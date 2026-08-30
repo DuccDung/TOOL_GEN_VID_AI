@@ -1,0 +1,583 @@
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
+using TOOL_LOCAL.Authentication;
+using TOOL_LOCAL.Projects;
+using TOOL_LOCAL.Storage;
+using TOOL_LOCAL.WebView;
+using TOOL_LOCAL.Configuration;
+using TOOL_LOCAL.Updates;
+using TOOL_SHARED.Contracts.Updates;
+using System.Text.Json;
+using TOOL_LOCAL.Generation;
+using TOOL_LOCAL.Media;
+
+namespace TOOL_LOCAL;
+
+public partial class Form1 : Form
+{
+    private const string AppHostName = "app.local";
+    private const string MediaHostName = "media.app.local";
+    private readonly AccountSessionManager? _sessionManager;
+    private readonly LicenseSessionManager? _licenseManager;
+    private readonly IProjectService? _projectService;
+    private readonly IProjectRenderService? _projectRenderService;
+    private readonly IProjectGenerationService? _generationService;
+    private readonly IGenerationClient? _generationClient;
+    private readonly ProjectWorkspaceService? _workspaceService;
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 3000 };
+    private readonly System.Windows.Forms.Timer _updateTimer = new();
+    private readonly DesktopUpdateApiClient? _updateApiClient;
+    private readonly DesktopPackageUpdateService? _packageUpdateService;
+    private readonly DesktopUpdateOptions? _updateOptions;
+    private readonly IMediaToolPreflightService? _mediaToolPreflight;
+    private WebView2? _webView;
+    private Panel? _loadingPanel;
+    private Label? _loadingLabel;
+    private DashboardBridge? _bridge;
+    private bool _refreshing;
+    private bool _closing;
+    private bool _checkingUpdate;
+    private bool _applyingUpdate;
+    private bool _preparingMediaRepair;
+    private Guid? _dismissedReleaseId;
+    private DesktopUpdateCheckResponse? _availableUpdate;
+    private DesktopReleaseResponse? _mediaRepairRelease;
+
+    internal bool ReturnToLoginRequested { get; private set; }
+
+    public Form1()
+    {
+        InitializeComponent();
+    }
+
+    internal Form1(
+        AccountSessionManager sessionManager,
+        LicenseSessionManager licenseManager,
+        IProjectService projectService,
+        IProjectRenderService projectRenderService,
+        IProjectGenerationService generationService,
+        IGenerationClient generationClient,
+        ProjectWorkspaceService workspaceService,
+        DesktopUpdateApiClient updateApiClient,
+        DesktopPackageUpdateService packageUpdateService,
+        DesktopUpdateOptions updateOptions,
+        IMediaToolPreflightService mediaToolPreflight) : this()
+    {
+        _sessionManager = sessionManager;
+        _licenseManager = licenseManager;
+        _projectService = projectService;
+        _projectRenderService = projectRenderService;
+        _generationService = generationService;
+        _generationClient = generationClient;
+        _workspaceService = workspaceService;
+        _updateApiClient = updateApiClient;
+        _packageUpdateService = packageUpdateService;
+        _updateOptions = updateOptions;
+        _mediaToolPreflight = mediaToolPreflight;
+        _updateTimer.Interval = Math.Max(30, updateOptions.CheckIntervalSeconds) * 1000;
+        ConfigureWindow();
+        Shown += InitializeDashboardOnShown;
+        FormClosed += FormOnClosed;
+        _refreshTimer.Tick += RefreshTimerOnTick;
+        _updateTimer.Tick += UpdateTimerOnTick;
+        _licenseManager.LicenseInvalidated += LicenseManagerOnInvalidated;
+        _sessionManager.SessionInvalidated += SessionManagerOnInvalidated;
+    }
+
+    private void ConfigureWindow()
+    {
+        SuspendLayout();
+        Text = "VideoMaker";
+        StartPosition = FormStartPosition.CenterScreen;
+        MinimumSize = new Size(1024, 700);
+        ClientSize = new Size(1440, 900);
+        WindowState = FormWindowState.Maximized;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        BackColor = Color.FromArgb(247, 249, 252);
+
+        _webView = new WebView2
+        {
+            Dock = DockStyle.Fill,
+            Visible = false,
+            DefaultBackgroundColor = Color.FromArgb(247, 249, 252)
+        };
+        _loadingPanel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(247, 249, 252)
+        };
+        _loadingLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            Text = "Đang khởi tạo giao diện VideoMaker...",
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 11f),
+            ForeColor = Color.FromArgb(91, 105, 128)
+        };
+        _loadingPanel.Controls.Add(_loadingLabel);
+        Controls.Add(_webView);
+        Controls.Add(_loadingPanel);
+        _loadingPanel.BringToFront();
+        ResumeLayout(false);
+    }
+
+    private async void InitializeDashboardOnShown(object? sender, EventArgs eventArgs)
+    {
+        if (_webView is null || _sessionManager is null || _licenseManager is null || _projectService is null || _projectRenderService is null || _generationService is null || _generationClient is null || _workspaceService is null || _mediaToolPreflight is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+            var indexPath = Path.Combine(webRoot, "index.html");
+            if (!File.Exists(indexPath))
+            {
+                throw new InvalidOperationException("Không tìm thấy giao diện dashboard đã build.");
+            }
+
+            var userDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ToolGenPostVideo",
+                "WebView2");
+            Directory.CreateDirectory(userDataFolder);
+            var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder);
+            await _webView.EnsureCoreWebView2Async(environment);
+            ConfigureWebViewSecurity(_webView.CoreWebView2, webRoot, _workspaceService.WorkspaceRoot);
+
+            _bridge = new DashboardBridge(
+                _sessionManager,
+                _licenseManager,
+                _projectService,
+                _projectRenderService,
+                _generationService,
+                _generationClient,
+                _mediaToolPreflight,
+                PostJsonToWebView,
+                CloseAfterLogout);
+            _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
+            _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;
+            _webView.CoreWebView2.Navigate($"https://{AppHostName}/index.html");
+        }
+        catch (WebView2RuntimeNotFoundException)
+        {
+            ShowStartupError("Máy tính chưa cài Microsoft Edge WebView2 Runtime.");
+        }
+        catch (Exception exception)
+        {
+            ShowStartupError(exception.Message);
+        }
+    }
+
+    private void ConfigureWebViewSecurity(CoreWebView2 coreWebView, string webRoot, string workspaceRoot)
+    {
+        coreWebView.SetVirtualHostNameToFolderMapping(
+            AppHostName,
+            webRoot,
+            CoreWebView2HostResourceAccessKind.DenyCors);
+        coreWebView.SetVirtualHostNameToFolderMapping(
+            MediaHostName,
+            workspaceRoot,
+            CoreWebView2HostResourceAccessKind.DenyCors);
+
+        var settings = coreWebView.Settings;
+        settings.IsWebMessageEnabled = true;
+        settings.AreHostObjectsAllowed = false;
+        settings.IsStatusBarEnabled = false;
+        settings.IsZoomControlEnabled = false;
+        settings.AreDefaultContextMenusEnabled = false;
+        settings.AreBrowserAcceleratorKeysEnabled = false;
+#if DEBUG
+        settings.AreDevToolsEnabled = true;
+#else
+        settings.AreDevToolsEnabled = false;
+#endif
+
+        coreWebView.NavigationStarting += (_, args) =>
+        {
+            if (!IsAllowedTopLevelNavigation(args.Uri))
+            {
+                args.Cancel = true;
+            }
+        };
+        coreWebView.NewWindowRequested += (_, args) => args.Handled = true;
+        coreWebView.PermissionRequested += (_, args) => args.State = CoreWebView2PermissionState.Deny;
+        coreWebView.DownloadStarting += (_, args) => args.Cancel = true;
+    }
+
+    private async void WebViewOnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs eventArgs)
+    {
+        if (_bridge is null || !IsTrustedWebMessageSource(eventArgs.Source))
+        {
+            return;
+        }
+
+        string message;
+        try
+        {
+            message = eventArgs.TryGetWebMessageAsString();
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        if (await TryHandleUpdateMessageAsync(message))
+        {
+            return;
+        }
+
+        await _bridge.HandleAsync(message, _shutdown.Token);
+    }
+
+    private void WebViewOnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs eventArgs)
+    {
+        if (!eventArgs.IsSuccess)
+        {
+            ShowStartupError("Không thể tải giao diện dashboard.");
+            return;
+        }
+
+        if (_webView is not null)
+        {
+            _webView.Visible = true;
+        }
+
+        if (_loadingPanel is not null)
+        {
+            _loadingPanel.Visible = false;
+        }
+
+        _refreshTimer.Start();
+        if (_updateOptions?.Enabled == true)
+        {
+            _updateTimer.Start();
+            _ = CheckForUpdateAsync();
+        }
+    }
+
+    private async void UpdateTimerOnTick(object? sender, EventArgs eventArgs) =>
+        await CheckForUpdateAsync();
+
+    private async Task CheckForUpdateAsync()
+    {
+        if (_checkingUpdate || _applyingUpdate || _closing || _updateApiClient is null || _shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _checkingUpdate = true;
+        try
+        {
+            var response = await _updateApiClient.CheckAsync(_shutdown.Token);
+            if (!response.IsUpdateAvailable || response.Release is null)
+            {
+                _availableUpdate = null;
+                PostHostMessage("update.none");
+                return;
+            }
+
+            _availableUpdate = response;
+            if (!response.IsMandatory && _dismissedReleaseId == response.Release.ReleaseId)
+            {
+                return;
+            }
+
+            PostHostMessage("update.available", response);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            // Automatic checks are intentionally quiet. A later timer retries.
+        }
+        finally
+        {
+            _checkingUpdate = false;
+        }
+    }
+
+    private async Task<bool> TryHandleUpdateMessageAsync(string json)
+    {
+        WebMessageRequest? request;
+        try
+        {
+            request = JsonSerializer.Deserialize<WebMessageRequest>(
+                json,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        switch (request?.Type)
+        {
+            case "media.tools.install.prepare":
+                await PrepareMediaToolRepairAsync();
+                return true;
+            case "media.tools.install":
+                await RepairMediaToolsAsync();
+                return true;
+            case "update.dismiss":
+                if (_availableUpdate is { IsMandatory: false, Release: not null })
+                {
+                    _dismissedReleaseId = _availableUpdate.Release.ReleaseId;
+                }
+                return true;
+            case "update.exit":
+                Close();
+                return true;
+            case "update.apply":
+                await ApplyAvailableUpdateAsync();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private async Task PrepareMediaToolRepairAsync()
+    {
+        if (_preparingMediaRepair || _applyingUpdate || _updateApiClient is null)
+        {
+            return;
+        }
+
+        _preparingMediaRepair = true;
+        try
+        {
+            _mediaRepairRelease = await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token);
+            PostHostMessage("media.tools.install.available", _mediaRepairRelease);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            _mediaRepairRelease = null;
+            PostHostMessage("media.tools.install.failed", new { message = exception.Message });
+        }
+        finally
+        {
+            _preparingMediaRepair = false;
+        }
+    }
+
+    private async Task RepairMediaToolsAsync()
+    {
+        if (_applyingUpdate || _updateApiClient is null || _packageUpdateService is null)
+        {
+            return;
+        }
+
+        _applyingUpdate = true;
+        _updateTimer.Stop();
+        try
+        {
+            var release = _mediaRepairRelease
+                ?? await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token);
+            _mediaRepairRelease = null;
+            var progress = new Progress<DesktopUpdateProgress>(update =>
+                PostHostMessage("media.tools.install.progress", update));
+            await _packageUpdateService.StartAsync(release, progress, _shutdown.Token);
+            Close();
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            _applyingUpdate = false;
+            if (_updateOptions?.Enabled == true)
+            {
+                _updateTimer.Start();
+            }
+            PostHostMessage("media.tools.install.failed", new { message = exception.Message });
+        }
+    }
+
+    private async Task ApplyAvailableUpdateAsync()
+    {
+        if (_applyingUpdate || _availableUpdate?.Release is not { } release || _packageUpdateService is null)
+        {
+            return;
+        }
+
+        _applyingUpdate = true;
+        _updateTimer.Stop();
+        try
+        {
+            var progress = new Progress<DesktopUpdateProgress>(update => PostHostMessage("update.progress", update));
+            await _packageUpdateService.StartAsync(release, progress, _shutdown.Token);
+            Close();
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            _applyingUpdate = false;
+            _updateTimer.Start();
+            PostHostMessage("update.failed", new { message = exception.Message });
+        }
+    }
+
+    private void PostHostMessage(string type, object? payload = null) =>
+        PostJsonToWebView(JsonSerializer.Serialize(
+            new WebMessageResponse(type, null, payload),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+    private async void RefreshTimerOnTick(object? sender, EventArgs eventArgs)
+    {
+        if (_refreshing || _bridge is null || _shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _refreshing = true;
+        try
+        {
+            await _bridge.RefreshInBackgroundAsync(_shutdown.Token);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            // Expected while the form is closing.
+        }
+        catch (AccountClientException exception) when (exception.StatusCode == 401)
+        {
+            if (_sessionManager is not null)
+            {
+                await _sessionManager.InvalidateAsync(CancellationToken.None);
+            }
+        }
+        catch (AccountClientException exception)
+        {
+            PostHostMessage("operation.error", new { code = exception.Code, message = exception.Message });
+        }
+        catch (HttpRequestException)
+        {
+            // A later timer retries while the current offline lease remains valid.
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    private void PostJsonToWebView(string json)
+    {
+        if (_closing || IsDisposed || _webView?.CoreWebView2 is null)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => PostJsonToWebView(json));
+            return;
+        }
+
+        _webView.CoreWebView2.PostWebMessageAsJson(json);
+    }
+
+    private void CloseAfterLogout()
+    {
+        if (_closing || IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(CloseAfterLogout);
+            return;
+        }
+
+        ReturnToLoginRequested = true;
+        Close();
+    }
+
+    private void SessionManagerOnInvalidated(string reason)
+    {
+        if (_closing || IsDisposed || !IsHandleCreated)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(() => ReturnToLogin(reason));
+        }
+        catch (InvalidOperationException)
+        {
+            // The form handle was destroyed while the invalidation event was being delivered.
+        }
+    }
+
+    private void ReturnToLogin(string reason)
+    {
+        if (_closing || IsDisposed)
+        {
+            return;
+        }
+
+        ReturnToLoginRequested = true;
+        _refreshTimer.Stop();
+        _updateTimer.Stop();
+        MessageBox.Show(
+            this,
+            reason,
+            "Phiên đăng nhập đã hết hạn",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+        Close();
+    }
+
+    private void LicenseManagerOnInvalidated(string reason) =>
+        PostHostMessage("license.invalidated", new { message = reason });
+
+    private void ShowStartupError(string message)
+    {
+        _refreshTimer.Stop();
+        _updateTimer.Stop();
+        if (_loadingLabel is not null)
+        {
+            _loadingLabel.Text = $"Không thể khởi tạo giao diện.\n\n{message}";
+            _loadingLabel.ForeColor = Color.Firebrick;
+        }
+    }
+
+    private static bool IsAllowedTopLevelNavigation(string uri) =>
+        Uri.TryCreate(uri, UriKind.Absolute, out var parsed) &&
+        (parsed.Scheme == "about" ||
+         (parsed.Scheme == Uri.UriSchemeHttps &&
+          parsed.Host.Equals(AppHostName, StringComparison.OrdinalIgnoreCase)));
+
+    private static bool IsTrustedWebMessageSource(string source) =>
+        Uri.TryCreate(source, UriKind.Absolute, out var parsed) &&
+        parsed.Scheme == Uri.UriSchemeHttps &&
+        parsed.Host.Equals(AppHostName, StringComparison.OrdinalIgnoreCase);
+
+    private void FormOnClosed(object? sender, FormClosedEventArgs eventArgs)
+    {
+        _closing = true;
+        _refreshTimer.Stop();
+        _shutdown.Cancel();
+        _bridge?.Dispose();
+        if (_licenseManager is not null)
+        {
+            _licenseManager.LicenseInvalidated -= LicenseManagerOnInvalidated;
+        }
+        if (_sessionManager is not null)
+        {
+            _sessionManager.SessionInvalidated -= SessionManagerOnInvalidated;
+        }
+        _refreshTimer.Dispose();
+        _updateTimer.Dispose();
+        _shutdown.Dispose();
+    }
+}

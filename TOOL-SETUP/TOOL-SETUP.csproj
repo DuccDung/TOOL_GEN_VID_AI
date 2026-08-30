@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>VideoMaker Setup</AssemblyName>
+    <RootNamespace>TOOL_SETUP</RootNamespace>
+    <Product>VideoMaker Setup</Product>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SetupServerBaseUrl Condition="'$(SetupServerBaseUrl)' == ''">https://localhost:7202/</SetupServerBaseUrl>
+    <SetupChannel Condition="'$(SetupChannel)' == ''">Stable</SetupChannel>
+    <SetupPlatform Condition="'$(SetupPlatform)' == ''">win-x64</SetupPlatform>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TOOL-SHARED.Contracts\TOOL-SHARED.Contracts.csproj" />
+    <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
+    <EmbeddedResource Include="setupsettings.json" LogicalName="TOOL_SETUP.setupsettings.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupServerBaseUrl</_Parameter1>
+      <_Parameter2>$(SetupServerBaseUrl)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupChannel</_Parameter1>
+      <_Parameter2>$(SetupChannel)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupPlatform</_Parameter1>
+      <_Parameter2>$(SetupPlatform)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

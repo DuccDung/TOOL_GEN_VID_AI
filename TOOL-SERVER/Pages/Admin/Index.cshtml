@@ -1,0 +1,244 @@
+@page "/admin"
+@{
+    Layout = null;
+}
+<!doctype html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>VideoMaker License Admin</title>
+    <link rel="stylesheet" href="~/admin/admin.css" asp-append-version="true" />
+</head>
+<body>
+    <svg class="icon-sprite" aria-hidden="true">
+        <symbol id="icon-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
+        <symbol id="icon-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z" /><path d="m9 12 2 2 4-4" /></symbol>
+        <symbol id="icon-layout-dashboard" viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1" /><rect width="7" height="5" x="14" y="3" rx="1" /><rect width="7" height="9" x="14" y="12" rx="1" /><rect width="7" height="5" x="3" y="16" rx="1" /></symbol>
+        <symbol id="icon-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></symbol>
+        <symbol id="icon-building" viewBox="0 0 24 24"><path d="M3 21h18M6 21V5l6-3 6 3v16M9 9h1m4 0h1m-6 4h1m4 0h1m-6 4h1m4 0h1" /></symbol>
+        <symbol id="icon-wallet" viewBox="0 0 24 24"><path d="M4 6h15a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a3 3 0 0 1 3-3h13v3M16 12h5" /></symbol>
+        <symbol id="icon-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9m-4 4 3 3m-6 0 3 3" /></symbol>
+        <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6" /></symbol>
+        <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5m6 6-6-6 6-6" /></symbol>
+        <symbol id="icon-id-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2" /><circle cx="8" cy="12" r="2" /><path d="M14 10h4M14 14h4M5 17c.7-1.4 1.7-2 3-2s2.3.6 3 2" /></symbol>
+        <symbol id="icon-package-up" viewBox="0 0 24 24"><path d="m16.5 9.4-9-5.2M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l4.5 2.6M3.3 7 12 12l8.7-5M12 22V12m5 10v-6m-3 3 3-3 3 3" /></symbol>
+        <symbol id="icon-log-out" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /></symbol>
+        <symbol id="icon-refresh-cw" viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5" /><path d="M18.5 9A7 7 0 0 0 6.3 6.3L4 11m16 2-2.3 4.7A7 7 0 0 1 5.5 15" /></symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+        <symbol id="icon-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></symbol>
+        <symbol id="icon-pencil" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z" /></symbol>
+        <symbol id="icon-trash-2" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 4v7m4-7v7" /></symbol>
+        <symbol id="icon-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></symbol>
+        <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></symbol>
+        <symbol id="icon-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></symbol>
+        <symbol id="icon-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" /><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5" /></symbol>
+        <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></symbol>
+    </svg>
+
+    <section class="login-screen" id="loginScreen">
+        <div class="login-glow glow-one"></div><div class="login-glow glow-two"></div>
+        <div class="login-card">
+            <div class="brand-lockup"><span class="brand-mark">V</span><div><strong>VideoMaker</strong><small>License Control Center</small></div></div>
+            <div class="login-copy"><span class="eyebrow">ADMIN CONSOLE</span><h1>Quản lý quyền sử dụng<br />an toàn, tập trung.</h1><p>Cấp gói theo thời gian, giới hạn thiết bị và thu hồi phiên truy cập của người dùng.</p></div>
+            <form id="loginForm" autocomplete="on">
+                <label>Email quản trị<input id="loginEmail" type="email" autocomplete="username" required /></label>
+                <label>Mật khẩu<input id="loginPassword" type="password" autocomplete="current-password" required /></label>
+                <button class="primary-button login-button" type="submit"><span>Đăng nhập Admin</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button>
+                <p class="form-message" id="loginMessage" role="alert"></p>
+            </form>
+            <p class="security-note"><svg class="ui-icon"><use href="#icon-shield-check"></use></svg><span>Server chỉ quản lý tài khoản, license, thiết bị và phiên sử dụng.</span></p>
+        </div>
+    </section>
+
+    <div class="admin-shell hidden" id="adminShell">
+        <aside class="sidebar">
+            <div class="brand-lockup sidebar-brand"><span class="brand-mark">V</span><div><strong>VideoMaker</strong><small>Admin Console</small></div></div>
+            <nav>
+                <button class="nav-item active" data-view="overview"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-layout-dashboard"></use></svg></span><span>Tổng quan</span></button>
+                <button class="nav-item" data-view="users"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-users"></use></svg></span><span>Người dùng</span></button>
+                <button class="nav-item" data-view="organizations"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-building"></use></svg></span><span>Tổ chức &amp; AI</span></button>
+                <button class="nav-item" data-view="plans"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-id-card"></use></svg></span><span>Gói sử dụng</span></button>
+                <button class="nav-item" data-view="releases"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-package-up"></use></svg></span><span>Desktop Releases</span></button>
+            </nav>
+            <div class="sidebar-status"><span class="pulse-dot"></span><div><strong>License server</strong><small>Đang hoạt động</small></div></div>
+            <div class="admin-profile"><div class="avatar" id="adminAvatar">A</div><div><strong id="adminName">Administrator</strong><small id="adminEmail"></small></div><button id="logoutButton" title="Đăng xuất"><svg class="ui-icon"><use href="#icon-log-out"></use></svg></button></div>
+        </aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <div><span class="eyebrow" id="pageEyebrow">LICENSE CONTROL</span><h1 id="pageTitle">Tổng quan hệ thống</h1><p id="pageSubtitle">Theo dõi tài khoản, license và phiên sử dụng theo thời gian thực.</p></div>
+                <div class="top-actions">
+                    <button class="ghost-button" id="refreshButton"><svg class="ui-icon"><use href="#icon-refresh-cw"></use></svg><span>Làm mới</span></button>
+                    <button class="primary-button hidden" id="topAddOrganization"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo tổ chức</span></button>
+                    <button class="primary-button hidden" id="topAddPlan"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo gói</span></button>
+                    <button class="primary-button hidden" id="topAddRelease"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo release</span></button>
+                </div>
+            </header>
+
+            <section class="view-panel" data-panel="overview">
+                <div class="metric-grid" id="overviewMetrics"></div>
+                <div class="overview-grid license-overview-grid">
+                    <section class="panel license-summary-panel"><div class="section-heading"><div><span class="eyebrow">USER ACCESS</span><h2>License đang sử dụng</h2></div><button class="text-button" data-go="users"><span>Quản lý</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button></div><div id="userOverview"></div></section>
+                    <section class="panel plan-summary-panel"><div class="section-heading"><div><span class="eyebrow">POLICY</span><h2>Gói đang mở</h2></div><button class="text-button" data-go="plans"><span>Xem gói</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button></div><div id="planOverview"></div></section>
+                </div>
+            </section>
+
+            <section class="view-panel hidden" data-panel="users">
+                <section class="panel management-panel">
+                    <div class="section-heading"><div><span class="eyebrow">ACCOUNTS & ACCESS</span><h2>Người dùng</h2></div><form class="search-form" id="userSearchForm"><div><svg class="ui-icon"><use href="#icon-search"></use></svg><input id="userSearch" type="search" placeholder="Tìm email hoặc tên..." /></div><button class="ghost-button" type="submit">Tìm kiếm</button></form></div>
+                    <div id="userTable"></div>
+                </section>
+            </section>
+
+            <section class="view-panel hidden" data-panel="organizations">
+                <div class="organization-scope-bar" role="tablist" aria-label="Phạm vi quản trị Tổ chức và AI">
+                    <button type="button" class="scope-tab active" id="organizationScopeButton" data-organization-scope="directory" role="tab" aria-selected="true">Tổ chức</button>
+                    <button type="button" class="scope-tab" id="pricingScopeButton" data-organization-scope="pricing" role="tab" aria-selected="false">Bảng giá AI</button>
+                    <button type="button" class="scope-tab" id="costGuideScopeButton" data-organization-scope="cost-guide" role="tab" aria-selected="false">Cách tính chi phí</button>
+                </div>
+
+                <div id="organizationDirectory">
+                    <section class="panel management-panel">
+                        <div class="section-heading"><div><span class="eyebrow">ORGANIZATION GOVERNANCE</span><h2>Danh sách tổ chức của tôi</h2></div><button class="primary-button" id="addOrganizationButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo tổ chức</span></button></div>
+                        <p class="form-hint">Global Admin chỉ thao tác credential và dữ liệu nội bộ khi đồng thời có membership phù hợp trong tổ chức.</p>
+                        <div id="organizationTable" aria-live="polite"></div>
+                    </section>
+                </div>
+
+                <div id="organizationDetail" class="hidden">
+                    <section class="panel organization-detail-shell">
+                        <div class="organization-detail-header">
+                            <button type="button" class="ghost-button" id="backToOrganizations"><svg class="ui-icon"><use href="#icon-arrow-left"></use></svg><span>Danh sách</span></button>
+                            <div id="organizationDetailHeading"></div>
+                        </div>
+                        <div class="organization-tabs" role="tablist" aria-label="Chi tiết tổ chức">
+                            <button type="button" class="organization-tab active" data-organization-tab="overview" role="tab" aria-selected="true">Tổng quan</button>
+                            <button type="button" class="organization-tab" data-organization-tab="members" role="tab" aria-selected="false">Thành viên</button>
+                            <button type="button" class="organization-tab" data-organization-tab="usage" role="tab" aria-selected="false">Ngân sách &amp; sử dụng</button>
+                            <button type="button" class="organization-tab" data-organization-tab="providers" role="tab" aria-selected="false">API AI</button>
+                            <button type="button" class="organization-tab" data-organization-tab="audit" role="tab" aria-selected="false">Nhật ký</button>
+                        </div>
+                        <div id="organizationTabContent" class="organization-tab-content" aria-live="polite"></div>
+                    </section>
+                </div>
+
+                <div id="organizationPricing" class="hidden">
+                    <section class="panel management-panel">
+                        <div class="section-heading"><div><span class="eyebrow">GLOBAL AI PRICING</span><h2>Bảng giá AI</h2></div></div>
+                        <p class="form-hint">Chỉ tạo rate mới hoặc ngừng rate hiện hành. Không chỉnh sửa lịch sử và không tự đoán giá provider.</p>
+                        <div id="aiPricingCatalog" aria-live="polite"></div>
+                    </section>
+                </div>
+
+                <div id="organizationCostGuide" class="hidden">
+                    <article class="panel cost-guide-page">
+                        <header class="cost-guide-hero">
+                            <div><span class="eyebrow">ADMIN COST HANDBOOK</span><h2>Cơ chế tính chi phí AI</h2><p>Giúp Admin hiểu rate, token, giây video và cách Budget được giữ rồi quyết toán trong VideoMaker.</p></div>
+                            <button type="button" class="primary-button" data-open-pricing-from-guide><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg><span>Mở bảng giá AI</span></button>
+                        </header>
+
+                        <div class="cost-guide-notice"><strong>Điều cần nhớ</strong><span>Budget là hạn mức nội bộ, không phải số dư provider. Budget bằng 0 sẽ khóa AI. Ledger VideoMaker hỗ trợ kiểm soát chi phí nhưng không thay thế hóa đơn OpenAI hoặc Kling.</span></div>
+
+                        <section class="cost-guide-section" aria-labelledby="tokenGuideHeading">
+                            <div class="cost-guide-heading"><span>01</span><div><h3 id="tokenGuideHeading">OpenAI tính theo token</h3><p>Token là đơn vị mà model đọc và tạo ra; không đồng nhất tuyệt đối với số từ hay số ký tự.</p></div></div>
+                            <div class="cost-guide-concepts">
+                                <article><span class="cost-guide-chip input">INPUT</span><h4>InputToken</h4><p>Prompt, chủ đề, hướng dẫn hệ thống và dữ liệu gửi vào OpenAI.</p></article>
+                                <article><span class="cost-guide-chip output">OUTPUT</span><h4>OutputToken</h4><p>Content plan, kịch bản và prompt cảnh do OpenAI sinh ra.</p></article>
+                            </div>
+                            <div class="cost-guide-formula"><span>Công thức quyết toán</span><code>(InputToken × giá Input) + (OutputToken × giá Output)</code><small>Mỗi thành phần được chia theo đơn vị rate: Token, 1KTokens hoặc MillionTokens.</small></div>
+                            <div class="table-scroll"><table class="data-table cost-guide-table"><thead><tr><th>Đơn vị rate</th><th>Công thức cho một loại token</th><th>Ví dụ nếu dùng 10.000 token</th></tr></thead><tbody><tr><td><strong>Token</strong></td><td><code>giá × số token</code></td><td><code>giá × 10.000</code></td></tr><tr><td><strong>1KTokens</strong></td><td><code>giá × số token / 1.000</code></td><td><code>giá × 10</code></td></tr><tr><td><strong>MillionTokens</strong></td><td><code>giá × số token / 1.000.000</code></td><td><code>giá × 0,01</code></td></tr></tbody></table></div>
+                            <details class="cost-guide-details"><summary>Server ước tính token trước khi gọi OpenAI như thế nào?</summary><div><p><code>Số cảnh = làm tròn lên(thời lượng video / 15 giây)</code></p><p><code>Input ước tính = max(2.000; 1.500 + số ký tự chủ đề / 3)</code></p><p><code>Output ước tính = min(8.000; 2.000 + số cảnh × 300)</code></p><p>Số ước tính chỉ dùng để giữ Budget. Khi OpenAI trả usage, server quyết toán lại bằng số token thực tế và rate snapshot.</p></div></details>
+                        </section>
+
+                        <section class="cost-guide-section" aria-labelledby="videoGuideHeading">
+                            <div class="cost-guide-heading"><span>02</span><div><h3 id="videoGuideHeading">Kling tính theo giây video</h3><p>VideoMaker dùng rate <strong>VideoSecond</strong>; thời lượng càng dài thì khoản giữ càng lớn.</p></div></div>
+                            <div class="cost-guide-formula kling"><span>Công thức ước tính</span><code>Số giây video × đơn giá VideoSecond</code><small>Desktop hiện gửi Kling 3.0 ở 720p và tắt Native Audio. Khi thay đổi độ phân giải hoặc âm thanh, phải đối chiếu lại rate provider.</small></div>
+                        </section>
+
+                        <section class="cost-guide-section" aria-labelledby="budgetGuideHeading">
+                            <div class="cost-guide-heading"><span>03</span><div><h3 id="budgetGuideHeading">Budget đi qua bốn trạng thái</h3><p>Server luôn kiểm tra và giữ tiền trước outbound call để tránh vượt hạn mức tổ chức hoặc thành viên.</p></div></div>
+                            <ol class="cost-guide-flow"><li><b>1</b><div><strong>Ước tính</strong><span>Chọn model và rate đang Active.</span></div></li><li><b>2</b><div><strong>Reservation</strong><span>Giữ chi phí dự kiến trong Budget.</span></div></li><li><b>3</b><div><strong>Provider xử lý</strong><span>OpenAI trả usage; Kling hoàn thành task.</span></div></li><li><b>4</b><div><strong>Actual hoặc Release</strong><span>Thành công thì quyết toán; lỗi/hủy thì giải phóng khoản giữ.</span></div></li></ol>
+                            <div class="cost-guide-rules"><article><strong>Rate snapshot</strong><p>Request giữ bản chụp rate lúc bắt đầu. Thay giá sau đó không làm đổi chi phí của request cũ.</p></article><article><strong>Remaining Budget</strong><p><code>Budget − Actual − Reserved</code>. Request mới chỉ chạy khi phần còn lại đủ để reserve.</p></article><article><strong>Fallback</strong><p>Nếu OpenAI không trả usage hoặc Kling không báo actual cost, hệ thống dùng chi phí đã ước tính.</p></article></div>
+                        </section>
+
+                        <section class="cost-guide-section" aria-labelledby="currentRateHeading">
+                            <div class="cost-guide-heading"><span>04</span><div><h3 id="currentRateHeading">Minh họa bằng rate đang Active</h3><p>Khu vực này đọc bảng giá hiện hành, không hard-code giá provider trong tài liệu.</p></div></div>
+                            <div id="costGuideCurrentRates" aria-live="polite"></div>
+                        </section>
+
+                        <section class="cost-guide-section cost-guide-limitations" aria-labelledby="limitGuideHeading">
+                            <div class="cost-guide-heading"><span>!</span><div><h3 id="limitGuideHeading">Phạm vi và giới hạn hiện tại</h3></div></div>
+                            <ul><li>Mỗi model OpenAI, gồm model Text và GPT-Image-2, cần rate InputToken và OutputToken riêng; không dùng rate của model Text để tính ảnh. VideoMaker chưa tách riêng cached input, tool fee, long-context, regional processing hoặc chương trình giảm giá.</li><li>Kling hiện dùng một VideoSecond rate cho model; bảng giá theo resolution, audio và loại workflow phải được Admin quy đổi đúng với cấu hình thực tế.</li><li>Luôn lấy giá từ hợp đồng hoặc Developer Console của chính tài khoản đang gắn credential. Không sao chép giá từ blog hoặc dịch vụ trung gian.</li></ul>
+                            <div class="cost-guide-sources"><a href="https://developers.openai.com/api/docs/models" target="_blank" rel="noopener noreferrer">Model và giá API OpenAI ↗</a><a href="https://kling.ai/document-api/pricing/base/video" target="_blank" rel="noopener noreferrer">Bảng giá API Kling ↗</a></div>
+                        </section>
+                    </article>
+                </div>
+            </section>
+
+            <section class="view-panel hidden" data-panel="plans">
+                <section class="panel management-panel"><div class="section-heading"><div><span class="eyebrow">LICENSE POLICY</span><h2>Gói sử dụng</h2></div><button class="primary-button" id="addPlanButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo gói</span></button></div><p class="form-hint">Giới hạn thiết bị và phiên đồng thời được server áp dụng cho mỗi license.</p><div id="planTable"></div></section>
+            </section>
+
+            <section class="view-panel hidden" data-panel="releases">
+                <section class="panel release-panel"><div class="section-heading"><div><span class="eyebrow">DESKTOP DISTRIBUTION</span><h2>Phiên bản VideoMaker</h2></div><button class="primary-button" id="addReleaseButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo release</span></button></div><p class="form-hint">Mỗi release giữ package ZIP riêng. Server tự tính SHA-256 khi upload.</p><div id="releaseTable"></div></section>
+            </section>
+        </main>
+    </div>
+
+    <dialog id="userDialog" class="admin-dialog user-dialog"><div class="dialog-shell"><div class="dialog-heading"><div><span class="eyebrow">USER ACCESS</span><h2>Chi tiết người dùng</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div><div id="userDetail"></div></div></dialog>
+
+    <dialog id="grantDialog" class="admin-dialog small-dialog">
+        <form id="grantForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">GRANT LICENSE</span><h2>Cấp gói sử dụng</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="grantUserId" /><div class="form-grid"><label class="full">Gói<select id="grantPlan" required></select></label><label>Số ngày sử dụng<input id="grantDuration" type="number" min="1" max="3650" value="30" required /></label><label>Ngày bắt đầu<input id="grantStart" type="datetime-local" /></label><label class="toggle-row full"><input id="grantTrial" type="checkbox" /><span class="toggle"></span><span>Đánh dấu là gói dùng thử</span></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Cấp license</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="planDialog" class="admin-dialog">
+        <form id="planForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">LICENSE PLAN</span><h2 id="planDialogTitle">Tạo gói</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="planId" /><div class="form-grid"><label>Mã gói<input id="planCode" maxlength="80" placeholder="monthly-30" required /></label><label>Tên gói<input id="planName" maxlength="200" required /></label><label class="full">Mô tả<textarea id="planDescription" rows="3"></textarea></label><label>Thời hạn mặc định (ngày)<input id="planDuration" type="number" min="1" max="3650" /></label><label>Số thiết bị<input id="planDevices" type="number" min="1" max="100" value="1" required /></label><label>Phiên đồng thời<input id="planSessions" type="number" min="1" max="100" value="1" required /></label><label>Offline grace (giờ)<input id="planOffline" type="number" min="0" max="720" value="0" required /></label><label class="toggle-row full"><input id="planActive" type="checkbox" checked /><span class="toggle"></span><span>Cho phép cấp gói này</span></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu gói</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="releaseDialog" class="admin-dialog">
+        <form id="releaseForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">DESKTOP RELEASE</span><h2 id="releaseDialogTitle">Tạo release</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="releaseId" /><div class="form-grid"><label>Version<input id="releaseVersion" maxlength="50" placeholder="1.2.0" required /></label><label>Build number<input id="releaseBuild" type="number" min="1" required /></label><label>Channel<select id="releaseChannel"><option>Stable</option><option>Beta</option><option>Development</option></select></label><label>Platform<input id="releasePlatform" maxlength="50" value="win-x64" required /></label><label>Minimum version<input id="releaseMinimum" maxlength="50" /></label><label>Ngày phát hành<input id="releasePublished" type="datetime-local" /></label><label class="full">Release notes<textarea id="releaseNotes" rows="4"></textarea></label><label>Desktop package ZIP<input id="releasePackage" type="file" accept=".zip" /></label><label>Setup executable<input id="releaseSetup" type="file" accept=".exe,.msi" /></label><label class="toggle-row"><input id="releaseMandatory" type="checkbox" /><span class="toggle"></span><span>Bắt buộc cập nhật</span></label><label class="toggle-row"><input id="releaseActive" type="checkbox" checked /><span class="toggle"></span><span>Đang phát hành</span></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu release</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationDialog" class="admin-dialog small-dialog">
+        <form id="organizationForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">NEW ORGANIZATION</span><h2>Tạo tổ chức</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <div class="form-grid"><label class="full">Tên tổ chức<input id="organizationName" maxlength="200" required /></label><label>Mã tổ chức<input id="organizationCode" maxlength="80" pattern="[a-z0-9-]*" placeholder="Để trống để tự sinh" /></label><label>Tiền tệ<select id="organizationCurrency"><option value="USD">USD</option></select></label><label class="full">Budget tháng (USD)<input id="organizationBudget" type="number" min="0" max="100000000" step="0.000001" value="0" required /><small class="input-help warning-text">Budget 0 nghĩa là khóa mọi request AI của tổ chức.</small></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Tạo tổ chức</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationMemberDialog" class="admin-dialog small-dialog">
+        <form id="organizationMemberForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">ORGANIZATION MEMBER</span><h2 id="organizationMemberDialogTitle">Thêm thành viên</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="organizationMemberUserId" /><div class="form-grid"><label class="full" id="organizationMemberEmailLabel">Email tài khoản<input id="organizationMemberEmail" type="email" autocomplete="off" /></label><label>Vai trò<select id="organizationMemberRole"><option>Owner</option><option>OrganizationAdmin</option><option>BillingManager</option><option selected>Member</option><option>Viewer</option></select></label><label id="organizationMemberStatusLabel">Trạng thái<select id="organizationMemberStatus"><option>Active</option><option>Suspended</option><option>Removed</option></select></label><label class="full">Hạn mức tháng (USD, không bắt buộc)<input id="organizationMemberLimit" type="number" min="0" max="100000000" step="0.000001" /><small class="input-help">Đây là hạn mức nội bộ của thành viên, không phải số dư đã nạp.</small></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu thành viên</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationCredentialDialog" class="admin-dialog small-dialog">
+        <form id="organizationCredentialForm" method="dialog" autocomplete="off"><div class="dialog-heading"><div><span class="eyebrow">PROVIDER CREDENTIAL</span><h2 id="organizationCredentialDialogTitle">Cấu hình credential</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="organizationCredentialProvider" /><div class="form-grid"><label class="full">Tên gợi nhớ<input id="organizationCredentialName" maxlength="100" autocomplete="off" placeholder="Ví dụ: OpenAI production" /></label><label class="full">API key<input id="organizationCredentialKey" type="password" minlength="8" maxlength="10000" autocomplete="new-password" autocapitalize="off" spellcheck="false" required /><small class="input-help warning-text">Key chỉ được gửi một lần để kiểm tra và mã hóa trên server; không thể xem lại.</small></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Kiểm tra và lưu</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationProviderUnavailableDialog" class="admin-dialog small-dialog">
+        <form method="dialog"><div class="dialog-heading"><div><span class="eyebrow">PROVIDER INACTIVE</span><h2 id="organizationProviderUnavailableTitle">Provider chưa được kích hoạt</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="organizationProviderUnavailableCode" /><p id="organizationProviderUnavailableMessage" class="form-hint">Hãy bật provider trong bảng giá AI trước khi cấu hình credential.</p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Đóng</button><button id="organizationProviderUnavailableSetup" class="primary-button" type="button">Mở bảng giá AI</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="aiRateDialog" class="admin-dialog small-dialog">
+        <form id="aiRateForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">AI COST RATE</span><h2 id="aiRateDialogTitle">Tạo đơn giá</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="aiRateModelId" /><input type="hidden" id="aiRateProviderCode" /><div class="form-grid"><label>Loại sử dụng<select id="aiRateUsageType"><option>InputToken</option><option>OutputToken</option><option>VideoSecond</option></select></label><label>Đơn vị<select id="aiRateUnit"><option>MillionTokens</option><option>1KTokens</option><option>Token</option><option>Second</option></select></label><label>Đơn giá USD<input id="aiRatePrice" type="number" min="0.000001" max="1000000" step="0.000001" required /></label><label>Tiền tệ<select id="aiRateCurrency"><option value="USD">USD</option></select></label><label class="full">Nguồn giá / ghi chú<input id="aiRateSource" maxlength="200" placeholder="provider-contract" /></label><p id="aiRateVariantHint" class="form-hint full hidden">Rate Kling này áp dụng riêng cho video 720p có Native Audio; nhập USD/giây từ hợp đồng hoặc dashboard provider, không nhập số credit.</p></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Tạo rate mới</button></div>
+        </form>
+    </dialog>
+
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+    <script src="~/admin/admin.js" asp-append-version="true"></script>
+    <script src="~/admin/admin-organizations.js" asp-append-version="true"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+{
+  "ServerBaseUrl": "https://localhost:7202/",
+  "Channel": "Stable",
+  "Platform": "win-x64"
+}

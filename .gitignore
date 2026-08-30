@@ -1,0 +1,34 @@
+# IDE and user-specific state
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# .NET build output
+**/bin/
+**/obj/
+TestResults/
+coverage/
+*.coverage
+
+# Frontend dependencies and generated output
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+TOOL-LOCAL/Web/vite.config.js
+TOOL-LOCAL/Web/vite.config.d.ts
+
+# Locally published packages and server release storage
+artifacts/
+TOOL-SERVER/App_Releases/
+
+# Local secrets and runtime files
+appsettings.user.json
+.env
+.env.*
+!.env.example
+provider-secrets.bin
+provider-secrets.bin.tmp
+*.log
+

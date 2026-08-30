@@ -1,0 +1,127 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>TOOL_LOCAL</RootNamespace>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>1.0.0</Version>
+    <DesktopBuildNumber>1</DesktopBuildNumber>
+    <AssemblyName>TOOL-LOCAL</AssemblyName>
+    <Product>VideoMaker</Product>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <ProjectReference Include="..\TOOL-SHARED.Contracts\TOOL-SHARED.Contracts.csproj" />
+    <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
+    <ProjectReference Include="..\TOOL-UPDATER\TOOL-UPDATER.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>DesktopBuildNumber</_Parameter1>
+      <_Parameter2>$(DesktopBuildNumber)</_Parameter2>
+    </AssemblyAttribute>
+    <InternalsVisibleTo Include="TOOL-TESTS" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <DashboardWebDirectory>$(MSBuildProjectDirectory)\Web</DashboardWebDirectory>
+    <DashboardWebDist>$(DashboardWebDirectory)\dist</DashboardWebDist>
+    <FfmpegBundleDirectory Condition="'$(FfmpegBundleDirectory)' == ''">$(MSBuildProjectDirectory)\..\third_party\ffmpeg\win-x64</FfmpegBundleDirectory>
+    <RequireMediaToolBundle Condition="'$(RequireMediaToolBundle)' == ''">false</RequireMediaToolBundle>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(FfmpegBundleDirectory)\ffmpeg.exe') And Exists('$(FfmpegBundleDirectory)\ffprobe.exe') And Exists('$(FfmpegBundleDirectory)\LICENSE.txt')">
+    <Content Include="$(FfmpegBundleDirectory)\ffmpeg.exe" Link="tools\ffmpeg\ffmpeg.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(FfmpegBundleDirectory)\ffprobe.exe" Link="tools\ffmpeg\ffprobe.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(FfmpegBundleDirectory)\LICENSE.txt" Link="tools\ffmpeg\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(FfmpegBundleDirectory)\PROVENANCE.md" Link="tools\ffmpeg\PROVENANCE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(FfmpegBundleDirectory)\PROVENANCE.md')" />
+    <Content Include="$(FfmpegBundleDirectory)\checksums.sha256" Link="tools\ffmpeg\checksums.sha256" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(FfmpegBundleDirectory)\checksums.sha256')" />
+  </ItemGroup>
+
+  <Target Name="ValidateMediaToolBundle" BeforeTargets="Publish" Condition="'$(RequireMediaToolBundle)' == 'true'">
+    <Error Condition="!Exists('$(FfmpegBundleDirectory)\ffmpeg.exe')" Text="FFmpeg bundle is missing ffmpeg.exe: $(FfmpegBundleDirectory)" />
+    <Error Condition="!Exists('$(FfmpegBundleDirectory)\ffprobe.exe')" Text="FFmpeg bundle is missing ffprobe.exe: $(FfmpegBundleDirectory)" />
+    <Error Condition="!Exists('$(FfmpegBundleDirectory)\LICENSE.txt')" Text="FFmpeg bundle is missing LICENSE.txt: $(FfmpegBundleDirectory)" />
+    <Error Condition="!Exists('$(FfmpegBundleDirectory)\PROVENANCE.md')" Text="FFmpeg bundle is missing PROVENANCE.md: $(FfmpegBundleDirectory)" />
+    <Error Condition="!Exists('$(FfmpegBundleDirectory)\checksums.sha256')" Text="FFmpeg bundle is missing checksums.sha256: $(FfmpegBundleDirectory)" />
+  </Target>
+
+  <Target Name="BuildDashboardWeb" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec
+      WorkingDirectory="$(DashboardWebDirectory)"
+      Command="npm ci --no-audit --no-fund"
+      Condition="!Exists('$(DashboardWebDirectory)\node_modules\react\package.json')" />
+    <Exec WorkingDirectory="$(DashboardWebDirectory)" Command="npm run build" />
+  </Target>
+
+  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyDashboardWeb" AfterTargets="Build" DependsOnTargets="BuildDashboardWeb">
+    <ItemGroup>
+      <DashboardWebAsset Include="$(DashboardWebDist)\**\*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(DashboardWebAsset)"
+      DestinationFiles="@(DashboardWebAsset->'$(TargetDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="IncludeDashboardInPublish" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="BuildDashboardWeb">
+    <ItemGroup>
+      <DashboardPublishFile Include="$(DashboardWebDist)\**\*" />
+      <ResolvedFileToPublish Include="@(DashboardPublishFile)">
+        <RelativePath>wwwroot\%(DashboardPublishFile.RecursiveDir)%(DashboardPublishFile.Filename)%(DashboardPublishFile.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyUpdaterForBuild" AfterTargets="Build">
+    <ItemGroup>
+      <UpdaterBuildFile Include="$(MSBuildThisFileDirectory)..\TOOL-UPDATER\bin\$(Configuration)\net10.0-windows\win-x64\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UpdaterBuildFile)" DestinationFiles="@(UpdaterBuildFile->'$(TargetDir)_updater\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PublishUpdater" BeforeTargets="ComputeFilesToPublish">
+    <PropertyGroup>
+      <UpdaterPublishDirectory>$(MSBuildProjectDirectory)\obj\$(Configuration)\updater-publish\</UpdaterPublishDirectory>
+    </PropertyGroup>
+    <MSBuild Projects="..\TOOL-UPDATER\TOOL-UPDATER.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;PublishDir=$(UpdaterPublishDirectory)" />
+    <ItemGroup>
+      <UpdaterPublishedFile Include="$(UpdaterPublishDirectory)VideoMaker.Updater.exe" />
+      <ResolvedFileToPublish Include="@(UpdaterPublishedFile)">
+        <RelativePath>_updater\VideoMaker.Updater.exe</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+</Project>
