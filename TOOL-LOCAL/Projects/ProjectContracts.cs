@@ -12,6 +12,17 @@ public sealed record CreateProjectCommand(
     string? VoiceCode = null,
     decimal? VoiceSpeakingRate = null);
 
+public sealed record CreateShortVideoCommand(
+    string Content,
+    string AspectRatio,
+    int DurationSeconds,
+    bool AudioEnabled,
+    Guid OrganizationId);
+
+public sealed record ShortVideoProjectResult(
+    ProjectSummary Project,
+    Guid SceneId);
+
 public sealed record ProjectSummary(
     Guid ProjectId,
     Guid? OrganizationId,
@@ -82,6 +93,7 @@ public sealed record SceneDashboardSummary(
     long TimelineStartMs,
     long TimelineEndMs,
     long DurationMs,
+    long GenerationDurationMs,
     string StoryPurpose,
     string? Narration,
     string VisualDescription,

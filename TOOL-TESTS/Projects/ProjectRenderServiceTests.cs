@@ -83,6 +83,28 @@ public sealed class ProjectRenderServiceTests
         Assert.Empty(await dbContext.ProviderRequests.ToListAsync());
     }
 
+    [Fact]
+    public async Task RenderFinalVideo_SilentSceneAcceptsOutputWithoutAudioStream()
+    {
+        await using var fixture = await RenderFixture.CreateAsync(
+            "SceneVideo",
+            nativeAudioAudible: false,
+            silentOutput: true);
+
+        var result = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        await using var dbContext = fixture.Factory.CreateDbContext();
+        var renderJob = await dbContext.RenderJobs.SingleAsync();
+        var output = await dbContext.MediaAssets.SingleAsync(x => x.MediaAssetId == result.MediaAssetId);
+        Assert.Equal("Completed", renderJob.Status);
+        Assert.Contains("\"audioStrategy\":\"SilentOutput\"", renderJob.ManifestJson);
+        Assert.Contains("\"audioStrategy\":\"SilentOutput\"", output.MetadataJson);
+        Assert.Null(output.AudioSampleRate);
+    }
+
     private sealed class RenderFixture : IAsyncDisposable
     {
         private RenderFixture(
@@ -114,7 +136,8 @@ public sealed class ProjectRenderServiceTests
         public static async Task<RenderFixture> CreateAsync(
             string assetType,
             bool nativeAudioAudible,
-            bool outputAudible = true)
+            bool outputAudible = true,
+            bool silentOutput = false)
         {
             var root = Path.Combine(Path.GetTempPath(), $"videomaker-render-{Guid.NewGuid():N}");
             var workspace = new ProjectWorkspaceService(root);
@@ -177,7 +200,9 @@ public sealed class ProjectRenderServiceTests
                     AudioSampleRate = 48000,
                     Status = "Ready",
                     SourceType = "Generated",
-                    MetadataJson = $"{{\"nativeAudioAudible\":{nativeAudioAudible.ToString().ToLowerInvariant()}}}",
+                    MetadataJson = silentOutput
+                        ? "{\"nativeAudioAudible\":false,\"audioStrategy\":\"SilentOutput\"}"
+                        : $"{{\"nativeAudioAudible\":{nativeAudioAudible.ToString().ToLowerInvariant()}}}",
                     CreatedAtUtc = now,
                     VerifiedAtUtc = now,
                     RowVersion = new byte[8]
@@ -222,7 +247,7 @@ public sealed class ProjectRenderServiceTests
             }
 
             var renderer = new CaptureRenderer();
-            var inspector = new StubOutputInspector(outputAudible);
+            var inspector = new StubOutputInspector(outputAudible, hasAudio: !silentOutput);
             var service = new ProjectRenderService(
                 factory,
                 workspace,
@@ -263,13 +288,22 @@ public sealed class ProjectRenderServiceTests
         }
     }
 
-    private sealed class StubOutputInspector(bool audible) : IFinalOutputInspector
+    private sealed class StubOutputInspector(bool audible, bool hasAudio = true) : IFinalOutputInspector
     {
         public Task<FinalOutputInspection> InspectAsync(
             string outputPath,
             CancellationToken cancellationToken) =>
             Task.FromResult(new FinalOutputInspection(
-                new MediaProbeResult(5m, 1280, 720, 25, "h264", "aac", 48000, true, true),
+                new MediaProbeResult(
+                    5m,
+                    1280,
+                    720,
+                    25,
+                    "h264",
+                    hasAudio ? "aac" : null,
+                    hasAudio ? 48000 : null,
+                    true,
+                    hasAudio),
                 new AudioQualityResult(
                     true,
                     audible,

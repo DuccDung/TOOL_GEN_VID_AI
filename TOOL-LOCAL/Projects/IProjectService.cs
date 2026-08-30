@@ -51,4 +51,10 @@ public interface IProjectService
         UserProfileResponse owner,
         Guid remoteDeviceId,
         CancellationToken cancellationToken = default);
+
+    Task<ShortVideoProjectResult> CreateShortVideoAsync(
+        CreateShortVideoCommand command,
+        UserProfileResponse owner,
+        Guid remoteDeviceId,
+        CancellationToken cancellationToken = default);
 }

@@ -98,6 +98,9 @@ internal static class Program
                     mediaProcessRunner,
                     mediaProbe,
                     audioQualityValidator);
+                var sceneVideoTrimmer = new SceneVideoTrimmer(
+                    mediaToolPaths.FfmpegPath,
+                    mediaProcessRunner);
                 var finalMediaRenderer = new FfmpegRenderService(
                     mediaToolPaths.FfmpegPath,
                     mediaProcessRunner);
@@ -121,7 +124,8 @@ internal static class Program
                     mediaProbe,
                     mediaToolPreflight,
                     audioQualityValidator,
-                    sceneAudioMixer);
+                    sceneAudioMixer,
+                    sceneVideoTrimmer);
                 var updateApiClient = new DesktopUpdateApiClient(updateHttpClient, sessionManager, options.Update);
                 var packageUpdateService = new DesktopPackageUpdateService(updateHttpClient);
                 using var mainForm = new Form1(

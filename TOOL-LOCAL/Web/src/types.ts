@@ -98,6 +98,7 @@ export type SceneSummary = {
   timelineStartMs: number;
   timelineEndMs: number;
   durationMs: number;
+  generationDurationMs: number;
   storyPurpose: string;
   narration?: string | null;
   visualDescription: string;
@@ -249,6 +250,13 @@ export type CreateProjectPayload = {
   topic: string;
   aspectRatio: string;
   languageCode: string;
+};
+
+export type CreateShortVideoPayload = {
+  content: string;
+  aspectRatio: '9:16' | '16:9' | '1:1';
+  durationSeconds: number;
+  audioEnabled: boolean;
 };
 
 export type UpdateScenePayload = {

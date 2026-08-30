@@ -77,6 +77,10 @@ internal sealed class ProjectRenderService(
                 {
                     var generation = scene.ApprovedGeneration;
                     var asset = generation?.OutputMediaAsset;
+                    var silentOutput = string.Equals(
+                        ReadStringProperty(asset?.MetadataJson, "audioStrategy"),
+                        "SilentOutput",
+                        StringComparison.OrdinalIgnoreCase);
                     if (scene.Status != "Approved" ||
                         scene.ApprovedGenerationId is null ||
                         generation is null ||
@@ -86,10 +90,12 @@ internal sealed class ProjectRenderService(
                         asset.AssetType != "SceneVideo" ||
                         asset.Status != "Ready" ||
                         asset.DeletedAtUtc is not null ||
-                        !ReadBooleanProperty(asset.MetadataJson, "nativeAudioAudible"))
+                        (!silentOutput && !ReadBooleanProperty(asset.MetadataJson, "nativeAudioAudible")))
                     {
                         throw new ArgumentException(
-                            $"Cảnh {scene.SequenceNumber} chưa có clip video Native Audio đã duyệt hợp lệ.");
+                            silentOutput
+                                ? $"Cảnh {scene.SequenceNumber} chưa có clip video không âm thanh đã duyệt hợp lệ."
+                                : $"Cảnh {scene.SequenceNumber} chưa có clip video Native Audio đã duyệt hợp lệ.");
                     }
 
                     var sourcePath = workspaceService.Resolve(asset.RelativePath);
@@ -114,7 +120,13 @@ internal sealed class ProjectRenderService(
                         asset.RelativePath,
                         sourcePath,
                         asset.Sha256,
-                        asset.DurationMs ?? generation.ActualDurationMs ?? generation.RequestedDurationMs));
+                        asset.DurationMs ?? generation.ActualDurationMs ?? generation.RequestedDurationMs,
+                        !silentOutput));
+                }
+
+                if (sources.Select(source => source.AudioEnabled).Distinct().Count() > 1)
+                {
+                    throw new ArgumentException("Chưa hỗ trợ dựng chung cảnh có âm thanh và cảnh tắt âm thanh trong cùng một video.");
                 }
 
                 var version = (await dbContext.RenderJobs
@@ -128,6 +140,7 @@ internal sealed class ProjectRenderService(
                     project.OutputWidth,
                     project.OutputHeight,
                     project.OutputFrameRate,
+                    sources.All(source => source.AudioEnabled),
                     sources);
             }
 
@@ -142,7 +155,7 @@ internal sealed class ProjectRenderService(
                 $"v{input.Version}")));
             var manifestJson = JsonSerializer.Serialize(new
             {
-                audioStrategy = "ProviderNative",
+                audioStrategy = input.AudioEnabled ? "ProviderNative" : "SilentOutput",
                 input.ProjectId,
                 input.ScenePlanVersion,
                 input.Version,
@@ -212,7 +225,7 @@ internal sealed class ProjectRenderService(
                 var completedAtUtc = DateTime.UtcNow;
                 var technicalReportJson = JsonSerializer.Serialize(new
                 {
-                    audioStrategy = "ProviderNative",
+                    audioStrategy = input.AudioEnabled ? "ProviderNative" : "SilentOutput",
                     sourceAssetType = "SceneVideo",
                     inspection.Probe,
                     inspection.AudioQuality,
@@ -351,14 +364,22 @@ internal sealed class ProjectRenderService(
 
     private static void ValidateOutput(RenderInput input, FinalOutputInspection inspection)
     {
-        if (!inspection.Probe.HasVideo || !inspection.Probe.HasAudio)
+        if (!inspection.Probe.HasVideo)
         {
-            throw new InvalidDataException("Video cuối phải có cả hình ảnh và Native Audio.");
+            throw new InvalidDataException("Video cuối không có luồng hình ảnh hợp lệ.");
         }
-        if (!inspection.AudioQuality.IsAudible)
+        if (input.AudioEnabled && !inspection.Probe.HasAudio)
+        {
+            throw new InvalidDataException("Video cuối phải có Native Audio.");
+        }
+        if (input.AudioEnabled && !inspection.AudioQuality.IsAudible)
         {
             throw new InvalidDataException(
                 $"Âm thanh video cuối không nghe được ({inspection.AudioQuality.FailureCode}).");
+        }
+        if (!input.AudioEnabled && inspection.Probe.HasAudio)
+        {
+            throw new InvalidDataException("Video cuối đã tắt âm thanh nhưng vẫn còn audio stream.");
         }
         if (inspection.Probe.Width != input.Width || inspection.Probe.Height != input.Height)
         {
@@ -389,6 +410,26 @@ internal sealed class ProjectRenderService(
         catch (JsonException)
         {
             return false;
+        }
+    }
+
+    private static string? ReadStringProperty(string? json, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty(propertyName, out var value) &&
+                   value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -423,6 +464,7 @@ internal sealed class ProjectRenderService(
         int Width,
         int Height,
         decimal FramesPerSecond,
+        bool AudioEnabled,
         IReadOnlyList<RenderSource> Sources);
 
     private sealed record RenderSource(
@@ -433,5 +475,6 @@ internal sealed class ProjectRenderService(
         string RelativePath,
         string AbsolutePath,
         string Sha256,
-        long DurationMs);
+        long DurationMs,
+        bool AudioEnabled);
 }

@@ -19,7 +19,8 @@ internal sealed class ProjectGenerationService(
     FfprobeService mediaProbe,
     IMediaToolPreflightService mediaToolPreflight,
     AudioQualityValidator audioQualityValidator,
-    SceneAudioMixer sceneAudioMixer) : IProjectGenerationService
+    SceneAudioMixer sceneAudioMixer,
+    SceneVideoTrimmer sceneVideoTrimmer) : IProjectGenerationService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -326,6 +327,7 @@ internal sealed class ProjectGenerationService(
                     x.ScriptId,
                     x.ScenePlanVersion,
                     x.SequenceNumber,
+                    x.ContentDurationMs,
                     x.GenerationDurationMs,
                     x.Narration,
                     x.Dialogue,
@@ -956,9 +958,15 @@ internal sealed class ProjectGenerationService(
         var workspaceRelativePath = Path.Combine(projectWorkspace, "scenes", fileName);
         var finalPath = workspaceService.Resolve(workspaceRelativePath);
         var partialPath = finalPath + ".part";
+        var trimmedPartialPath = finalPath + ".trimmed.part";
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
         MediaProbeResult probe;
-        AudioQualityResult nativeAudioQuality;
+        AudioQualityResult? nativeAudioQuality;
+        var trimmedToContentDuration = scene.ContentDurationMs > 0 &&
+                                       scene.ContentDurationMs < scene.GenerationDurationMs;
+        var outputAudioEnabled = !ReadBooleanProperty(
+            scene.RequiredCapabilitiesJson,
+            "muteOutputAudio");
         try
         {
             await apiClient.DownloadVideoAsync(task.OutputUrl!, partialPath, cancellationToken);
@@ -967,14 +975,67 @@ internal sealed class ProjectGenerationService(
             {
                 throw new InvalidDataException("Tệp provider tải về không chứa luồng video.");
             }
-            nativeAudioQuality = await audioQualityValidator.AnalyzeAsync(partialPath, cancellationToken);
-            File.Move(partialPath, finalPath, true);
+
+            if (trimmedToContentDuration)
+            {
+                if (scene.ContentDurationMs % 1000 != 0)
+                {
+                    throw new InvalidDataException("Thời lượng video ngắn cần cắt phải là số giây nguyên.");
+                }
+                var targetDurationSeconds = checked((int)(scene.ContentDurationMs / 1000));
+                await sceneVideoTrimmer.TrimAsync(
+                    partialPath,
+                    trimmedPartialPath,
+                    targetDurationSeconds,
+                    cancellationToken,
+                    includeAudio: outputAudioEnabled);
+                probe = await mediaProbe.ProbeAsync(trimmedPartialPath, cancellationToken);
+                if (!probe.HasVideo ||
+                    probe.DurationSeconds < targetDurationSeconds - 0.25m ||
+                    probe.DurationSeconds > targetDurationSeconds + 0.5m)
+                {
+                    throw new InvalidDataException("Clip sau khi cắt không đạt đúng thời lượng người dùng đã chọn.");
+                }
+                if (!outputAudioEnabled && probe.HasAudio)
+                {
+                    throw new InvalidDataException("Clip đã tắt âm thanh nhưng file sau xử lý vẫn còn audio stream.");
+                }
+                nativeAudioQuality = outputAudioEnabled
+                    ? await audioQualityValidator.AnalyzeAsync(trimmedPartialPath, cancellationToken)
+                    : null;
+                File.Move(trimmedPartialPath, finalPath, true);
+                File.Delete(partialPath);
+            }
+            else if (!outputAudioEnabled)
+            {
+                await sceneVideoTrimmer.StripAudioAsync(
+                    partialPath,
+                    trimmedPartialPath,
+                    cancellationToken);
+                probe = await mediaProbe.ProbeAsync(trimmedPartialPath, cancellationToken);
+                if (!probe.HasVideo || probe.HasAudio)
+                {
+                    throw new InvalidDataException("Clip tắt âm thanh sau xử lý không hợp lệ.");
+                }
+                nativeAudioQuality = null;
+                File.Move(trimmedPartialPath, finalPath, true);
+                File.Delete(partialPath);
+            }
+            else
+            {
+                nativeAudioQuality = await audioQualityValidator.AnalyzeAsync(partialPath, cancellationToken);
+                File.Move(partialPath, finalPath, true);
+            }
         }
         catch
         {
             if (File.Exists(partialPath))
             {
                 File.Delete(partialPath);
+            }
+            if (File.Exists(trimmedPartialPath))
+            {
+                File.Delete(trimmedPartialPath);
             }
             throw;
         }
@@ -1027,7 +1088,12 @@ internal sealed class ProjectGenerationService(
                 {
                     task.ProviderRequestId,
                     task.ModelCode,
-                    audioStrategy = "ProviderNative",
+                    audioStrategy = outputAudioEnabled ? "ProviderNative" : "SilentOutput",
+                    requestedContentDurationMs = scene.ContentDurationMs,
+                    providerGenerationDurationMs = scene.GenerationDurationMs,
+                    trimmedToContentDuration,
+                    providerNativeAudioRequested = true,
+                    outputAudioEnabled,
                     speechExpected,
                     speechMode = !string.IsNullOrWhiteSpace(scene.Dialogue)
                         ? KlingSpeechModes.OnCameraDialogue
@@ -1035,15 +1101,15 @@ internal sealed class ProjectGenerationService(
                             ? KlingSpeechModes.NativeVoiceOver
                             : KlingSpeechModes.None,
                     spokenTextHash = Sha256Hex(scene.SpokenText ?? string.Empty),
-                    nativeAudioExpected = true,
+                    nativeAudioExpected = outputAudioEnabled,
                     nativeAudioPresent = probe.HasAudio,
-                    nativeAudioAudible = nativeAudioQuality.IsAudible,
-                    nativeAudioQuality.MeanVolumeDb,
-                    nativeAudioQuality.MaxVolumeDb,
-                    nativeAudioQuality.SilentRatio,
+                    nativeAudioAudible = nativeAudioQuality?.IsAudible ?? false,
+                    meanVolumeDb = nativeAudioQuality?.MeanVolumeDb,
+                    maxVolumeDb = nativeAudioQuality?.MaxVolumeDb,
+                    silentRatio = nativeAudioQuality?.SilentRatio,
                     probe.VideoCodec,
                     probe.AudioCodec,
-                    warningCode = nativeAudioQuality.FailureCode
+                    warningCode = nativeAudioQuality?.FailureCode
                 }, JsonOptions),
                 CreatedAtUtc = DateTime.UtcNow,
                 VerifiedAtUtc = DateTime.UtcNow
@@ -1055,28 +1121,40 @@ internal sealed class ProjectGenerationService(
         generationToApprove.ActualDurationMs = durationMs;
         generationToApprove.QualityReportJson = JsonSerializer.Serialize(new
         {
-            audioStrategy = "ProviderNative",
+            audioStrategy = outputAudioEnabled ? "ProviderNative" : "SilentOutput",
+            requestedContentDurationMs = scene.ContentDurationMs,
+            providerGenerationDurationMs = scene.GenerationDurationMs,
+            trimmedToContentDuration,
+            providerNativeAudioRequested = true,
+            outputAudioEnabled,
             speechExpected,
-            nativeAudioExpected = true,
+            nativeAudioExpected = outputAudioEnabled,
             nativeAudioPresent = probe.HasAudio,
-            nativeAudioAudible = nativeAudioQuality.IsAudible,
-            nativeAudioQuality.MeanVolumeDb,
-            nativeAudioQuality.MaxVolumeDb,
-            nativeAudioQuality.SilentRatio,
-            issues = nativeAudioQuality.IsAudible
+            nativeAudioAudible = nativeAudioQuality?.IsAudible ?? false,
+            meanVolumeDb = nativeAudioQuality?.MeanVolumeDb,
+            maxVolumeDb = nativeAudioQuality?.MaxVolumeDb,
+            silentRatio = nativeAudioQuality?.SilentRatio,
+            issues = !outputAudioEnabled || nativeAudioQuality?.IsAudible == true
                 ? Array.Empty<string>()
-                : new[] { nativeAudioQuality.FailureCode ?? "native_audio_invalid" }
+                : new[] { nativeAudioQuality?.FailureCode ?? "native_audio_invalid" }
         }, JsonOptions);
-        var nativeAudioInvalid = !probe.HasAudio || !nativeAudioQuality.IsAudible;
-        generationToApprove.Status = nativeAudioInvalid ? "NativeAudioInvalid" : "AudioReviewRequired";
+        var nativeAudioInvalid = outputAudioEnabled &&
+                                 (!probe.HasAudio || nativeAudioQuality?.IsAudible != true);
+        generationToApprove.Status = outputAudioEnabled
+            ? nativeAudioInvalid ? "NativeAudioInvalid" : "AudioReviewRequired"
+            : "Approved";
         generationToApprove.CompletedAtUtc = DateTime.UtcNow;
-        sceneToApprove.ApprovedGenerationId = null;
-        sceneToApprove.Status = nativeAudioInvalid ? "NativeAudioInvalid" : "AudioReviewRequired";
+        sceneToApprove.ApprovedGenerationId = outputAudioEnabled
+            ? null
+            : generationToApprove.VideoGenerationId;
+        sceneToApprove.Status = outputAudioEnabled
+            ? nativeAudioInvalid ? "NativeAudioInvalid" : "AudioReviewRequired"
+            : "Approved";
         sceneToApprove.LastErrorCode = nativeAudioInvalid
-            ? nativeAudioQuality.FailureCode ?? "provider_native_audio_inaudible"
+            ? nativeAudioQuality?.FailureCode ?? "provider_native_audio_inaudible"
             : null;
         sceneToApprove.LastErrorMessage = nativeAudioInvalid
-            ? nativeAudioQuality.FailureMessage ?? "Clip provider không có Native Audio nghe được. Hãy tạo lại cảnh."
+            ? nativeAudioQuality?.FailureMessage ?? "Clip provider không có Native Audio nghe được. Hãy tạo lại cảnh."
             : null;
         sceneToApprove.UpdatedAtUtc = DateTime.UtcNow;
         await writeContext.SaveChangesAsync(cancellationToken);
@@ -1622,6 +1700,25 @@ internal sealed class ProjectGenerationService(
         }
     }
 
+    private static bool ReadBooleanProperty(string? json, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty(propertyName, out var value) &&
+                   value.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static string LocalGenerationStatus(string taskStatus) => taskStatus switch
     {
         "Completed" => "Generated",
@@ -1673,6 +1770,7 @@ internal sealed class ProjectGenerationService(
         Guid ScriptId,
         int ScenePlanVersion,
         int SequenceNumber,
+        long ContentDurationMs,
         long GenerationDurationMs,
         string? Narration,
         string? Dialogue,

@@ -9,6 +9,7 @@ Khi toàn bộ scene đã được nghe và duyệt, desktop cho phép dựng vi
 Tài liệu chính:
 
 - [Nghiệp vụ hệ thống](NGHIEP_VU_HE_THONG_VIDEOMAKER.md)
+- [Nghiệp vụ tạo video ngắn bằng Kling](NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md)
 - [Nghiệp vụ sinh video và đồng bộ nhân vật](NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md)
 - [Hướng dẫn triển khai AI Gateway](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md)
 - [Sơ đồ hoạt động API AI](SO_DO_HOAT_DONG_API_AI.docx)

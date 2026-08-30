@@ -83,8 +83,16 @@ internal sealed class DashboardBridge : IDisposable
             switch (request.Type)
             {
                 case "app.ready":
+                    await RefreshAsync(
+                        request.RequestId,
+                        cancellationToken,
+                        selectDefaultProject: false);
+                    break;
                 case "dashboard.refresh":
-                    await RefreshAsync(request.RequestId, cancellationToken);
+                    await RefreshAsync(
+                        request.RequestId,
+                        cancellationToken,
+                        selectDefaultProject: _selectedProjectId.HasValue);
                     break;
                 case "project.select":
                     await SelectProjectAsync(request, cancellationToken);
@@ -94,6 +102,9 @@ internal sealed class DashboardBridge : IDisposable
                     break;
                 case "project.create":
                     await CreateProjectAsync(request, cancellationToken);
+                    break;
+                case "short-video.generate":
+                    await GenerateShortVideoAsync(request, cancellationToken);
                     break;
                 case "generation.content":
                     await GenerateContentAsync(request.RequestId, cancellationToken);
@@ -194,7 +205,10 @@ internal sealed class DashboardBridge : IDisposable
     }
 
     public Task RefreshInBackgroundAsync(CancellationToken cancellationToken = default) =>
-        RefreshAsync(null, cancellationToken);
+        RefreshAsync(
+            null,
+            cancellationToken,
+            selectDefaultProject: _selectedProjectId.HasValue);
 
     private async Task SelectProjectAsync(WebMessageRequest request, CancellationToken cancellationToken)
     {
@@ -276,6 +290,92 @@ internal sealed class DashboardBridge : IDisposable
             request.RequestId,
             new { message = "Đã tạo dự án mới." }));
         await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private Task GenerateShortVideoAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<CreateShortVideoWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Thông tin tạo video ngắn không hợp lệ.");
+        var content = payload.Content?.Trim() ?? string.Empty;
+        if (content.Length is < 1 or > 2000)
+        {
+            throw new ArgumentException("Nội dung video phải có từ 1 đến 2.000 ký tự.");
+        }
+        var aspectRatio = payload.AspectRatio is "16:9" or "9:16" or "1:1"
+            ? payload.AspectRatio
+            : throw new ArgumentException("Tỷ lệ khung hình không được hỗ trợ.");
+        if (payload.DurationSeconds is < 5 or > 15)
+        {
+            throw new ArgumentException("Thời lượng video phải nằm trong khoảng 5–15 giây.");
+        }
+
+        return RunExclusiveGenerationAsync(
+            request.RequestId,
+            async token =>
+            {
+                var current = _sessionManager.Current
+                    ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
+                var organizationId = _generationClient.SelectedOrganizationId
+                    ?? throw new ArgumentException("Hãy chọn tổ chức trước khi tạo video.");
+
+                await _mediaToolPreflight.RequireReadyAsync(token);
+                var providerStatus = await _generationService.GetProviderStatusAsync(token);
+                if (!providerStatus.VideoReady)
+                {
+                    throw new AccountClientException(
+                        providerStatus.VideoUnavailableCode ?? "video_provider_not_ready",
+                        providerStatus.VideoUnavailableMessage ??
+                        "Kling chưa sẵn sàng cho tổ chức hiện tại. Hãy kiểm tra provider, model và rate Active.",
+                        409);
+                }
+                if (!string.Equals(providerStatus.VideoProviderCode, "kling", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException(
+                        "Màn hình này chỉ tạo clip bằng Kling. Hãy chọn Kling làm video policy của tổ chức.");
+                }
+
+                var result = await _projectService.CreateShortVideoAsync(
+                    new CreateShortVideoCommand(
+                        content,
+                        aspectRatio,
+                        payload.DurationSeconds,
+                        payload.AudioEnabled,
+                        organizationId),
+                    current.User,
+                    current.DeviceId,
+                    token);
+                _selectedProjectId = result.Project.ProjectId;
+                Post(new WebMessageResponse(
+                    "short-video.started",
+                    request.RequestId,
+                    new { projectId = result.Project.ProjectId, sceneId = result.SceneId }));
+                await RefreshAsync(request.RequestId, token);
+
+                Post(new WebMessageResponse(
+                    "operation.notice",
+                    request.RequestId,
+                    new { message = $"Đã tạo workflow một cảnh. Kling đang xử lý clip {payload.DurationSeconds} giây..." }));
+                var count = await _generationService.GenerateVideosAsync(
+                    result.Project.ProjectId,
+                    current.User.UserId,
+                    [result.SceneId],
+                    async (message, progressToken) =>
+                    {
+                        Post(new WebMessageResponse("operation.notice", request.RequestId, new { message }));
+                        await RefreshAsync(request.RequestId, progressToken);
+                    },
+                    token);
+                Post(new WebMessageResponse(
+                    "operation.notice",
+                    request.RequestId,
+                    new
+                    {
+                        message = payload.AudioEnabled
+                            ? $"Đã tạo xong {count} clip Kling {payload.DurationSeconds} giây. Hãy phát video để kiểm tra hình và Native Audio."
+                            : $"Đã tạo xong {count} clip Kling {payload.DurationSeconds} giây. VideoMaker đã loại bỏ audio và tự động duyệt clip đầu ra."
+                    }));
+            },
+            cancellationToken);
     }
 
     private async Task LogoutAsync(string? requestId, CancellationToken cancellationToken)
@@ -572,9 +672,25 @@ internal sealed class DashboardBridge : IDisposable
         return (projectId, current.User.UserId);
     }
 
-    private async Task RunGenerationAsync(
+    private Task RunGenerationAsync(
         string? requestId,
         Func<Guid, string, CancellationToken, Task> operation,
+        CancellationToken cancellationToken) =>
+        RunExclusiveGenerationAsync(
+            requestId,
+            async token =>
+            {
+                var current = _sessionManager.Current
+                    ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
+                var projectId = _selectedProjectId
+                    ?? throw new ArgumentException("Hãy chọn hoặc tạo một dự án trước.");
+                await operation(projectId, current.User.UserId, token);
+            },
+            cancellationToken);
+
+    private async Task RunExclusiveGenerationAsync(
+        string? requestId,
+        Func<CancellationToken, Task> operation,
         CancellationToken cancellationToken)
     {
         if (!_generationLock.Wait(0))
@@ -584,13 +700,9 @@ internal sealed class DashboardBridge : IDisposable
 
         try
         {
-            var current = _sessionManager.Current
-                ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
-            var projectId = _selectedProjectId
-                ?? throw new ArgumentException("Hãy chọn hoặc tạo một dự án trước.");
             _generationRunning = true;
             await RefreshAsync(requestId, cancellationToken);
-            await operation(projectId, current.User.UserId, cancellationToken);
+            await operation(cancellationToken);
         }
         finally
         {
@@ -606,7 +718,10 @@ internal sealed class DashboardBridge : IDisposable
         }
     }
 
-    private async Task RefreshAsync(string? requestId, CancellationToken cancellationToken)
+    private async Task RefreshAsync(
+        string? requestId,
+        CancellationToken cancellationToken,
+        bool selectDefaultProject = true)
     {
         if (_disposed)
         {
@@ -637,10 +752,10 @@ internal sealed class DashboardBridge : IDisposable
             var projects = allProjects
                 .Where(x => x.OrganizationId == selectedOrganizationId.Value)
                 .ToArray();
-            if (_selectedProjectId is null || projects.All(x => x.ProjectId != _selectedProjectId.Value))
-            {
-                _selectedProjectId = projects.FirstOrDefault()?.ProjectId;
-            }
+            _selectedProjectId = ResolveSelectedProjectId(
+                _selectedProjectId,
+                projects.Select(x => x.ProjectId).ToArray(),
+                selectDefaultProject);
 
             var selectedProject = _selectedProjectId.HasValue
                 ? await _projectService.GetDashboardAsync(
@@ -678,6 +793,21 @@ internal sealed class DashboardBridge : IDisposable
         {
             _operationLock.Release();
         }
+    }
+
+    internal static Guid? ResolveSelectedProjectId(
+        Guid? selectedProjectId,
+        IReadOnlyList<Guid> availableProjectIds,
+        bool selectDefaultProject)
+    {
+        if (selectedProjectId.HasValue && availableProjectIds.Contains(selectedProjectId.Value))
+        {
+            return selectedProjectId;
+        }
+
+        return selectDefaultProject && availableProjectIds.Count > 0
+            ? availableProjectIds[0]
+            : null;
     }
 
     private static string NormalizeTopic(string topic)

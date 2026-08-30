@@ -187,7 +187,8 @@ public sealed class ProjectService(
                     x.SequenceNumber,
                     x.TimelineStartMs,
                     x.TimelineEndMs,
-                    DurationMs = x.GenerationDurationMs,
+                    DurationMs = x.ContentDurationMs,
+                    x.GenerationDurationMs,
                     x.StoryPurpose,
                     x.Narration,
                     x.Dialogue,
@@ -324,6 +325,7 @@ public sealed class ProjectService(
                     scene.TimelineStartMs,
                     scene.TimelineEndMs,
                     scene.DurationMs,
+                    scene.GenerationDurationMs,
                     scene.StoryPurpose,
                     spokenText,
                     scene.VisualDescription,
@@ -363,7 +365,7 @@ public sealed class ProjectService(
                     ReadStringProperty(scene.RequiredCapabilitiesJson, "ambientAudio"),
                     ReadStringProperty(scene.RequiredCapabilitiesJson, "soundEffects"),
                     NativeSpeechWordBudget.MaximumWordsForDurationSeconds(
-                        checked((int)Math.Ceiling(scene.DurationMs / 1000m))));
+                        checked((int)Math.Ceiling(scene.GenerationDurationMs / 1000m))));
             })
             .ToArray();
 
@@ -402,6 +404,11 @@ public sealed class ProjectService(
             ? 0
             : Math.Round(pipeline.Average(x => x.ProgressPercent), 2);
         var renderProgress = render?.ProgressPercent ?? pipeline.Last().ProgressPercent;
+        var audioStrategy = sceneRows.Count > 0 &&
+                            sceneRows.All(scene =>
+                                ReadBooleanProperty(scene.RequiredCapabilitiesJson, "muteOutputAudio"))
+            ? "SilentOutput"
+            : "ProviderNative";
 
         var summary = new ProjectSummary(
             project.ProjectId,
@@ -442,7 +449,7 @@ public sealed class ProjectService(
                 : "Dự án gặp lỗi ở bước xử lý gần nhất.",
             project.VoiceCode,
             project.VoiceSpeakingRate,
-            "ProviderNative");
+            audioStrategy);
     }
 
     public async Task UpdateSceneAsync(
@@ -957,6 +964,221 @@ public sealed class ProjectService(
             project.UpdatedAtUtc);
     }
 
+    public async Task<ShortVideoProjectResult> CreateShortVideoAsync(
+        CreateShortVideoCommand command,
+        UserProfileResponse owner,
+        Guid remoteDeviceId,
+        CancellationToken cancellationToken = default)
+    {
+        Validate(command);
+        var content = command.Content.Trim();
+        var projectId = Guid.NewGuid();
+        var conceptId = Guid.NewGuid();
+        var scriptId = Guid.NewGuid();
+        var styleProfileId = Guid.NewGuid();
+        var sceneId = Guid.NewGuid();
+        var scenePromptId = Guid.NewGuid();
+        var relativeWorkspace = workspaceService.Create(projectId);
+        var now = DateTime.UtcNow;
+        var projectName = CreateShortVideoName(content);
+        var providerDurationSeconds = command.DurationSeconds;
+        var contentDurationMs = command.DurationSeconds * 1000L;
+        var generationDurationMs = providerDurationSeconds * 1000L;
+        var platform = command.AspectRatio switch
+        {
+            "9:16" => "YouTubeShorts",
+            "1:1" => "InstagramReels",
+            _ => "YouTube"
+        };
+        var (outputWidth, outputHeight) = command.AspectRatio switch
+        {
+            "16:9" => (1920, 1080),
+            "1:1" => (1080, 1080),
+            _ => (1080, 1920)
+        };
+        var canonicalInputJson = JsonSerializer.Serialize(new
+        {
+            workflow = "short-video-direct-prompt",
+            content,
+            durationSeconds = command.DurationSeconds,
+            providerDurationSeconds,
+            aspectRatio = command.AspectRatio,
+            nativeAudio = true,
+            outputAudioEnabled = command.AudioEnabled,
+            muteOutputAudio = !command.AudioEnabled,
+            speechMode = KlingSpeechModes.None
+        });
+        const string negativePrompt =
+            "text overlays, subtitles, watermarks, logos, distorted anatomy, duplicated subjects, flicker, visual artifacts";
+
+        var project = new Project
+        {
+            ProjectId = projectId,
+            OrganizationId = command.OrganizationId,
+            CreatedByUserId = owner.UserId,
+            RemoteUserId = owner.UserId,
+            RemoteDeviceId = remoteDeviceId,
+            OwnerDisplayNameSnapshot = owner.DisplayName,
+            Name = projectName,
+            Topic = content,
+            LanguageCode = "vi-VN",
+            Platform = platform,
+            AspectRatio = command.AspectRatio,
+            TargetDurationSeconds = command.DurationSeconds,
+            OutputWidth = outputWidth,
+            OutputHeight = outputHeight,
+            OutputFrameRate = 30,
+            Status = "ScenePlanning",
+            CurrentConceptVersion = 1,
+            CurrentScriptVersion = 1,
+            CurrentStyleVersion = 1,
+            CurrentScenePlanVersion = 1,
+            RequireContentApproval = false,
+            RequireStoryboardApproval = false,
+            EstimatedCost = 0,
+            ActualCost = 0,
+            CurrencyCode = "USD",
+            WorkspaceRelativePath = relativeWorkspace,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+        var concept = new Concept
+        {
+            ConceptId = conceptId,
+            ProjectId = projectId,
+            Version = 1,
+            Title = projectName,
+            Angle = "Direct short-video prompt supplied by the user.",
+            StrategyJson = JsonSerializer.Serialize(new
+            {
+                workflow = "short-video-direct-prompt",
+                usesOpenAi = false,
+                durationSeconds = command.DurationSeconds,
+                providerDurationSeconds
+            }),
+            Status = "Approved",
+            CreatedAtUtc = now,
+            ApprovedAtUtc = now
+        };
+        var script = new Script
+        {
+            ScriptId = scriptId,
+            ProjectId = projectId,
+            ConceptId = conceptId,
+            Version = 1,
+            StructureType = "DirectShortVideo",
+            Title = projectName,
+            FullText = content,
+            NarrationJson = "[]",
+            DialogueJson = "[]",
+            StoryBeatsJson = JsonSerializer.Serialize(new[]
+            {
+                new { id = "short-video-scene", content, durationSeconds = command.DurationSeconds }
+            }),
+            EstimatedDurationMs = contentDurationMs,
+            Status = "Approved",
+            CreatedAtUtc = now,
+            ApprovedAtUtc = now
+        };
+        var styleProfile = new StyleProfile
+        {
+            StyleProfileId = styleProfileId,
+            ProjectId = projectId,
+            Version = 1,
+            Name = "Direct short video",
+            VisualStyleJson = JsonSerializer.Serialize(new { description = content }),
+            CameraStyleJson = JsonSerializer.Serialize(new { direction = "Follow the user's prompt." }),
+            LightingStyleJson = JsonSerializer.Serialize(new { direction = "Follow the user's prompt." }),
+            EnvironmentJson = JsonSerializer.Serialize(new
+            {
+                nativeAudio = command.AudioEnabled
+                    ? "Natural environmental audio matching the scene."
+                    : "Provider audio is removed from the local output."
+            }),
+            NegativeRulesJson = JsonSerializer.Serialize(new[] { negativePrompt }),
+            Status = "Approved",
+            CreatedAtUtc = now,
+            ApprovedAtUtc = now
+        };
+        var scene = new Scene
+        {
+            SceneId = sceneId,
+            ProjectId = projectId,
+            ScriptId = scriptId,
+            StyleProfileId = styleProfileId,
+            ScenePlanVersion = 1,
+            SequenceNumber = 1,
+            StoryBeatId = "short-video-scene",
+            StoryPurpose = $"Video ngắn {command.DurationSeconds} giây từ nội dung người dùng nhập.",
+            VisualDescription = content,
+            ContentDurationMs = contentDurationMs,
+            GenerationDurationMs = generationDurationMs,
+            TimelineStartMs = 0,
+            TimelineEndMs = contentDurationMs,
+            TailTrimMs = generationDurationMs - contentDurationMs,
+            CharacterIdsJson = "[]",
+            EntryStateJson = "{}",
+            ExitStateJson = "{}",
+            RequiredCapabilitiesJson = JsonSerializer.Serialize(new
+            {
+                textToVideo = true,
+                maxDurationSeconds = 15,
+                requestedDurationSeconds = command.DurationSeconds,
+                providerDurationSeconds,
+                aspectRatio = command.AspectRatio,
+                nativeAudio = true,
+                outputAudioEnabled = command.AudioEnabled,
+                muteOutputAudio = !command.AudioEnabled,
+                speechMode = KlingSpeechModes.None,
+                ambientAudio = command.AudioEnabled
+                    ? "Natural environmental audio matching the scene."
+                    : null,
+                soundEffects = command.AudioEnabled
+                    ? "Natural sound effects synchronized with visible actions."
+                    : null
+            }),
+            Status = "PromptReady",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+        var prompt = new ScenePrompt
+        {
+            ScenePromptId = scenePromptId,
+            SceneId = sceneId,
+            Version = 1,
+            PromptTemplateName = "manual-short-video",
+            PromptTemplateVersion = "1",
+            CanonicalInputJson = canonicalInputJson,
+            FinalPrompt = content,
+            NegativePrompt = negativePrompt,
+            PromptHash = Sha256Hex(content + "\n" + negativePrompt + "\n" + canonicalInputJson),
+            Status = "Approved",
+            CreatedAtUtc = now,
+            ApprovedAtUtc = now
+        };
+
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        dbContext.AddRange(project, concept, script, styleProfile, scene, prompt);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return new ShortVideoProjectResult(
+            new ProjectSummary(
+                project.ProjectId,
+                project.OrganizationId,
+                project.Name,
+                project.Topic,
+                project.Platform,
+                project.AspectRatio,
+                project.TargetDurationSeconds,
+                project.Status,
+                project.ActualCost,
+                project.BudgetLimit,
+                project.UpdatedAtUtc),
+            sceneId);
+    }
+
     private static void Validate(CreateProjectCommand command)
     {
         if (command.OrganizationId == Guid.Empty)
@@ -1008,6 +1230,35 @@ public sealed class ProjectService(
         {
             throw new ArgumentException("Tốc độ giọng đọc phải nằm trong khoảng 0,5–2,0.", nameof(command));
         }
+    }
+
+    private static void Validate(CreateShortVideoCommand command)
+    {
+        if (command.OrganizationId == Guid.Empty)
+        {
+            throw new ArgumentException("Tổ chức của video ngắn không hợp lệ.", nameof(command));
+        }
+        if (string.IsNullOrWhiteSpace(command.Content) || command.Content.Trim().Length > 2000)
+        {
+            throw new ArgumentException("Nội dung video phải có từ 1 đến 2.000 ký tự.", nameof(command));
+        }
+        if (command.AspectRatio is not ("9:16" or "16:9" or "1:1"))
+        {
+            throw new ArgumentException("Tỷ lệ khung hình không được hỗ trợ.", nameof(command));
+        }
+        if (command.DurationSeconds is < 5 or > 15)
+        {
+            throw new ArgumentException("Thời lượng video phải nằm trong khoảng 5–15 giây.", nameof(command));
+        }
+    }
+
+    private static string CreateShortVideoName(string content)
+    {
+        const int maximumLength = 70;
+        var singleLine = string.Join(' ', content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return singleLine.Length <= maximumLength
+            ? singleLine
+            : $"{singleLine[..(maximumLength - 1)].TrimEnd()}…";
     }
 
     private static IReadOnlyList<PipelineStageSummary> CreatePipeline(

@@ -43,6 +43,7 @@ import {
   UserRound,
   Users,
   Volume2,
+  VolumeX,
   WandSparkles,
   X
 } from 'lucide-react';
@@ -57,6 +58,7 @@ import type {
   AiModel,
   CharacterSummary,
   CreateProjectPayload,
+  CreateShortVideoPayload,
   DashboardState,
   DesktopRelease,
   DesktopUpdateNotice,
@@ -74,7 +76,7 @@ import type {
   UpdateCharacterPayload,
 } from './types';
 
-type Page = 'create' | 'projects' | 'apiKeys';
+type Page = 'create' | 'shortVideo' | 'projects' | 'apiKeys';
 type Toast = { id: number; message: string; error?: boolean };
 type ConfirmationIntent = 'default' | 'download';
 type ConfirmationRequest = {
@@ -105,6 +107,10 @@ const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
   create: {
     title: 'Tạo video mới',
     subtitle: 'Nhập chủ đề hoặc ý tưởng, AI sẽ giúp bạn tạo video hoàn chỉnh chỉ với vài bước.'
+  },
+  shortVideo: {
+    title: 'Tạo video ngắn',
+    subtitle: 'Nhập nội dung hình ảnh và tạo trực tiếp một clip Kling từ 1 đến 15 giây với Native Audio.'
   },
   projects: {
     title: 'Dự án của tôi',
@@ -151,7 +157,7 @@ const emptyState: DashboardState = {
 const primaryMenu: Array<{ label: string; icon: LucideIcon; page?: Page }> = [
   { label: 'Dashboard', icon: Home, page: 'create' },
   { label: 'Dự án của tôi', icon: FolderOpen, page: 'projects' },
-  { label: 'Tạo video', icon: Play, page: 'create' },
+  { label: 'Tạo video', icon: Play, page: 'shortVideo' },
   { label: 'Nhân vật AI', icon: Users },
   { label: 'Thư viện video', icon: Library },
   { label: 'Lịch sử render', icon: Clock3 },
@@ -209,6 +215,7 @@ function App() {
   const [characterImageBusyId, setCharacterImageBusyId] = useState<string | null>(null);
   const [mediaInstallProgress, setMediaInstallProgress] = useState<DesktopUpdateProgress | null>(null);
   const [sceneSaveState, setSceneSaveState] = useState<SceneSaveState | null>(null);
+  const [shortVideoProjectId, setShortVideoProjectId] = useState<string | null>(null);
   const pendingSceneSaveRef = useRef<PendingSceneSave | null>(null);
 
   const notify = (message: string, error = false) => {
@@ -224,6 +231,12 @@ function App() {
         setDashboard(nextDashboard);
         if (!nextDashboard.generationRunning) setCharacterImageBusyId(null);
         setBusy(false);
+        return;
+      }
+
+      if (message.type === 'short-video.started' && message.payload) {
+        const payload = message.payload as { projectId?: string };
+        if (payload.projectId) setShortVideoProjectId(payload.projectId);
         return;
       }
 
@@ -358,6 +371,60 @@ function App() {
     postToHost('project.create', payload);
   };
 
+  const requestShortVideo = (payload: CreateShortVideoPayload) => {
+    if (busy || dashboard.generationRunning) return;
+    const content = payload.content.trim();
+    if (!content || content.length > 2000) {
+      notify('Nội dung video phải có từ 1 đến 2.000 ký tự.', true);
+      return;
+    }
+    if (!Number.isInteger(payload.durationSeconds) || payload.durationSeconds < 5 || payload.durationSeconds > 15) {
+      notify('Thời lượng video phải nằm trong khoảng 5–15 giây.', true);
+      return;
+    }
+    if (!dashboard.selectedOrganizationId) {
+      notify('Hãy chọn tổ chức trước khi tạo video.', true);
+      return;
+    }
+    if (!dashboard.mediaTools.ready) {
+      notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
+      return;
+    }
+    const status = dashboard.providerStatus;
+    if (!status.videoReady) {
+      notify(status.videoUnavailableMessage ?? 'Kling chưa sẵn sàng cho tổ chức hiện tại.', true);
+      return;
+    }
+    if (status.videoProviderCode?.toLowerCase() !== 'kling') {
+      notify('Màn hình này chỉ dùng Kling. Hãy chọn Kling làm video policy của tổ chức.', true);
+      return;
+    }
+
+    const providerDurationSeconds = payload.durationSeconds;
+    const estimatedCost = status.estimatedVideoCostPerSecond && status.estimatedVideoCostPerSecond > 0
+      ? status.estimatedVideoCostPerSecond * providerDurationSeconds
+      : null;
+    const contentPreview = content.length > 360 ? `${content.slice(0, 359).trimEnd()}…` : content;
+    setConfirmation({
+      eyebrow: 'XÁC NHẬN TẠO VIDEO NGẮN',
+      title: `Tạo một clip Kling ${payload.durationSeconds} giây?`,
+      description: `${status.videoProviderName ?? 'Kling'} · ${status.videoModel ?? 'Model theo policy'} · ${status.videoResolution ?? '720p'} · ${payload.aspectRatio} · ${payload.audioEnabled ? 'Giữ Native Audio' : 'Video đầu ra không âm thanh'}\n\n${contentPreview}`,
+      note: estimatedCost
+        ? `Chi phí ước tính ${formatMoney(estimatedCost, status.currencyCode ?? 'USD')} cho ${providerDurationSeconds} giây provider.${payload.audioEnabled ? '' : ' Kling vẫn dùng variant Native Audio và tính phí như cũ; VideoMaker sẽ loại bỏ hoàn toàn audio khỏi file đầu ra.'} Server vẫn kiểm tra rate Active, budget và quyền. Luồng này không gọi OpenAI.`
+        : `Server sẽ quote rate Active, giữ budget của tổ chức và kiểm tra quyền trước khi gọi Kling.${payload.audioEnabled ? '' : ' Kling vẫn dùng variant Native Audio và tính phí như cũ; VideoMaker sẽ loại bỏ hoàn toàn audio khỏi file đầu ra.'} Luồng này không gọi OpenAI.`,
+      confirmLabel: `Tạo clip ${payload.durationSeconds} giây`,
+      onConfirm: () => {
+        setBusy(true);
+        postToHost('short-video.generate', {
+          content,
+          aspectRatio: payload.aspectRatio,
+          durationSeconds: payload.durationSeconds,
+          audioEnabled: payload.audioEnabled
+        });
+      }
+    });
+  };
+
   const generateContent = () => {
     if (!dashboard.selectedProject || dashboard.generationRunning) return;
     setBusy(true);
@@ -367,19 +434,26 @@ function App() {
   const renderFinalVideo = () => {
     const project = dashboard.selectedProject;
     if (!project || dashboard.generationRunning) return;
+    const silentOutput = project.audioStrategy === 'SilentOutput';
     if (!dashboard.mediaTools.ready) {
       notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
       return;
     }
     if (project.totalScenes === 0 || project.approvedScenes !== project.totalScenes) {
-      notify('Hãy nghe và duyệt Native Audio của tất cả cảnh trước khi dựng video cuối.', true);
+      notify(silentOutput
+        ? 'Hãy hoàn tất tất cả clip trước khi dựng video cuối.'
+        : 'Hãy nghe và duyệt Native Audio của tất cả cảnh trước khi dựng video cuối.', true);
       return;
     }
     setConfirmation({
       eyebrow: 'XÁC NHẬN DỰNG VIDEO CUỐI',
       title: project.preview?.url ? 'Dựng lại video hoàn chỉnh?' : 'Dựng video hoàn chỉnh?',
-      description: `${project.totalScenes} clip SceneVideo đã duyệt sẽ được ghép đúng thứ tự. Âm thanh Native Audio của provider được giữ nguyên; hệ thống không tạo hoặc chèn thêm giọng TTS.`,
-      note: 'FFmpeg sẽ kiểm tra lại hình, audio stream, mức âm lượng và thời lượng trước khi công nhận video đầu ra.',
+      description: silentOutput
+        ? `${project.totalScenes} clip SceneVideo không âm thanh sẽ được ghép đúng thứ tự. Video đầu ra sẽ không chứa audio stream.`
+        : `${project.totalScenes} clip SceneVideo đã duyệt sẽ được ghép đúng thứ tự. Âm thanh Native Audio của provider được giữ nguyên; hệ thống không tạo hoặc chèn thêm giọng TTS.`,
+      note: silentOutput
+        ? 'FFmpeg sẽ kiểm tra lại hình, thời lượng và xác nhận file đầu ra không có audio stream.'
+        : 'FFmpeg sẽ kiểm tra lại hình, audio stream, mức âm lượng và thời lượng trước khi công nhận video đầu ra.',
       confirmLabel: 'Bắt đầu dựng video',
       onConfirm: () => {
         setBusy(true);
@@ -406,7 +480,9 @@ function App() {
     const isDownloadOnly = resumableScenes.length === selectedScenes.length;
     const isMixedOperation = resumableScenes.length > 0 && newRequestScenes.length > 0;
     const totalSeconds = Math.ceil(selectedScenes.reduce((total, scene) => total + scene.durationMs, 0) / 1000);
-    const newRequestSeconds = Math.ceil(newRequestScenes.reduce((total, scene) => total + scene.durationMs, 0) / 1000);
+    const newRequestSeconds = Math.ceil(newRequestScenes.reduce(
+      (total, scene) => total + (scene.generationDurationMs ?? scene.durationMs),
+      0) / 1000);
     const spokenSceneCount = selectedScenes.filter((scene) => scene.speechMode !== 'None').length;
     const spokenPreview = selectedScenes
       .map((scene) => {
@@ -585,6 +661,7 @@ function App() {
           }}
           onSelectProject={selectProject}
           onSelectOrganization={(organizationId) => {
+            setShortVideoProjectId(null);
             setBusy(true);
             postToHost('organization.select', { organizationId });
           }}
@@ -593,6 +670,19 @@ function App() {
 
         {page === 'projects' ? (
           <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={() => setPage('create')} />
+        ) : page === 'shortVideo' ? (
+          <ShortVideoPage
+            project={dashboard.selectedProject?.project.projectId === shortVideoProjectId
+              ? dashboard.selectedProject
+              : null}
+            providerStatus={dashboard.providerStatus}
+            mediaTools={dashboard.mediaTools}
+            hasOrganization={Boolean(dashboard.selectedOrganizationId)}
+            busy={generationBusy}
+            onGenerate={requestShortVideo}
+            onOpenSetup={() => setPage('apiKeys')}
+            onCheckMediaTools={checkMediaTools}
+          />
         ) : page === 'apiKeys' ? (
           <ApiKeysPage
             settings={providerSettings ?? {
@@ -977,7 +1067,7 @@ function Sidebar({
         <nav className="sidebar-nav">
           {primaryMenu.map(({ label, icon: Icon, page: target }) => (
             <button
-              className={target === page && (label === 'Dashboard' || label === 'Dự án của tôi') ? 'active' : ''}
+              className={target === page ? 'active' : ''}
               key={label}
               onClick={() => onNavigate(label, target)}
             >
@@ -1061,13 +1151,14 @@ function Header({
           <Plus size={17} /> <span>Tạo video mới</span>
         </button>
       )}
-      {page !== 'apiKeys' && dashboard.projects.length > 0 && (
+      {page !== 'apiKeys' && page !== 'shortVideo' && dashboard.projects.length > 0 && (
         <label className="project-picker">
           <span>Dự án</span>
           <select
             value={dashboard.selectedProject?.project.projectId ?? ''}
             onChange={(event) => onSelectProject(event.target.value)}
           >
+            <option value="" disabled>Chọn dự án</option>
             {dashboard.projects.map((project) => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}
           </select>
           <ChevronDown size={15} />
@@ -1083,6 +1174,250 @@ function Header({
         <Sparkles size={17} /> Nâng cấp gói
       </button>
     </header>
+  );
+}
+
+function ShortVideoPage({
+  project,
+  providerStatus,
+  mediaTools,
+  hasOrganization,
+  busy,
+  onGenerate,
+  onOpenSetup,
+  onCheckMediaTools
+}: {
+  project: ProjectDashboard | null;
+  providerStatus: GenerationProviderStatus;
+  mediaTools: MediaToolStatus;
+  hasOrganization: boolean;
+  busy: boolean;
+  onGenerate: (payload: CreateShortVideoPayload) => void;
+  onOpenSetup: () => void;
+  onCheckMediaTools: () => void;
+}) {
+  const [content, setContent] = useState('');
+  const [aspectRatio, setAspectRatio] = useState<CreateShortVideoPayload['aspectRatio']>('9:16');
+  const [durationSeconds, setDurationSeconds] = useState(15);
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const scene = project?.scenes[0] ?? null;
+  const preview = scene?.preview ?? project?.preview ?? null;
+  const projectAspectRatio = project?.project.aspectRatio;
+  const previewAspectRatio: CreateShortVideoPayload['aspectRatio'] =
+    projectAspectRatio === '9:16' || projectAspectRatio === '16:9' || projectAspectRatio === '1:1'
+      ? projectAspectRatio
+      : aspectRatio;
+  const klingSelected = providerStatus.videoProviderCode?.toLowerCase() === 'kling';
+  const klingReady = providerStatus.videoReady && klingSelected;
+  const canGenerate = Boolean(
+    content.trim() &&
+    content.length <= 2000 &&
+    hasOrganization &&
+    klingReady &&
+    mediaTools.ready &&
+    !busy
+  );
+  const providerDurationSeconds = Math.max(3, durationSeconds);
+  const estimatedCost = providerStatus.estimatedVideoCostPerSecond && providerStatus.estimatedVideoCostPerSecond > 0
+    ? providerStatus.estimatedVideoCostPerSecond * providerDurationSeconds
+    : null;
+  const progress = project
+    ? Math.round(Math.max(project.overallProgressPercent, preview?.url ? 100 : 0))
+    : 0;
+
+  const submit = () => {
+    if (!canGenerate) return;
+    onGenerate({ content: content.trim(), aspectRatio, durationSeconds, audioEnabled });
+  };
+
+  return (
+    <div className="page-shell short-video-page">
+      <section className="short-video-hero">
+        <div className="short-video-hero-icon"><Film size={28} /></div>
+        <div>
+          <span className="short-video-eyebrow">KLING QUICK CREATE</span>
+          <h2>Một nội dung, một clip ngắn theo ý bạn</h2>
+          <p>Nội dung được dùng trực tiếp làm prompt hình ảnh. VideoMaker không gọi OpenAI và không tự thêm lời thoại.</p>
+        </div>
+        <div className="short-video-fixed-badge"><Clock3 size={15} /> Chọn từ 5–15 giây</div>
+      </section>
+
+      <div className="short-video-layout">
+        <section className="card short-video-form-card">
+          <div className="short-video-section-heading">
+            <span>1</span>
+            <div><h3>Nhập nội dung cảnh</h3><p>Mô tả rõ chủ thể, bối cảnh, hành động, góc máy, ánh sáng và phong cách mong muốn.</p></div>
+          </div>
+
+          <label className="short-video-prompt-field">
+            <span>Nội dung dùng để tạo video</span>
+            <textarea
+              autoFocus
+              maxLength={2000}
+              value={content}
+              disabled={busy}
+              onChange={(event) => setContent(event.target.value)}
+              placeholder="Ví dụ: Một cô gái mặc áo dài xanh bước chậm giữa phố cổ Hội An lúc bình minh, máy quay dolly lùi mượt, đèn lồng lay nhẹ trong gió, phong cách điện ảnh chân thực..."
+            />
+            <small><span>Nội dung này được gửi thẳng vào prompt Kling, không qua OpenAI.</span><strong>{content.length}/2.000</strong></small>
+          </label>
+
+          <div className="short-video-ratio-block">
+            <span>Tỷ lệ khung hình</span>
+            <div>
+              {(['9:16', '16:9', '1:1'] as const).map((ratio) => (
+                <button
+                  type="button"
+                  className={aspectRatio === ratio ? 'selected' : ''}
+                  disabled={busy}
+                  key={ratio}
+                  onClick={() => setAspectRatio(ratio)}
+                >
+                  <i className={`ratio-shape ratio-${ratio.replace(':', '-')}`} />
+                  <strong>{ratio}</strong>
+                  <small>{ratio === '9:16' ? 'Video dọc' : ratio === '16:9' ? 'Video ngang' : 'Video vuông'}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="short-video-duration-block">
+            <div className="short-video-duration-heading">
+              <span>Thời lượng video</span>
+              <output>{durationSeconds} giây</output>
+            </div>
+            <div className="short-video-duration-control">
+              <button
+                type="button"
+                disabled={busy || durationSeconds <= 5}
+                aria-label="Giảm một giây"
+                onClick={() => setDurationSeconds((current) => Math.max(5, current - 1))}
+              >−</button>
+              <input
+                type="range"
+                min="5"
+                max="15"
+                step="1"
+                value={durationSeconds}
+                disabled={busy}
+                aria-label="Thời lượng video từ 5 đến 15 giây"
+                onChange={(event) => setDurationSeconds(Number(event.target.value))}
+              />
+              <button
+                type="button"
+                disabled={busy || durationSeconds >= 15}
+                aria-label="Tăng một giây"
+                onClick={() => setDurationSeconds((current) => Math.min(15, current + 1))}
+              >+</button>
+            </div>
+            <div className="short-video-duration-scale"><span>5s</span><span>10s</span><span>15s</span></div>
+          </div>
+
+          <div className="short-video-specs">
+            <div><Clock3 size={17} /><span><small>Thời lượng đầu ra</small><strong>{durationSeconds} giây</strong></span></div>
+            <button
+              type="button"
+              className={`short-video-audio-option ${audioEnabled ? 'enabled' : 'muted'}`}
+              role="switch"
+              aria-checked={audioEnabled}
+              disabled={busy}
+              onClick={() => setAudioEnabled((current) => !current)}
+            >
+              {audioEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
+              <span>
+                <small>Âm thanh</small>
+                <strong>{audioEnabled ? 'Native Audio, không lời thoại' : 'Tắt âm thanh đầu ra'}</strong>
+              </span>
+              <i aria-hidden="true"><b /></i>
+            </button>
+            <div><ShieldCheck size={17} /><span><small>Kiểm soát chi phí</small><strong>Rate và budget tổ chức</strong></span></div>
+          </div>
+          {!audioEnabled && (
+            <p className="short-video-audio-note">
+              <VolumeX size={14} /> File kết quả sẽ không có audio stream. Chi phí Kling không giảm vì provider vẫn dùng variant Native Audio.
+            </p>
+          )}
+
+          {!hasOrganization && (
+            <div className="short-video-readiness warning"><TriangleAlert size={17} /><span>Hãy chọn tổ chức trước khi tạo video.</span></div>
+          )}
+          {hasOrganization && !klingReady && (
+            <div className="short-video-readiness warning">
+              <TriangleAlert size={17} />
+              <span>{providerStatus.videoReady && !klingSelected
+                ? 'Video policy hiện tại không phải Kling. Hãy chọn Kling cho tổ chức.'
+                : providerStatus.videoUnavailableMessage ?? 'Kling chưa sẵn sàng cho tổ chức hiện tại.'}</span>
+              <button type="button" onClick={onOpenSetup}>Kiểm tra AI</button>
+            </div>
+          )}
+          {!mediaTools.ready && (
+            <div className="short-video-readiness warning">
+              <TriangleAlert size={17} /><span>{mediaTools.message}</span>
+              <button type="button" disabled={busy} onClick={onCheckMediaTools}>Kiểm tra lại</button>
+            </div>
+          )}
+
+          <div className="short-video-submit-row">
+            <div>
+              <span>Chi phí Kling ước tính</span>
+              <strong>{estimatedCost
+                ? formatMoney(estimatedCost, providerStatus.currencyCode ?? 'USD')
+                : 'Server sẽ báo giá theo rate Active'}</strong>
+            </div>
+            <button className="start-button short-video-submit" disabled={!canGenerate} onClick={submit}>
+              {busy ? <LoaderCircle className="spin" size={19} /> : <Play size={18} fill="currentColor" />}
+              {busy ? 'Đang tạo video...' : `Tạo video ${durationSeconds} giây`}
+            </button>
+          </div>
+        </section>
+
+        <aside className="card short-video-result-card">
+          <div className="short-video-section-heading compact">
+            <span>2</span>
+            <div><h3>Kết quả</h3><p>Clip được tải qua proxy server và lưu vào workspace.</p></div>
+          </div>
+
+          <div
+            className={`short-video-preview ratio-preview-${previewAspectRatio.replace(':', '-')}`}
+            data-aspect-ratio={previewAspectRatio}
+          >
+            {preview?.url ? (
+              <video controls preload="metadata" src={preview.url} />
+            ) : (
+              <div className="short-video-preview-empty">
+                {busy ? <LoaderCircle className="spin" size={32} /> : <Film size={34} />}
+                <strong>{busy ? 'Kling đang xử lý clip...' : 'Video sẽ xuất hiện tại đây'}</strong>
+                <span>{busy ? 'Bạn có thể theo dõi tiến trình mà không cần rời màn hình.' : `Nhập nội dung, chọn thời lượng và bấm Tạo video ${durationSeconds} giây.`}</span>
+              </div>
+            )}
+          </div>
+
+          {project ? (
+            <div className="short-video-result-meta">
+              <div><span>Trạng thái</span><strong>{translateProjectStatus(project.project.status)}</strong></div>
+              <div><span>Cảnh</span><strong>1 cảnh · {project.project.targetDurationSeconds} giây</strong></div>
+              <div><span>Model</span><strong>{providerStatus.videoModel ?? 'Kling theo policy'}</strong></div>
+              <div><span>Âm thanh</span><strong>{project.audioStrategy === 'SilentOutput' ? 'Đã tắt' : 'Native Audio'}</strong></div>
+              <ProgressBar value={progress} />
+              {scene?.lastErrorMessage && (
+                <p className="short-video-result-error"><TriangleAlert size={15} /> {scene.lastErrorMessage}</p>
+              )}
+              {preview?.url && (
+                <p className="short-video-result-success"><CircleCheck size={15} /> {project.audioStrategy === 'SilentOutput'
+                  ? 'Clip không âm thanh đã được lưu vào workspace.'
+                  : 'Clip đã tải về workspace. Hãy phát để kiểm tra hình và Native Audio.'}</p>
+              )}
+            </div>
+          ) : (
+            <div className="short-video-empty-notes">
+              <p><Check size={14} /> Không sinh content bằng OpenAI.</p>
+              <p><Check size={14} /> Không tạo nhân vật hay lời thoại tự động.</p>
+              <p><Check size={14} /> Gateway vẫn kiểm tra quyền, rate và ngân sách.</p>
+            </div>
+          )}
+        </aside>
+      </div>
+    </div>
   );
 }
 
@@ -1706,7 +2041,7 @@ function SceneCard({
         : speechMode !== 'None' && narration.trim().length === 0
           ? 'Hãy nhập lời provider cần nói hoặc chuyển cảnh sang không có lời nói.'
           : spokenWordCount > maximumSpokenWords
-            ? `Lời nói cần tối đa ${maximumSpokenWords} từ cho clip ${Math.ceil(scene.durationMs / 1000)} giây.`
+            ? `Lời nói cần tối đa ${maximumSpokenWords} từ cho clip ${Math.ceil((scene.generationDurationMs ?? scene.durationMs) / 1000)} giây.`
             : speechMode === 'OnCameraDialogue' && scene.characters.length !== 1
               ? 'Lời thoại trực diện cần đúng một nhân vật trong cảnh.'
               : null;
@@ -1830,7 +2165,7 @@ function SceneCard({
                 />
                 {speechMode !== 'None' && (
                   <small className={spokenWordCount > maximumSpokenWords ? 'scene-word-count invalid' : 'scene-word-count'}>
-                    {spokenWordCount}/{maximumSpokenWords} từ cho clip {Math.ceil(scene.durationMs / 1000)} giây
+                    {spokenWordCount}/{maximumSpokenWords} từ cho clip {Math.ceil((scene.generationDurationMs ?? scene.durationMs) / 1000)} giây
                   </small>
                 )}
                 {speechMode === 'OnCameraDialogue' && scene.characters.length !== 1 && (

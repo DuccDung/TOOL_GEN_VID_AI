@@ -62,8 +62,8 @@ public sealed class SceneNativeAudioStatusMigrationTests
             "CK_VideoGenerations_Status");
 
         Assert.Contains("scene.Status = \"PromptInvalid\"", generationSource, StringComparison.Ordinal);
-        Assert.Contains("generationToApprove.Status = nativeAudioInvalid", generationSource, StringComparison.Ordinal);
-        Assert.Contains("sceneToApprove.Status = nativeAudioInvalid", generationSource, StringComparison.Ordinal);
+        Assert.Contains("generationToApprove.Status = outputAudioEnabled", generationSource, StringComparison.Ordinal);
+        Assert.Contains("sceneToApprove.Status = outputAudioEnabled", generationSource, StringComparison.Ordinal);
 
         Assert.Contains("'PromptInvalid'", sceneConstraint, StringComparison.Ordinal);
         Assert.Contains("'AudioReviewRequired'", sceneConstraint, StringComparison.Ordinal);

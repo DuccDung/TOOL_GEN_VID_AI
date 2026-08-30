@@ -45,6 +45,12 @@ internal sealed record CreateProjectWebRequest(
     string? VoiceCode = null,
     decimal? VoiceSpeakingRate = null);
 
+internal sealed record CreateShortVideoWebRequest(
+    string Content,
+    string AspectRatio,
+    int DurationSeconds,
+    bool AudioEnabled);
+
 internal sealed record GenerateVideoWebRequest(IReadOnlyList<Guid>? SceneIds);
 
 internal sealed record UpdateSceneWebRequest(

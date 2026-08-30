@@ -10,9 +10,11 @@ public sealed class NativeAudioWorkflowTests
         Assert.Contains("new SubmitVideoRequest(", source);
         Assert.DoesNotContain("new SubmitKlingVideoRequest(", source, StringComparison.Ordinal);
         Assert.Contains("mediaProbe.ProbeAsync(partialPath", source);
-        Assert.Contains("nativeAudioExpected = true", source);
+        Assert.Contains("nativeAudioExpected = outputAudioEnabled", source);
+        Assert.Contains("muteOutputAudio", source);
+        Assert.Contains("StripAudioAsync", source);
         Assert.Contains("audioQualityValidator.AnalyzeAsync(partialPath", source);
-        Assert.Contains("nativeAudioQuality.FailureCode", source);
+        Assert.Contains("nativeAudioQuality?.FailureCode", source);
         Assert.Contains("AudioReviewRequired", source);
         Assert.Contains("NativeAudioInvalid", source);
         Assert.Contains("spokenTextHash", source);
