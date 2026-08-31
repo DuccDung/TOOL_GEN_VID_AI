@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   ArrowRight,
   Bell,
   Bot,
@@ -76,7 +77,16 @@ import type {
   UpdateCharacterPayload,
 } from './types';
 
-type Page = 'create' | 'shortVideo' | 'projects' | 'apiKeys';
+type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'apiKeys';
+type LongVideoStepId = 'setup' | 'content' | 'assets' | 'storyboard' | 'export';
+type LongVideoStep = {
+  id: LongVideoStepId;
+  label: string;
+  shortLabel: string;
+  description: string;
+  icon: LucideIcon;
+};
+type StoryboardFilter = 'all' | 'pending' | 'processing' | 'review' | 'approved' | 'failed';
 type Toast = { id: number; message: string; error?: boolean };
 type ConfirmationIntent = 'default' | 'download';
 type ConfirmationRequest = {
@@ -105,8 +115,12 @@ type PendingSceneSave = {
 
 const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
   create: {
-    title: 'Tạo video mới',
-    subtitle: 'Nhập chủ đề hoặc ý tưởng, AI sẽ giúp bạn tạo video hoàn chỉnh chỉ với vài bước.'
+    title: 'Dashboard',
+    subtitle: 'Theo dõi dự án, tác vụ đang chạy và trạng thái hệ thống của bạn.'
+  },
+  longVideo: {
+    title: 'Tạo Video Dài',
+    subtitle: 'Tạo nội dung, chia cảnh, đồng bộ nhân vật và dựng video hoàn chỉnh.'
   },
   shortVideo: {
     title: 'Tạo video ngắn',
@@ -157,7 +171,8 @@ const emptyState: DashboardState = {
 const primaryMenu: Array<{ label: string; icon: LucideIcon; page?: Page }> = [
   { label: 'Dashboard', icon: Home, page: 'create' },
   { label: 'Dự án của tôi', icon: FolderOpen, page: 'projects' },
-  { label: 'Tạo video', icon: Play, page: 'shortVideo' },
+  { label: 'Tạo Video Dài', icon: Film, page: 'longVideo' },
+  { label: 'Tạo Video Ngắn', icon: Play, page: 'shortVideo' },
   { label: 'Nhân vật AI', icon: Users },
   { label: 'Thư viện video', icon: Library },
   { label: 'Lịch sử render', icon: Clock3 },
@@ -188,6 +203,53 @@ const stageColors: Record<string, string> = {
   video: '#7854b7',
   render: '#ef5d57'
 };
+
+const longVideoSteps: LongVideoStep[] = [
+  {
+    id: 'setup',
+    label: 'Thiết lập dự án',
+    shortLabel: 'Thiết lập',
+    description: 'Chọn chủ đề, tỉ lệ khung hình, ngôn ngữ và tạo workspace.',
+    icon: Settings
+  },
+  {
+    id: 'content',
+    label: 'Nội dung & kịch bản',
+    shortLabel: 'Nội dung',
+    description: 'Sinh content plan, kịch bản và cấu trúc các cảnh bằng OpenAI.',
+    icon: FileText
+  },
+  {
+    id: 'assets',
+    label: 'Tài sản hình ảnh',
+    shortLabel: 'Tài sản',
+    description: 'Kiểm tra hồ sơ, ảnh chuẩn và khóa nhân vật trước khi tạo clip.',
+    icon: ImageIcon
+  },
+  {
+    id: 'storyboard',
+    label: 'Storyboard & clip',
+    shortLabel: 'Storyboard',
+    description: 'Chỉnh từng cảnh, tạo clip, nghe và duyệt Native Audio.',
+    icon: LayoutGrid
+  },
+  {
+    id: 'export',
+    label: 'Duyệt & xuất video',
+    shortLabel: 'Xuất video',
+    description: 'Kiểm tra các cảnh đã duyệt và dựng video cuối bằng FFmpeg.',
+    icon: Clapperboard
+  }
+];
+
+const storyboardFilters: Array<{ id: StoryboardFilter; label: string }> = [
+  { id: 'all', label: 'Tất cả' },
+  { id: 'pending', label: 'Chưa tạo' },
+  { id: 'processing', label: 'Đang xử lý' },
+  { id: 'review', label: 'Cần duyệt' },
+  { id: 'approved', label: 'Đã duyệt' },
+  { id: 'failed', label: 'Lỗi' }
+];
 
 type ModelDisplay = {
   id: string;
@@ -363,7 +425,7 @@ function App() {
   const selectProject = (projectId: string) => {
     setBusy(true);
     postToHost('project.select', { projectId });
-    setPage('create');
+    setPage('longVideo');
   };
 
   const createProject = (payload: CreateProjectPayload) => {
@@ -654,7 +716,7 @@ function App() {
           page={page}
           busy={generationBusy}
           onMenu={() => setSidebarOpen(true)}
-          onCreate={() => setPage('create')}
+          onCreate={() => setPage('longVideo')}
           onRefresh={() => {
             setBusy(true);
             postToHost('dashboard.refresh');
@@ -669,7 +731,7 @@ function App() {
         />
 
         {page === 'projects' ? (
-          <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={() => setPage('create')} />
+          <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={() => setPage('longVideo')} />
         ) : page === 'shortVideo' ? (
           <ShortVideoPage
             project={dashboard.selectedProject?.project.projectId === shortVideoProjectId
@@ -700,8 +762,8 @@ function App() {
             busy={busy}
             onTest={(providerCode) => postToHost('providers.settings.test', { providerCode })}
           />
-        ) : (
-          <DashboardPage
+        ) : page === 'longVideo' ? (
+          <LongVideoPage
             project={dashboard.selectedProject ?? null}
             models={dashboard.models}
             providerStatus={dashboard.providerStatus}
@@ -725,6 +787,15 @@ function App() {
             characterImageBusyId={characterImageBusyId}
             onOpenImageSetup={() => setPage('apiKeys')}
             onUnavailable={notify}
+          />
+        ) : (
+          <DashboardPage
+            dashboard={dashboard}
+            onCreateLongVideo={() => setPage('longVideo')}
+            onCreateShortVideo={() => setPage('shortVideo')}
+            onOpenProjects={() => setPage('projects')}
+            onOpenProviderSetup={() => setPage('apiKeys')}
+            onSelectProject={selectProject}
           />
         )}
       </main>
@@ -1060,7 +1131,7 @@ function Sidebar({
           <div><strong>VideoMaker</strong><span>Tự động tạo video</span></div>
         </div>
 
-        <button className="new-video-button" onClick={() => onNavigate('Tạo video mới', 'create')}>
+        <button className="new-video-button" onClick={() => onNavigate('Tạo Video Dài', 'longVideo')}>
           <Plus size={18} /> Tạo video mới
         </button>
 
@@ -1422,6 +1493,128 @@ function ShortVideoPage({
 }
 
 function DashboardPage({
+  dashboard,
+  onCreateLongVideo,
+  onCreateShortVideo,
+  onOpenProjects,
+  onOpenProviderSetup,
+  onSelectProject
+}: {
+  dashboard: DashboardState;
+  onCreateLongVideo: () => void;
+  onCreateShortVideo: () => void;
+  onOpenProjects: () => void;
+  onOpenProviderSetup: () => void;
+  onSelectProject: (projectId: string) => void;
+}) {
+  const organization = dashboard.organizations.find(
+    (item) => item.organizationId === dashboard.selectedOrganizationId
+  ) ?? null;
+  const selectedProject = dashboard.selectedProject ?? null;
+  const recentProjects = [...dashboard.projects]
+    .sort((left, right) => Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc))
+    .slice(0, 4);
+  const activeJobs = (selectedProject?.pendingJobs ?? 0) + (selectedProject?.runningJobs ?? 0);
+  const approvedScenes = selectedProject?.approvedScenes ?? 0;
+  const totalScenes = selectedProject?.totalScenes ?? 0;
+  const approvedPercent = totalScenes > 0 ? Math.round(approvedScenes * 100 / totalScenes) : 0;
+
+  return (
+    <div className="page-shell dashboard-overview-page">
+      <section className="dashboard-welcome">
+        <div>
+          <span className="dashboard-eyebrow">VIDEO WORKSPACE</span>
+          <h2>Chọn đúng luồng để bắt đầu sản xuất</h2>
+          <p>Dashboard chỉ tổng hợp trạng thái. Mọi thao tác biên tập nhiều cảnh được thực hiện trong workspace Tạo Video Dài.</p>
+        </div>
+        <div className="dashboard-welcome-actions">
+          <button className="dashboard-primary-action" onClick={onCreateLongVideo}><Film size={18} /> Tạo Video Dài</button>
+          <button className="dashboard-secondary-action" onClick={onCreateShortVideo}><Play size={17} /> Tạo Video Ngắn</button>
+        </div>
+      </section>
+
+      <section className="dashboard-stat-grid" aria-label="Tổng quan dự án">
+        <article className="card dashboard-stat-card projects">
+          <span className="dashboard-stat-icon"><FolderOpen size={20} /></span>
+          <div><small>Tổng dự án</small><strong>{dashboard.projects.length}</strong><span>Trong tổ chức hiện tại</span></div>
+        </article>
+        <article className="card dashboard-stat-card jobs">
+          <span className="dashboard-stat-icon"><LoaderCircle size={20} className={activeJobs > 0 ? 'spin' : ''} /></span>
+          <div><small>Tác vụ đang chạy</small><strong>{activeJobs}</strong><span>{selectedProject ? selectedProject.project.name : 'Chưa chọn dự án'}</span></div>
+        </article>
+        <article className="card dashboard-stat-card scenes">
+          <span className="dashboard-stat-icon"><CircleCheck size={20} /></span>
+          <div><small>Cảnh đã duyệt</small><strong>{approvedScenes}/{totalScenes}</strong><span>{approvedPercent}% của dự án đang chọn</span></div>
+        </article>
+        <article className="card dashboard-stat-card budget">
+          <span className="dashboard-stat-icon"><Gauge size={20} /></span>
+          <div><small>Ngân sách còn lại</small><strong>{organization ? formatMoney(organization.remainingBudget, organization.currencyCode) : '—'}</strong><span>{organization?.name ?? 'Chưa chọn tổ chức'}</span></div>
+        </article>
+      </section>
+
+      <div className="dashboard-overview-grid">
+        <section className="card dashboard-recent-projects">
+          <div className="dashboard-section-heading">
+            <div><span>DỰ ÁN</span><h2>Tiếp tục công việc gần đây</h2></div>
+            <button onClick={onOpenProjects}>Xem tất cả <ArrowRight size={15} /></button>
+          </div>
+          {recentProjects.length > 0 ? (
+            <div className="dashboard-project-list">
+              {recentProjects.map((project) => (
+                <button key={project.projectId} className="dashboard-project-row" onClick={() => onSelectProject(project.projectId)}>
+                  <span className="dashboard-project-icon"><Film size={18} /></span>
+                  <span className="dashboard-project-copy">
+                    <strong>{project.name}</strong>
+                    <small>{project.topic}</small>
+                  </span>
+                  <span className="dashboard-project-meta">
+                    <strong>{translateProjectStatus(project.status)}</strong>
+                    <small>{project.aspectRatio} · {formatDate(project.updatedAtUtc)}</small>
+                  </span>
+                  <ArrowRight size={17} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="dashboard-empty-projects">
+              <FolderOpen size={32} />
+              <strong>Chưa có dự án video</strong>
+              <p>Tạo workspace Video Dài đầu tiên để bắt đầu.</p>
+              <button onClick={onCreateLongVideo}>Tạo Video Dài</button>
+            </div>
+          )}
+        </section>
+
+        <aside className="dashboard-health-column">
+          <section className="card dashboard-health-card">
+            <div className="dashboard-section-heading compact"><div><span>HỆ THỐNG</span><h2>Trạng thái sẵn sàng</h2></div></div>
+            <div className="dashboard-health-list">
+              <div><span><Bot size={16} /> OpenAI Content</span><strong className={dashboard.providerStatus.openAiReady ? 'ready' : 'missing'}>{dashboard.providerStatus.openAiReady ? 'Sẵn sàng' : 'Cần cấu hình'}</strong></div>
+              <div><span><Film size={16} /> Video Provider</span><strong className={dashboard.providerStatus.videoReady ? 'ready' : 'missing'}>{dashboard.providerStatus.videoReady ? 'Sẵn sàng' : 'Cần cấu hình'}</strong></div>
+              <div><span><Clapperboard size={16} /> FFmpeg/FFprobe</span><strong className={dashboard.mediaTools.ready ? 'ready' : 'missing'}>{dashboard.mediaTools.ready ? 'Sẵn sàng' : 'Cần kiểm tra'}</strong></div>
+            </div>
+            {(!dashboard.providerStatus.openAiReady || !dashboard.providerStatus.videoReady) && (
+              <button className="dashboard-setup-link" onClick={onOpenProviderSetup}>Xem cấu hình tổ chức <ArrowRight size={14} /></button>
+            )}
+          </section>
+
+          <section className="card dashboard-current-project">
+            <div className="dashboard-section-heading compact"><div><span>ĐANG CHỌN</span><h2>Dự án hiện tại</h2></div></div>
+            {selectedProject ? <>
+              <strong className="dashboard-current-name">{selectedProject.project.name}</strong>
+              <p>{selectedProject.project.topic}</p>
+              <ProgressBar value={selectedProject.overallProgressPercent} />
+              <div className="dashboard-current-meta"><span>{selectedProject.totalScenes} cảnh</span><span>{selectedProject.runningJobs} tác vụ chạy</span></div>
+              <button className="dashboard-open-workspace" onClick={() => onSelectProject(selectedProject.project.projectId)}>Mở workspace Video Dài <ArrowRight size={15} /></button>
+            </> : <EmptyBlock text="Chọn một dự án để xem tiến độ." />}
+          </section>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function LongVideoPage({
   project,
   models,
   providerStatus,
@@ -1470,59 +1663,266 @@ function DashboardPage({
   onOpenImageSetup: () => void;
   onUnavailable: (message: string) => void;
 }) {
+  const suggestedStep = getSuggestedLongVideoStep(project);
+  const projectId = project?.project.projectId ?? '';
+  const [activeStep, setActiveStep] = useState<LongVideoStepId>(suggestedStep);
+
+  useEffect(() => {
+    setActiveStep(getSuggestedLongVideoStep(project));
+  }, [projectId]);
+
+  const activeStepIndex = longVideoSteps.findIndex((step) => step.id === activeStep);
+  const activeStepDefinition = longVideoSteps[activeStepIndex] ?? longVideoSteps[0];
+  const previousStep = activeStepIndex > 0 ? longVideoSteps[activeStepIndex - 1] : null;
+  const nextStep = activeStepIndex < longVideoSteps.length - 1 ? longVideoSteps[activeStepIndex + 1] : null;
+  const canMoveNext = Boolean(nextStep && isLongVideoStepAvailable(nextStep.id, project));
+
+  const renderStepContent = () => {
+    if (activeStep === 'setup') {
+      return <>
+        {project && (
+          <section className="card long-video-selected-project">
+            <span className="long-video-selected-icon"><FolderOpen size={19} /></span>
+            <div><small>DỰ ÁN ĐANG CHỌN</small><strong>{project.project.name}</strong><p>Bạn có thể chuyển sang bước Nội dung để tiếp tục, hoặc nhập chủ đề mới bên dưới để tạo workspace khác.</p></div>
+            <button onClick={() => setActiveStep('content')}>Tiếp tục dự án <ArrowRight size={15} /></button>
+          </section>
+        )}
+        <CreateVideoCard busy={busy} onCreate={onCreate} />
+        <ModelsSection models={models} />
+      </>;
+    }
+
+    if (activeStep === 'content') {
+      return <>
+        <LongVideoContentSummary project={project} providerStatus={providerStatus} />
+        <GenerationActions
+          project={project}
+          providerStatus={providerStatus}
+          busy={busy}
+          onGenerateContent={onGenerateContent}
+        />
+        <WorkflowCard project={project} />
+        <PipelineDetails project={project} onUnavailable={onUnavailable} />
+      </>;
+    }
+
+    if (activeStep === 'assets') {
+      return <>
+        <div className="long-video-asset-tabs" aria-label="Loại tài sản hình ảnh">
+          <button className="active"><Users size={16} /> Nhân vật <span>{project?.characters.length ?? 0}</span></button>
+          <button disabled><ImageIcon size={16} /> Bối cảnh <small>Sắp triển khai</small></button>
+          <button disabled><Database size={16} /> Item/Đạo cụ <small>Sắp triển khai</small></button>
+        </div>
+        <CharacterSection
+          project={project}
+          providerStatus={providerStatus}
+          busy={busy}
+          imageBusyId={characterImageBusyId}
+          onRegenerateContent={onRegenerateContent}
+          onUpdate={onUpdateCharacter}
+          onSelectReference={onSelectCharacterReference}
+          onGenerateReference={onGenerateCharacterReference}
+          onApprove={onApproveCharacter}
+          onOpenImageSetup={onOpenImageSetup}
+        />
+      </>;
+    }
+
+    if (activeStep === 'storyboard') {
+      return <StoryboardSection
+        project={project}
+        providerStatus={providerStatus}
+        mediaTools={mediaTools}
+        busy={busy}
+        onGenerateVideo={onGenerateVideo}
+        onApproveNativeAudio={onApproveSceneNativeAudio}
+        onInstallMediaTools={onInstallMediaTools}
+        onCheckMediaTools={onCheckMediaTools}
+        onUpdateScene={onUpdateScene}
+        sceneSaveState={sceneSaveState}
+        onClearSaveFailure={onClearSaveFailure}
+      />;
+    }
+
+    return <>
+      <LongVideoExportOverview project={project} mediaTools={mediaTools} />
+      <RenderProgressCard
+        project={project}
+        busy={busy}
+        mediaToolsReady={mediaTools.ready}
+        onRender={onRenderFinalVideo}
+        onUnavailable={onUnavailable}
+      />
+    </>;
+  };
+
   return (
-    <div className="page-shell">
-      <div className="workspace-grid">
-        <section className="workspace-main">
-          <CreateVideoCard busy={busy} onCreate={onCreate} />
-          <GenerationActions
-            project={project}
-            providerStatus={providerStatus}
-            busy={busy}
-            onGenerateContent={onGenerateContent}
-          />
-          <CharacterSection
-            project={project}
-            providerStatus={providerStatus}
-            busy={busy}
-            imageBusyId={characterImageBusyId}
-            onRegenerateContent={onRegenerateContent}
-            onUpdate={onUpdateCharacter}
-            onSelectReference={onSelectCharacterReference}
-            onGenerateReference={onGenerateCharacterReference}
-            onApprove={onApproveCharacter}
-            onOpenImageSetup={onOpenImageSetup}
-          />
-          <StoryboardSection
-            project={project}
-            providerStatus={providerStatus}
-            mediaTools={mediaTools}
-            busy={busy}
-            onGenerateVideo={onGenerateVideo}
-            onApproveNativeAudio={onApproveSceneNativeAudio}
-            onInstallMediaTools={onInstallMediaTools}
-            onCheckMediaTools={onCheckMediaTools}
-            onUpdateScene={onUpdateScene}
-            sceneSaveState={sceneSaveState}
-            onClearSaveFailure={onClearSaveFailure}
-          />
-          <WorkflowCard project={project} />
-          <PipelineDetails project={project} onUnavailable={onUnavailable} />
-          <ModelsSection models={models} />
+    <div className="page-shell long-video-page">
+      <section className="long-video-workspace-header">
+        <div className="long-video-workspace-copy">
+          <span className="long-video-eyebrow">LONG-FORM STUDIO</span>
+          <div><h2>{project?.project.name ?? 'Workspace video nhiều cảnh'}</h2>{project && <span className="long-video-project-status">{translateProjectStatus(project.project.status)}</span>}</div>
+          <p>{project ? project.project.topic : 'Bắt đầu từ chủ đề, phát triển kịch bản, chuẩn hóa nhân vật và dựng video theo từng cảnh.'}</p>
+        </div>
+        <div className="long-video-workspace-meta">
+          <span><strong>{project?.totalScenes ?? 0}</strong>Cảnh</span>
+          <span><strong>{project?.approvedScenes ?? 0}</strong>Đã duyệt</span>
+          <span><strong>{Math.round(project?.overallProgressPercent ?? 0)}%</strong>Tiến độ</span>
+        </div>
+      </section>
+
+      <nav className="long-video-stepper" aria-label="Quy trình tạo video dài">
+        {longVideoSteps.map((step, index) => {
+          const Icon = step.icon;
+          const available = isLongVideoStepAvailable(step.id, project);
+          const completed = isLongVideoStepCompleted(step.id, project);
+          return (
+            <button
+              key={step.id}
+              className={`${activeStep === step.id ? 'active' : ''} ${completed ? 'completed' : ''}`}
+              disabled={!available}
+              onClick={() => setActiveStep(step.id)}
+              aria-current={activeStep === step.id ? 'step' : undefined}
+            >
+              <span className="long-video-step-number">{completed ? <Check size={15} strokeWidth={3} /> : <Icon size={16} />}</span>
+              <span className="long-video-step-copy"><small>Bước {index + 1}</small><strong>{step.shortLabel}</strong></span>
+              {index < longVideoSteps.length - 1 && <span className="long-video-step-line" />}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="long-video-layout">
+        <section className="long-video-main">
+          <header className="long-video-step-header">
+            <span>BƯỚC {activeStepIndex + 1} / {longVideoSteps.length}</span>
+            <h2>{activeStepDefinition.label}</h2>
+            <p>{activeStepDefinition.description}</p>
+          </header>
+          <div className="long-video-step-content">{renderStepContent()}</div>
+          <footer className="long-video-navigation">
+            <button
+              className="long-video-back"
+              disabled={!previousStep}
+              onClick={() => previousStep && setActiveStep(previousStep.id)}
+            ><ArrowLeft size={16} /> Quay lại</button>
+            <span>Bước {activeStepIndex + 1} trên {longVideoSteps.length}</span>
+            <button
+              className="long-video-next"
+              disabled={!canMoveNext}
+              onClick={() => nextStep && setActiveStep(nextStep.id)}
+            >{nextStep ? `Tiếp tục: ${nextStep.shortLabel}` : 'Đã đến bước cuối'} <ArrowRight size={16} /></button>
+          </footer>
         </section>
-        <aside className="workspace-side">
+        <aside className="long-video-side">
           <PreviewCard project={project} />
           <ProjectInfoCard project={project} />
-          <RenderProgressCard
-            project={project}
-            busy={busy}
-            mediaToolsReady={mediaTools.ready}
-            onRender={onRenderFinalVideo}
-            onUnavailable={onUnavailable}
-          />
+          <LongVideoReadinessCard providerStatus={providerStatus} mediaTools={mediaTools} project={project} />
         </aside>
       </div>
     </div>
+  );
+}
+
+function getSuggestedLongVideoStep(project: ProjectDashboard | null): LongVideoStepId {
+  if (!project) return 'setup';
+  if (project.totalScenes === 0) return 'content';
+  const charactersReady = project.characters.every(
+    (character) => character.status === 'Approved' && Boolean(character.primaryReference?.previewUrl)
+  );
+  if (!charactersReady) return 'assets';
+  if (project.approvedScenes < project.totalScenes) return 'storyboard';
+  return 'export';
+}
+
+function isLongVideoStepAvailable(step: LongVideoStepId, project: ProjectDashboard | null): boolean {
+  if (step === 'setup') return true;
+  if (!project) return false;
+  if (step === 'content') return true;
+  return project.totalScenes > 0;
+}
+
+function isLongVideoStepCompleted(step: LongVideoStepId, project: ProjectDashboard | null): boolean {
+  if (!project) return false;
+  if (step === 'setup') return true;
+  if (step === 'content') return project.totalScenes > 0;
+  if (step === 'assets') {
+    return project.totalScenes > 0 && project.characters.every(
+      (character) => character.status === 'Approved' && Boolean(character.primaryReference?.previewUrl)
+    );
+  }
+  if (step === 'storyboard') {
+    return project.totalScenes > 0 && project.approvedScenes === project.totalScenes;
+  }
+  return Boolean(project.preview?.url);
+}
+
+function LongVideoContentSummary({
+  project,
+  providerStatus
+}: {
+  project: ProjectDashboard | null;
+  providerStatus: GenerationProviderStatus;
+}) {
+  if (!project) {
+    return <section className="card long-video-blocked-step"><FileText size={30} /><h3>Chưa có dự án</h3><p>Quay lại bước Thiết lập và tạo project trước khi sinh nội dung.</p></section>;
+  }
+
+  return (
+    <section className="card long-video-content-summary">
+      <div className="long-video-summary-heading"><div><span>NỘI DUNG HIỆN HÀNH</span><h3>{project.project.topic}</h3></div><strong className={project.totalScenes > 0 ? 'ready' : 'draft'}>{project.totalScenes > 0 ? 'Đã có scene plan' : 'Chờ sinh nội dung'}</strong></div>
+      <div className="long-video-summary-grid">
+        <div><small>Ngôn ngữ</small><strong>{formatLanguage(project.languageCode)}</strong></div>
+        <div><small>Thời lượng mục tiêu</small><strong>{formatDuration(project.project.targetDurationSeconds)}</strong></div>
+        <div><small>Số cảnh</small><strong>{project.totalScenes}</strong></div>
+        <div><small>OpenAI model</small><strong>{providerStatus.openAiModel ?? 'Chưa cấu hình'}</strong></div>
+      </div>
+    </section>
+  );
+}
+
+function LongVideoExportOverview({ project, mediaTools }: { project: ProjectDashboard | null; mediaTools: MediaToolStatus }) {
+  const totalScenes = project?.totalScenes ?? 0;
+  const approvedScenes = project?.approvedScenes ?? 0;
+  const ready = totalScenes > 0 && approvedScenes === totalScenes && mediaTools.ready;
+  return (
+    <section className="card long-video-export-overview">
+      <div className={`long-video-export-icon ${ready ? 'ready' : ''}`}>{ready ? <CircleCheck size={25} /> : <Clapperboard size={25} />}</div>
+      <div><span>KIỂM TRA TRƯỚC KHI XUẤT</span><h3>{ready ? 'Dự án đã sẵn sàng để dựng video cuối' : 'Hoàn tất các điều kiện còn thiếu'}</h3><p>{totalScenes > 0 ? `Đã duyệt ${approvedScenes}/${totalScenes} cảnh. ${mediaTools.ready ? 'FFmpeg và FFprobe đã sẵn sàng.' : mediaTools.message}` : 'Dự án chưa có cảnh để dựng video.'}</p></div>
+      <strong className={ready ? 'ready' : 'waiting'}>{ready ? 'Sẵn sàng' : 'Chưa sẵn sàng'}</strong>
+    </section>
+  );
+}
+
+function LongVideoReadinessCard({
+  providerStatus,
+  mediaTools,
+  project
+}: {
+  providerStatus: GenerationProviderStatus;
+  mediaTools: MediaToolStatus;
+  project: ProjectDashboard | null;
+}) {
+  const hasScenePlan = Boolean(project && project.totalScenes > 0);
+  const hasCharacters = Boolean(project && project.characters.length > 0);
+  const charactersReady = Boolean(hasScenePlan && project && project.characters.every(
+    (character) => character.status === 'Approved' && Boolean(character.primaryReference?.previewUrl)
+  ));
+  const characterLabel = !hasScenePlan
+    ? 'Chưa có'
+    : !hasCharacters
+      ? 'Không yêu cầu'
+      : charactersReady
+        ? 'Đã khóa'
+        : 'Cần hoàn tất';
+  return (
+    <section className="card side-card long-video-readiness-card">
+      <h2>Điều kiện workflow</h2>
+      <div><span><Bot size={15} /> OpenAI Content</span><strong className={providerStatus.openAiReady ? 'ready' : 'missing'}>{providerStatus.openAiReady ? 'Sẵn sàng' : 'Thiếu cấu hình'}</strong></div>
+      <div><span><Film size={15} /> Video Provider</span><strong className={providerStatus.videoReady ? 'ready' : 'missing'}>{providerStatus.videoReady ? 'Sẵn sàng' : 'Thiếu cấu hình'}</strong></div>
+      <div><span><Users size={15} /> Nhân vật</span><strong className={charactersReady ? 'ready' : 'waiting'}>{characterLabel}</strong></div>
+      <div><span><Clapperboard size={15} /> FFmpeg</span><strong className={mediaTools.ready ? 'ready' : 'missing'}>{mediaTools.ready ? 'Sẵn sàng' : 'Cần kiểm tra'}</strong></div>
+    </section>
   );
 }
 
@@ -1836,9 +2236,12 @@ function StoryboardSection({
   onClearSaveFailure: (sceneId: string) => void;
 }) {
   const [selectedSceneIds, setSelectedSceneIds] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<StoryboardFilter>('all');
   const selectionProjectId = useRef('');
   const scenes = project?.scenes ?? [];
+  const filteredScenes = scenes.filter((scene) => matchesStoryboardFilter(scene, filter));
   const selectableScenes = scenes.filter(canQueueScene);
+  const visibleSelectableScenes = filteredScenes.filter(canQueueScene);
   const selectableKey = selectableScenes.map((scene) => `${scene.sceneId}:${scene.status}`).join('|');
 
   useEffect(() => {
@@ -1874,7 +2277,17 @@ function StoryboardSection({
         : `Tạo ${selectedCreateCount} clip video`;
   const completedScenes = scenes.filter(isSceneCompleted).length;
   const totalDurationSeconds = Math.ceil(scenes.reduce((total, scene) => total + scene.durationMs, 0) / 1000);
-  const allSelected = selectableScenes.length > 0 && selectedIds.length === selectableScenes.length;
+  const allSelected = visibleSelectableScenes.length > 0 && visibleSelectableScenes.every(
+    (scene) => selectedSceneIds.has(scene.sceneId)
+  );
+
+  const selectFilter = (nextFilter: StoryboardFilter) => {
+    setFilter(nextFilter);
+    const nextVisibleIds = scenes
+      .filter((scene) => matchesStoryboardFilter(scene, nextFilter) && canQueueScene(scene))
+      .map((scene) => scene.sceneId);
+    setSelectedSceneIds(new Set(nextVisibleIds));
+  };
 
   const toggleScene = (sceneId: string) => {
     setSelectedSceneIds((current) => {
@@ -1914,8 +2327,8 @@ function StoryboardSection({
           <button
             type="button"
             className="storyboard-select-all"
-            disabled={busy || selectableScenes.length === 0}
-            onClick={() => setSelectedSceneIds(allSelected ? new Set() : new Set(selectableScenes.map((scene) => scene.sceneId)))}
+            disabled={busy || visibleSelectableScenes.length === 0}
+            onClick={() => setSelectedSceneIds(allSelected ? new Set() : new Set(visibleSelectableScenes.map((scene) => scene.sceneId)))}
           >
             {allSelected ? 'Bỏ chọn tất cả' : 'Chọn cảnh cần xử lý'}
           </button>
@@ -1959,8 +2372,17 @@ function StoryboardSection({
         </div>
       )}
 
+      <div className="storyboard-filters" aria-label="Lọc cảnh theo trạng thái">
+        {storyboardFilters.map((item) => {
+          const count = scenes.filter((scene) => matchesStoryboardFilter(scene, item.id)).length;
+          return <button type="button" key={item.id} className={filter === item.id ? 'active' : ''} onClick={() => selectFilter(item.id)}>
+            {item.label}<span>{count}</span>
+          </button>;
+        })}
+      </div>
+
       <div className="storyboard-list">
-        {scenes.map((scene) => (
+        {filteredScenes.map((scene) => (
           <SceneCard
             key={scene.sceneId}
             scene={scene}
@@ -1976,6 +2398,7 @@ function StoryboardSection({
             onClearSaveFailure={() => onClearSaveFailure(scene.sceneId)}
           />
         ))}
+        {filteredScenes.length === 0 && <div className="storyboard-filter-empty"><LayoutGrid size={27} /><span>Không có cảnh thuộc trạng thái này.</span></div>}
       </div>
     </section>
   );
@@ -2352,6 +2775,17 @@ function canQueueScene(scene: SceneSummary): boolean {
   return scene.canGenerate && !isSceneCompleted(scene) && scene.prompt.trim().length > 0;
 }
 
+function matchesStoryboardFilter(scene: SceneSummary, filter: StoryboardFilter): boolean {
+  if (filter === 'all') return true;
+  const status = scene.status.toLowerCase();
+  const tone = sceneStatus(scene).tone;
+  if (filter === 'approved') return isSceneCompleted(scene);
+  if (filter === 'review') return status === 'audioreviewrequired' || scene.requiresAudioReview || scene.canApproveNativeAudio;
+  if (filter === 'processing') return tone === 'running';
+  if (filter === 'failed') return tone === 'failed';
+  return !isSceneCompleted(scene) && tone !== 'running' && tone !== 'failed' && status !== 'audioreviewrequired';
+}
+
 function isSceneCompleted(scene: SceneSummary): boolean {
   return scene.status.toLowerCase() === 'approved';
 }
@@ -2414,7 +2848,7 @@ function CreateVideoCard({ busy, onCreate }: { busy: boolean; onCreate: (payload
 
   return (
     <section className="card create-card">
-      <h2><span>1.</span> Nhập chủ đề video</h2>
+      <h2>Nhập chủ đề video</h2>
       <div className="topic-field">
         <textarea
           maxLength={300}
@@ -2448,7 +2882,7 @@ function WorkflowCard({ project }: { project: ProjectDashboard | null }) {
   const stages = project?.pipeline ?? createEmptyStages();
   return (
     <section className="card workflow-card">
-      <h2><span>2.</span> Quy trình tạo video bằng AI</h2>
+      <h2>Quy trình tạo video bằng AI</h2>
       <div className="workflow-track">
         {stages.map((stage, index) => {
           const Icon = stageIcons[stage.code] ?? WandSparkles;
@@ -2473,7 +2907,7 @@ function PipelineDetails({ project, onUnavailable }: { project: ProjectDashboard
   const stages = createDisplayStages(project);
   return (
     <section className="pipeline-section">
-      <h2 className="section-title"><span>3.</span> Chi tiết tiến trình</h2>
+      <h2 className="section-title">Chi tiết tiến trình</h2>
       <div className="pipeline-grid">
         {stages.map((stage, index) => {
           const Icon = stageIcons[stage.code] ?? WandSparkles;
@@ -2509,7 +2943,7 @@ function ModelsSection({ models }: { models: AiModel[] }) {
   const displayModels = createDisplayModels(models);
   return (
     <section className="models-section">
-      <h2 className="section-title"><span>4.</span> AI Models sẵn sàng</h2>
+      <h2 className="section-title">AI Models sẵn sàng</h2>
       <div className="models-carousel-shell">
         <div className="models-grid" ref={trackRef}>
           {displayModels.map((model) => <ModelCard key={model.id} model={model} />)}
