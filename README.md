@@ -6,14 +6,17 @@ VideoMaker là ứng dụng desktop tự tạo nội dung bằng OpenAI và sinh
 
 Khi toàn bộ scene đã được nghe và duyệt, desktop cho phép dựng video cuối bằng FFmpeg. Luồng này chỉ nối các `SceneVideo` thuộc đúng `ApprovedGenerationId`, giữ nguyên Native Audio và kiểm tra lại hình, audio stream, mức âm lượng cùng thời lượng trước khi ghi nhận `FinalVideo`; dựng lại video không gọi provider AI.
 
-Tài liệu chính:
+Tài liệu chính, theo thứ tự sử dụng:
 
-- [Nghiệp vụ hệ thống](NGHIEP_VU_HE_THONG_VIDEOMAKER.md)
-- [Nghiệp vụ tạo video ngắn bằng Kling](NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md)
-- [Nghiệp vụ sinh video và đồng bộ nhân vật](NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md)
-- [Hướng dẫn triển khai AI Gateway](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md)
+- [Nghiệp vụ hệ thống](NGHIEP_VU_HE_THONG_VIDEOMAKER.md): nguồn sự thật nghiệp vụ toàn hệ thống.
+- [Nghiệp vụ dự án nhiều cảnh và đồng bộ nhân vật](NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md): chi tiết content, nhân vật, storyboard, clip và duyệt Native Audio.
+- [Nghiệp vụ tạo video ngắn bằng Kling](NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md): luồng direct prompt một scene, chỉ chạy khi policy tổ chức là Kling.
+- [Kế hoạch và trạng thái Server AI Gateway](KE_HOACH_SERVER_AI_GATEWAY.md): phần source đã có, việc vận hành còn phải thực hiện và phạm vi mở rộng.
+- [Hướng dẫn triển khai AI Gateway](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md): runbook migration, credential, rate, budget, smoke test và rollback.
 - [Sơ đồ hoạt động API AI](SO_DO_HOAT_DONG_API_AI.docx)
 - [Ngữ cảnh và quy tắc dành cho AI agent](AGENTS.md)
+
+Khi tài liệu diễn giải khác source hoặc migration, source/migration là sự thật kỹ thuật. Khi hai tài liệu nghiệp vụ khác nhau, `NGHIEP_VU_HE_THONG_VIDEOMAKER.md` được ưu tiên. Các file kế hoạch triển khai theo tính năng đã hoàn tất hoặc bị thay thế không còn được giữ ở root để tránh AI/maintainer đọc nhầm trạng thái lịch sử thành thiết kế hiện hành.
 
 ## Kiến trúc hiện tại
 
@@ -39,9 +42,10 @@ sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.2
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.3.SceneVoiceTts.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.4.BytePlusSeedance.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.5.SceneNativeAudioStatuses.sql
+sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
 ```
 
-`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 đồng bộ constraint trạng thái scene với luồng chỉnh lời và duyệt Native Audio. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
+`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 mở rộng trạng thái scene; 4.0.6 hoàn thiện constraint cho cả scene và video generation với `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
 
 Nếu desktop vẫn cần truy cập trực tiếp dữ liệu workflow trong giai đoạn chuyển tiếp, tạo user SQL riêng và chạy:
 

@@ -102,7 +102,7 @@ npm ci --no-audit --no-fund
 npm run build
 ```
 
-Mốc xác minh gần nhất ngày 2026-08-26: Release build không warning/error và 91/91 test đạt. Không ghi nhận mốc mới nếu chưa thực sự chạy lại.
+Mốc xác minh gần nhất ngày 2026-08-31: restore thành công, Release build không warning/error và 347/347 test đạt. Không ghi nhận mốc mới nếu chưa thực sự chạy lại.
 
 ## An toàn vận hành
 

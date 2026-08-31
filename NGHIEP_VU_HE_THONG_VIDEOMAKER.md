@@ -2,9 +2,13 @@
 
 > Trạng thái hiện tại: AI Gateway tập trung theo tổ chức. Tài liệu BYOK 3.0 đã hết hiệu lực. Source hỗ trợ policy video bất biến theo project, Kling và BytePlus Seedance dưới cùng gateway; BytePlus/Seedance được seed disabled và chỉ được bật theo tổ chức sau migration, credential, rate và smoke test có phí. Luồng mặc định hiện vẫn là **Kling Native Audio 720p** cho tới khi quản trị viên chủ động chọn policy khác. Desktop bắt buộc preview/nghe/duyệt từng clip, chỉ render `SceneVideo` của đúng `ApprovedGenerationId`; TTS/WAV được giữ tương thích nhưng không fallback ngầm.
 
+> Cập nhật ngữ cảnh: 2026-08-31. Đây là nguồn sự thật nghiệp vụ toàn hệ thống. `NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md` và `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md` chỉ bổ sung chi tiết cho từng luồng; khi có khác biệt, tài liệu này được ưu tiên. Source code và migration vẫn là nguồn sự thật kỹ thuật.
+
 ## 1. Mục tiêu
 
 VideoMaker hỗ trợ người dùng nhập chủ đề, tự sinh content plan/kịch bản/prompt bằng OpenAI, sinh clip theo từng cảnh bằng provider video trong snapshot của project và tải clip qua server về workspace để tiếp tục quy trình dựng video.
+
+Ngoài dự án nhiều cảnh, desktop có luồng **Tạo video ngắn**: người dùng nhập direct prompt, hệ thống tạo project một scene và không gọi OpenAI để viết lại nội dung. Màn hình này chỉ cho chạy khi video policy hiện hành của tổ chức là Kling; chi tiết nằm trong `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md`.
 
 Doanh nghiệp quản lý AI theo mô hình:
 
@@ -148,41 +152,41 @@ Ngân sách `0` có nghĩa là khóa phát sinh AI, không phải không giới 
 ### 8.1. Compatibility Kling và Native Audio
 
 1. Người dùng chọn một hoặc nhiều cảnh trên storyboard; với cảnh có nhân vật, desktop chỉ cho tạo clip sau khi hồ sơ đã khóa và có ảnh tham chiếu chính được duyệt.
-2. Desktop đọc ảnh từ workspace, kiểm tra dung lượng và SHA-256 rồi gửi ảnh cùng ID tham chiếu, scene, thời lượng, tỷ lệ, độ phân giải, `organizationId` và idempotency key. Dữ liệu Base64 không được ghi vào request log.
+2. Desktop đọc ảnh từ workspace, kiểm tra dung lượng và SHA-256 rồi gửi request trung lập provider gồm project, scene, scene-plan version, prompt version, `organizationId`, idempotency key và ảnh tham chiếu nếu có. Provider, model, prompt hiệu lực, thời lượng, tỷ lệ, độ phân giải và Native Audio được server đọc từ dữ liệu đã lưu/snapshot; dữ liệu Base64 không được ghi vào request log.
 3. Server xác minh lại quyền sở hữu project/scene, prompt version, character mapping, trạng thái nhân vật, ID ảnh, MIME, dung lượng và SHA-256 theo `MediaAsset`; dữ liệu client không được dùng để thay thế hồ sơ đã duyệt trên server.
 4. Server ghép prompt hiệu lực từ identity, trang phục, đặc điểm bất biến, điều cấm thay đổi và prompt của cảnh. Với model Kling 3.0 thường, ảnh chuẩn được gửi theo luồng image-to-video làm first frame; model Omni dùng element reference khi model đó được quản trị viên bật và cấu hình rate.
 5. Server kiểm tra rate, ngân sách, giữ chi phí ước tính, gửi task Kling và ghi external task ID cùng credential version, character version, reference ID và hash.
 6. Worker server polling các task đến hạn. Desktop cũng có thể hỏi trạng thái nhưng không chịu trách nhiệm duy nhất cho polling.
 7. Khi Kling hoàn tất, server quyết toán theo reported cost nếu có; nếu không dùng estimated cost đã khóa.
-8. Desktop nhận URL tương đối của server: `/api/generation/kling/videos/{providerRequestId}/content`.
+8. Desktop nhận URL tương đối trung lập provider của server: `/api/generation/videos/{providerRequestId}/content`. Endpoint Kling cũ chỉ được giữ cho tương thích, không phải đường gọi mặc định của desktop.
 9. Proxy xác thực lại user/license/tổ chức, chỉ cho HTTPS và host thuộc allowlist của provider, kiểm tra DNS chống SSRF, giới hạn redirect, MIME, dung lượng file và tổng dung lượng cache theo cấu hình.
 10. Clip tải xong được hiển thị ngay tại card của cảnh qua virtual media host cục bộ; cảnh chưa có clip dùng placeholder theo theme và không tự gọi thêm provider ảnh.
 
 ### 8.2. Nghiệp vụ âm thanh của clip và video cuối
 
-Luồng sản phẩm hiện tại chỉ dùng âm thanh được Kling sinh trực tiếp cùng clip:
+Luồng sản phẩm hiện tại chỉ dùng Native Audio do provider video đã snapshot cho project sinh trực tiếp cùng clip. Kling 3.0 là policy mặc định; BytePlus chỉ đi vào luồng này sau rollout có kiểm soát:
 
 1. Mỗi cảnh có một `SpeechMode`: `None`, `OnCameraDialogue` hoặc `NativeVoiceOver`.
 2. OpenAI content planner trả riêng `spoken_text`, speaker, voice style, ambience và sound effects; `visual_prompt` không được lặp lại lời nói.
-3. Server đọc dữ liệu scene đã lưu, không tin prompt lời nói do desktop tự gửi, rồi dựng prompt Kling theo template có version. Prompt bắt buộc nêu một người nói, nguyên văn câu cần nói, ngôn ngữ, phong cách giọng, lip-sync, ambience và SFX.
-4. Lời nói được giới hạn theo thời lượng: tối đa 8 từ cho clip 3–5 giây, 18 từ cho 6–10 giây và 28 từ cho 11–15 giây. Vượt giới hạn phải chặn trước outbound, không tự cắt lời.
-5. Request Kling luôn dùng `720p`, `NativeAudio = true` và `multi_shot = false`. Rate Active phải có metadata đúng biến thể `720p + nativeAudio`; thiếu rate/budget dừng trước outbound.
+3. Server đọc dữ liệu scene đã lưu, không tin prompt lời nói do desktop tự gửi, rồi dựng prompt theo adapter/template có version của provider snapshot. Prompt phải giữ nguyên lời đã duyệt, speaker, ngôn ngữ, voice style, ambience và SFX; on-camera dialogue còn yêu cầu đúng một người nói và lip-sync.
+4. Với Kling, lời nói được giới hạn theo thời lượng: tối đa 8 từ cho clip 3–5 giây, 18 từ cho 6–10 giây và 28 từ cho 11–15 giây. Vượt giới hạn phải chặn trước outbound, không tự cắt lời. Provider khác phải dùng capability/validation riêng của model đã snapshot.
+5. Kling hiện dùng `720p`, `NativeAudio = true` và `multi_shot = false`; BytePlus hiện dùng biến thể 720p/24fps/Native Audio theo catalog. Rate Active phải khớp đúng model, usage type và capability; thiếu rate/budget dừng trước outbound.
 6. Desktop tải raw `SceneVideo` qua proxy có xác thực, kiểm tra video bằng FFprobe và đo audio bằng `AudioQualityValidator`. Metadata chỉ lưu speech hash, mode và thống kê audio; không log nguyên văn lời hoặc provider URL.
 7. Clip thiếu audio stream hoặc gần như im lặng chuyển `NativeAudioInvalid`, không được duyệt và có thể sửa prompt/tạo lại bằng provider request mới.
 8. Clip có audio nghe được chuyển `AudioReviewRequired`. Người dùng phải phát preview, đối chiếu lời, người nói, phát âm, khẩu hình, ambience và SFX rồi bấm **Duyệt hình và âm thanh**.
 9. Chỉ khi duyệt, scene mới có `ApprovedGenerationId` và trạng thái `Approved`; project chỉ `ReadyToRender` khi toàn bộ scene đã duyệt.
-10. Workflow mặc định không gọi OpenAI Speech, không tải WAV, không tạo `SceneVoice`, không chạy `SceneAudioMixer` và không tạo `SceneVideoNarrated`. Không fallback ngầm sang TTS khi Kling sai hoặc im lặng.
+10. Workflow mặc định không gọi OpenAI Speech, không tải WAV, không tạo `SceneVoice`, không chạy `SceneAudioMixer` và không tạo `SceneVideoNarrated`. Không fallback ngầm sang TTS khi provider trả âm thanh sai hoặc im lặng.
 
 ### 8.3. Trạng thái triển khai và điều kiện vận hành hiện tại
 
 Source hiện hành đã có contract speech intent, OpenAI structured output, `KlingNativeAudioPromptComposer`, rate policy cho `720p + nativeAudio`, kiểm tra audio sau tải, trạng thái `NativeAudioInvalid`/`AudioReviewRequired`, API bridge duyệt scene và UI phân biệt lời nhân vật với native voice-over.
 
-Source cũng đã có migration 4.0.4, admin video policy, generic contract/service/bridge, Seedance client/prompt composer, worker đa provider, cache/proxy/cleanup và pricing bằng `completion_tokens`. Release build và test offline đã đạt ngày 2026-08-30; trạng thái này không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus đã hoàn tất.
+Source cũng đã có migration 4.0.4–4.0.6, admin video policy, generic contract/service/bridge, Seedance client/prompt composer, worker đa provider, cache/proxy/cleanup và pricing bằng `completion_tokens`. Trạng thái source không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus đã hoàn tất trên một môi trường triển khai.
 
 Để chạy được trong một môi trường, vẫn phải thỏa đồng thời:
 
-- tổ chức có Kling credential Active và model Kling Video Active;
-- model Kling có rate Active đúng metadata `{"resolution":"720p","nativeAudio":true}`;
+- tổ chức có credential Active, model video Active và policy Active cho provider được chọn; mặc định là Kling;
+- model có đủ rate Active đúng usage type/capability; Kling cần metadata `{"resolution":"720p","nativeAudio":true}`;
 - budget tổ chức và hạn mức thành viên còn đủ;
 - nhân vật của cảnh đã khóa và có ảnh reference primary nếu cảnh dùng nhân vật;
 - desktop có FFmpeg/FFprobe hợp lệ để kiểm tra clip và audio;
@@ -190,9 +194,9 @@ Source cũng đã có migration 4.0.4, admin video policy, generic contract/serv
 
 Tiếng Việt được gắn nhãn **experimental/best-effort**. Tài liệu Kling 3.0 hiện công bố Native Audio đa ngôn ngữ cho Chinese, English, Japanese, Korean và Spanish, đồng thời cảnh báo ngôn ngữ ngoài danh sách có thể bị dịch sang English. Prompt vẫn yêu cầu giữ nguyên tiếng Việt, nhưng manual review là bắt buộc và chưa được xem là hỗ trợ production cho đến khi smoke test thực tế đạt.
 
-Không cần migration TTS 4.0.3 hoặc rate OpenAI Voice để chạy Kling Native Audio. Schema/entity/API TTS hiện hữu vẫn được giữ để đọc dữ liệu cũ và phát triển tính năng ghép giọng sau này, nhưng không nằm trên đường gọi mặc định.
+Kling Native Audio không phụ thuộc rate OpenAI Voice hoặc việc bật TTS. Runbook vẫn chạy migration 4.0.3 theo đúng chuỗi 4.0.0–4.0.6 để giữ schema tương thích; schema/entity/API TTS hiện hữu được giữ để đọc dữ liệu cũ và phát triển tính năng ghép giọng sau này, nhưng không nằm trên đường gọi mặc định.
 
-`ProjectRenderService` là đường gọi thực tế từ UI vào `FfmpegRenderService`. Service chỉ chọn `SceneVideo` thuộc đúng `ApprovedGenerationId` của từng scene trong scene-plan hiện hành, xác minh SHA-256 và cờ `nativeAudioAudible`, sau đó chuẩn hóa/concat theo thứ tự. Final MP4 chỉ được lưu thành `FinalVideo` khi có video stream, audio stream nghe được, đúng kích thước và thời lượng nằm trong tolerance; lỗi render chỉ retry cục bộ, không tạo request Kling/TTS mới.
+`ProjectRenderService` là đường gọi thực tế từ UI vào `FfmpegRenderService`. Service chỉ chọn `SceneVideo` thuộc đúng `ApprovedGenerationId` của từng scene trong scene-plan hiện hành, xác minh SHA-256 và cờ `nativeAudioAudible`, sau đó chuẩn hóa/concat theo thứ tự. Final MP4 chỉ được lưu thành `FinalVideo` khi có video stream, audio stream nghe được, đúng kích thước và thời lượng nằm trong tolerance; lỗi render chỉ retry cục bộ, không tạo request provider/TTS mới.
 
 ## 9. Idempotency
 
@@ -310,14 +314,14 @@ Gateway giới hạn mặc định 30 request/phút cho mỗi user/IP.
 2. Desktop không có client gọi trực tiếp OpenAI/Kling/BytePlus và không có request/setting chọn provider/model.
 3. User ngoài tổ chức, Viewer, license hết hạn hoặc lease quá hạn không phát sinh provider request.
 4. Hai request đồng thời không vượt ngân sách đã khóa và không tạo hai reservation cùng operation.
-5. Credential rotate không làm hỏng task Kling đang chạy.
+5. Credential rotate không làm hỏng task provider video đang chạy theo credential version đã snapshot.
 6. Thay đổi rate không đổi giá request đã có snapshot.
 7. Mỗi actual cost truy được về user, project, provider request, model và credential version.
-8. Khi desktop đóng, Kling worker server vẫn polling và reconciliation vẫn hoạt động.
+8. Khi desktop đóng, worker video server vẫn polling và reconciliation vẫn hoạt động.
 9. URL video provider không lộ cho desktop và proxy chặn SSRF.
 10. Toàn bộ solution Release biên dịch không cảnh báo và bộ test tự động đạt.
-11. Kling request của luồng mới bật native audio và được quote theo đúng rate/capability có audio.
-12. Prompt Kling chứa speech mode, đúng một speaker, nguyên văn lời cần nói, language, voice style, lip-sync, ambience và SFX; lời vượt word budget bị chặn trước outbound.
+11. Video request của luồng mới bật Native Audio và được quote theo đúng provider/model/rate/capability đã snapshot.
+12. Prompt provider chứa speech mode, nguyên văn lời cần nói, language, voice style, ambience và SFX; on-camera dialogue có đúng một speaker/lip-sync, và Kling word budget bị chặn trước outbound.
 13. Clip thiếu/không nghe được audio không thể duyệt; clip hợp lệ phải qua bước nghe và duyệt thủ công trước khi scene `Approved`.
 14. Workflow mặc định không gọi TTS, không tạo WAV/`SceneVideoNarrated` và retry Native Audio không phát sinh request trùng theo cùng idempotency key.
 15. Thiếu rate/budget, Viewer hoặc truy cập chéo project/character không tạo outbound request GPT-Image-2.

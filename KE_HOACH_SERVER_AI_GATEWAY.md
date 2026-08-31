@@ -1,6 +1,8 @@
 # Kế hoạch và trạng thái triển khai Server AI Gateway
 
-> Cập nhật: 2026-08-29. Kiến trúc AI Gateway theo tổ chức, luồng tạo ảnh chuẩn nhân vật GPT-Image-2 và Kling Native Audio 720p đã được triển khai trong source. Gateway kiểm tra scene-plan/prompt version, dùng snapshot idempotency theo tổ chức/user/model và không lưu raw provider payload Kling. Migration chưa được tự động chạy trên database đang sử dụng.
+> Cập nhật ngữ cảnh: 2026-08-31. Kiến trúc AI Gateway theo tổ chức, GPT-Image-2, Kling Native Audio 720p và gateway video đa provider Kling/BytePlus đã được triển khai trong source. BytePlus/Seedance được seed disabled và chưa được coi là đã rollout nếu thiếu migration, credential, rate, policy và smoke test có phí. Gateway kiểm tra scene-plan/prompt version, dùng snapshot idempotency theo tổ chức và không lưu raw provider payload hoặc signed output URL. Migration chưa được tự động chạy trên database đang sử dụng.
+
+Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; lệnh triển khai nằm tại `TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md`.
 
 ## 1. Hạng mục đã triển khai
 
@@ -21,6 +23,10 @@
 - [x] Desktop lưu `.part` nguyên tử, tạo primary `CharacterReference`, hỗ trợ tạo lại/preview/khóa thủ công và không gọi OpenAI trực tiếp.
 - [x] Kling submit/status, worker polling nền và credential version snapshot.
 - [x] Kling Native Audio dùng prompt server-side, scene/prompt version hiện hành, snapshot hash không chứa full prompt/spoken text/Base64 và lỗi provider đã chuẩn hóa.
+- [x] Migration 4.0.4–4.0.6 cho policy video, project snapshot, cache output và trạng thái `PromptInvalid`/`AudioReviewRequired`/`NativeAudioInvalid`.
+- [x] Contract/API video trung lập provider; desktop không gửi provider/model/prompt/thời lượng/độ phân giải làm nguồn sự thật.
+- [x] BytePlus Seedance client, prompt composer, policy resolver, worker đa provider, pricing theo `completion_tokens` và output cache/proxy dùng chung.
+- [x] Catalog Seedance 2.0/2.5 được seed disabled; không tự bật provider, model, rate, credential hoặc policy tổ chức.
 - [x] Output proxy có authorization, DNS/IP SSRF checks, redirect/size limit.
 - [x] Generation API xác thực JWT/session/device/license/organization/project và rate limit.
 - [x] Idempotency theo tổ chức cùng request hash.
@@ -40,10 +46,10 @@
 - [ ] Tạo database user riêng cho server và desktop.
 - [ ] Cấu hình JWT signing key/Data Protection cho môi trường production.
 - [ ] Tạo tổ chức, gán thành viên, budget và member limit thật.
-- [ ] Nhập rate riêng cho model Text, `gpt-image-2` và Kling hiện hành từ hợp đồng/provider dashboard.
+- [ ] Nhập rate riêng cho model Text, `gpt-image-2`, Kling và provider video thực sự rollout từ hợp đồng/provider dashboard.
 - [ ] Xác nhận tổ chức OpenAI đã được phép dùng GPT-Image-2; xử lý bước organization verification nếu provider yêu cầu.
 - [ ] Nhập production credential qua HTTPS bằng Owner/OrganizationAdmin.
-- [ ] Chạy staging smoke test có phê duyệt chi phí với OpenAI Text, GPT-Image-2 và Kling thật.
+- [ ] Chạy staging smoke test có phê duyệt chi phí với OpenAI Text, GPT-Image-2 và Kling thật; smoke test BytePlus trên tổ chức thử nghiệm riêng nếu rollout Seedance.
 - [ ] Đối chiếu usage ledger với hóa đơn/provider dashboard.
 - [ ] Phát hành desktop gateway sau khi server/migration/configuration sẵn sàng.
 - [ ] Theo dõi worker, provider 401/403/429/5xx và reservation quá hạn.
@@ -62,9 +68,10 @@
 2. Budget/rate/credential đã cấu hình và credential test thành công.
 3. Desktop không có provider key và dùng database role riêng.
 4. Cross-organization, Viewer, license hết hạn và budget exceeded đều bị chặn trước provider.
-5. Kling vẫn hoàn thành qua worker khi desktop đóng.
+5. Task video của provider được bật vẫn hoàn thành qua worker khi desktop đóng.
 6. Usage ledger truy được theo Organization, user, project, request và credential version.
 7. Build/test Release đạt và staging live smoke test đã được phê duyệt.
 8. GPT-Image-2 có đủ rate riêng, ảnh tải qua server đúng hash/MIME và retry không tạo request hoặc chi phí trùng.
+9. Nếu rollout BytePlus, provider/model chỉ được bật sau smoke test; project đã snapshot Kling không tự đổi provider và ảnh upload/người thật bị chặn trước outbound BytePlus.
 
 Chi tiết thao tác: [TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md).

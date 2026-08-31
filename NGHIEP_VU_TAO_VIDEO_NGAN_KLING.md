@@ -2,7 +2,7 @@
 
 > Phạm vi: màn hình **Tạo video** tạo một clip duy nhất từ nội dung người dùng nhập.
 >
-> Trạng thái: mô tả đúng luồng đang triển khai tại thời điểm 2026-08-30. Tài liệu này bổ sung cho [Nghiệp vụ hệ thống VideoMaker](NGHIEP_VU_HE_THONG_VIDEOMAKER.md), không thay thế nghiệp vụ tạo dự án nhiều cảnh bằng OpenAI.
+> Cập nhật ngữ cảnh: 2026-08-31. Tài liệu này mô tả màn hình direct prompt một scene đã có trong source, bổ sung cho [Nghiệp vụ hệ thống VideoMaker](NGHIEP_VU_HE_THONG_VIDEOMAKER.md) và không thay thế nghiệp vụ dự án nhiều cảnh bằng OpenAI. Khi có khác biệt, tài liệu nghiệp vụ hệ thống và source hiện hành được ưu tiên.
 
 ## 1. Mục đích
 
@@ -14,7 +14,7 @@ Tính năng phù hợp với các video ngắn độc lập như Shorts, Reels, 
 
 ## 2. Nguyên tắc và ranh giới
 
-- Provider của luồng này là **Kling** theo policy của tổ chức; người dùng desktop không tự chọn provider, model hoặc nhập API key.
+- Provider của luồng này là **Kling**. Desktop đọc video policy của tổ chức và chặn thao tác nếu policy hiện hành không phải Kling; người dùng desktop không tự chọn provider, model hoặc nhập API key.
 - Nội dung người dùng nhập đi thẳng vào prompt hình ảnh của scene. Luồng này **không gọi OpenAI** để viết lại, dịch hoặc tự sinh kịch bản.
 - Hệ thống vẫn phải đi qua `TOOL-SERVER`: kiểm tra quyền, giá, ngân sách, idempotency, credential và log usage trước khi gọi Kling.
 - API key Kling chỉ tồn tại ở server dưới dạng credential mã hóa. Desktop không nhận key, URL output gốc hoặc secret provider.
@@ -87,7 +87,7 @@ Desktop kiểm tra dữ liệu cơ bản trước khi gửi:
 
 - Nội dung sau khi trim không được rỗng và không vượt 2.000 ký tự.
 - Tỉ lệ phải thuộc ba giá trị được hỗ trợ.
-- Thời lượng phải là số nguyên từ 1 đến 15.
+- Thời lượng phải là số nguyên từ 5 đến 15.
 - Không tạo song song khi đang có tác vụ generation chạy.
 - Người dùng phải chọn tổ chức, Kling phải sẵn sàng và FFmpeg/FFprobe phải dùng được.
 

@@ -1,6 +1,8 @@
 # Triển khai AI Gateway theo tổ chức
 
-Tài liệu này là runbook triển khai VideoMaker 4.0. Các lệnh thay đổi database phải được chạy trong cửa sổ bảo trì và sau khi đã có backup kiểm tra phục hồi được.
+> Cập nhật ngữ cảnh: 2026-08-31. Đây là runbook vận hành hiện hành cho VideoMaker 4.0. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; trạng thái source và việc còn mở nằm tại `KE_HOACH_SERVER_AI_GATEWAY.md`.
+
+Các lệnh thay đổi database phải được chạy trong cửa sổ bảo trì và sau khi đã có backup kiểm tra phục hồi được. Có migration trong repository không đồng nghĩa migration đã chạy trên database của bất kỳ môi trường nào.
 
 ## 1. Chuẩn bị
 

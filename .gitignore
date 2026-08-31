@@ -23,6 +23,10 @@ TOOL-LOCAL/Web/vite.config.d.ts
 artifacts/
 TOOL-SERVER/App_Releases/
 
+# Server runtime-generated provider output cache
+/data/video-outputs/
+/TOOL-SERVER/[Dd]ata/video-outputs/
+
 # Local secrets and runtime files
 appsettings.user.json
 .env
@@ -31,4 +35,3 @@ appsettings.user.json
 provider-secrets.bin
 provider-secrets.bin.tmp
 *.log
-
