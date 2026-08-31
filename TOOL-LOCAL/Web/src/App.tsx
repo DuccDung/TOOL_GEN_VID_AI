@@ -2528,7 +2528,7 @@ function ModelCard({ model }: { model: ModelDisplay }) {
       <ModelLogo brand={model.brand} label={model.name} />
       <div className="model-name"><strong>{model.name}</strong><span>{model.description}</span></div>
       <div className="model-meta">{model.badge && <span className="model-badge">{model.badge}</span>}<span>{model.secondary}</span></div>
-      <span className="model-readonly-badge">Do server quản lý</span>
+      <span className="model-readonly-badge">Quản lý tập trung</span>
     </article>
   );
 }
