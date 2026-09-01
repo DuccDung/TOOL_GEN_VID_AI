@@ -68,11 +68,17 @@ public partial class VideoFactoryDbContext : DbContext
 
     public virtual DbSet<Project> Projects { get; set; }
 
+    public virtual DbSet<ProjectAsset> ProjectAssets { get; set; }
+
+    public virtual DbSet<ProjectAssetVersion> ProjectAssetVersions { get; set; }
+
     public virtual DbSet<Provider> Providers { get; set; }
 
     public virtual DbSet<ProviderModel> ProviderModels { get; set; }
 
     public virtual DbSet<ProviderRequest> ProviderRequests { get; set; }
+
+    public virtual DbSet<ProviderRequestAssetVersion> ProviderRequestAssetVersions { get; set; }
 
     public virtual DbSet<RefreshToken> RefreshTokens { get; set; }
 
@@ -81,6 +87,8 @@ public partial class VideoFactoryDbContext : DbContext
     public virtual DbSet<RenderJob> RenderJobs { get; set; }
 
     public virtual DbSet<Scene> Scenes { get; set; }
+
+    public virtual DbSet<SceneAssetAssignment> SceneAssetAssignments { get; set; }
 
     public virtual DbSet<ScenePrompt> ScenePrompts { get; set; }
 
@@ -1131,6 +1139,108 @@ public partial class VideoFactoryDbContext : DbContext
                 .HasForeignKey(d => d.UserId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_RegisteredDevices_AspNetUsers");
+        });
+
+        modelBuilder.Entity<ProjectAsset>(entity =>
+        {
+            entity.ToTable("ProjectAssets", "vf");
+
+            entity.HasIndex(e => new { e.ProjectId, e.AssetKey }, "UQ_ProjectAssets_Project_AssetKey").IsUnique();
+            entity.HasIndex(e => new { e.ProjectId, e.AssetType, e.Name }, "UQ_ProjectAssets_Project_Type_Name").IsUnique();
+            entity.HasIndex(e => new { e.ProjectId, e.Status }, "IX_ProjectAssets_Project_Status");
+
+            entity.Property(e => e.ProjectAssetId).HasDefaultValueSql("(newsequentialid())", "DF_ProjectAssets_Id");
+            entity.Property(e => e.AssetType).HasMaxLength(20).IsUnicode(false);
+            entity.Property(e => e.AssetKey).HasMaxLength(80);
+            entity.Property(e => e.Name).HasMaxLength(160);
+            entity.Property(e => e.CanonicalDescription).HasMaxLength(2000);
+            entity.Property(e => e.Status)
+                .HasMaxLength(20)
+                .IsUnicode(false)
+                .HasDefaultValue("Draft", "DF_ProjectAssets_Status");
+            entity.Property(e => e.SourceKind)
+                .HasMaxLength(20)
+                .IsUnicode(false)
+                .HasDefaultValue("Manual", "DF_ProjectAssets_SourceKind");
+            entity.Property(e => e.CurrentVersion).HasDefaultValue(0, "DF_ProjectAssets_CurrentVersion");
+            entity.Property(e => e.LockedAtUtc).HasPrecision(3);
+            entity.Property(e => e.CreatedAtUtc)
+                .HasPrecision(3)
+                .HasDefaultValueSql("(sysutcdatetime())", "DF_ProjectAssets_CreatedAtUtc");
+            entity.Property(e => e.CreatedByUserId).HasMaxLength(450);
+            entity.Property(e => e.UpdatedAtUtc)
+                .HasPrecision(3)
+                .HasDefaultValueSql("(sysutcdatetime())", "DF_ProjectAssets_UpdatedAtUtc");
+            entity.Property(e => e.UpdatedByUserId).HasMaxLength(450);
+            entity.Property(e => e.RowVersion).IsRowVersion().IsConcurrencyToken();
+
+            entity.HasOne<Project>()
+                .WithMany()
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ProjectAssets_Projects");
+        });
+
+        modelBuilder.Entity<ProjectAssetVersion>(entity =>
+        {
+            entity.ToTable("ProjectAssetVersions", "vf");
+
+            entity.HasIndex(e => new { e.ProjectAssetId, e.Version }, "UQ_ProjectAssetVersions_Asset_Version").IsUnique();
+
+            entity.Property(e => e.ProjectAssetVersionId).HasDefaultValueSql("(newsequentialid())", "DF_ProjectAssetVersions_Id");
+            entity.Property(e => e.AssetType).HasMaxLength(20).IsUnicode(false);
+            entity.Property(e => e.Name).HasMaxLength(160);
+            entity.Property(e => e.CanonicalDescription).HasMaxLength(2000);
+            entity.Property(e => e.LockedAtUtc).HasPrecision(3);
+            entity.Property(e => e.LockedByUserId).HasMaxLength(450);
+
+            entity.HasOne(e => e.ProjectAsset)
+                .WithMany(e => e.Versions)
+                .HasForeignKey(e => e.ProjectAssetId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ProjectAssetVersions_ProjectAssets");
+        });
+
+        modelBuilder.Entity<SceneAssetAssignment>(entity =>
+        {
+            entity.ToTable("SceneAssetAssignments", "vf");
+
+            entity.HasKey(e => new { e.SceneId, e.ProjectAssetId });
+            entity.HasIndex(e => e.ProjectAssetId, "IX_SceneAssetAssignments_ProjectAsset");
+            entity.Property(e => e.AssignedByUserId).HasMaxLength(450);
+            entity.Property(e => e.AssignedAtUtc)
+                .HasPrecision(3)
+                .HasDefaultValueSql("(sysutcdatetime())", "DF_SceneAssetAssignments_AssignedAtUtc");
+
+            entity.HasOne(e => e.Scene)
+                .WithMany()
+                .HasForeignKey(e => e.SceneId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_SceneAssetAssignments_Scenes");
+            entity.HasOne(e => e.ProjectAsset)
+                .WithMany(e => e.SceneAssignments)
+                .HasForeignKey(e => e.ProjectAssetId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_SceneAssetAssignments_ProjectAssets");
+        });
+
+        modelBuilder.Entity<ProviderRequestAssetVersion>(entity =>
+        {
+            entity.ToTable("ProviderRequestAssetVersions", "vf");
+
+            entity.HasKey(e => new { e.ProviderRequestId, e.ProjectAssetVersionId });
+            entity.HasIndex(e => e.ProjectAssetVersionId, "IX_ProviderRequestAssetVersions_AssetVersion");
+
+            entity.HasOne(e => e.ProviderRequest)
+                .WithMany()
+                .HasForeignKey(e => e.ProviderRequestId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ProviderRequestAssetVersions_ProviderRequests");
+            entity.HasOne(e => e.ProjectAssetVersion)
+                .WithMany(e => e.ProviderRequestSnapshots)
+                .HasForeignKey(e => e.ProjectAssetVersionId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ProviderRequestAssetVersions_ProjectAssetVersions");
         });
 
         modelBuilder.Entity<RenderJob>(entity =>

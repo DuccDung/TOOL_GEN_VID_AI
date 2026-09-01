@@ -39,7 +39,15 @@ public sealed record GeneratedContentScene(
     string? SpeakerCharacterKey = null,
     string? VoiceStyle = null,
     string? AmbientAudio = null,
-    string? SoundEffects = null);
+    string? SoundEffects = null,
+    IReadOnlyList<string>? AssetKeys = null);
+
+public sealed record GeneratedProjectAsset(
+    string AssetKey,
+    string AssetType,
+    string Name,
+    string CanonicalDescription,
+    IReadOnlyList<int> SceneSequenceNumbers);
 
 public sealed record GeneratedContentPlan(
     string Title,
@@ -51,7 +59,8 @@ public sealed record GeneratedContentPlan(
     string VisualStyle,
     string NegativePrompt,
     IReadOnlyList<GeneratedCharacterProfile> Characters,
-    IReadOnlyList<GeneratedContentScene> Scenes);
+    IReadOnlyList<GeneratedContentScene> Scenes,
+    IReadOnlyList<GeneratedProjectAsset>? Assets = null);
 
 public sealed record GeneratedContentResponse(
     Guid ProviderRequestId,
@@ -59,7 +68,9 @@ public sealed record GeneratedContentResponse(
     string ModelCode,
     long InputTokens,
     long OutputTokens,
-    GeneratedContentPlan Plan);
+    GeneratedContentPlan Plan,
+    string? EffectiveGenerationLanguageCode = null,
+    string? GenerationLanguagePolicyVersion = null);
 
 public sealed record GenerateCharacterReferenceImageRequest(
     Guid ProjectId,

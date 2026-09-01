@@ -205,6 +205,7 @@ builder.Services.AddScoped<IOrganizationProviderCredentialTester, OrganizationPr
 builder.Services.AddScoped<IAiPricingAdminService, AiPricingAdminService>();
 builder.Services.AddScoped<IAiBudgetService, AiBudgetService>();
 builder.Services.AddScoped<IGenerationAccessService, GenerationAccessService>();
+builder.Services.AddScoped<TOOL_SERVER.Projects.IProjectAssetService, TOOL_SERVER.Projects.ProjectAssetService>();
 builder.Services.AddScoped<IProviderCredentialProtector, ProviderCredentialProtector>();
 builder.Services.AddScoped<IProviderRuntimeResolver, ProviderRuntimeResolver>();
 builder.Services.AddScoped<IProjectVideoPolicyResolver, ProjectVideoPolicyResolver>();

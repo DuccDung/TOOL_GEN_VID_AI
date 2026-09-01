@@ -29,7 +29,9 @@ import {
   LockKeyhole,
   LoaderCircle,
   LogOut,
+  MapPin,
   Menu,
+  Package,
   Pencil,
   Play,
   Plus,
@@ -40,6 +42,8 @@ import {
   ShieldCheck,
   Sparkles,
   TriangleAlert,
+  Trash2,
+  UnlockKeyhole,
   Upload,
   UserRound,
   Users,
@@ -58,6 +62,7 @@ import { isHosted, postToHost, subscribeToHost } from './bridge';
 import type {
   AiModel,
   CharacterSummary,
+  CreateProjectAssetPayload,
   CreateProjectPayload,
   CreateShortVideoPayload,
   DashboardState,
@@ -70,11 +75,15 @@ import type {
   OrganizationSummary,
   PipelineStage,
   ProjectDashboard,
+  ProjectAssetLibrary,
+  ProjectAssetSummary as ProjectTextAsset,
+  ProjectAssetType,
   ProjectSummary,
   ProviderSettings,
   SceneSummary,
   UpdateScenePayload,
   UpdateCharacterPayload,
+  UpdateProjectAssetPayload,
 } from './types';
 
 type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'apiKeys';
@@ -115,8 +124,8 @@ type PendingSceneSave = {
 
 const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
   create: {
-    title: 'Dashboard',
-    subtitle: 'Theo dõi dự án, tác vụ đang chạy và trạng thái hệ thống của bạn.'
+    title: 'Tạo video mới',
+    subtitle: 'Nhập chủ đề hoặc ý tưởng, AI sẽ giúp bạn tạo video hoàn chỉnh chỉ với vài bước.'
   },
   longVideo: {
     title: 'Tạo Video Dài',
@@ -148,6 +157,7 @@ const emptyState: DashboardState = {
   selectedOrganizationId: '',
   projects: [],
   selectedProject: null,
+  assetLibrary: null,
   models: [],
   providerStatus: {
     openAiReady: false,
@@ -221,9 +231,9 @@ const longVideoSteps: LongVideoStep[] = [
   },
   {
     id: 'assets',
-    label: 'Tài sản hình ảnh',
+    label: 'Tài sản nhất quán',
     shortLabel: 'Tài sản',
-    description: 'Kiểm tra hồ sơ, ảnh chuẩn và khóa nhân vật trước khi tạo clip.',
+    description: 'Khóa nhân vật và thư viện text bối cảnh, đạo cụ, item cho từng cảnh.',
     icon: ImageIcon
   },
   {
@@ -275,6 +285,7 @@ function App() {
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [serviceError, setServiceError] = useState<ServiceError | null>(null);
   const [characterImageBusyId, setCharacterImageBusyId] = useState<string | null>(null);
+  const [assetConfirmBusyId, setAssetConfirmBusyId] = useState<string | null>(null);
   const [mediaInstallProgress, setMediaInstallProgress] = useState<DesktopUpdateProgress | null>(null);
   const [sceneSaveState, setSceneSaveState] = useState<SceneSaveState | null>(null);
   const [shortVideoProjectId, setShortVideoProjectId] = useState<string | null>(null);
@@ -292,6 +303,7 @@ function App() {
         const nextDashboard = message.payload as DashboardState;
         setDashboard(nextDashboard);
         if (!nextDashboard.generationRunning) setCharacterImageBusyId(null);
+        setAssetConfirmBusyId(null);
         setBusy(false);
         return;
       }
@@ -314,6 +326,10 @@ function App() {
         }
         setBusy(false);
         setCharacterImageBusyId(null);
+        setAssetConfirmBusyId(null);
+        if (message.error?.code === 'scene_asset_confirmation_stale' || message.error?.code === 'project_asset_changed') {
+          postToHost('dashboard.refresh');
+        }
         if (message.error?.code === 'provider_temporarily_unavailable') {
           setServiceError({
             title: 'Máy chủ đang bảo trì',
@@ -425,7 +441,7 @@ function App() {
   const selectProject = (projectId: string) => {
     setBusy(true);
     postToHost('project.select', { projectId });
-    setPage('longVideo');
+    if (page !== 'create') setPage('longVideo');
   };
 
   const createProject = (payload: CreateProjectPayload) => {
@@ -527,11 +543,17 @@ function App() {
   const generateVideos = (sceneIds: string[]) => {
     const project = dashboard.selectedProject;
     if (!project || dashboard.generationRunning || sceneIds.length === 0) return;
+    if (project.requiresVietnameseContentRegeneration) {
+      notify('Dự án Kling này còn nội dung tiếng Anh. Hãy sinh lại nội dung tiếng Việt trước khi tạo clip.', true);
+      return;
+    }
     if (!dashboard.mediaTools.ready) {
       notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
       return;
     }
     const selectedSceneIds = new Set(sceneIds);
+    const enforceKlingLongFormSpeechPolicy = project.workflowStructureType === 'OpenAiStructuredPlan' &&
+      project.videoProviderCode?.toLowerCase() === 'kling';
     const selectedScenes = project.scenes.filter((scene) => selectedSceneIds.has(scene.sceneId));
     if (selectedScenes.length !== selectedSceneIds.size) {
       notify('Danh sách cảnh đã thay đổi. Hãy chọn lại cảnh cần tạo.', true);
@@ -539,6 +561,20 @@ function App() {
     }
     const resumableScenes = selectedScenes.filter(sceneNeedsLocalCompletion);
     const newRequestScenes = selectedScenes.filter((scene) => !sceneNeedsLocalCompletion(scene));
+    const blockedAssetScenes = newRequestScenes.filter(
+      (scene) => !areSceneAssetsReady(scene.sceneId, dashboard.assetLibrary ?? null)
+    );
+    if (blockedAssetScenes.length > 0) {
+      const hasInvalidSelection = blockedAssetScenes.some((scene) =>
+        dashboard.assetLibrary?.sceneAssignments.find((assignment) => assignment.sceneId === scene.sceneId)?.isValid === false);
+      notify(
+        hasInvalidSelection
+          ? `Cảnh ${blockedAssetScenes.map((scene) => scene.sequenceNumber).join(', ')} có lựa chọn tài sản không hợp lệ. Hãy sửa trong Storyboard trước khi tạo clip.`
+          : `Cảnh ${blockedAssetScenes.map((scene) => scene.sequenceNumber).join(', ')} đang dùng tài sản text chưa khóa. Hãy duyệt và khóa tài sản trước khi tạo clip.`,
+        true
+      );
+      return;
+    }
     const isDownloadOnly = resumableScenes.length === selectedScenes.length;
     const isMixedOperation = resumableScenes.length > 0 && newRequestScenes.length > 0;
     const totalSeconds = Math.ceil(selectedScenes.reduce((total, scene) => total + scene.durationMs, 0) / 1000);
@@ -551,7 +587,7 @@ function App() {
         const durationSeconds = Math.ceil(scene.durationMs / 1000);
         const speech = scene.speechMode === 'None'
           ? 'Không có lời nói'
-          : `${speechModeLabel(scene.speechMode)}: “${scene.narration?.trim() || 'chưa có nội dung'}”`;
+          : `${speechModeLabel(scene.speechMode, enforceKlingLongFormSpeechPolicy)}: “${scene.narration?.trim() || 'chưa có nội dung'}”`;
         const operation = sceneNeedsLocalCompletion(scene) ? 'Tải clip đã tạo' : 'Tạo clip mới';
         return `${isMixedOperation ? `${operation} · ` : ''}Cảnh ${scene.sequenceNumber} (${durationSeconds}s) — ${speech}`;
       })
@@ -565,7 +601,7 @@ function App() {
       : 'Chi phí được server quote theo rate Active và giữ trong budget tổ chức trước outbound.';
     const languageNote = ' Bạn phải nghe và duyệt từng clip trước khi dựng video cuối.';
     const retryNote = retryCount > 0
-      ? ` ${retryCount} clip có Native Audio không đạt sẽ được tạo lại và phát sinh chi phí provider mới.`
+      ? ` ${retryCount} clip có Native Audio không đạt sẽ được tạo lại bằng prompt ưu tiên lời thoại và phát sinh chi phí provider mới.`
       : '';
     const providerLabel = dashboard.providerStatus.videoProviderName ?? dashboard.providerStatus.videoProviderCode ?? 'Provider do server chọn';
 
@@ -603,10 +639,14 @@ function App() {
 
     setConfirmation({
       eyebrow: 'XÁC NHẬN TẠO VIDEO',
-      title: `Tạo ${selectedScenes.length} clip video?`,
+      title: retryCount === selectedScenes.length
+        ? `Tạo lại ${selectedScenes.length} clip với prompt ưu tiên lời thoại?`
+        : `Tạo ${selectedScenes.length} clip video?`,
       description: `${providerLabel} · ${dashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${dashboard.providerStatus.videoResolution ?? '720p'} · Native Audio\nTổng thời lượng: khoảng ${totalSeconds} giây · ${spokenSceneCount}/${selectedScenes.length} cảnh có lời nói\n\n${spokenPreview}`,
       note: `${costNote}${languageNote}${retryNote}`,
-      confirmLabel: `Tạo ${selectedScenes.length} clip`,
+      confirmLabel: retryCount === selectedScenes.length
+        ? `Tạo lại ${selectedScenes.length} clip`
+        : `Tạo ${selectedScenes.length} clip`,
       onConfirm: () => {
         setBusy(true);
         postToHost('generation.video', { sceneIds });
@@ -615,13 +655,17 @@ function App() {
   };
 
   const requestContentRegeneration = () => {
-    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    const project = dashboard.selectedProject;
+    if (!project || dashboard.generationRunning) return;
+    const requiresVietnamese = project.requiresVietnameseContentRegeneration;
     setConfirmation({
       eyebrow: 'XÁC NHẬN SINH LẠI',
-      title: 'Sinh lại content có nhân vật?',
-      description: 'AI sẽ tạo một phiên bản kịch bản mới, chia lại các cảnh và bổ sung hồ sơ nhân vật để dùng xuyên suốt video.',
+      title: requiresVietnamese ? 'Sinh lại nội dung tiếng Việt?' : 'Sinh lại content có nhân vật?',
+      description: requiresVietnamese
+        ? 'OpenAI sẽ tạo phiên bản kịch bản mới hoàn toàn bằng tiếng Việt, chia lại cảnh, lời nói, hồ sơ nhân vật và tài sản cho Kling.'
+        : 'AI sẽ tạo một phiên bản kịch bản mới, chia lại các cảnh và bổ sung hồ sơ nhân vật để dùng xuyên suốt video.',
       note: 'Thao tác này có thể phát sinh chi phí OpenAI theo rate đang Active của tổ chức.',
-      confirmLabel: 'Tiếp tục sinh lại',
+      confirmLabel: requiresVietnamese ? 'Sinh lại bằng tiếng Việt' : 'Tiếp tục sinh lại',
       onConfirm: generateContent
     });
   };
@@ -651,13 +695,137 @@ function App() {
     postToHost('character.update', payload);
   };
 
+  const createProjectAsset = (payload: CreateProjectAssetPayload) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setBusy(true);
+    postToHost('project-asset.create', payload);
+  };
+
+  const synchronizeProjectAssets = () => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setBusy(true);
+    postToHost('project-asset.materialize');
+  };
+
+  const approveAiProjectAssets = () => {
+    const library = dashboard.assetLibrary;
+    if (!dashboard.selectedProject || !library || dashboard.generationRunning) return;
+    const assignedIds = new Set(library.sceneAssignments.flatMap((assignment) => assignment.projectAssetIds));
+    const assets = library.assets.filter((asset) =>
+      asset.sourceKind === 'AiGenerated' &&
+      asset.status === 'Draft' &&
+      assignedIds.has(asset.projectAssetId));
+    if (assets.length === 0) {
+      notify('Không còn tài sản AI đang dùng cần duyệt.', false);
+      return;
+    }
+    setConfirmation({
+      eyebrow: 'DUYỆT TÍNH NHẤT QUÁN',
+      title: `Duyệt và khóa ${assets.length} tài sản AI?`,
+      description: 'Hệ thống sẽ kiểm tra từng cảnh, giới hạn một bối cảnh và độ dài prompt Kling trước khi khóa đồng thời toàn bộ tài sản AI đang được dùng.',
+      note: 'Thao tác này không gọi OpenAI hoặc Kling nên không phát sinh chi phí provider.',
+      confirmLabel: 'Duyệt & khóa tài sản AI',
+      onConfirm: () => {
+        setBusy(true);
+        postToHost('project-assets.approve-ai', {
+          assets: assets.map((asset) => ({
+            projectAssetId: asset.projectAssetId,
+            concurrencyToken: asset.concurrencyToken
+          }))
+        });
+      }
+    });
+  };
+
+  const updateProjectAsset = (payload: UpdateProjectAssetPayload) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setBusy(true);
+    postToHost('project-asset.update', payload);
+  };
+
+  const lockProjectAsset = (asset: ProjectTextAsset) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setBusy(true);
+    postToHost('project-asset.lock', {
+      projectAssetId: asset.projectAssetId,
+      concurrencyToken: asset.concurrencyToken
+    });
+  };
+
+  const unlockProjectAsset = (asset: ProjectTextAsset) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setConfirmation({
+      eyebrow: 'MỞ KHÓA TÀI SẢN',
+      title: `Mở khóa “${asset.name}”?`,
+      description: asset.sceneIds.length > 0
+        ? `Tài sản đang được gắn vào ${asset.sceneIds.length} cảnh. Các cảnh đó sẽ tạm thời không thể tạo clip mới cho đến khi text được khóa lại.`
+        : 'Bạn có thể chỉnh sửa mô tả sau khi mở khóa.',
+      note: 'Clip đã tạo trước đó không bị thay đổi. Lần tạo clip tiếp theo sẽ dùng phiên bản mới sau khi bạn khóa lại.',
+      confirmLabel: 'Mở khóa để chỉnh sửa',
+      onConfirm: () => {
+        setBusy(true);
+        postToHost('project-asset.unlock', {
+          projectAssetId: asset.projectAssetId,
+          concurrencyToken: asset.concurrencyToken
+        });
+      }
+    });
+  };
+
+  const deleteProjectAsset = (asset: ProjectTextAsset) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setConfirmation({
+      eyebrow: 'XÓA TÀI SẢN NHÁP',
+      title: `Xóa “${asset.name}”?`,
+      description: 'Chỉ tài sản nháp chưa từng khóa và chưa gắn vào cảnh mới có thể xóa.',
+      note: 'Thao tác xóa không thể hoàn tác.',
+      confirmLabel: 'Xóa tài sản',
+      onConfirm: () => {
+        setBusy(true);
+        postToHost('project-asset.delete', {
+          projectAssetId: asset.projectAssetId,
+          concurrencyToken: asset.concurrencyToken
+        });
+      }
+    });
+  };
+
+  const updateSceneAssets = (sceneId: string, projectAssetIds: string[]) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setBusy(true);
+    postToHost('scene.assets.update', { sceneId, projectAssetIds });
+  };
+
+  const confirmSceneAssets = (sceneId: string) => {
+    const library = dashboard.assetLibrary;
+    if (!dashboard.selectedProject || !library || dashboard.generationRunning) return;
+    const assignment = library.sceneAssignments.find((item) => item.sceneId === sceneId);
+    const assignedIds = new Set(assignment?.projectAssetIds ?? []);
+    const assets = library.assets.filter((asset) => assignedIds.has(asset.projectAssetId));
+    if (assets.length === 0 || assets.every((asset) => asset.status === 'Locked')) return;
+    setAssetConfirmBusyId(sceneId);
+    setBusy(true);
+    postToHost('scene.assets.confirm', {
+      sceneId,
+      assets: assets.map((asset) => ({
+        projectAssetId: asset.projectAssetId,
+        concurrencyToken: asset.concurrencyToken
+      }))
+    });
+  };
+
   const selectCharacterReference = (characterId: string) => {
     if (!dashboard.selectedProject || dashboard.generationRunning) return;
     postToHost('character.reference.select', { characterId });
   };
 
   const generateCharacterReference = (character: CharacterSummary) => {
-    if (!dashboard.selectedProject || dashboard.generationRunning || characterImageBusyId) return;
+    const project = dashboard.selectedProject;
+    if (!project || dashboard.generationRunning || characterImageBusyId) return;
+    if (project.requiresVietnameseContentRegeneration) {
+      notify('Hãy sinh lại nội dung tiếng Việt trước khi tạo ảnh nhân vật cho dự án Kling.', true);
+      return;
+    }
     const status = dashboard.providerStatus;
     if (!status.openAiImageReady) {
       notify(status.openAiImageUnavailableMessage ?? 'GPT-Image-2 chưa sẵn sàng cho tổ chức này.', true);
@@ -765,6 +933,43 @@ function App() {
         ) : page === 'longVideo' ? (
           <LongVideoPage
             project={dashboard.selectedProject ?? null}
+            assetLibrary={dashboard.assetLibrary ?? null}
+            models={dashboard.models}
+            providerStatus={dashboard.providerStatus}
+            mediaTools={dashboard.mediaTools}
+            busy={generationBusy}
+            onCreate={createProject}
+            onGenerateContent={generateContent}
+            onRegenerateContent={requestContentRegeneration}
+            onGenerateVideo={generateVideos}
+            onRenderFinalVideo={renderFinalVideo}
+            onApproveSceneNativeAudio={approveSceneNativeAudio}
+            onInstallMediaTools={requestMediaToolInstall}
+            onCheckMediaTools={checkMediaTools}
+            onUpdateScene={updateScene}
+            sceneSaveState={sceneSaveState}
+            onClearSaveFailure={clearSceneSaveFailure}
+            onUpdateCharacter={updateCharacter}
+            onSelectCharacterReference={selectCharacterReference}
+            onGenerateCharacterReference={generateCharacterReference}
+            onApproveCharacter={approveCharacter}
+            onCreateProjectAsset={createProjectAsset}
+            onSynchronizeProjectAssets={synchronizeProjectAssets}
+            onApproveAiProjectAssets={approveAiProjectAssets}
+            onUpdateProjectAsset={updateProjectAsset}
+            onLockProjectAsset={lockProjectAsset}
+            onUnlockProjectAsset={unlockProjectAsset}
+            onDeleteProjectAsset={deleteProjectAsset}
+            onUpdateSceneAssets={updateSceneAssets}
+            onConfirmSceneAssets={confirmSceneAssets}
+            characterImageBusyId={characterImageBusyId}
+            assetConfirmBusyId={assetConfirmBusyId}
+            onOpenImageSetup={() => setPage('apiKeys')}
+            onUnavailable={notify}
+          />
+        ) : (
+          <DashboardPage
+            project={dashboard.selectedProject ?? null}
             models={dashboard.models}
             providerStatus={dashboard.providerStatus}
             mediaTools={dashboard.mediaTools}
@@ -787,15 +992,6 @@ function App() {
             characterImageBusyId={characterImageBusyId}
             onOpenImageSetup={() => setPage('apiKeys')}
             onUnavailable={notify}
-          />
-        ) : (
-          <DashboardPage
-            dashboard={dashboard}
-            onCreateLongVideo={() => setPage('longVideo')}
-            onCreateShortVideo={() => setPage('shortVideo')}
-            onOpenProjects={() => setPage('projects')}
-            onOpenProviderSetup={() => setPage('apiKeys')}
-            onSelectProject={selectProject}
           />
         )}
       </main>
@@ -1493,128 +1689,6 @@ function ShortVideoPage({
 }
 
 function DashboardPage({
-  dashboard,
-  onCreateLongVideo,
-  onCreateShortVideo,
-  onOpenProjects,
-  onOpenProviderSetup,
-  onSelectProject
-}: {
-  dashboard: DashboardState;
-  onCreateLongVideo: () => void;
-  onCreateShortVideo: () => void;
-  onOpenProjects: () => void;
-  onOpenProviderSetup: () => void;
-  onSelectProject: (projectId: string) => void;
-}) {
-  const organization = dashboard.organizations.find(
-    (item) => item.organizationId === dashboard.selectedOrganizationId
-  ) ?? null;
-  const selectedProject = dashboard.selectedProject ?? null;
-  const recentProjects = [...dashboard.projects]
-    .sort((left, right) => Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc))
-    .slice(0, 4);
-  const activeJobs = (selectedProject?.pendingJobs ?? 0) + (selectedProject?.runningJobs ?? 0);
-  const approvedScenes = selectedProject?.approvedScenes ?? 0;
-  const totalScenes = selectedProject?.totalScenes ?? 0;
-  const approvedPercent = totalScenes > 0 ? Math.round(approvedScenes * 100 / totalScenes) : 0;
-
-  return (
-    <div className="page-shell dashboard-overview-page">
-      <section className="dashboard-welcome">
-        <div>
-          <span className="dashboard-eyebrow">VIDEO WORKSPACE</span>
-          <h2>Chọn đúng luồng để bắt đầu sản xuất</h2>
-          <p>Dashboard chỉ tổng hợp trạng thái. Mọi thao tác biên tập nhiều cảnh được thực hiện trong workspace Tạo Video Dài.</p>
-        </div>
-        <div className="dashboard-welcome-actions">
-          <button className="dashboard-primary-action" onClick={onCreateLongVideo}><Film size={18} /> Tạo Video Dài</button>
-          <button className="dashboard-secondary-action" onClick={onCreateShortVideo}><Play size={17} /> Tạo Video Ngắn</button>
-        </div>
-      </section>
-
-      <section className="dashboard-stat-grid" aria-label="Tổng quan dự án">
-        <article className="card dashboard-stat-card projects">
-          <span className="dashboard-stat-icon"><FolderOpen size={20} /></span>
-          <div><small>Tổng dự án</small><strong>{dashboard.projects.length}</strong><span>Trong tổ chức hiện tại</span></div>
-        </article>
-        <article className="card dashboard-stat-card jobs">
-          <span className="dashboard-stat-icon"><LoaderCircle size={20} className={activeJobs > 0 ? 'spin' : ''} /></span>
-          <div><small>Tác vụ đang chạy</small><strong>{activeJobs}</strong><span>{selectedProject ? selectedProject.project.name : 'Chưa chọn dự án'}</span></div>
-        </article>
-        <article className="card dashboard-stat-card scenes">
-          <span className="dashboard-stat-icon"><CircleCheck size={20} /></span>
-          <div><small>Cảnh đã duyệt</small><strong>{approvedScenes}/{totalScenes}</strong><span>{approvedPercent}% của dự án đang chọn</span></div>
-        </article>
-        <article className="card dashboard-stat-card budget">
-          <span className="dashboard-stat-icon"><Gauge size={20} /></span>
-          <div><small>Ngân sách còn lại</small><strong>{organization ? formatMoney(organization.remainingBudget, organization.currencyCode) : '—'}</strong><span>{organization?.name ?? 'Chưa chọn tổ chức'}</span></div>
-        </article>
-      </section>
-
-      <div className="dashboard-overview-grid">
-        <section className="card dashboard-recent-projects">
-          <div className="dashboard-section-heading">
-            <div><span>DỰ ÁN</span><h2>Tiếp tục công việc gần đây</h2></div>
-            <button onClick={onOpenProjects}>Xem tất cả <ArrowRight size={15} /></button>
-          </div>
-          {recentProjects.length > 0 ? (
-            <div className="dashboard-project-list">
-              {recentProjects.map((project) => (
-                <button key={project.projectId} className="dashboard-project-row" onClick={() => onSelectProject(project.projectId)}>
-                  <span className="dashboard-project-icon"><Film size={18} /></span>
-                  <span className="dashboard-project-copy">
-                    <strong>{project.name}</strong>
-                    <small>{project.topic}</small>
-                  </span>
-                  <span className="dashboard-project-meta">
-                    <strong>{translateProjectStatus(project.status)}</strong>
-                    <small>{project.aspectRatio} · {formatDate(project.updatedAtUtc)}</small>
-                  </span>
-                  <ArrowRight size={17} />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="dashboard-empty-projects">
-              <FolderOpen size={32} />
-              <strong>Chưa có dự án video</strong>
-              <p>Tạo workspace Video Dài đầu tiên để bắt đầu.</p>
-              <button onClick={onCreateLongVideo}>Tạo Video Dài</button>
-            </div>
-          )}
-        </section>
-
-        <aside className="dashboard-health-column">
-          <section className="card dashboard-health-card">
-            <div className="dashboard-section-heading compact"><div><span>HỆ THỐNG</span><h2>Trạng thái sẵn sàng</h2></div></div>
-            <div className="dashboard-health-list">
-              <div><span><Bot size={16} /> OpenAI Content</span><strong className={dashboard.providerStatus.openAiReady ? 'ready' : 'missing'}>{dashboard.providerStatus.openAiReady ? 'Sẵn sàng' : 'Cần cấu hình'}</strong></div>
-              <div><span><Film size={16} /> Video Provider</span><strong className={dashboard.providerStatus.videoReady ? 'ready' : 'missing'}>{dashboard.providerStatus.videoReady ? 'Sẵn sàng' : 'Cần cấu hình'}</strong></div>
-              <div><span><Clapperboard size={16} /> FFmpeg/FFprobe</span><strong className={dashboard.mediaTools.ready ? 'ready' : 'missing'}>{dashboard.mediaTools.ready ? 'Sẵn sàng' : 'Cần kiểm tra'}</strong></div>
-            </div>
-            {(!dashboard.providerStatus.openAiReady || !dashboard.providerStatus.videoReady) && (
-              <button className="dashboard-setup-link" onClick={onOpenProviderSetup}>Xem cấu hình tổ chức <ArrowRight size={14} /></button>
-            )}
-          </section>
-
-          <section className="card dashboard-current-project">
-            <div className="dashboard-section-heading compact"><div><span>ĐANG CHỌN</span><h2>Dự án hiện tại</h2></div></div>
-            {selectedProject ? <>
-              <strong className="dashboard-current-name">{selectedProject.project.name}</strong>
-              <p>{selectedProject.project.topic}</p>
-              <ProgressBar value={selectedProject.overallProgressPercent} />
-              <div className="dashboard-current-meta"><span>{selectedProject.totalScenes} cảnh</span><span>{selectedProject.runningJobs} tác vụ chạy</span></div>
-              <button className="dashboard-open-workspace" onClick={() => onSelectProject(selectedProject.project.projectId)}>Mở workspace Video Dài <ArrowRight size={15} /></button>
-            </> : <EmptyBlock text="Chọn một dự án để xem tiến độ." />}
-          </section>
-        </aside>
-      </div>
-    </div>
-  );
-}
-
-function LongVideoPage({
   project,
   models,
   providerStatus,
@@ -1663,9 +1737,144 @@ function LongVideoPage({
   onOpenImageSetup: () => void;
   onUnavailable: (message: string) => void;
 }) {
+  const ignoreSceneAssetUpdate = (_sceneId: string, _projectAssetIds: string[]) => undefined;
+
+  return (
+    <div className="page-shell">
+      <div className="workspace-grid">
+        <section className="workspace-main">
+          <CreateVideoCard busy={busy} onCreate={onCreate} />
+          <GenerationActions
+            project={project}
+            providerStatus={providerStatus}
+            busy={busy}
+            onGenerateContent={onGenerateContent}
+            onRegenerateContent={onRegenerateContent}
+          />
+          <CharacterSection
+            project={project}
+            providerStatus={providerStatus}
+            busy={busy}
+            imageBusyId={characterImageBusyId}
+            onRegenerateContent={onRegenerateContent}
+            onUpdate={onUpdateCharacter}
+            onSelectReference={onSelectCharacterReference}
+            onGenerateReference={onGenerateCharacterReference}
+            onApprove={onApproveCharacter}
+            onOpenImageSetup={onOpenImageSetup}
+          />
+          <StoryboardSection
+            project={project}
+            assetLibrary={null}
+            providerStatus={providerStatus}
+            mediaTools={mediaTools}
+            busy={busy}
+            onGenerateVideo={onGenerateVideo}
+            onApproveNativeAudio={onApproveSceneNativeAudio}
+            onInstallMediaTools={onInstallMediaTools}
+            onCheckMediaTools={onCheckMediaTools}
+            onUpdateScene={onUpdateScene}
+            sceneSaveState={sceneSaveState}
+            onClearSaveFailure={onClearSaveFailure}
+            onUpdateSceneAssets={ignoreSceneAssetUpdate}
+            onConfirmSceneAssets={() => undefined}
+            assetConfirmBusyId={null}
+          />
+          <WorkflowCard project={project} />
+          <PipelineDetails project={project} onUnavailable={onUnavailable} />
+          <ModelsSection models={models} />
+        </section>
+        <aside className="workspace-side">
+          <PreviewCard project={project} />
+          <ProjectInfoCard project={project} />
+          <RenderProgressCard
+            project={project}
+            busy={busy}
+            mediaToolsReady={mediaTools.ready}
+            onRender={onRenderFinalVideo}
+            onUnavailable={onUnavailable}
+          />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function LongVideoPage({
+  project,
+  assetLibrary,
+  models,
+  providerStatus,
+  mediaTools,
+  busy,
+  onCreate,
+  onGenerateContent,
+  onRegenerateContent,
+  onGenerateVideo,
+  onRenderFinalVideo,
+  onApproveSceneNativeAudio,
+  onInstallMediaTools,
+  onCheckMediaTools,
+  onUpdateScene,
+  sceneSaveState,
+  onClearSaveFailure,
+  onUpdateCharacter,
+  onSelectCharacterReference,
+  onGenerateCharacterReference,
+  onApproveCharacter,
+  onCreateProjectAsset,
+  onSynchronizeProjectAssets,
+  onApproveAiProjectAssets,
+  onUpdateProjectAsset,
+  onLockProjectAsset,
+  onUnlockProjectAsset,
+  onDeleteProjectAsset,
+  onUpdateSceneAssets,
+  onConfirmSceneAssets,
+  characterImageBusyId,
+  assetConfirmBusyId,
+  onOpenImageSetup,
+  onUnavailable
+}: {
+  project: ProjectDashboard | null;
+  assetLibrary: ProjectAssetLibrary | null;
+  models: AiModel[];
+  providerStatus: GenerationProviderStatus;
+  mediaTools: MediaToolStatus;
+  busy: boolean;
+  onCreate: (payload: CreateProjectPayload) => void;
+  onGenerateContent: () => void;
+  onRegenerateContent: () => void;
+  onGenerateVideo: (sceneIds: string[]) => void;
+  onRenderFinalVideo: () => void;
+  onApproveSceneNativeAudio: (sceneId: string, playbackConfirmed: boolean) => void;
+  onInstallMediaTools: () => void;
+  onCheckMediaTools: () => void;
+  onUpdateScene: (payload: UpdateScenePayload) => void;
+  sceneSaveState: SceneSaveState | null;
+  onClearSaveFailure: (sceneId: string) => void;
+  onUpdateCharacter: (payload: UpdateCharacterPayload) => void;
+  onSelectCharacterReference: (characterId: string) => void;
+  onGenerateCharacterReference: (character: CharacterSummary) => void;
+  onApproveCharacter: (characterId: string) => void;
+  onCreateProjectAsset: (payload: CreateProjectAssetPayload) => void;
+  onSynchronizeProjectAssets: () => void;
+  onApproveAiProjectAssets: () => void;
+  onUpdateProjectAsset: (payload: UpdateProjectAssetPayload) => void;
+  onLockProjectAsset: (asset: ProjectTextAsset) => void;
+  onUnlockProjectAsset: (asset: ProjectTextAsset) => void;
+  onDeleteProjectAsset: (asset: ProjectTextAsset) => void;
+  onUpdateSceneAssets: (sceneId: string, projectAssetIds: string[]) => void;
+  onConfirmSceneAssets: (sceneId: string) => void;
+  characterImageBusyId: string | null;
+  assetConfirmBusyId: string | null;
+  onOpenImageSetup: () => void;
+  onUnavailable: (message: string) => void;
+}) {
   const suggestedStep = getSuggestedLongVideoStep(project);
   const projectId = project?.project.projectId ?? '';
   const [activeStep, setActiveStep] = useState<LongVideoStepId>(suggestedStep);
+  const [assetTab, setAssetTab] = useState<'characters' | ProjectAssetType>('characters');
 
   useEffect(() => {
     setActiveStep(getSuggestedLongVideoStep(project));
@@ -1695,11 +1904,13 @@ function LongVideoPage({
     if (activeStep === 'content') {
       return <>
         <LongVideoContentSummary project={project} providerStatus={providerStatus} />
+        {project && <LongVideoContentScenes scenes={project.scenes} />}
         <GenerationActions
           project={project}
           providerStatus={providerStatus}
           busy={busy}
           onGenerateContent={onGenerateContent}
+          onRegenerateContent={onRegenerateContent}
         />
         <WorkflowCard project={project} />
         <PipelineDetails project={project} onUnavailable={onUnavailable} />
@@ -1708,29 +1919,47 @@ function LongVideoPage({
 
     if (activeStep === 'assets') {
       return <>
-        <div className="long-video-asset-tabs" aria-label="Loại tài sản hình ảnh">
-          <button className="active"><Users size={16} /> Nhân vật <span>{project?.characters.length ?? 0}</span></button>
-          <button disabled><ImageIcon size={16} /> Bối cảnh <small>Sắp triển khai</small></button>
-          <button disabled><Database size={16} /> Item/Đạo cụ <small>Sắp triển khai</small></button>
+        <div className="long-video-asset-tabs" aria-label="Loại tài sản nhất quán">
+          <button className={assetTab === 'characters' ? 'active' : ''} onClick={() => setAssetTab('characters')}><Users size={16} /> Nhân vật <span>{project?.characters.length ?? 0}</span></button>
+          <button className={assetTab === 'Background' ? 'active' : ''} onClick={() => setAssetTab('Background')}><MapPin size={16} /> Bối cảnh <span>{countAssets(assetLibrary, 'Background')}</span></button>
+          <button className={assetTab === 'Prop' ? 'active' : ''} onClick={() => setAssetTab('Prop')}><Package size={16} /> Đạo cụ <span>{countAssets(assetLibrary, 'Prop')}</span></button>
+          <button className={assetTab === 'Item' ? 'active' : ''} onClick={() => setAssetTab('Item')}><Database size={16} /> Item <span>{countAssets(assetLibrary, 'Item')}</span></button>
         </div>
-        <CharacterSection
-          project={project}
-          providerStatus={providerStatus}
-          busy={busy}
-          imageBusyId={characterImageBusyId}
-          onRegenerateContent={onRegenerateContent}
-          onUpdate={onUpdateCharacter}
-          onSelectReference={onSelectCharacterReference}
-          onGenerateReference={onGenerateCharacterReference}
-          onApprove={onApproveCharacter}
-          onOpenImageSetup={onOpenImageSetup}
-        />
+        {assetTab === 'characters' ? (
+          <CharacterSection
+            project={project}
+            providerStatus={providerStatus}
+            busy={busy}
+            imageBusyId={characterImageBusyId}
+            onRegenerateContent={onRegenerateContent}
+            onUpdate={onUpdateCharacter}
+            onSelectReference={onSelectCharacterReference}
+            onGenerateReference={onGenerateCharacterReference}
+            onApprove={onApproveCharacter}
+            onOpenImageSetup={onOpenImageSetup}
+          />
+        ) : (
+          <ProjectAssetLibrarySection
+            project={project}
+            library={assetLibrary}
+            assetType={assetTab}
+            busy={busy}
+            onCreate={onCreateProjectAsset}
+            onSynchronize={onSynchronizeProjectAssets}
+            onApproveAi={onApproveAiProjectAssets}
+            onUpdate={onUpdateProjectAsset}
+            onLock={onLockProjectAsset}
+            onUnlock={onUnlockProjectAsset}
+            onDelete={onDeleteProjectAsset}
+          />
+        )}
       </>;
     }
 
     if (activeStep === 'storyboard') {
       return <StoryboardSection
         project={project}
+        assetLibrary={assetLibrary}
         providerStatus={providerStatus}
         mediaTools={mediaTools}
         busy={busy}
@@ -1741,6 +1970,9 @@ function LongVideoPage({
         onUpdateScene={onUpdateScene}
         sceneSaveState={sceneSaveState}
         onClearSaveFailure={onClearSaveFailure}
+        onUpdateSceneAssets={onUpdateSceneAssets}
+        onConfirmSceneAssets={onConfirmSceneAssets}
+        assetConfirmBusyId={assetConfirmBusyId}
       />;
     }
 
@@ -1775,7 +2007,7 @@ function LongVideoPage({
         {longVideoSteps.map((step, index) => {
           const Icon = step.icon;
           const available = isLongVideoStepAvailable(step.id, project);
-          const completed = isLongVideoStepCompleted(step.id, project);
+            const completed = isLongVideoStepCompleted(step.id, project);
           return (
             <button
               key={step.id}
@@ -1842,7 +2074,10 @@ function isLongVideoStepAvailable(step: LongVideoStepId, project: ProjectDashboa
   return project.totalScenes > 0;
 }
 
-function isLongVideoStepCompleted(step: LongVideoStepId, project: ProjectDashboard | null): boolean {
+function isLongVideoStepCompleted(
+  step: LongVideoStepId,
+  project: ProjectDashboard | null
+): boolean {
   if (!project) return false;
   if (step === 'setup') return true;
   if (step === 'content') return project.totalScenes > 0;
@@ -1872,10 +2107,156 @@ function LongVideoContentSummary({
     <section className="card long-video-content-summary">
       <div className="long-video-summary-heading"><div><span>NỘI DUNG HIỆN HÀNH</span><h3>{project.project.topic}</h3></div><strong className={project.totalScenes > 0 ? 'ready' : 'draft'}>{project.totalScenes > 0 ? 'Đã có scene plan' : 'Chờ sinh nội dung'}</strong></div>
       <div className="long-video-summary-grid">
-        <div><small>Ngôn ngữ</small><strong>{formatLanguage(project.languageCode)}</strong></div>
+        <div><small>Ngôn ngữ nội dung</small><strong>{project.effectiveGenerationLanguageCode?.toLowerCase().startsWith('vi') && project.videoProviderCode?.toLowerCase() === 'kling'
+          ? 'Tiếng Việt (bắt buộc cho Video Dài dùng Kling)'
+          : formatLanguage(project.effectiveGenerationLanguageCode ?? project.languageCode)}</strong></div>
         <div><small>Thời lượng mục tiêu</small><strong>{formatDuration(project.project.targetDurationSeconds)}</strong></div>
         <div><small>Số cảnh</small><strong>{project.totalScenes}</strong></div>
         <div><small>OpenAI model</small><strong>{providerStatus.openAiModel ?? 'Chưa cấu hình'}</strong></div>
+      </div>
+      {project.requiresVietnameseContentRegeneration && (
+        <p className="long-video-language-warning">Nội dung hiện tại còn tiếng Anh và sẽ bị chặn trước khi gọi Kling. Hãy dùng hành động “Sinh lại nội dung tiếng Việt”.</p>
+      )}
+    </section>
+  );
+}
+
+function LongVideoContentScenes({ scenes }: { scenes: SceneSummary[] }) {
+  const sceneIdsKey = scenes.map((scene) => scene.sceneId).join('|');
+  const [expandedSceneIds, setExpandedSceneIds] = useState<Set<string>>(
+    () => new Set(scenes.map((scene) => scene.sceneId))
+  );
+
+  useEffect(() => {
+    setExpandedSceneIds(new Set(scenes.map((scene) => scene.sceneId)));
+  }, [sceneIdsKey]);
+
+  if (scenes.length === 0) {
+    return (
+      <section className="card long-video-content-scenes empty">
+        <FileText size={28} />
+        <div>
+          <span>CHI TIẾT KỊCH BẢN</span>
+          <h3>Chưa có cảnh để hiển thị</h3>
+          <p>Sinh nội dung bằng OpenAI để xem lời dẫn, hình ảnh, prompt và âm thanh của từng cảnh tại đây.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const allExpanded = scenes.every((scene) => expandedSceneIds.has(scene.sceneId));
+  const toggleAllScenes = () => {
+    setExpandedSceneIds(allExpanded
+      ? new Set<string>()
+      : new Set(scenes.map((scene) => scene.sceneId)));
+  };
+  const toggleScene = (sceneId: string) => {
+    setExpandedSceneIds((current) => {
+      const next = new Set(current);
+      if (next.has(sceneId)) next.delete(sceneId);
+      else next.add(sceneId);
+      return next;
+    });
+  };
+
+  return (
+    <section className="card long-video-content-scenes">
+      <header className="content-scenes-header">
+        <div>
+          <span>CHI TIẾT KỊCH BẢN</span>
+          <h2>{scenes.length} cảnh trong scene plan hiện hành</h2>
+          <p>Kiểm tra nội dung, hình ảnh, prompt và ý đồ âm thanh trước khi chuyển sang bước chuẩn hóa tài sản.</p>
+        </div>
+        <button type="button" onClick={toggleAllScenes} aria-expanded={allExpanded}>
+          <ListVideo size={15} /> {allExpanded ? 'Thu gọn tất cả' : 'Mở tất cả'}
+        </button>
+      </header>
+
+      <div className="content-scenes-list">
+        {scenes.map((scene) => {
+          const expanded = expandedSceneIds.has(scene.sceneId);
+          const status = sceneStatus(scene);
+          const spokenText = scene.narration?.trim();
+          const durationSeconds = Math.max(0, Math.round(scene.durationMs / 1000));
+          const generationDurationSeconds = Math.max(0, Math.round(scene.generationDurationMs / 1000));
+
+          return (
+            <article className={`content-scene-card ${expanded ? 'expanded' : ''}`} key={scene.sceneId}>
+              <button
+                type="button"
+                className="content-scene-summary"
+                aria-expanded={expanded}
+                aria-controls={`content-scene-${scene.sceneId}`}
+                onClick={() => toggleScene(scene.sceneId)}
+              >
+                <span className="content-scene-number">{scene.sequenceNumber}</span>
+                <span className="content-scene-heading">
+                  <small>CẢNH {scene.sequenceNumber}</small>
+                  <strong>{scene.storyPurpose?.trim() || `Nội dung cảnh ${scene.sequenceNumber}`}</strong>
+                </span>
+                <span className="content-scene-timing">
+                  <small>{formatTimeline(scene.timelineStartMs)}–{formatTimeline(scene.timelineEndMs)}</small>
+                  <strong>{durationSeconds} giây</strong>
+                </span>
+                <span className={`content-scene-status ${status.tone}`}>{status.label}</span>
+                <ChevronDown size={17} className="content-scene-chevron" />
+              </button>
+
+              {expanded && (
+                <div className="content-scene-details" id={`content-scene-${scene.sceneId}`}>
+                  <div className="content-scene-meta">
+                    <span><Clock3 size={13} /> Nội dung {durationSeconds}s</span>
+                    <span><Film size={13} /> Provider {generationDurationSeconds}s</span>
+                    <span><Volume2 size={13} /> {speechModeLabel(scene.speechMode)}</span>
+                  </div>
+
+                  <div className="content-scene-character-row">
+                    <strong><Users size={14} /> Nhân vật</strong>
+                    <div>
+                      {scene.characters.length > 0
+                        ? scene.characters.map((character) => <span key={character.characterId}>{character.name}</span>)
+                        : <small>Không có nhân vật cố định trong cảnh.</small>}
+                    </div>
+                  </div>
+
+                  <div className="content-scene-copy-grid">
+                    <section className="content-scene-copy-block speech">
+                      <div>
+                        <span>LỜI THOẠI / LỜI DẪN</span>
+                        <small>{scene.speakerCharacterName ? `Người nói: ${scene.speakerCharacterName}` : speechModeLabel(scene.speechMode)}</small>
+                      </div>
+                      {spokenText
+                        ? <ExpandableSceneText text={spokenText} collapseAt={260} />
+                        : <p className="content-scene-placeholder">Cảnh không có lời nói; chỉ sử dụng âm thanh môi trường và hiệu ứng phù hợp.</p>}
+                    </section>
+
+                    <section className="content-scene-copy-block visual">
+                      <div><span>MÔ TẢ HÌNH ẢNH</span><small>Hành động, bối cảnh và máy quay</small></div>
+                      <ExpandableSceneText
+                        text={scene.visualDescription?.trim() || 'Chưa có mô tả hình ảnh.'}
+                        collapseAt={360}
+                      />
+                    </section>
+
+                    <section className="content-scene-copy-block prompt">
+                      <div><span>PROMPT SINH VIDEO</span><small>Prompt hiệu lực của scene plan</small></div>
+                      <ExpandableSceneText
+                        text={scene.prompt?.trim() || 'Chưa có prompt sinh video.'}
+                        collapseAt={480}
+                      />
+                    </section>
+                  </div>
+
+                  <div className="content-scene-audio-grid">
+                    <div><small>Phong cách giọng</small><strong>{scene.voiceStyle?.trim() || 'Tự nhiên, rõ ràng'}</strong></div>
+                    <div><small>Âm thanh môi trường</small><strong>{scene.ambientAudio?.trim() || 'Phù hợp với bối cảnh'}</strong></div>
+                    <div><small>Hiệu ứng âm thanh</small><strong>{scene.soundEffects?.trim() || 'Không yêu cầu riêng'}</strong></div>
+                  </div>
+                </div>
+              )}
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -1930,23 +2311,28 @@ function GenerationActions({
   project,
   providerStatus,
   busy,
-  onGenerateContent
+  onGenerateContent,
+  onRegenerateContent
 }: {
   project: ProjectDashboard | null;
   providerStatus: GenerationProviderStatus;
   busy: boolean;
   onGenerateContent: () => void;
+  onRegenerateContent: () => void;
 }) {
   if (!project) return null;
   const hasContent = project.totalScenes > 0;
-  if (hasContent) return null;
+  if (hasContent && !project.requiresVietnameseContentRegeneration) return null;
+  const requiresVietnamese = project.requiresVietnameseContentRegeneration;
 
   return (
     <section className="card generation-actions">
       <div>
         <span className="generation-eyebrow">API GENERATION</span>
-        <h2>Tạo nội dung và prompt</h2>
-        <p>OpenAI sẽ viết hook, kịch bản, chia cảnh và tạo prompt có cấu trúc.</p>
+        <h2>{requiresVietnamese ? 'Sinh lại nội dung tiếng Việt' : 'Tạo nội dung và prompt'}</h2>
+        <p>{requiresVietnamese
+          ? 'Dự án video dài dùng Kling còn dữ liệu tiếng Anh. OpenAI cần tạo một version tiếng Việt mới trước khi sinh clip.'
+          : 'OpenAI sẽ viết hook, kịch bản, chia cảnh và tạo prompt có cấu trúc.'}</p>
       </div>
       <div className="generation-provider-state">
         <span className={providerStatus.openAiReady ? 'ready' : 'missing'}>
@@ -1956,9 +2342,12 @@ function GenerationActions({
           Video · {providerStatus.videoReady ? `${providerStatus.videoProviderName ?? providerStatus.videoProviderCode} / ${providerStatus.videoModel}` : 'chưa được cấu hình'}
         </span>
       </div>
-      <button disabled={busy || !providerStatus.openAiReady} onClick={onGenerateContent}>
+      <button
+        disabled={busy || !providerStatus.openAiReady}
+        onClick={requiresVietnamese ? onRegenerateContent : onGenerateContent}
+      >
         {busy ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />}
-        Tạo nội dung &amp; chia cảnh
+        {requiresVietnamese ? 'Sinh lại nội dung tiếng Việt' : 'Tạo nội dung & chia cảnh'}
       </button>
     </section>
   );
@@ -2210,8 +2599,227 @@ function parseCharacterRules(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))].slice(0, 12);
 }
 
+function ProjectAssetLibrarySection({
+  project,
+  library,
+  assetType,
+  busy,
+  onSynchronize,
+  onApproveAi,
+  onCreate,
+  onUpdate,
+  onLock,
+  onUnlock,
+  onDelete
+}: {
+  project: ProjectDashboard | null;
+  library: ProjectAssetLibrary | null;
+  assetType: ProjectAssetType;
+  busy: boolean;
+  onSynchronize: () => void;
+  onApproveAi: () => void;
+  onCreate: (payload: CreateProjectAssetPayload) => void;
+  onUpdate: (payload: UpdateProjectAssetPayload) => void;
+  onLock: (asset: ProjectTextAsset) => void;
+  onUnlock: (asset: ProjectTextAsset) => void;
+  onDelete: (asset: ProjectTextAsset) => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [canonicalDescription, setCanonicalDescription] = useState('');
+  const assets = library?.assets.filter((asset) => asset.assetType === assetType) ?? [];
+  const lockedCount = assets.filter((asset) => asset.status === 'Locked').length;
+  const aiGeneratedCount = assets.filter((asset) => asset.sourceKind === 'AiGenerated').length;
+  const canEdit = Boolean(project && library?.canEdit);
+  const assignedIds = new Set(library?.sceneAssignments.flatMap((assignment) => assignment.projectAssetIds) ?? []);
+  const aiDraftCount = library?.assets.filter((asset) =>
+    asset.sourceKind === 'AiGenerated' && asset.status === 'Draft' && assignedIds.has(asset.projectAssetId)).length ?? 0;
+  const invalidSceneCount = library?.sceneAssignments.filter((assignment) => !assignment.isValid).length ?? 0;
+  const readySceneCount = library?.sceneAssignments.filter((assignment) =>
+    assignment.isValid && !assignment.hasUnlockedAssets).length ?? 0;
+
+  useEffect(() => {
+    setCreating(false);
+    setName('');
+    setCanonicalDescription('');
+  }, [assetType, project?.project.projectId]);
+
+  if (!project) {
+    return <section className="card project-assets-empty"><Package size={30} /><strong>Hãy chọn hoặc tạo dự án trước</strong><p>Thư viện text được lưu riêng cho từng dự án video dài.</p></section>;
+  }
+
+  const submitCreate = () => {
+    if (!canEdit || busy || !name.trim() || !canonicalDescription.trim()) return;
+    onCreate({
+      assetType,
+      name: name.trim(),
+      canonicalDescription: canonicalDescription.trim()
+    });
+    setCreating(false);
+    setName('');
+    setCanonicalDescription('');
+  };
+
+  return (
+    <section className="card project-assets-section">
+      <header className="project-assets-header">
+        <div>
+          <span className="generation-eyebrow">KIỂM TRA TÍNH NHẤT QUÁN · {assetTypeLabel(assetType).toUpperCase()}</span>
+          <h2>Kiểm tra mô tả trước khi tạo clip</h2>
+          <p>Mỗi cảnh có tài sản dùng đúng một bối cảnh. Đạo cụ và item là tùy chọn; cảnh không cần tài sản vẫn có thể để trống.</p>
+        </div>
+        <div className="project-assets-header-actions">
+          <span>{lockedCount}/{assets.length} đã khóa · {aiGeneratedCount} AI</span>
+          {canEdit && aiDraftCount > 0 && <button type="button" disabled={busy || invalidSceneCount > 0} onClick={onApproveAi}><ShieldCheck size={15} /> Duyệt & khóa {aiDraftCount} tài sản AI</button>}
+          {canEdit && <button type="button" disabled={busy} onClick={() => setCreating(true)}><Plus size={15} /> Tạo {assetTypeLabel(assetType).toLowerCase()}</button>}
+        </div>
+      </header>
+
+      <div className={`project-assets-readiness ${invalidSceneCount > 0 ? 'blocked' : 'ready'}`}>
+        <div><strong>{readySceneCount}/{project.scenes.length} cảnh sẵn sàng về tài sản</strong><span>{invalidSceneCount > 0 ? `${invalidSceneCount} cảnh cần sửa lựa chọn` : aiDraftCount > 0 ? `${aiDraftCount} đề xuất AI đang chờ duyệt` : 'Các lựa chọn hiện tại hợp lệ'}</span></div>
+        {invalidSceneCount > 0 && <small>Vào bước Storyboard để sửa cảnh đang chọn thiếu hoặc thừa bối cảnh.</small>}
+      </div>
+
+      {canEdit && project.scenes.length > 0 && (
+        <details className="project-assets-advanced">
+          <summary>Tùy chọn nâng cao</summary>
+          <p>Chỉ dùng khi cần khôi phục lại đề xuất từ content plan đã lưu. Dữ liệu khóa hiện có vẫn được giữ nguyên.</p>
+          <button type="button" className="secondary" disabled={busy} onClick={onSynchronize}><RefreshCw size={15} /> Khôi phục đề xuất AI</button>
+        </details>
+      )}
+
+      {creating && (
+        <div className="project-asset-create-form">
+          <label>Tên {assetTypeLabel(assetType).toLowerCase()}<input autoFocus maxLength={160} value={name} onChange={(event) => setName(event.target.value)} placeholder={assetNamePlaceholder(assetType)} /></label>
+          <label>Mô tả chuẩn<textarea maxLength={2000} value={canonicalDescription} onChange={(event) => setCanonicalDescription(event.target.value)} placeholder={assetDescriptionPlaceholder(assetType)} /></label>
+          <div><small>{canonicalDescription.length}/2000 ký tự</small><button type="button" className="scene-cancel" disabled={busy} onClick={() => setCreating(false)}><X size={14} /> Hủy</button><button type="button" className="scene-save" disabled={busy || !name.trim() || !canonicalDescription.trim()} onClick={submitCreate}><Save size={14} /> Lưu nháp</button></div>
+        </div>
+      )}
+
+      {assets.length > 0 ? (
+        <div className="project-assets-list">
+          {assets.map((asset) => (
+            <ProjectAssetCard
+              key={asset.projectAssetId}
+              asset={asset}
+              sceneNumbers={asset.sceneIds
+                .map((sceneId) => project.scenes.find((scene) => scene.sceneId === sceneId)?.sequenceNumber)
+                .filter((sequence): sequence is number => sequence !== undefined)
+                .sort((left, right) => left - right)}
+              busy={busy}
+              canEdit={canEdit}
+              onUpdate={onUpdate}
+              onLock={onLock}
+              onUnlock={onUnlock}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      ) : !creating && (
+        <div className="project-assets-empty inline"><Package size={27} /><strong>Chưa có {assetTypeLabel(assetType).toLowerCase()}</strong><p>Tạo hồ sơ text, kiểm tra mô tả rồi khóa trước khi gắn vào cảnh.</p></div>
+      )}
+      {!canEdit && library && <div className="project-assets-view-only"><ShieldCheck size={15} /> Vai trò hiện tại chỉ được xem thư viện tài sản.</div>}
+    </section>
+  );
+}
+
+function ProjectAssetCard({
+  asset,
+  sceneNumbers,
+  busy,
+  canEdit,
+  onUpdate,
+  onLock,
+  onUnlock,
+  onDelete
+}: {
+  asset: ProjectTextAsset;
+  sceneNumbers: number[];
+  busy: boolean;
+  canEdit: boolean;
+  onUpdate: (payload: UpdateProjectAssetPayload) => void;
+  onLock: (asset: ProjectTextAsset) => void;
+  onUnlock: (asset: ProjectTextAsset) => void;
+  onDelete: (asset: ProjectTextAsset) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(asset.name);
+  const [canonicalDescription, setCanonicalDescription] = useState(asset.canonicalDescription);
+  const locked = asset.status === 'Locked';
+
+  useEffect(() => {
+    setName(asset.name);
+    setCanonicalDescription(asset.canonicalDescription);
+    setEditing(false);
+  }, [asset.concurrencyToken]);
+
+  const save = () => {
+    if (busy || !name.trim() || !canonicalDescription.trim()) return;
+    onUpdate({
+      projectAssetId: asset.projectAssetId,
+      assetType: asset.assetType,
+      name: name.trim(),
+      canonicalDescription: canonicalDescription.trim(),
+      concurrencyToken: asset.concurrencyToken
+    });
+  };
+
+  return (
+    <article className={`project-asset-card ${locked ? 'locked' : 'draft'}`}>
+      <header>
+        <div className="project-asset-title"><span className="project-asset-icon">{asset.assetType === 'Background' ? <MapPin size={17} /> : asset.assetType === 'Prop' ? <Package size={17} /> : <Database size={17} />}</span><div><small>{assetTypeLabel(asset.assetType)} · {locked ? `phiên bản ${asset.currentVersion}` : 'bản nháp'} {asset.sourceKind === 'AiGenerated' && <em>AI đề xuất</em>}</small><h3>{asset.name}</h3></div></div>
+        <span className={`project-asset-status ${locked ? 'locked' : 'draft'}`}>{locked ? <LockKeyhole size={13} /> : <Pencil size={13} />}{locked ? 'Đã khóa' : 'Chưa khóa'}</span>
+      </header>
+
+      {editing ? (
+        <div className="project-asset-edit-form">
+          <label>Tên<input maxLength={160} value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>Mô tả chuẩn<textarea maxLength={2000} value={canonicalDescription} onChange={(event) => setCanonicalDescription(event.target.value)} /></label>
+          <div><small>{canonicalDescription.length}/2000 ký tự</small><button type="button" className="scene-cancel" disabled={busy} onClick={() => setEditing(false)}><X size={14} /> Hủy</button><button type="button" className="scene-save" disabled={busy || !name.trim() || !canonicalDescription.trim()} onClick={save}><Save size={14} /> Lưu thay đổi</button></div>
+        </div>
+      ) : (
+        <p className="project-asset-description">{asset.canonicalDescription}</p>
+      )}
+
+      {sceneNumbers.length > 0 && <div className="project-asset-scenes"><span>Áp dụng:</span>{sceneNumbers.map((sequence) => <small key={sequence}>Cảnh {sequence}</small>)}</div>}
+
+      <footer>
+        <span className={asset.sceneIds.length > 0 ? 'in-use' : ''}><Link2 size={13} /> {asset.sceneIds.length > 0 ? `Đang dùng trong ${asset.sceneIds.length} cảnh` : 'Chưa gắn vào cảnh'}</span>
+        {canEdit && !editing && <div className="project-asset-actions">
+          {!locked && <button type="button" disabled={busy} onClick={() => setEditing(true)}><Pencil size={14} /> Chỉnh sửa</button>}
+          {!locked && asset.currentVersion === 0 && asset.sceneIds.length === 0 && <button type="button" className="danger" disabled={busy} onClick={() => onDelete(asset)}><Trash2 size={14} /> Xóa</button>}
+          {locked ? <button type="button" disabled={busy} onClick={() => onUnlock(asset)}><UnlockKeyhole size={14} /> Mở khóa</button> : <button type="button" className="lock" disabled={busy || !asset.canonicalDescription.trim()} onClick={() => onLock(asset)}><LockKeyhole size={14} /> Khóa text</button>}
+        </div>}
+      </footer>
+    </article>
+  );
+}
+
+function assetTypeLabel(assetType: ProjectAssetType): string {
+  if (assetType === 'Background') return 'Bối cảnh';
+  if (assetType === 'Prop') return 'Đạo cụ';
+  return 'Item';
+}
+
+function assetNamePlaceholder(assetType: ProjectAssetType): string {
+  if (assetType === 'Background') return 'Ví dụ: Căn bếp nhà Minh';
+  if (assetType === 'Prop') return 'Ví dụ: Chiếc máy ảnh cổ';
+  return 'Ví dụ: Chiếc cốc đỏ';
+}
+
+function assetDescriptionPlaceholder(assetType: ProjectAssetType): string {
+  if (assetType === 'Background') return 'Kiến trúc, màu sắc, ánh sáng, vị trí cửa sổ và các chi tiết không được thay đổi...';
+  if (assetType === 'Prop') return 'Hình dáng, chất liệu, màu sắc, kích thước và trạng thái cố định của đạo cụ...';
+  return 'Đặc điểm nhận diện, màu sắc, vật liệu và chi tiết cố định của item...';
+}
+
+function countAssets(library: ProjectAssetLibrary | null, assetType: ProjectAssetType): number {
+  return library?.assets.filter((asset) => asset.assetType === assetType).length ?? 0;
+}
+
 function StoryboardSection({
   project,
+  assetLibrary,
   providerStatus,
   mediaTools,
   busy,
@@ -2221,9 +2829,13 @@ function StoryboardSection({
   onCheckMediaTools,
   onUpdateScene,
   sceneSaveState,
-  onClearSaveFailure
+  onClearSaveFailure,
+  onUpdateSceneAssets,
+  onConfirmSceneAssets,
+  assetConfirmBusyId
 }: {
   project: ProjectDashboard | null;
+  assetLibrary: ProjectAssetLibrary | null;
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
   busy: boolean;
@@ -2234,15 +2846,24 @@ function StoryboardSection({
   onUpdateScene: (payload: UpdateScenePayload) => void;
   sceneSaveState: SceneSaveState | null;
   onClearSaveFailure: (sceneId: string) => void;
+  onUpdateSceneAssets: (sceneId: string, projectAssetIds: string[]) => void;
+  onConfirmSceneAssets: (sceneId: string) => void;
+  assetConfirmBusyId: string | null;
 }) {
   const [selectedSceneIds, setSelectedSceneIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<StoryboardFilter>('all');
   const selectionProjectId = useRef('');
   const scenes = project?.scenes ?? [];
   const filteredScenes = scenes.filter((scene) => matchesStoryboardFilter(scene, filter));
-  const selectableScenes = scenes.filter(canQueueScene);
-  const visibleSelectableScenes = filteredScenes.filter(canQueueScene);
+  const selectableScenes = scenes.filter(
+    (scene) => canQueueScene(scene) && (sceneNeedsLocalCompletion(scene) || areSceneAssetsReady(scene.sceneId, assetLibrary))
+  );
+  const visibleSelectableScenes = filteredScenes.filter(
+    (scene) => canQueueScene(scene) && (sceneNeedsLocalCompletion(scene) || areSceneAssetsReady(scene.sceneId, assetLibrary))
+  );
   const selectableKey = selectableScenes.map((scene) => `${scene.sceneId}:${scene.status}`).join('|');
+  const enforceKlingLongFormSpeechPolicy = project?.workflowStructureType === 'OpenAiStructuredPlan' &&
+    project?.videoProviderCode?.toLowerCase() === 'kling';
 
   useEffect(() => {
     if (!project) {
@@ -2372,6 +2993,18 @@ function StoryboardSection({
         </div>
       )}
 
+      {assetLibrary?.sceneAssignments.some((assignment) => assignment.hasUnlockedAssets) && (
+        <div className="storyboard-warning asset-lock-warning">
+          <CircleHelp size={16} /> Một số cảnh đang chờ xác nhận tài sản. Bạn có thể xác nhận trực tiếp tại từng cảnh mà không phát sinh chi phí AI.
+        </div>
+      )}
+
+      {assetLibrary?.sceneAssignments.some((assignment) => !assignment.isValid) && (
+        <div className="storyboard-warning asset-selection-warning">
+          <TriangleAlert size={16} /> Có cảnh đang chọn tài sản không hợp lệ. Bấm “Sửa lựa chọn” tại cảnh được cảnh báo trước khi tạo clip.
+        </div>
+      )}
+
       <div className="storyboard-filters" aria-label="Lọc cảnh theo trạng thái">
         {storyboardFilters.map((item) => {
           const count = scenes.filter((scene) => matchesStoryboardFilter(scene, item.id)).length;
@@ -2386,16 +3019,21 @@ function StoryboardSection({
           <SceneCard
             key={scene.sceneId}
             scene={scene}
+            assetLibrary={assetLibrary}
             selected={selectedSceneIds.has(scene.sceneId)}
             busy={busy}
             videoReady={providerStatus.videoReady}
             mediaToolsReady={mediaTools.ready}
+            enforceKlingLongFormSpeechPolicy={enforceKlingLongFormSpeechPolicy}
             onToggle={() => toggleScene(scene.sceneId)}
             onGenerate={() => onGenerateVideo([scene.sceneId])}
             onApproveNativeAudio={(playbackConfirmed) => onApproveNativeAudio(scene.sceneId, playbackConfirmed)}
             onUpdate={onUpdateScene}
             saveState={sceneSaveState?.sceneId === scene.sceneId ? sceneSaveState : null}
             onClearSaveFailure={() => onClearSaveFailure(scene.sceneId)}
+            onUpdateAssets={(projectAssetIds) => onUpdateSceneAssets(scene.sceneId, projectAssetIds)}
+            onConfirmAssets={() => onConfirmSceneAssets(scene.sceneId)}
+            confirmingAssets={assetConfirmBusyId === scene.sceneId}
           />
         ))}
         {filteredScenes.length === 0 && <div className="storyboard-filter-empty"><LayoutGrid size={27} /><span>Không có cảnh thuộc trạng thái này.</span></div>}
@@ -2406,28 +3044,38 @@ function StoryboardSection({
 
 function SceneCard({
   scene,
+  assetLibrary,
   selected,
   busy,
   videoReady,
   mediaToolsReady,
+  enforceKlingLongFormSpeechPolicy,
   onToggle,
   onGenerate,
   onApproveNativeAudio,
   onUpdate,
   saveState,
-  onClearSaveFailure
+  onClearSaveFailure,
+  onUpdateAssets,
+  onConfirmAssets,
+  confirmingAssets
 }: {
   scene: SceneSummary;
+  assetLibrary: ProjectAssetLibrary | null;
   selected: boolean;
   busy: boolean;
   videoReady: boolean;
   mediaToolsReady: boolean;
+  enforceKlingLongFormSpeechPolicy: boolean;
   onToggle: () => void;
   onGenerate: () => void;
   onApproveNativeAudio: (playbackConfirmed: boolean) => void;
   onUpdate: (payload: UpdateScenePayload) => void;
   saveState: SceneSaveState | null;
   onClearSaveFailure: () => void;
+  onUpdateAssets: (projectAssetIds: string[]) => void;
+  onConfirmAssets: () => void;
+  confirmingAssets: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [speechMode, setSpeechMode] = useState<UpdateScenePayload['speechMode']>(scene.speechMode);
@@ -2438,18 +3086,34 @@ function SceneCard({
   const [visualDescription, setVisualDescription] = useState(scene.visualDescription);
   const [prompt, setPrompt] = useState(scene.prompt);
   const [previewPlaybackConfirmed, setPreviewPlaybackConfirmed] = useState(false);
+  const [speechContentConfirmed, setSpeechContentConfirmed] = useState(false);
+  const [speakerConfirmed, setSpeakerConfirmed] = useState(false);
+  const [lipSyncConfirmed, setLipSyncConfirmed] = useState(false);
+  const [assigningAssets, setAssigningAssets] = useState(false);
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
+  const assignedAssetIds = sceneAssignedAssetIds(scene.sceneId, assetLibrary);
+  const [draftAssetIds, setDraftAssetIds] = useState<Set<string>>(new Set(assignedAssetIds));
+  const assetAssignment = assetLibrary?.sceneAssignments.find((assignment) => assignment.sceneId === scene.sceneId);
+  const assignedAssets = assetLibrary?.assets.filter((asset) => assignedAssetIds.includes(asset.projectAssetId)) ?? [];
+  const assignedAssetsReady = (assetAssignment?.isValid ?? true) &&
+    !(assetAssignment?.hasUnlockedAssets ?? false) &&
+    assignedAssets.every((asset) => asset.status === 'Locked');
+  const assetUiState = assetAssignment?.isValid === false
+    ? 'invalid'
+    : assignedAssetsReady
+      ? 'ready'
+      : 'pending';
+  const draftAssets = assetLibrary?.assets.filter((asset) => draftAssetIds.has(asset.projectAssetId)) ?? [];
+  const draftBackgroundCount = draftAssets.filter((asset) => asset.assetType === 'Background').length;
+  const draftAssetsValid = draftAssetIds.size === 0 || draftBackgroundCount === 1;
+  const assetsChanged = assignedAssetIds.length !== draftAssetIds.size || assignedAssetIds.some((id) => !draftAssetIds.has(id));
   const status = sceneStatus(scene);
-  const maximumSpokenWords = scene.maximumSpokenWords;
-  const persistedSpokenWordCount = countWords(scene.narration ?? '');
-  const speechWordBudgetExceeded = scene.speechMode !== 'None' && persistedSpokenWordCount > maximumSpokenWords;
-  const hasSpeechWordBudgetError = scene.lastErrorCode === 'kling_spoken_text_too_long' || speechWordBudgetExceeded;
-  const selectable = canQueueScene(scene) && !hasSpeechWordBudgetError;
-  const spokenWordCount = countWords(narration);
+  const selectable = canQueueScene(scene) && (sceneNeedsLocalCompletion(scene) || assignedAssetsReady);
   const validSpeech = speechMode === 'None'
     ? narration.trim().length === 0
     : narration.trim().length > 0 &&
-      spokenWordCount <= maximumSpokenWords &&
-      (speechMode !== 'OnCameraDialogue' || scene.characters.length === 1);
+      (speechMode !== 'OnCameraDialogue' || scene.characters.length === 1) &&
+      (!enforceKlingLongFormSpeechPolicy || speechMode !== 'NativeVoiceOver' || scene.characters.length === 0);
   const validDraft = visualDescription.trim().length > 0 && prompt.trim().length > 0 && validSpeech;
   const displayTitle = sceneDisplayTitle(scene);
   const isSaving = saveState?.status === 'saving';
@@ -2463,13 +3127,25 @@ function SceneCard({
         ? 'Hãy nhập prompt hình ảnh cho cảnh.'
         : speechMode !== 'None' && narration.trim().length === 0
           ? 'Hãy nhập lời provider cần nói hoặc chuyển cảnh sang không có lời nói.'
-          : spokenWordCount > maximumSpokenWords
-            ? `Lời nói cần tối đa ${maximumSpokenWords} từ cho clip ${Math.ceil((scene.generationDurationMs ?? scene.durationMs) / 1000)} giây.`
-            : speechMode === 'OnCameraDialogue' && scene.characters.length !== 1
-              ? 'Lời thoại trực diện cần đúng một nhân vật trong cảnh.'
-              : null;
+          : speechMode === 'OnCameraDialogue' && scene.characters.length !== 1
+            ? 'Lời thoại trực diện cần đúng một nhân vật trong cảnh.'
+            : enforceKlingLongFormSpeechPolicy && speechMode === 'NativeVoiceOver' && scene.characters.length !== 0
+              ? 'Lời dẫn ngoài khung hình chỉ dùng cho cảnh B-roll không có nhân vật.'
+            : null;
 
-  useEffect(() => setPreviewPlaybackConfirmed(false), [scene.sceneId, scene.preview?.url]);
+  useEffect(() => {
+    setPreviewPlaybackConfirmed(false);
+    setSpeechContentConfirmed(false);
+    setSpeakerConfirmed(false);
+    setLipSyncConfirmed(false);
+  }, [scene.sceneId, scene.preview?.url]);
+  useEffect(() => setDraftAssetIds(new Set(assignedAssetIds)), [scene.sceneId, assignedAssetIds.join('|')]);
+  useEffect(() => {
+    if (!assignmentSaving || busy) return;
+    const saved = assignedAssetIds.length === draftAssetIds.size && assignedAssetIds.every((id) => draftAssetIds.has(id));
+    setAssignmentSaving(false);
+    if (saved) setAssigningAssets(false);
+  }, [assignmentSaving, busy, assignedAssetIds.join('|')]);
   useEffect(() => {
     if (saveState?.status === 'succeeded') setEditing(false);
   }, [saveState?.status]);
@@ -2497,6 +3173,20 @@ function SceneCard({
       voiceStyle: voiceStyle.trim() || null,
       ambientAudio: ambientAudio.trim() || null,
       soundEffects: soundEffects.trim() || null
+    });
+  };
+
+  const toggleAsset = (asset: ProjectTextAsset) => {
+    setDraftAssetIds((current) => {
+      const next = new Set(current);
+      if (asset.assetType === 'Background') {
+        assetLibrary?.assets
+          .filter((candidate) => candidate.assetType === 'Background')
+          .forEach((candidate) => next.delete(candidate.projectAssetId));
+        next.add(asset.projectAssetId);
+      } else if (next.has(asset.projectAssetId)) next.delete(asset.projectAssetId);
+      else next.add(asset.projectAssetId);
+      return next;
     });
   };
 
@@ -2554,6 +3244,59 @@ function SceneCard({
               </span>
             ))}
           </div>
+          <div className={`scene-assets-strip ${assetUiState}`}>
+            <div className="scene-assets-strip-heading">
+              <span><Link2 size={13} /> Tài sản của cảnh</span>
+              <div className="scene-assets-heading-actions">
+                <small className={`scene-assets-state ${assetUiState}`}>{assetUiState === 'invalid' ? 'Cần chỉnh sửa' : assetUiState === 'pending' ? 'Chờ xác nhận' : 'Đã sẵn sàng'}</small>
+                {assetLibrary?.canEdit && assetUiState === 'pending' && !assigningAssets && <button type="button" className="confirm" disabled={busy} onClick={onConfirmAssets}>{confirmingAssets ? <LoaderCircle className="spin" size={12} /> : <ShieldCheck size={12} />}{confirmingAssets ? 'Đang xác nhận...' : 'Xác nhận tài sản cảnh'}</button>}
+                {assetLibrary?.canEdit && <button type="button" disabled={busy} onClick={() => setAssigningAssets((current) => !current)}>{assigningAssets ? 'Đóng' : assetUiState === 'invalid' ? 'Sửa lựa chọn' : assignedAssets.length > 0 ? 'Thay đổi' : 'Chọn tài sản'}</button>}
+              </div>
+            </div>
+            <div className="scene-asset-chips">
+              {assignedAssets.length === 0 ? <small>Cảnh này không dùng bối cảnh hoặc đạo cụ cố định.</small> : assignedAssets.map((asset) => (
+                <span key={asset.projectAssetId} className={asset.assetType.toLowerCase()}>
+                  <small>{assetTypeLabel(asset.assetType)}</small>
+                  <strong>{asset.name}</strong>
+                </span>
+              ))}
+            </div>
+            {assetAssignment && !assetAssignment.isValid && <p><TriangleAlert size={13} /> {(assetAssignment.blockers ?? ['Lựa chọn tài sản chưa hợp lệ.']).join(' ')}</p>}
+            {assetUiState === 'pending' && <p className="pending"><CircleHelp size={13} /> AI đã chọn {assignedAssets.length} tài sản. Hãy xác nhận để cảnh sẵn sàng tạo clip.</p>}
+            {assetUiState === 'ready' && assignedAssets.length > 0 && <p className="ready"><CircleCheck size={13} /> Tài sản đã được xác nhận và sẵn sàng sử dụng.</p>}
+            {assetAssignment && assetAssignment.promptLimit > 0 && assignedAssets.length > 0 && (
+              <details className="scene-assets-technical">
+                <summary>Chi tiết nâng cao</summary>
+                <span>Phần bắt buộc: {assetAssignment.requiredPromptCharacters}/{assetAssignment.promptLimit} ký tự. Prompt hoàn chỉnh được server tự điều chỉnh trong giới hạn Kling.</span>
+              </details>
+            )}
+            {assigningAssets && (
+              <div className="scene-assets-picker">
+                {(assetLibrary?.assets.length ?? 0) > 0 ? (
+                  <>
+                    {(['Background', 'Prop', 'Item'] as ProjectAssetType[]).map((assetType) => {
+                      const options = assetLibrary?.assets.filter((asset) => asset.assetType === assetType) ?? [];
+                      if (options.length === 0) return null;
+                      return <div key={assetType}><strong>{assetTypeLabel(assetType)} {assetType === 'Background' ? '· chọn tối đa 1' : '· tùy chọn'}</strong>
+                        {assetType === 'Background' && <label className="empty">
+                          <input type="radio" name={`background-${scene.sceneId}`} checked={draftAssetIds.size === 0} disabled={busy || assignmentSaving} onChange={() => setDraftAssetIds(new Set())} />
+                          <span>Không dùng tài sản cho cảnh này<small>Xóa cả bối cảnh, đạo cụ và item đã chọn</small></span>
+                        </label>}
+                        {options.map((asset) => (
+                        <label key={asset.projectAssetId} className={asset.status === 'Locked' ? 'locked' : 'draft'}>
+                          <input type={assetType === 'Background' ? 'radio' : 'checkbox'} name={assetType === 'Background' ? `background-${scene.sceneId}` : undefined} checked={draftAssetIds.has(asset.projectAssetId)} disabled={busy || assignmentSaving || (assetType !== 'Background' && draftBackgroundCount === 0)} onChange={() => toggleAsset(asset)} />
+                          <span>{asset.name}<small>{asset.status === 'Locked' ? 'Đã xác nhận' : asset.sourceKind === 'AiGenerated' && asset.sceneIds.includes(scene.sceneId) ? 'AI đề xuất' : 'Có thể chọn'}</small><em>{asset.canonicalDescription}</em></span>
+                        </label>
+                      ))}</div>;
+                    })}
+                    {!draftAssetsValid && <div className="scene-validation-message invalid"><TriangleAlert size={13} /> Cảnh có tài sản phải chọn đúng một bối cảnh.</div>}
+                    {assetsChanged && draftAssetsValid && <small className="scene-assets-preflight-note">Hệ thống sẽ kiểm tra lựa chọn trước khi áp dụng. Bước này không gọi AI và không phát sinh chi phí.</small>}
+                    <div className="scene-assets-picker-actions"><button type="button" className="scene-cancel" disabled={busy || assignmentSaving} onClick={() => { setDraftAssetIds(new Set(assignedAssetIds)); setAssigningAssets(false); }}>Hủy</button><button type="button" className="scene-save" disabled={busy || assignmentSaving || !draftAssetsValid || !assetsChanged} onClick={() => { setAssignmentSaving(true); onUpdateAssets([...draftAssetIds]); }}><Save size={13} /> {assignmentSaving ? 'Đang áp dụng...' : 'Áp dụng lựa chọn'}</button></div>
+                  </>
+                ) : <small>Hãy tạo hồ sơ text trong bước Tài sản trước.</small>}
+              </div>
+            )}
+          </div>
           {editing ? (
             <div className="scene-edit-form">
               <label>
@@ -2579,20 +3322,18 @@ function SceneCard({
                   spellCheck={false}
                   maxLength={4000}
                   disabled={speechMode === 'None' || isSaving}
-                  placeholder={speechMode === 'None' ? 'Cảnh chỉ có âm thanh môi trường.' : 'Nhập câu ngắn, tự nhiên và vừa với thời lượng cảnh.'}
+                  placeholder={speechMode === 'None' ? 'Cảnh chỉ có âm thanh môi trường.' : 'Nhập nguyên văn lời provider cần nói.'}
                   value={narration}
                   onChange={(event) => {
                     onClearSaveFailure();
                     setNarration(event.target.value);
                   }}
                 />
-                {speechMode !== 'None' && (
-                  <small className={spokenWordCount > maximumSpokenWords ? 'scene-word-count invalid' : 'scene-word-count'}>
-                    {spokenWordCount}/{maximumSpokenWords} từ cho clip {Math.ceil((scene.generationDurationMs ?? scene.durationMs) / 1000)} giây
-                  </small>
-                )}
                 {speechMode === 'OnCameraDialogue' && scene.characters.length !== 1 && (
-                  <small className="scene-word-count invalid">Lời thoại trực diện cần đúng một nhân vật trong cảnh.</small>
+                  <small className="scene-validation-message invalid">Lời thoại trực diện cần đúng một nhân vật trong cảnh.</small>
+                )}
+                {enforceKlingLongFormSpeechPolicy && speechMode === 'NativeVoiceOver' && scene.characters.length !== 0 && (
+                  <small className="scene-validation-message invalid">Lời dẫn ngoài khung hình chỉ dùng cho cảnh B-roll không có nhân vật.</small>
                 )}
               </label>
               {speechMode === 'OnCameraDialogue' && (
@@ -2651,7 +3392,7 @@ function SceneCard({
           ) : (
             <div className="scene-copy-grid">
               <div className="scene-copy-box">
-                <span>{speechModeLabel(scene.speechMode)}</span>
+                <span>{speechModeLabel(scene.speechMode, enforceKlingLongFormSpeechPolicy)}</span>
                 <ExpandableSceneText text={scene.narration || 'Cảnh này không có lời nói; provider chỉ tạo âm thanh môi trường và hiệu ứng tự nhiên.'} collapseAt={190} />
               </div>
               <div className="scene-copy-box">
@@ -2663,7 +3404,6 @@ function SceneCard({
           {!editing && (
             <div className="scene-audio-intent">
               <span><Film size={12} /> Model do server quản lý · Native Audio</span>
-              {scene.speechMode !== 'None' && <span>{countWords(scene.narration ?? '')}/{maximumSpokenWords} từ</span>}
               {scene.speakerCharacterName && <span><UserRound size={12} /> Người nói: {scene.speakerCharacterName}</span>}
               <span><Volume2 size={12} /> Giọng: {scene.voiceStyle || 'tự nhiên, rõ ràng'}</span>
               <span>Ambience: {scene.ambientAudio || 'phù hợp bối cảnh'}</span>
@@ -2693,20 +3433,6 @@ function SceneCard({
                 <TriangleAlert size={14} />
                 <div className="scene-error-content">
                   <span>{scene.lastErrorMessage || 'Clip của cảnh chưa hoàn tất. Bạn có thể chọn cảnh và thử lại.'}</span>
-                  {hasSpeechWordBudgetError && scene.canEdit && (
-                    <button type="button" disabled={busy} onClick={beginEdit}>Sửa lời cảnh</button>
-                  )}
-                </div>
-              </div>
-            )}
-            {speechWordBudgetExceeded && !scene.lastErrorMessage && status.tone !== 'failed' && (
-              <div className="scene-error">
-                <TriangleAlert size={14} />
-                <div className="scene-error-content">
-                  <span>Lời cảnh này có {persistedSpokenWordCount}/{maximumSpokenWords} từ. Hãy rút ngắn và lưu lời trước khi tạo clip.</span>
-                  {scene.canEdit && (
-                    <button type="button" disabled={busy} onClick={beginEdit}>Sửa lời cảnh</button>
-                  )}
                 </div>
               </div>
             )}
@@ -2720,11 +3446,21 @@ function SceneCard({
                       : `Hãy kiểm tra lời nói đúng nguyên văn, đúng người nói và khớp khẩu hình. Hệ thống đã phát hiện track âm thanh${scene.nativeAudioAudible ? ' có tín hiệu nghe được' : ''}.`}
                   </span>
                   {!previewPlaybackConfirmed && <span>Hãy bấm phát clip ít nhất một lần để mở nút duyệt.</span>}
+                  {scene.speechMode !== 'None' && (
+                    <div className="scene-audio-review-checklist">
+                      <label><input type="checkbox" checked={speechContentConfirmed} disabled={busy} onChange={(event) => setSpeechContentConfirmed(event.target.checked)} /> Tôi đã nghe rõ đủ câu và đúng nguyên văn.</label>
+                      <label><input type="checkbox" checked={speakerConfirmed} disabled={busy} onChange={(event) => setSpeakerConfirmed(event.target.checked)} /> {scene.speechMode === 'OnCameraDialogue' ? 'Đúng nhân vật trên màn hình đang nói.' : 'Đúng là lời dẫn ngoài khung hình; không có nhân vật nói trực tiếp.'}</label>
+                      <label><input type="checkbox" checked={lipSyncConfirmed} disabled={busy} onChange={(event) => setLipSyncConfirmed(event.target.checked)} /> {scene.speechMode === 'OnCameraDialogue' ? 'Khẩu hình và biểu cảm chấp nhận được.' : 'Giọng dẫn và hình ảnh đồng bộ, chấp nhận được.'}</label>
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
-                  disabled={busy || !scene.canApproveNativeAudio || !previewPlaybackConfirmed}
-                  onClick={() => onApproveNativeAudio(previewPlaybackConfirmed)}
+                  disabled={busy || !scene.canApproveNativeAudio || !previewPlaybackConfirmed ||
+                    (scene.speechMode !== 'None' && (!speechContentConfirmed || !speakerConfirmed || !lipSyncConfirmed))}
+                  onClick={() => onApproveNativeAudio(
+                    previewPlaybackConfirmed &&
+                    (scene.speechMode === 'None' || (speechContentConfirmed && speakerConfirmed && lipSyncConfirmed)))}
                 >
                   <CircleCheck size={14} /> Duyệt hình và âm thanh
                 </button>
@@ -2733,6 +3469,9 @@ function SceneCard({
             {scene.characterSetupMessage && (
               <div className="scene-character-warning"><TriangleAlert size={14} /> {scene.characterSetupMessage}</div>
             )}
+            {enforceKlingLongFormSpeechPolicy && scene.status === 'NativeAudioInvalid' && (
+              <div className="scene-character-warning"><Volume2 size={14} /> Lần tạo trước không có lời nghe được. Lần thử tiếp theo sẽ dùng prompt ưu tiên lời thoại và là một request có phí mới.</div>
+            )}
             <div className="scene-actions">
               {scene.canEdit && (
                 <button type="button" className="scene-edit" disabled={busy} onClick={beginEdit}><Pencil size={14} /> Chỉnh sửa</button>
@@ -2740,7 +3479,15 @@ function SceneCard({
               {selectable && (
                 <button type="button" className="scene-generate-one" disabled={busy || !videoReady || !mediaToolsReady} onClick={onGenerate}>
                   {sceneNeedsLocalCompletion(scene) ? <Download size={14} /> : <Film size={14} />}
-                  {sceneNeedsLocalCompletion(scene) ? 'Tiếp tục tải clip' : status.tone === 'running' ? 'Tiếp tục theo dõi' : status.tone === 'failed' ? 'Thử lại cảnh này' : 'Tạo clip cảnh này'}
+                  {sceneNeedsLocalCompletion(scene)
+                    ? 'Tiếp tục tải clip'
+                    : enforceKlingLongFormSpeechPolicy && scene.status === 'NativeAudioInvalid'
+                      ? 'Tạo lại với prompt ưu tiên lời thoại'
+                      : status.tone === 'running'
+                        ? 'Tiếp tục theo dõi'
+                        : status.tone === 'failed'
+                          ? 'Thử lại cảnh này'
+                          : 'Tạo clip cảnh này'}
                 </button>
               )}
               {isSceneCompleted(scene) && <span className="scene-complete-note"><CircleCheck size={15} /> Hình và Native Audio đã được duyệt</span>}
@@ -2773,6 +3520,20 @@ function ExpandableSceneText({ text, collapseAt }: { text: string; collapseAt: n
 
 function canQueueScene(scene: SceneSummary): boolean {
   return scene.canGenerate && !isSceneCompleted(scene) && scene.prompt.trim().length > 0;
+}
+
+function sceneAssignedAssetIds(sceneId: string, assetLibrary: ProjectAssetLibrary | null): string[] {
+  return assetLibrary?.sceneAssignments.find((assignment) => assignment.sceneId === sceneId)?.projectAssetIds ?? [];
+}
+
+function areSceneAssetsReady(sceneId: string, assetLibrary: ProjectAssetLibrary | null): boolean {
+  if (!assetLibrary) return true;
+  const assignment = assetLibrary.sceneAssignments.find((item) => item.sceneId === sceneId);
+  if (assignment && !assignment.isValid) return false;
+  if (!assignment || assignment.projectAssetIds.length === 0) return true;
+  if (assignment.hasUnlockedAssets) return false;
+  const assetById = new Map(assetLibrary.assets.map((asset) => [asset.projectAssetId, asset]));
+  return assignment.projectAssetIds.every((assetId) => assetById.get(assetId)?.status === 'Locked');
 }
 
 function matchesStoryboardFilter(scene: SceneSummary, filter: StoryboardFilter): boolean {
@@ -2812,15 +3573,12 @@ function sceneNeedsLocalCompletion(scene: SceneSummary): boolean {
   return !isSceneCompleted(scene) && (status === 'generated' || status === 'downloading');
 }
 
-function speechModeLabel(mode: SceneSummary['speechMode']): string {
+function speechModeLabel(mode: SceneSummary['speechMode'], enforceKlingLongFormSpeechPolicy = false): string {
   if (mode === 'OnCameraDialogue') return 'Nhân vật nói trực tiếp bằng Native Audio của provider';
-  if (mode === 'NativeVoiceOver') return 'Lời dẫn ngoài khung hình bằng Native Audio của provider';
+  if (mode === 'NativeVoiceOver') return enforceKlingLongFormSpeechPolicy
+    ? 'Lời dẫn ngoài khung hình — cảnh không có nhân vật'
+    : 'Lời dẫn ngoài khung hình bằng Native Audio của provider';
   return 'Không có lời nói';
-}
-
-function countWords(value: string): number {
-  const normalized = value.trim();
-  return normalized ? normalized.split(/\s+/u).length : 0;
 }
 
 function formatTimeline(milliseconds: number): string {
@@ -2838,12 +3596,11 @@ function sceneDisplayTitle(scene: SceneSummary): string {
 function CreateVideoCard({ busy, onCreate }: { busy: boolean; onCreate: (payload: CreateProjectPayload) => void }) {
   const [topic, setTopic] = useState('');
   const [aspectRatio, setAspectRatio] = useState('16:9');
-  const [languageCode, setLanguageCode] = useState('vi-VN');
 
   const submit = () => {
     const normalizedTopic = topic.trim();
     if (!normalizedTopic || busy) return;
-    onCreate({ topic: normalizedTopic, aspectRatio, languageCode });
+    onCreate({ topic: normalizedTopic, aspectRatio, languageCode: 'vi-VN' });
   };
 
   return (
@@ -2864,7 +3621,7 @@ function CreateVideoCard({ busy, onCreate }: { busy: boolean; onCreate: (payload
             <button className={aspectRatio === ratio ? 'selected' : ''} key={ratio} onClick={() => setAspectRatio(ratio)}>{ratio}</button>
           ))}
         </div></div>
-        <label className="select-group">Ngôn ngữ<select value={languageCode} onChange={(e) => setLanguageCode(e.target.value)}><option value="vi-VN">Tiếng Việt</option><option value="en-US">English</option></select></label>
+        <label className="select-group">Ngôn ngữ<select value="vi-VN" disabled><option value="vi-VN">Tiếng Việt</option></select></label>
         <div className="select-group create-native-audio-note">
           <span>Âm thanh</span>
           <strong><Volume2 size={15} /> Provider Native Audio</strong>
@@ -2982,19 +3739,52 @@ function ModelLogo({ brand, label }: { brand: ModelDisplay['brand']; label: stri
   return <div className="model-logo logo-generic" aria-label={label}>{label.charAt(0).toUpperCase()}</div>;
 }
 
+function getFinalPreviewState(project: ProjectDashboard | null): { label: string; tone: 'ready' | 'processing' | 'waiting' | 'error' } {
+  if (!project) return { label: 'Chọn hoặc tạo một dự án', tone: 'waiting' };
+
+  const renderStatus = project.render.status.toLowerCase();
+  const finalRenderRunning = renderStatus === 'rendering' || renderStatus === 'validatingoutput';
+  if (project.preview?.url) {
+    return finalRenderRunning
+      ? { label: 'Đang dựng phiên bản mới · bản hoàn chỉnh trước vẫn có thể xem', tone: 'processing' }
+      : { label: 'Video hoàn chỉnh đã sẵn sàng', tone: 'ready' };
+  }
+  if (finalRenderRunning) {
+    return { label: 'FFmpeg đang dựng video hoàn chỉnh', tone: 'processing' };
+  }
+  if (renderStatus === 'failed') {
+    return { label: 'Dựng video cuối chưa thành công · hãy kiểm tra và thử lại', tone: 'error' };
+  }
+  if (project.runningJobs > 0) {
+    return { label: `Đang xử lý clip cảnh · ${project.approvedScenes}/${project.totalScenes} cảnh đã duyệt`, tone: 'processing' };
+  }
+  if (project.failedScenes > 0 || project.failedJobs > 0) {
+    return { label: 'Một số cảnh đang lỗi · cần xử lý trước khi dựng video cuối', tone: 'error' };
+  }
+  if (project.totalScenes > 0 && project.approvedScenes === project.totalScenes) {
+    return { label: 'Các cảnh đã sẵn sàng · hãy dựng video cuối', tone: 'waiting' };
+  }
+  if (project.totalScenes > 0) {
+    return { label: `Chờ hoàn tất các cảnh · ${project.approvedScenes}/${project.totalScenes} cảnh đã duyệt`, tone: 'waiting' };
+  }
+  return { label: 'Video hoàn chỉnh sẽ xuất hiện sau khi dựng xong', tone: 'waiting' };
+}
+
 function PreviewCard({ project }: { project: ProjectDashboard | null }) {
   const preview = project?.preview;
+  const state = getFinalPreviewState(project);
   return (
     <section className="card side-card preview-card">
       <h2>Xem trước dự án</h2>
       <div className="preview-frame">
         {preview?.url ? (
-          <video controls preload="metadata" src={preview.url} />
+          <video key={preview.url} controls preload="metadata" src={preview.url} />
         ) : (
-          <div className="preview-placeholder"><div className="sun" /><div className="mountain mountain-back" /><div className="mountain mountain-front" /><button aria-label="Chưa có video"><Play size={30} fill="white" /></button><span>{project ? 'Video sẽ xuất hiện khi render hoàn tất' : 'Chọn hoặc tạo một dự án'}</span></div>
+          <div className="preview-placeholder"><div className="sun" /><div className="mountain mountain-back" /><div className="mountain mountain-front" /><button aria-label="Chưa có video"><Play size={30} fill="white" /></button><span>{project ? 'Chưa có video hoàn chỉnh' : 'Chọn hoặc tạo một dự án'}</span></div>
         )}
       </div>
-      <div className="preview-meta"><Play size={13} fill="currentColor" /><span>{formatDuration(preview?.durationMs ? Math.round(preview.durationMs / 1000) : project?.project.targetDurationSeconds ?? 0)}</span><div className="fake-timeline"><i /></div></div>
+      {project && <div className={`preview-status ${state.tone}`}>{state.label}</div>}
+      <div className="preview-meta"><Play size={13} fill="currentColor" /><span>{preview?.url ? 'Video cuối' : 'Mục tiêu'} · {formatDuration(preview?.durationMs ? Math.round(preview.durationMs / 1000) : project?.project.targetDurationSeconds ?? 0)}</span><div className="fake-timeline"><i /></div></div>
     </section>
   );
 }
@@ -3257,7 +4047,7 @@ function createDisplayStages(project: ProjectDashboard | null): PipelineStage[] 
       script: [
         'Xây dựng cấu trúc kịch bản AI',
         `Thời lượng dự kiến: ${duration}`,
-        `Ngôn ngữ: ${formatLanguage(project.languageCode)}`,
+        `Ngôn ngữ nội dung: ${formatLanguage(project.effectiveGenerationLanguageCode ?? project.languageCode)}`,
         'Cảm xúc: Đang xác định'
       ],
       scenes: [

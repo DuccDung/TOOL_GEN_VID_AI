@@ -4,6 +4,12 @@ VideoMaker là ứng dụng desktop tự tạo nội dung bằng OpenAI và sinh
 
 Âm thanh mặc định dùng **Provider Native Audio** ở biến thể 720p: OpenAI lập speech intent có cấu trúc, server đưa nguyên văn lời cần nói/voice style/ambience/SFX vào prompt theo provider và desktop bắt buộc nghe duyệt từng scene. TTS ghép WAV được giữ cho tính năng tương lai, không được gọi hoặc fallback trong workflow hiện tại.
 
+Với dự án video dài/nhiều cảnh `OpenAiStructuredPlan` đã snapshot Kling, ngôn ngữ nội dung hiệu lực luôn là `vi-VN`: OpenAI phải trả toàn bộ kịch bản, scene, lời nói, nhân vật và continuity asset bằng tiếng Việt; server chặn dữ liệu tiếng Anh còn sót trước quote/reserve/outbound Kling. Tên riêng và các khóa/enum máy đọc không bị dịch. Quy tắc này không áp dụng cho màn hình video ngắn `DirectShortVideo` hoặc BytePlus/Seedance.
+
+Cùng phạm vi video dài Kling, speech intent được khóa theo quan hệ scene: một nhân vật có lời phải là `OnCameraDialogue`; `NativeVoiceOver` chỉ hợp lệ cho B-roll không gắn nhân vật. Kling prompt dùng template tiếng Việt `kling-native-audio-v4-vietnamese-speech-first`, đặt lời/performance trước identity và continuity asset, gắn người nói với ảnh first-frame, yêu cầu bắt đầu nói trong 0,5 giây đầu và giữ rõ mặt/miệng. Attempt mới sau `NativeAudioInvalid` được server tự nhận diện từ generation terminal và dùng profile `speech-recovery-v1`; desktop không được tự khai profile và người dùng phải xác nhận chi phí request mới.
+
+Content plan nhiều cảnh đồng thời có thể đề xuất thư viện text `Background`/`Prop`/`Item` và gắn đúng `asset_key` vào từng scene. Storyboard hiển thị trực tiếp các tài sản đã chọn bằng ba trạng thái dễ hiểu: **Chờ xác nhận**, **Cần chỉnh sửa** và **Đã sẵn sàng**. Người dùng có thể bấm **Xác nhận tài sản cảnh** ngay trên card; server kiểm tra lại lựa chọn rồi khóa nguyên tử các tài sản nháp đang gắn với cảnh. Thao tác này không gọi provider, không tạo usage và không phát sinh chi phí AI.
+
 Khi toàn bộ scene đã được nghe và duyệt, desktop cho phép dựng video cuối bằng FFmpeg. Luồng này chỉ nối các `SceneVideo` thuộc đúng `ApprovedGenerationId`, giữ nguyên Native Audio và kiểm tra lại hình, audio stream, mức âm lượng cùng thời lượng trước khi ghi nhận `FinalVideo`; dựng lại video không gọi provider AI.
 
 Tài liệu chính, theo thứ tự sử dụng:
@@ -11,17 +17,19 @@ Tài liệu chính, theo thứ tự sử dụng:
 - [Nghiệp vụ hệ thống](NGHIEP_VU_HE_THONG_VIDEOMAKER.md): nguồn sự thật nghiệp vụ toàn hệ thống.
 - [Nghiệp vụ dự án nhiều cảnh và đồng bộ nhân vật](NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md): chi tiết content, nhân vật, storyboard, clip và duyệt Native Audio.
 - [Nghiệp vụ tạo video ngắn bằng Kling](NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md): luồng direct prompt một scene, chỉ chạy khi policy tổ chức là Kling.
+- [Hồ sơ triển khai nội dung tiếng Việt cho Video Dài Kling](KE_HOACH_KLING_NOI_DUNG_TIENG_VIET.md): quyết định phạm vi, chốt chặn ngôn ngữ và kết quả xác minh.
+- [Hồ sơ triển khai nhân vật nói trực tiếp trong video dài Kling](KE_HOACH_KLING_NHAN_VAT_NOI_TRUC_TIEP_VIDEO_DAI.md): policy speech intent, template speech-first, retry phục hồi lời nói và phạm vi smoke test còn mở.
 - [Kế hoạch và trạng thái Server AI Gateway](KE_HOACH_SERVER_AI_GATEWAY.md): phần source đã có, việc vận hành còn phải thực hiện và phạm vi mở rộng.
 - [Hướng dẫn triển khai AI Gateway](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md): runbook migration, credential, rate, budget, smoke test và rollback.
 - [Sơ đồ hoạt động API AI](SO_DO_HOAT_DONG_API_AI.docx)
 - [Ngữ cảnh và quy tắc dành cho AI agent](AGENTS.md)
 
-Khi tài liệu diễn giải khác source hoặc migration, source/migration là sự thật kỹ thuật. Khi hai tài liệu nghiệp vụ khác nhau, `NGHIEP_VU_HE_THONG_VIDEOMAKER.md` được ưu tiên. Các file kế hoạch triển khai theo tính năng đã hoàn tất hoặc bị thay thế không còn được giữ ở root để tránh AI/maintainer đọc nhầm trạng thái lịch sử thành thiết kế hiện hành.
+Khi tài liệu diễn giải khác source hoặc migration, source/migration là sự thật kỹ thuật. Khi hai tài liệu nghiệp vụ khác nhau, `NGHIEP_VU_HE_THONG_VIDEOMAKER.md` được ưu tiên. Hồ sơ kế hoạch đã hoàn tất chỉ được giữ khi đã ghi rõ trạng thái và còn cần cho quyết định/đối chiếu; không dùng phần “hiện trạng trước triển khai” làm mô tả source hiện hành.
 
 ## Kiến trúc hiện tại
 
 - `TOOL-SERVER`: tài khoản, JWT, license/lease thiết bị, tổ chức và thành viên, credential OpenAI/Kling/BytePlus, ngân sách, usage ledger, AI Gateway, tạo ảnh nhân vật GPT-Image-2, polling video đa provider, cache output có hạn dùng và API tải output có xác thực.
-- `TOOL-LOCAL`: giao diện WinForms/WebView2, dữ liệu dự án và workspace. Người dùng có thể tạo/sinh lại ảnh chuẩn nhân vật, xem trước rồi khóa nhân vật; storyboard hiển thị lời đọc, mô tả, prompt và preview từng cảnh. Mọi request AI đều có JWT, device claim và `organizationId`, sau đó đi qua `TOOL-SERVER`.
+- `TOOL-LOCAL`: giao diện WinForms/WebView2, dữ liệu dự án và workspace. Người dùng có thể tạo/sinh lại ảnh chuẩn nhân vật, xem trước rồi khóa nhân vật; xem tài sản text do AI đề xuất, xác nhận ngay trên card cảnh hoặc thay đổi lựa chọn bằng trình chọn nâng cao; storyboard hiển thị lời đọc, mô tả, prompt và preview từng cảnh. Mọi request AI đều có JWT, device claim và `organizationId`, sau đó đi qua `TOOL-SERVER`.
 - `TOOL-SHARED.Contracts`: hợp đồng request/response dùng chung.
 - `TOOL-DISTRIBUTION`: quy tắc dùng chung để xác minh hồ sơ và SHA-256 của bundle FFmpeg trong desktop/setup/updater.
 - `TOOL-TESTS`: kiểm thử quyền, gateway, định giá, SSRF, cập nhật desktop và các nghiệp vụ nền.
@@ -43,9 +51,11 @@ sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.3
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.4.BytePlusSeedance.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.5.SceneNativeAudioStatuses.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
+sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
+sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
 ```
 
-`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 mở rộng trạng thái scene; 4.0.6 hoàn thiện constraint cho cả scene và video generation với `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
+`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 mở rộng trạng thái scene; 4.0.6 hoàn thiện constraint cho cả scene và video generation với `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`; 4.0.7 thêm thư viện text bối cảnh/đạo cụ/item có version, gắn theo cảnh và snapshot version theo provider request; 4.0.8 thêm khóa tài sản ổn định và metadata truy vết tài sản do AI đề xuất. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
 
 Nếu desktop vẫn cần truy cập trực tiếp dữ liệu workflow trong giai đoạn chuyển tiếp, tạo user SQL riêng và chạy:
 
@@ -120,9 +130,12 @@ Trong môi trường phát triển, có thể tạo `TOOL-LOCAL\appsettings.user
 ## Kiểm tra
 
 ```powershell
-dotnet build TOOL_GEN_POST_VIDEO.slnx -c Release
+dotnet restore TOOL_GEN_POST_VIDEO.slnx
+dotnet build TOOL_GEN_POST_VIDEO.slnx -c Release --no-restore
 dotnet test TOOL-TESTS\TOOL-TESTS.csproj -c Release --no-build
 ```
+
+Mốc xác minh source gần nhất ngày 2026-09-01: Release build không có warning/error và 388/388 test đạt. Policy speech-first/recovery profile và việc đơn giản hóa xác nhận tài sản theo cảnh dùng schema/contract hiện có, không cần migration SQL mới ngoài chuỗi 4.0.0–4.0.8 ở trên. Smoke test Kling thật chưa được chạy vì cần chỉ định staging organization và phê duyệt chi phí.
 
 ## Cập nhật desktop
 

@@ -1,6 +1,6 @@
 # Kế hoạch và trạng thái triển khai Server AI Gateway
 
-> Cập nhật ngữ cảnh: 2026-08-31. Kiến trúc AI Gateway theo tổ chức, GPT-Image-2, Kling Native Audio 720p và gateway video đa provider Kling/BytePlus đã được triển khai trong source. BytePlus/Seedance được seed disabled và chưa được coi là đã rollout nếu thiếu migration, credential, rate, policy và smoke test có phí. Gateway kiểm tra scene-plan/prompt version, dùng snapshot idempotency theo tổ chức và không lưu raw provider payload hoặc signed output URL. Migration chưa được tự động chạy trên database đang sử dụng.
+> Cập nhật ngữ cảnh: 2026-09-01. Kiến trúc AI Gateway theo tổ chức, GPT-Image-2, Kling Native Audio 720p, gateway video đa provider Kling/BytePlus và thư viện continuity text-only theo scene đã được triển khai trong source. Video dài Kling dùng content/prompt tiếng Việt cùng policy speech-first; Storyboard hỗ trợ xác nhận tài sản theo từng cảnh, checklist duyệt lời và retry `speech-recovery-v1` có xác nhận chi phí. BytePlus/Seedance được seed disabled và chưa được coi là đã rollout nếu thiếu migration, credential, rate, policy và smoke test có phí. Gateway kiểm tra scene-plan/prompt/asset version, dùng snapshot idempotency theo tổ chức và không lưu raw provider payload, full continuity text/spoken text trong request log hoặc signed output URL. Migration chưa được tự động chạy trên database đang sử dụng.
 
 Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; lệnh triển khai nằm tại `TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md`.
 
@@ -32,17 +32,29 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 - [x] Idempotency theo tổ chức cùng request hash.
 - [x] Desktop chỉ dùng `ServerGenerationClient`; đã xóa client gọi trực tiếp provider và mã lưu DPAPI.
 - [x] Desktop cho chọn tổ chức, lọc dự án theo tổ chức và gắn OrganizationId khi tạo dự án.
+- [x] Thư viện text project cho `Background`/`Prop`/`Item`, khóa version bất biến, gắn theo scene và chặn asset nháp trước outbound video.
+- [x] Migration idempotent 4.0.7–4.0.8 cho thư viện/version/assignment, `AssetKey` ổn định, nguồn AI và snapshot provider request; least-privilege deny đã được mở rộng tương ứng.
+- [x] Prompt Kling/Seedance đọc continuity text server-side và provider request snapshot đúng `ProjectAssetVersion`; desktop chưa quản lý ảnh tham chiếu cho ba loại tài sản này.
+- [x] OpenAI materialize đề xuất `Background`/`Prop`/`Item` cùng assignment theo `asset_key`; tài sản AI bắt đầu ở trạng thái nháp và dữ liệu `Locked`/`Manual` không bị đồng bộ lại ghi đè.
+- [x] Endpoint xác nhận theo scene khóa nguyên tử đúng tập tài sản đang gắn, kiểm tra concurrency/preflight và không tạo provider request, reservation hoặc usage.
+- [x] Storyboard dùng ba trạng thái `Chờ xác nhận`/`Cần chỉnh sửa`/`Đã sẵn sàng`, có hành động chính **Xác nhận tài sản cảnh** và giữ quản lý version/khóa theo lô trong phần nâng cao.
+- [x] Kling prompt preflight phân biệt phần bắt buộc với phần tùy chọn có thể tự co; UI không còn báo con số prompt hoàn chỉnh gần giới hạn như một lỗi.
+- [x] Workflow `OpenAiStructuredPlan` đã snapshot Kling bắt buộc content, speech, character, asset và prompt bằng tiếng Việt/`vi-VN`; `DirectShortVideo` và BytePlus không bị thay đổi.
+- [x] Policy speech intent video dài Kling chặn voice-over còn gắn presenter, on-camera thiếu speaker/reference hoặc prompt hành động mâu thuẫn trước resolver/budget/outbound; BytePlus và `DirectShortVideo` không bị áp dụng.
+- [x] Template `kling-native-audio-v4-vietnamese-speech-first` đặt câu thoại/performance tiếng Việt trước identity/tài sản, gắn speaker với first-frame và giữ nguyên spoken text bằng hash trong safe request snapshot.
+- [x] Retry on-camera sau generation terminal `NativeAudioInvalid` dùng `speech-recovery-v1`, idempotency/reservation riêng và chỉ chạy sau xác nhận của người dùng; không có auto retry hoặc fallback TTS.
+- [x] UI video dài phân biệt on-camera/B-roll/không lời, chặn lưu voice-over có nhân vật, hiển thị chi phí retry và yêu cầu checklist nghe đủ câu/đúng người nói/khẩu hình trước duyệt.
 - [x] Desktop không còn UI nhập key; bundle production không chứa UI BYOK cũ.
 - [x] Bộ dọn credential BYOK cũ chỉ xóa đúng `provider-secrets.bin` và `.tmp`.
 - [x] SQL role ít quyền cho database user desktop.
 - [x] Cập nhật README, tài liệu nghiệp vụ và runbook triển khai.
 - [x] Build toàn solution Release không có warning/error.
-- [x] Unit/security test cho role, cost snapshot, allowlist, SSRF và legacy credential cleanup.
+- [x] Toàn bộ 388/388 test đạt ngày 2026-09-01, gồm role, cost snapshot, allowlist, SSRF, language/speech policy, speech-first/recovery prompt, prompt analyzer, xác nhận tài sản và legacy credential cleanup.
 
 ## 2. Hạng mục vận hành phải làm khi triển khai
 
 - [ ] Backup và thử restore database đích.
-- [ ] Chạy `VideoFactory.Initial.sql`, migration 4.0.0 đến 4.0.6 và script least privilege theo runbook.
+- [ ] Chạy `VideoFactory.Initial.sql`, migration 4.0.0 đến 4.0.8 và script least privilege theo runbook.
 - [ ] Tạo database user riêng cho server và desktop.
 - [ ] Cấu hình JWT signing key/Data Protection cho môi trường production.
 - [ ] Tạo tổ chức, gán thành viên, budget và member limit thật.
@@ -64,7 +76,7 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 
 ## 4. Điều kiện phát hành
 
-1. Migration có đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.6-native-audio-workflow-statuses`.
+1. Migration có đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.8-ai-generated-project-assets`.
 2. Budget/rate/credential đã cấu hình và credential test thành công.
 3. Desktop không có provider key và dùng database role riêng.
 4. Cross-organization, Viewer, license hết hạn và budget exceeded đều bị chặn trước provider.
@@ -73,5 +85,8 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 7. Build/test Release đạt và staging live smoke test đã được phê duyệt.
 8. GPT-Image-2 có đủ rate riêng, ảnh tải qua server đúng hash/MIME và retry không tạo request hoặc chi phí trùng.
 9. Nếu rollout BytePlus, provider/model chỉ được bật sau smoke test; project đã snapshot Kling không tự đổi provider và ảnh upload/người thật bị chặn trước outbound BytePlus.
+10. Content Kling nhiều cảnh là tiếng Việt/`vi-VN`; tài sản AI xuất hiện đúng scene và có thể xác nhận ngay trên card mà không tạo provider request hoặc usage.
+11. Assignment sai quy tắc hoặc thay đổi đồng thời bị chặn; thao tác xác nhận hợp lệ khóa đúng tài sản đang gắn và không khóa tài sản ngoài scene.
+12. Scene video dài Kling có presenter và lời chỉ dùng on-camera; request snapshot chứa template/policy/recovery profile an toàn nhưng không chứa full speech, và retry im lặng cần một xác nhận chi phí mới.
 
 Chi tiết thao tác: [TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md).

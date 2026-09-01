@@ -9,11 +9,35 @@ using TOOL_SERVER.Generation;
 using TOOL_SERVER.Models;
 using TOOL_SERVER.Organizations;
 using TOOL_SHARED.Contracts.Generation;
+using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_TESTS.Generation;
 
 public sealed class GenerationServiceKlingNativeAudioTests
 {
+    [Fact]
+    public async Task SubmitKling_LongFormEnglishContentIsBlockedBeforeResolverBudgetAndOutbound()
+    {
+        await using var dbContext = CreateContext();
+        var seeded = SeedProject(dbContext);
+        seeded.Script.StructureType = GenerationWorkflowTypes.OpenAiStructuredPlan;
+        await dbContext.SaveChangesAsync();
+        var fixture = CreateService(dbContext, seeded.Project);
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() =>
+            fixture.Service.SubmitKlingVideoAsync(
+                CreateRequest(seeded, scenePlanVersion: 1, scenePromptVersion: 1),
+                "user-1",
+                Guid.NewGuid(),
+                CancellationToken.None));
+
+        Assert.Equal("kling_prompt_language_invalid", exception.Code);
+        Assert.Equal(0, fixture.Resolver.ResolveCount);
+        Assert.Equal(0, fixture.Budget.ReserveCount);
+        Assert.Equal(0, fixture.Kling.CallCount);
+        Assert.Empty(dbContext.ProviderRequests);
+    }
+
     [Fact]
     public async Task SubmitKling_RejectsStaleScenePlanBeforeResolverBudgetAndOutbound()
     {
@@ -128,6 +152,53 @@ public sealed class GenerationServiceKlingNativeAudioTests
                 CancellationToken.None));
 
         Assert.Equal("organization_budget_exceeded", exception.Code);
+        Assert.Equal(0, fixture.Kling.CallCount);
+        Assert.Empty(dbContext.ProviderRequests);
+    }
+
+    [Fact]
+    public async Task SubmitKling_AppliesOnlyLockedSceneAssetsAndPersistsVersionSnapshot()
+    {
+        await using var dbContext = CreateContext();
+        var seeded = SeedProject(dbContext);
+        var asset = SeedProjectAsset(dbContext, seeded, ProjectAssetStatuses.Locked);
+        var fixture = CreateService(dbContext, seeded.Project);
+
+        await fixture.Service.SubmitKlingVideoAsync(
+            CreateRequest(seeded, scenePlanVersion: 1, scenePromptVersion: 1),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        var effectivePrompt = Assert.IsType<string>(fixture.Kling.LastPrompt);
+        Assert.Contains("BACKGROUND CONTINUITY LOCK", effectivePrompt);
+        Assert.Contains("Căn bếp nhà Minh", effectivePrompt);
+        Assert.Contains("cửa sổ luôn nằm bên trái", effectivePrompt);
+        var snapshot = await dbContext.ProviderRequestAssetVersions.SingleAsync();
+        Assert.Equal(asset.Version.ProjectAssetVersionId, snapshot.ProjectAssetVersionId);
+        var requestLog = await dbContext.ProviderRequests.SingleAsync();
+        Assert.Contains(asset.Asset.ProjectAssetId.ToString(), requestLog.RequestJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(asset.Version.CanonicalDescription, requestLog.RequestJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SubmitKling_AssignedDraftAssetStopsBeforeResolverBudgetAndOutbound()
+    {
+        await using var dbContext = CreateContext();
+        var seeded = SeedProject(dbContext);
+        SeedProjectAsset(dbContext, seeded, ProjectAssetStatuses.Draft);
+        var fixture = CreateService(dbContext, seeded.Project);
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() =>
+            fixture.Service.SubmitKlingVideoAsync(
+                CreateRequest(seeded, scenePlanVersion: 1, scenePromptVersion: 1),
+                "user-1",
+                Guid.NewGuid(),
+                CancellationToken.None));
+
+        Assert.Equal("scene_asset_not_locked", exception.Code);
+        Assert.Equal(0, fixture.Resolver.ResolveCount);
+        Assert.Equal(0, fixture.Budget.ReserveCount);
         Assert.Equal(0, fixture.Kling.CallCount);
         Assert.Empty(dbContext.ProviderRequests);
     }
@@ -262,11 +333,23 @@ public sealed class GenerationServiceKlingNativeAudioTests
             UpdatedAtUtc = now,
             RowVersion = new byte[8]
         };
+        var script = new Script
+        {
+            ScriptId = Guid.NewGuid(),
+            ProjectId = project.ProjectId,
+            Version = 1,
+            StructureType = GenerationWorkflowTypes.DirectShortVideo,
+            FullText = "Test",
+            StoryBeatsJson = "[]",
+            Status = "Approved",
+            CreatedAtUtc = now,
+            RowVersion = new byte[8]
+        };
         var scene = new Scene
         {
             SceneId = Guid.NewGuid(),
             ProjectId = project.ProjectId,
-            ScriptId = Guid.NewGuid(),
+            ScriptId = script.ScriptId,
             StyleProfileId = Guid.NewGuid(),
             ScenePlanVersion = 1,
             SequenceNumber = 1,
@@ -299,12 +382,63 @@ public sealed class GenerationServiceKlingNativeAudioTests
             CreatedAtUtc = now,
             RowVersion = new byte[8]
         };
-        dbContext.AddRange(project, scene, prompt);
+        dbContext.AddRange(project, script, scene, prompt);
         dbContext.SaveChanges();
-        return new SeededProject(project, scene, prompt);
+        return new SeededProject(project, script, scene, prompt);
     }
 
-    private sealed record SeededProject(Project Project, Scene Scene, ScenePrompt Prompt);
+    private static SeededAsset SeedProjectAsset(
+        VideoFactoryDbContext dbContext,
+        SeededProject seeded,
+        string status)
+    {
+        var now = DateTime.UtcNow;
+        var asset = new ProjectAsset
+        {
+            ProjectAssetId = Guid.NewGuid(),
+            ProjectId = seeded.Project.ProjectId,
+            AssetType = ProjectAssetTypes.Background,
+            Name = "Căn bếp nhà Minh",
+            CanonicalDescription = "Tủ gỗ nâu, tường trắng, cửa sổ luôn nằm bên trái.",
+            Status = status,
+            CurrentVersion = status == ProjectAssetStatuses.Locked ? 1 : 0,
+            LockedAtUtc = status == ProjectAssetStatuses.Locked ? now : null,
+            CreatedAtUtc = now,
+            CreatedByUserId = "user-1",
+            UpdatedAtUtc = now,
+            UpdatedByUserId = "user-1",
+            RowVersion = new byte[8]
+        };
+        var version = new ProjectAssetVersion
+        {
+            ProjectAssetVersionId = Guid.NewGuid(),
+            ProjectAssetId = asset.ProjectAssetId,
+            Version = 1,
+            AssetType = asset.AssetType,
+            Name = asset.Name,
+            CanonicalDescription = asset.CanonicalDescription,
+            LockedAtUtc = now,
+            LockedByUserId = "user-1"
+        };
+        var assignment = new SceneAssetAssignment
+        {
+            SceneId = seeded.Scene.SceneId,
+            ProjectAssetId = asset.ProjectAssetId,
+            AssignedByUserId = "user-1",
+            AssignedAtUtc = now
+        };
+        dbContext.Add(asset);
+        if (status == ProjectAssetStatuses.Locked)
+        {
+            dbContext.Add(version);
+        }
+        dbContext.Add(assignment);
+        dbContext.SaveChanges();
+        return new SeededAsset(asset, version);
+    }
+
+    private sealed record SeededProject(Project Project, Script Script, Scene Scene, ScenePrompt Prompt);
+    private sealed record SeededAsset(ProjectAsset Asset, ProjectAssetVersion Version);
     private sealed record ServiceFixture(
         GenerationService Service,
         StubProviderResolver Resolver,
@@ -357,6 +491,7 @@ public sealed class GenerationServiceKlingNativeAudioTests
     private sealed class StubKlingClient(bool completeImmediately) : IKlingVideoClient
     {
         public int CallCount { get; private set; }
+        public string? LastPrompt { get; private set; }
 
         public Task<KlingTaskResult> SubmitAsync(
             ProviderRuntimeConfiguration provider,
@@ -370,6 +505,7 @@ public sealed class GenerationServiceKlingNativeAudioTests
             CancellationToken cancellationToken)
         {
             CallCount++;
+            LastPrompt = prompt;
             var outputUrl = completeImmediately
                 ? "https://media.kwaicdn.com/video.mp4?signature=secret"
                 : null;

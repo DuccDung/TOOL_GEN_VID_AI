@@ -1,6 +1,6 @@
 # Triển khai AI Gateway theo tổ chức
 
-> Cập nhật ngữ cảnh: 2026-08-31. Đây là runbook vận hành hiện hành cho VideoMaker 4.0. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; trạng thái source và việc còn mở nằm tại `KE_HOACH_SERVER_AI_GATEWAY.md`.
+> Cập nhật ngữ cảnh: 2026-09-01. Đây là runbook vận hành hiện hành cho VideoMaker 4.0. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; trạng thái source và việc còn mở nằm tại `KE_HOACH_SERVER_AI_GATEWAY.md`.
 
 Các lệnh thay đổi database phải được chạy trong cửa sổ bảo trì và sau khi đã có backup kiểm tra phục hồi được. Có migration trong repository không đồng nghĩa migration đã chạy trên database của bất kỳ môi trường nào.
 
@@ -26,10 +26,14 @@ sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.4.BytePlusSeedance.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.5.SceneNativeAudioStatuses.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
+sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
+sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.DesktopLeastPrivilege.sql
 ```
 
-`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance hay tự nhập giá. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi. Phải chạy các migration trước script least privilege.
+`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance hay tự nhập giá. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI. Phải chạy các migration trước script least privilege.
+
+Luồng xác nhận tài sản trực tiếp trên card cảnh, endpoint `/confirm` và phép phân tích prompt bắt buộc sử dụng các bảng/cột của migration 4.0.7–4.0.8; không có file SQL mới riêng cho cải tiến UI này. Không chạy lại `VideoFactory.Initial.sql` trên database thật nếu chưa xác minh đúng quy trình nâng cấp, backup và khả năng restore.
 
 Gán đúng database user của desktop:
 
@@ -51,7 +55,7 @@ SELECT [Code], [Name], [MonthlyBudgetLimit], [CurrencyCode]
 FROM [ai].[Organizations];
 ```
 
-Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.6-native-audio-workflow-statuses`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
+Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.8-ai-generated-project-assets`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
 
 ## 3. Cấu hình server
 
@@ -340,14 +344,23 @@ Thực hiện bằng một tài khoản Member có license và device lease hợ
 2. Trang “API AI tổ chức” hiển thị OpenAI Text, GPT-Image-2 và Kling sẵn sàng.
 3. Tạo dự án và tạo content.
 4. Kiểm tra usage tăng theo token và user.
-5. Tạo ảnh AI cho một nhân vật Draft, xác nhận preview PNG 1024×1024 được lưu trong workspace nhưng nhân vật chưa tự khóa.
-6. Sinh lại ảnh, xác nhận reference mới trở thành primary; sau đó khóa nhân vật và xác nhận Kling dùng primary này.
-7. Gửi lại cùng idempotency key tạo ảnh, xác nhận không có outbound call hoặc chi phí thứ hai; kiểm tra API không trả URL OpenAI/Base64.
-8. Tạo một clip Kling, đóng desktop, chờ worker server polling hoàn tất.
-9. Mở lại desktop và tải clip qua URL server.
-10. Giảm hạn mức thành viên đến sát mức đã dùng, xác nhận request tiếp theo bị chặn trước provider.
-11. Đổi user sang Viewer, xác nhận request trả `organization_generation_denied`.
-12. Gửi lại cùng idempotency key/payload, xác nhận không phát sinh provider request thứ hai.
+5. Với project video dài Kling, xác nhận content plan, scene prompt, lời nói, nhân vật/tài sản và metadata speech đều là tiếng Việt/`vi-VN`; thử sửa một scene bằng tiếng Anh và xác nhận bị chặn trước request Kling. Kiểm tra riêng màn hình video ngắn và BytePlus để bảo đảm policy này không bị áp dụng nhầm.
+6. Xác nhận tài sản AI xuất hiện đúng card cảnh với loại/tên rõ ràng và trạng thái `Chờ xác nhận`; assignment có tài sản phải có đúng một `Background`, còn `Prop`/`Item` là tùy chọn.
+7. Bấm **Xác nhận tài sản cảnh** và xác nhận card chuyển `Đã sẵn sàng`; đúng các tài sản đang gắn được khóa, tài sản ngoài scene vẫn giữ nguyên, không có provider request/reservation/usage mới.
+8. Thay assignment từ một phiên desktop khác trước khi xác nhận để kiểm tra `scene_asset_confirmation_stale`; desktop phải tải lại và yêu cầu xác nhận lại, không khóa một phần dữ liệu cũ.
+9. Tạo assignment sai để xác nhận card chuyển `Cần chỉnh sửa`; kiểm tra chỉ phần prompt bắt buộc vượt giới hạn mới bị `kling_prompt_too_long`, còn phần scene/negative tùy chọn được server tự co trong giới hạn.
+10. Tạo ảnh AI cho một nhân vật Draft, xác nhận preview PNG 1024×1024 được lưu trong workspace nhưng nhân vật chưa tự khóa.
+11. Sinh lại ảnh, xác nhận reference mới trở thành primary; sau đó khóa nhân vật và xác nhận Kling dùng primary này.
+12. Gửi lại cùng idempotency key tạo ảnh, xác nhận không có outbound call hoặc chi phí thứ hai; kiểm tra API không trả URL OpenAI/Base64.
+13. Tạo một clip Kling từ scene đã sẵn sàng, xác nhận prompt outbound chứa continuity text nhưng `ProviderRequests.RequestJson` không chứa mô tả đầy đủ và request snapshot đúng `ProjectAssetVersion`.
+14. Đóng desktop khi Kling đang chạy, chờ worker server polling hoàn tất; mở lại desktop và tải clip qua URL server.
+15. Mở khóa một tài sản đang gắn, xác nhận lần tạo clip mới bị `scene_asset_not_locked` trước resolver/budget/outbound; xác nhận lại trên card để tạo version mới rồi kiểm tra request mới snapshot đúng version.
+16. Giảm hạn mức thành viên đến sát mức đã dùng, xác nhận request tiếp theo bị chặn trước provider.
+17. Đổi user sang Viewer, xác nhận request trả `organization_generation_denied`.
+18. Gửi lại cùng idempotency key/payload, xác nhận không phát sinh provider request thứ hai.
+19. Với video dài Kling, kiểm tra mọi scene có presenter + lời hiển thị **Nhân vật nói trực tiếp**; B-roll voice-over không có nhân vật. Thử lưu voice-over khi scene còn character và xác nhận bị chặn trước request/reservation Kling.
+20. Tạo một on-camera clip và đối chiếu safe `RequestJson`: có `kling-native-audio-v4-vietnamese-speech-first`, language/speech policy version và speech hash nhưng không có full speech. Nghe đủ câu tiếng Việt, xác nhận đúng nhân vật nói và khẩu hình rồi mới duyệt.
+21. Nếu có `NativeAudioInvalid`, bấm **Tạo lại với prompt ưu tiên lời thoại**, xác nhận hộp thoại nêu thời lượng/chi phí request mới, rồi kiểm tra request mới có `speech-recovery-v1`, đúng một reservation/submit và không auto retry. Không cố tình tạo request Kling chỉ để ép lỗi audio nếu chưa được phê duyệt thêm chi phí.
 
 Với rollout Seedance, tạo một tổ chức thử nghiệm riêng và thực hiện thêm: chọn policy Seedance, tạo clip ngắn nhất được model hỗ trợ ở 720p/Native Audio, đóng desktop khi task chạy, mở lại và tải từ `/api/generation/videos/{providerRequestId}/content`. Xác minh `ProviderRequests.ResponseJson` không chứa signed URL, `GeneratedVideoOutputs` có hash/MIME/size, audio nghe được, actual `completion_tokens` được quyết toán theo rate snapshot và cleanup xóa output sau retention. Đây là smoke test có phí, chỉ chạy khi đã được phê duyệt.
 
@@ -367,7 +380,7 @@ Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage
 ## 12. Checklist production
 
 - [ ] Backup và thử restore database.
-- [ ] Migration 4.0.0 đến 4.0.6 có trong `ai.SchemaVersions`; 4.0.4, 4.0.5 và 4.0.6 đã chạy idempotent trên database clone.
+- [ ] Migration 4.0.0 đến 4.0.8 có trong `ai.SchemaVersions`; 4.0.4 đến 4.0.8 đã chạy idempotent trên database clone.
 - [ ] Server/desktop dùng database user khác nhau.
 - [ ] HTTPS hợp lệ; không cho HTTP public.
 - [ ] JWT signing key nằm trong secret manager.
@@ -383,4 +396,8 @@ Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage
 - [ ] Dung lượng cache, retention, output-host allowlist và quyền ghi thư mục `Generation:VideoOutputs:StorageRoot` đã được kiểm tra.
 - [ ] Log/telemetry không chứa Authorization header, prompt nhạy cảm hoặc provider key.
 - [ ] Desktop mới không còn UI/mã BYOK và đã dọn credential cũ.
+- [ ] Storyboard hiển thị ba trạng thái tài sản `Chờ xác nhận`/`Cần chỉnh sửa`/`Đã sẵn sàng`; xác nhận theo cảnh không tạo provider request hoặc usage.
+- [ ] Video dài Kling có content/prompt/speech/character/asset tiếng Việt và metadata `vi-VN`; video ngắn direct prompt cùng BytePlus vẫn giữ hành vi riêng.
+- [ ] Video dài Kling dùng policy on-camera/B-roll đúng quan hệ nhân vật; template speech-first và recovery profile chỉ xuất hiện trong safe snapshot, không log full speech.
+- [ ] `NativeAudioInvalid` không tự retry; UI nêu rõ chi phí attempt mới và checklist duyệt yêu cầu đủ câu/đúng người nói/khẩu hình.
 - [ ] Build Release và toàn bộ test đạt trước khi publish.

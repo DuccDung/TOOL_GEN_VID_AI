@@ -3,6 +3,38 @@ namespace TOOL_TESTS.Projects;
 public sealed class DesktopStoryboardUiTests
 {
     [Fact]
+    public void ProjectPreview_UsesOnlyCompletedFinalVideoAndNeverFallsBackToSceneClip()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var service = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+
+        var queryStart = service.IndexOf("var finalVideoCandidates", StringComparison.Ordinal);
+        var queryEnd = service.IndexOf("var characterRows", queryStart, StringComparison.Ordinal);
+        Assert.True(queryStart >= 0 && queryEnd > queryStart);
+        var finalPreviewQuery = service[queryStart..queryEnd];
+
+        Assert.Contains("x.RenderJob.Status == \"Completed\"", finalPreviewQuery);
+        Assert.Contains("x.MediaAsset.AssetType == \"FinalVideo\"", finalPreviewQuery);
+        Assert.Contains("x.MediaAsset.Status == \"Ready\"", finalPreviewQuery);
+        Assert.Contains("x.MediaAsset.DeletedAtUtc == null", finalPreviewQuery);
+        Assert.DoesNotContain("AssetType == \"SceneVideo\"", finalPreviewQuery, StringComparison.Ordinal);
+        Assert.Contains("FirstOrDefault(preview => preview is not null)", finalPreviewQuery);
+
+        var previewStart = app.IndexOf("function getFinalPreviewState", StringComparison.Ordinal);
+        var previewEnd = app.IndexOf("function ProjectInfoCard", previewStart, StringComparison.Ordinal);
+        Assert.True(previewStart >= 0 && previewEnd > previewStart);
+        var previewComponent = app[previewStart..previewEnd];
+
+        Assert.Contains("Video hoàn chỉnh đã sẵn sàng", previewComponent);
+        Assert.Contains("FFmpeg đang dựng video hoàn chỉnh", previewComponent);
+        Assert.Contains("Đang xử lý clip cảnh", previewComponent);
+        Assert.Contains("Các cảnh đã sẵn sàng · hãy dựng video cuối", previewComponent);
+        Assert.Contains("key={preview.url}", previewComponent);
+        Assert.DoesNotContain("scene.preview", previewComponent, StringComparison.Ordinal);
+        Assert.Contains("return Boolean(project.preview?.url);", app);
+    }
+
+    [Fact]
     public void Storyboard_RendersRealSceneContentAndLocalVideoPreview()
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
@@ -21,6 +53,75 @@ public sealed class DesktopStoryboardUiTests
     }
 
     [Fact]
+    public void LongVideoContentStep_RendersReadOnlyDetailsForEveryGeneratedScene()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var styles = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "styles.css");
+
+        Assert.Contains("<LongVideoContentScenes scenes={project.scenes} />", app);
+        Assert.Contains("function LongVideoContentScenes", app);
+        Assert.Contains("CHI TIẾT KỊCH BẢN", app);
+        Assert.Contains("Chưa có cảnh để hiển thị", app);
+        Assert.Contains("scene.storyPurpose", app);
+        Assert.Contains("scene.timelineStartMs", app);
+        Assert.Contains("scene.narration", app);
+        Assert.Contains("scene.visualDescription", app);
+        Assert.Contains("scene.prompt", app);
+        Assert.Contains("scene.voiceStyle", app);
+        Assert.Contains("scene.ambientAudio", app);
+        Assert.Contains("scene.soundEffects", app);
+        Assert.Contains("Thu gọn tất cả", app);
+        Assert.Contains(".long-video-content-scenes { overflow: hidden", styles);
+        Assert.Contains(".content-scene-copy-grid { display: grid", styles);
+
+        var componentStart = app.IndexOf("function LongVideoContentScenes", StringComparison.Ordinal);
+        var componentEnd = app.IndexOf("function LongVideoExportOverview", componentStart, StringComparison.Ordinal);
+        Assert.True(componentStart >= 0 && componentEnd > componentStart);
+        var component = app[componentStart..componentEnd];
+        Assert.DoesNotContain("postToHost(", component, StringComparison.Ordinal);
+        Assert.DoesNotContain("onGenerateVideo", component, StringComparison.Ordinal);
+        Assert.DoesNotContain("onUpdateScene", component, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void KlingLongFormLanguagePolicy_IsVisibleAndDoesNotChangeShortVideoPromptFlow()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
+        var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+
+        Assert.Contains("requiresVietnameseContentRegeneration", types);
+        Assert.Contains("Tiếng Việt (bắt buộc cho Video Dài dùng Kling)", app);
+        Assert.Contains("Sinh lại nội dung tiếng Việt", app);
+        Assert.Contains("Dự án Kling này còn nội dung tiếng Anh", app);
+        Assert.Contains("workflowStructureType", projectService);
+        Assert.Contains("KlingLongFormVietnameseValidator.RequiresVietnamese", projectService);
+
+        var shortVideoStart = app.IndexOf("function ShortVideoPage", StringComparison.Ordinal);
+        var shortVideoEnd = app.IndexOf("function LongVideoPage", shortVideoStart, StringComparison.Ordinal);
+        Assert.True(shortVideoStart >= 0 && shortVideoEnd > shortVideoStart);
+        var shortVideoComponent = app[shortVideoStart..shortVideoEnd];
+        Assert.Contains("Nội dung được dùng trực tiếp làm prompt hình ảnh", shortVideoComponent);
+        Assert.DoesNotContain("requiresVietnameseContentRegeneration", shortVideoComponent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AssetStep_ShowsAiGeneratedAssetsSceneChipsAndRetryWithoutProviderCall()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
+
+        Assert.Contains("postToHost('project-asset.materialize')", app);
+        Assert.Contains("Khôi phục đề xuất AI", app);
+        Assert.Contains("AI đề xuất", app);
+        Assert.Contains("Cảnh {sequence}", app);
+        Assert.Contains("sourceKind: 'Manual' | 'AiGenerated'", types);
+        Assert.Contains("SynchronizeProjectAssetPlanAsync", bridge);
+        Assert.Contains("Đang đồng bộ thư viện tài sản từ content plan đã lưu", bridge);
+    }
+
+    [Fact]
     public void NativeAudioApproval_RequiresPreviewPlaybackInUiAndDesktopService()
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
@@ -32,6 +133,27 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("{ sceneId, playbackConfirmed }", app);
         Assert.Contains("bool PlaybackConfirmed", bridgeContracts);
         Assert.Contains("if (!playbackConfirmed)", service);
+    }
+
+    [Fact]
+    public void KlingLongFormSpeechUi_BlocksVoiceOverWithCharacterAndExplainsRecoveryRetry()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+
+        Assert.Contains("enforceKlingLongFormSpeechPolicy", app);
+        Assert.Contains("Lời dẫn ngoài khung hình chỉ dùng cho cảnh B-roll không có nhân vật", app);
+        Assert.Contains("Tạo lại với prompt ưu tiên lời thoại", app);
+        Assert.Contains("phát sinh chi phí provider mới", app);
+        Assert.Contains("Tôi đã nghe rõ đủ câu và đúng nguyên văn", app);
+        Assert.Contains("Đúng nhân vật trên màn hình đang nói", app);
+        Assert.Contains("Khẩu hình và biểu cảm chấp nhận được", app);
+        Assert.Contains("KlingLongFormSpeechIntentValidator.FindViolation", projectService);
+
+        var shortVideoStart = app.IndexOf("function ShortVideoPage", StringComparison.Ordinal);
+        var shortVideoEnd = app.IndexOf("function LongVideoPage", shortVideoStart, StringComparison.Ordinal);
+        Assert.True(shortVideoStart >= 0 && shortVideoEnd > shortVideoStart);
+        Assert.DoesNotContain("enforceKlingLongFormSpeechPolicy", app[shortVideoStart..shortVideoEnd], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -176,27 +298,22 @@ public sealed class DesktopStoryboardUiTests
     }
 
     [Fact]
-    public void SpeechWordBudgetFailure_IsMarkedOnTheSceneAndGuidesTheUserToEditIt()
+    public void Storyboard_DoesNotExposeOrEnforceLegacySpeechWordBudget()
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
         var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
         var dashboard = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
         var generation = ReadRepositoryFile("TOOL-LOCAL", "Generation", "ProjectGenerationService.cs");
 
-        Assert.Contains("maximumSpokenWords: number", types);
-        Assert.Contains("scene.maximumSpokenWords", app);
-        Assert.Contains("Sửa lời cảnh", app);
+        Assert.DoesNotContain("maximumSpokenWords", types);
+        Assert.DoesNotContain("scene.maximumSpokenWords", app);
         Assert.Contains("status === 'promptinvalid'", app);
-        Assert.Contains("speechWordBudgetExceeded", app);
-        Assert.Contains("Hãy rút ngắn và lưu lời trước khi tạo clip.", app);
-        Assert.Contains("IsSpeechWordBudgetError", dashboard);
-        Assert.Contains("MarkSceneSpeechValidationFailedAsync", generation);
-        Assert.Contains("scene.Status = \"PromptInvalid\"", generation);
-        Assert.Contains("sceneWithSpeechOverBudget", generation);
-        Assert.Contains("Hãy rút ngắn và lưu lời cảnh trước khi tạo clip.", generation);
-        Assert.Contains("speechWordBudgetExceeded", app);
-        Assert.Contains("!hasSpeechWordBudgetError", app);
-        Assert.Contains("Hãy rút ngắn và lưu lời trước khi tạo clip.", app);
+        Assert.DoesNotContain("speechWordBudgetExceeded", app);
+        Assert.DoesNotContain("IsSpeechWordBudgetError", dashboard);
+        Assert.DoesNotContain("MarkSceneSpeechValidationFailedAsync", generation);
+        Assert.DoesNotContain("sceneWithSpeechOverBudget", generation);
+        Assert.DoesNotContain("kling_spoken_text_too_long", generation);
+        Assert.Contains("const selectable = canQueueScene(scene) &&", app);
         Assert.Contains("x.Status == \"Failed\"", generation);
         Assert.Contains("$\"{keyPrefix}:retry:{failedAttempts}\"", generation);
     }
@@ -279,6 +396,25 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("role=\"alertdialog\"", app);
         Assert.Contains(".service-error-card::before", styles);
         Assert.DoesNotContain("Account balance not enough", app, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SceneAssetPicker_UsesSingleBackgroundAndOneClickSceneConfirmation()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
+
+        Assert.Contains("type={assetType === 'Background' ? 'radio' : 'checkbox'}", app);
+        Assert.Contains("Cảnh có tài sản phải chọn đúng một bối cảnh.", app);
+        Assert.Contains("Xác nhận tài sản cảnh", app);
+        Assert.Contains("Áp dụng lựa chọn", app);
+        Assert.Contains("Phần bắt buộc:", app);
+        Assert.DoesNotContain("Prompt Kling hiện tại", app, StringComparison.Ordinal);
+        Assert.Contains("Duyệt & khóa", app);
+        Assert.Contains("project-assets.approve-ai", app);
+        Assert.Contains("scene.assets.confirm", app);
+        Assert.Contains("case \"project-assets.approve-ai\"", bridge);
+        Assert.Contains("case \"scene.assets.confirm\"", bridge);
     }
 
     private static string ReadRepositoryFile(params string[] relativeParts)
