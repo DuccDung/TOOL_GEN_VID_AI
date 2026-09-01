@@ -51,7 +51,9 @@ internal sealed class AiCostEstimator(
 
         var scenes = Math.Max(1, (int)Math.Ceiling(targetDurationSeconds / 15m));
         var estimatedInput = Math.Max(2_000L, 1_500L + topicCharacters / 3L);
-        var estimatedOutput = Math.Min(8_000L, 2_000L + scenes * 300L);
+        // Content output now includes a shared background/prop/item continuity library
+        // and per-scene asset mappings in addition to script and native-audio intent.
+        var estimatedOutput = Math.Min(8_000L, 2_000L + scenes * 650L);
         var cost = TokenCost(inputRate, estimatedInput) + TokenCost(outputRate, estimatedOutput);
         return new AiCostQuote(
             Round(cost),

@@ -21,6 +21,14 @@ public interface IGenerationAccessService
         Guid? requestedOrganizationId,
         Guid? projectId,
         CancellationToken cancellationToken);
+
+    Task<GenerationAccessContext> RequireProjectAccessAsync(
+        string userId,
+        Guid deviceId,
+        Guid? requestedOrganizationId,
+        Guid? projectId,
+        CancellationToken cancellationToken) =>
+        RequireAsync(userId, deviceId, requestedOrganizationId, projectId, cancellationToken);
 }
 
 internal sealed class GenerationAccessService(
@@ -34,6 +42,35 @@ internal sealed class GenerationAccessService(
         Guid deviceId,
         Guid? requestedOrganizationId,
         Guid? projectId,
+        CancellationToken cancellationToken) =>
+        await RequireCoreAsync(
+            userId,
+            deviceId,
+            requestedOrganizationId,
+            projectId,
+            requireGenerationPermission: true,
+            cancellationToken);
+
+    public async Task<GenerationAccessContext> RequireProjectAccessAsync(
+        string userId,
+        Guid deviceId,
+        Guid? requestedOrganizationId,
+        Guid? projectId,
+        CancellationToken cancellationToken) =>
+        await RequireCoreAsync(
+            userId,
+            deviceId,
+            requestedOrganizationId,
+            projectId,
+            requireGenerationPermission: false,
+            cancellationToken);
+
+    private async Task<GenerationAccessContext> RequireCoreAsync(
+        string userId,
+        Guid deviceId,
+        Guid? requestedOrganizationId,
+        Guid? projectId,
+        bool requireGenerationPermission,
         CancellationToken cancellationToken)
     {
         await RequireLicenseAsync(userId, deviceId, cancellationToken);
@@ -91,7 +128,7 @@ internal sealed class GenerationAccessService(
             organizationId = membership.OrganizationId;
         }
 
-        if (!OrganizationMemberRoles.CanGenerate(membership.Role))
+        if (requireGenerationPermission && !OrganizationMemberRoles.CanGenerate(membership.Role))
         {
             throw new AccountApiException(
                 StatusCodes.Status403Forbidden,

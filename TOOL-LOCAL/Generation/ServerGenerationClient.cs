@@ -7,6 +7,7 @@ using TOOL_LOCAL.Providers;
 using TOOL_SHARED.Contracts.Common;
 using TOOL_SHARED.Contracts.Generation;
 using TOOL_SHARED.Contracts.Organizations;
+using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.Generation;
 
@@ -106,6 +107,141 @@ internal sealed class ServerGenerationClient(
         Guid providerRequestId,
         CancellationToken cancellationToken) =>
         SendAsync<VideoTaskResponse>(HttpMethod.Get, $"api/generation/videos/{providerRequestId:D}", null, cancellationToken);
+
+    public async Task<ProjectAssetLibraryResponse> GetProjectAssetLibraryAsync(
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ProjectAssetLibraryResponse>(
+            HttpMethod.Get,
+            $"api/projects/{projectId:D}/assets?organizationId={organizationId:D}",
+            null,
+            cancellationToken);
+    }
+
+    public async Task<MaterializeProjectAssetPlanResponse> MaterializeProjectAssetPlanAsync(
+        Guid projectId,
+        MaterializeProjectAssetPlanRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<MaterializeProjectAssetPlanResponse>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/assets/materialize",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<ProjectAssetSummary> CreateProjectAssetAsync(
+        Guid projectId,
+        CreateProjectAssetRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ProjectAssetSummary>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/assets",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<ProjectAssetSummary> UpdateProjectAssetAsync(
+        Guid projectId,
+        Guid projectAssetId,
+        UpdateProjectAssetRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ProjectAssetSummary>(
+            HttpMethod.Put,
+            $"api/projects/{projectId:D}/assets/{projectAssetId:D}",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<ProjectAssetSummary> LockProjectAssetAsync(
+        Guid projectId,
+        Guid projectAssetId,
+        ChangeProjectAssetLockRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ProjectAssetSummary>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/assets/{projectAssetId:D}/lock",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<ProjectAssetSummary> UnlockProjectAssetAsync(
+        Guid projectId,
+        Guid projectAssetId,
+        ChangeProjectAssetLockRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ProjectAssetSummary>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/assets/{projectAssetId:D}/unlock",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<ApproveAiProjectAssetsResponse> ApproveAiProjectAssetsAsync(
+        Guid projectId,
+        ApproveAiProjectAssetsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ApproveAiProjectAssetsResponse>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/assets/approve-ai",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task DeleteProjectAssetAsync(
+        Guid projectId,
+        Guid projectAssetId,
+        DeleteProjectAssetRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        await SendWithoutResponseAsync(
+            HttpMethod.Delete,
+            $"api/projects/{projectId:D}/assets/{projectAssetId:D}",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<SceneAssetAssignmentSummary> UpdateSceneAssetAssignmentsAsync(
+        Guid projectId,
+        Guid sceneId,
+        UpdateSceneAssetAssignmentsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneAssetAssignmentSummary>(
+            HttpMethod.Put,
+            $"api/projects/{projectId:D}/assets/scenes/{sceneId:D}",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<ConfirmSceneProjectAssetsResponse> ConfirmSceneProjectAssetsAsync(
+        Guid projectId,
+        Guid sceneId,
+        ConfirmSceneProjectAssetsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ConfirmSceneProjectAssetsResponse>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/assets/scenes/{sceneId:D}/confirm",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
 
     public async Task DownloadVideoAsync(
         string outputUrl,
@@ -417,6 +553,28 @@ internal sealed class ServerGenerationClient(
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<TResponse>(JsonOptions, cancellationToken)
             ?? throw new AccountClientException("invalid_server_response", "Server trả về dữ liệu không hợp lệ.", (int)response.StatusCode);
+    }
+
+    private async Task SendWithoutResponseAsync(
+        HttpMethod method,
+        string uri,
+        object? body,
+        CancellationToken cancellationToken)
+    {
+        await licenseManager.EnsureAccessAsync(cancellationToken);
+        using var request = new HttpRequestMessage(method, uri);
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            await sessionManager.GetValidAccessTokenAsync(cancellationToken));
+        if (body is not null)
+        {
+            request.Content = JsonContent.Create(body, options: JsonOptions);
+        }
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
     }
 
     private async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)

@@ -6,6 +6,7 @@ using TOOL_SHARED.Contracts.Accounts;
 using TOOL_LOCAL.Providers;
 using TOOL_SHARED.Contracts.Organizations;
 using TOOL_LOCAL.Media;
+using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.WebView;
 
@@ -28,6 +29,7 @@ internal sealed record DashboardStateResponse(
     Guid SelectedOrganizationId,
     IReadOnlyList<ProjectSummary> Projects,
     ProjectDashboard? SelectedProject,
+    ProjectAssetLibraryResponse? AssetLibrary,
     IReadOnlyList<AiModelSummary> Models,
     GenerationProviderStatusResponse ProviderStatus,
     MediaToolStatusSummary MediaTools,
@@ -75,5 +77,32 @@ internal sealed record UpdateCharacterWebRequest(
     string Wardrobe,
     IReadOnlyList<string> ImmutableTraits,
     IReadOnlyList<string> ForbiddenChanges);
+
+internal sealed record CreateProjectAssetWebRequest(
+    string AssetType,
+    string Name,
+    string CanonicalDescription);
+
+internal sealed record UpdateProjectAssetWebRequest(
+    Guid ProjectAssetId,
+    string AssetType,
+    string Name,
+    string CanonicalDescription,
+    string ConcurrencyToken);
+
+internal sealed record ProjectAssetActionWebRequest(
+    Guid ProjectAssetId,
+    string ConcurrencyToken);
+
+internal sealed record ApproveAiProjectAssetsWebRequest(
+    IReadOnlyList<ApproveProjectAssetInput> Assets);
+
+internal sealed record UpdateSceneAssetsWebRequest(
+    Guid SceneId,
+    IReadOnlyList<Guid> ProjectAssetIds);
+
+internal sealed record ConfirmSceneAssetsWebRequest(
+    Guid SceneId,
+    IReadOnlyList<ApproveProjectAssetInput> Assets);
 
 internal sealed record TestProviderWebRequest(string ProviderCode);

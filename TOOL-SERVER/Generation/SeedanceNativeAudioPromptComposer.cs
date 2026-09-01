@@ -4,7 +4,7 @@ namespace TOOL_SERVER.Generation;
 
 internal static class SeedanceNativeAudioPromptComposer
 {
-    public const string TemplateVersion = "seedance-native-audio-v1";
+    public const string TemplateVersion = "seedance-native-audio-v2-project-assets";
 
     public static string Compose(
         IReadOnlyCollection<string> identityParts,

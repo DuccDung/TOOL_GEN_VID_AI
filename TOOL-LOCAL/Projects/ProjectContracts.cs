@@ -115,8 +115,7 @@ public sealed record SceneDashboardSummary(
     string? SpeakerCharacterName = null,
     string? VoiceStyle = null,
     string? AmbientAudio = null,
-    string? SoundEffects = null,
-    int MaximumSpokenWords = 28);
+    string? SoundEffects = null);
 
 public sealed record UpdateSceneCommand(
     Guid SceneId,
@@ -156,7 +155,12 @@ public sealed record ProjectDashboard(
     string? LastErrorMessage,
     string? VoiceCode = null,
     decimal? VoiceSpeakingRate = null,
-    string AudioStrategy = "ProviderNative");
+    string AudioStrategy = "ProviderNative",
+    string? VideoProviderCode = null,
+    string? VideoModelCode = null,
+    string? WorkflowStructureType = null,
+    string? EffectiveGenerationLanguageCode = null,
+    bool RequiresVietnameseContentRegeneration = false);
 
 public sealed record AiModelSummary(
     string ProviderCode,

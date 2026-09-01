@@ -2,7 +2,7 @@
 
 > Trạng thái hiện tại: AI Gateway tập trung theo tổ chức. Tài liệu BYOK 3.0 đã hết hiệu lực. Source hỗ trợ policy video bất biến theo project, Kling và BytePlus Seedance dưới cùng gateway; BytePlus/Seedance được seed disabled và chỉ được bật theo tổ chức sau migration, credential, rate và smoke test có phí. Luồng mặc định hiện vẫn là **Kling Native Audio 720p** cho tới khi quản trị viên chủ động chọn policy khác. Desktop bắt buộc preview/nghe/duyệt từng clip, chỉ render `SceneVideo` của đúng `ApprovedGenerationId`; TTS/WAV được giữ tương thích nhưng không fallback ngầm.
 
-> Cập nhật ngữ cảnh: 2026-08-31. Đây là nguồn sự thật nghiệp vụ toàn hệ thống. `NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md` và `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md` chỉ bổ sung chi tiết cho từng luồng; khi có khác biệt, tài liệu này được ưu tiên. Source code và migration vẫn là nguồn sự thật kỹ thuật.
+> Cập nhật ngữ cảnh: 2026-09-01. Đây là nguồn sự thật nghiệp vụ toàn hệ thống. Source đã có thư viện tính nhất quán **text-only** cho bối cảnh/đạo cụ/item theo project, materialize đề xuất AI và xác nhận trực tiếp theo từng cảnh; ảnh tham chiếu của các loại tài sản này chưa thuộc phạm vi hiện tại. `NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md` và `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md` chỉ bổ sung chi tiết cho từng luồng; khi có khác biệt, tài liệu này được ưu tiên. Source code và migration vẫn là nguồn sự thật kỹ thuật.
 
 ## 1. Mục tiêu
 
@@ -126,7 +126,9 @@ Ngân sách `0` có nghĩa là khóa phát sinh AI, không phải không giới 
 6. Server gọi `POST /v1/responses` với JSON Schema, `store=false`, giới hạn output và `safety_identifier` là hash ổn định của user ID.
 7. Server đọc structured output cùng `usage.input_tokens`/`usage.output_tokens`, tính actual cost theo rate snapshot và quyết toán.
 8. Kết quả content plan gồm hồ sơ nhân vật, `character_key` của từng cảnh và prompt được trả về desktop, version hóa rồi ghi vào dữ liệu dự án.
-9. Desktop hiển thị hồ sơ nhân vật và storyboard để người dùng kiểm tra, chọn ảnh tham chiếu, khóa nhân vật và sửa các cảnh chưa gửi provider trước khi phát sinh chi phí Kling.
+9. Desktop hiển thị hồ sơ nhân vật, tài sản text do AI đề xuất và storyboard để người dùng kiểm tra, chọn ảnh tham chiếu, khóa nhân vật, xác nhận tài sản theo cảnh và sửa các cảnh chưa gửi provider trước khi phát sinh chi phí Kling.
+10. Với workflow video dài `OpenAiStructuredPlan` đã snapshot Kling, server thay ngôn ngữ nội dung hiệu lực thành `vi-VN`, yêu cầu toàn bộ trường văn bản dành cho người đọc bằng tiếng Việt và chặn output sai ngôn ngữ trước khi desktop lưu scene plan. Tên riêng cùng khóa/enum máy đọc được giữ nguyên. BytePlus/Seedance vẫn dùng ngôn ngữ project; `DirectShortVideo` không thuộc quy tắc này.
+11. Cùng phạm vi video dài Kling, OpenAI phải trả `OnCameraDialogue` khi scene có một presenter và có lời; `NativeVoiceOver` chỉ được dùng khi `character_keys=[]`. On-camera visual prompt phải mô tả hành động nói nhìn thấy được, mặt/miệng rõ và cử chỉ khi nói; kết quả sai quan hệ hoặc chỉ đứng/cười không được lưu thành plan hợp lệ.
 
 ### 7.1. Luồng tạo ảnh chuẩn nhân vật GPT-Image-2
 
@@ -139,6 +141,27 @@ Ngân sách `0` có nghĩa là khóa phát sinh AI, không phải không giới 
 7. Desktop tải qua `/api/generation/character-images/{providerRequestId}/content`; server xác thực lại user/tổ chức/project/character và không trả URL provider.
 8. Desktop kiểm tra metadata, SHA-256 và PNG, ghi file `.part` rồi đổi tên nguyên tử; tạo `MediaAsset` loại `CharacterReference`, tạo reference primary mới và hạ primary cũ.
 9. Tạo ảnh không tự khóa nhân vật. Nhân vật tiếp tục ở `Draft` để người dùng xem, sinh lại, thay ảnh hoặc bấm **Khóa nhân vật cho các cảnh**; sau khi khóa, Kling tiếp tục dùng reference primary theo luồng hiện tại.
+
+### 7.2. Thư viện text giữ bối cảnh, đạo cụ và item
+
+Giai đoạn hiện tại chỉ quản lý text, không tải lên hoặc sinh ảnh tham chiếu cho bối cảnh/đạo cụ/item:
+
+1. Mỗi project có thư viện riêng với ba loại `Background`, `Prop`, `Item`; mỗi hồ sơ có tên, mô tả chuẩn và trạng thái `Draft`/`Locked`.
+2. Người dùng có quyền generation được tạo/sửa tài sản nháp, khóa, mở khóa và gắn tài sản vào các scene của scene-plan hiện hành. `Viewer` chỉ được xem.
+3. Khóa tài sản tạo một `ProjectAssetVersion` bất biến. Mở khóa không sửa version cũ; lần khóa tiếp theo tạo version tăng dần.
+4. Một tài sản chỉ áp dụng cho những scene được gắn với nó. Không tự chèn toàn bộ thư viện vào mọi scene.
+5. Scene được phép không gắn tài sản. Nếu đã gắn thì phải có đúng một `Background`; `Prop` và `Item` là tùy chọn. Server kiểm tra quy tắc này và độ dài prompt Kling trước khi lưu assignment, không tạo provider request và không phát sinh chi phí ở bước kiểm tra.
+6. Nếu đã gắn thì toàn bộ tài sản của scene phải ở trạng thái `Locked`; tài sản nháp làm request video dừng với `scene_asset_not_locked` trước resolver, budget và outbound provider.
+7. Server ghép text của đúng version đang khóa vào phần continuity bắt buộc của prompt Kling/Seedance. Desktop không được gửi mô tả thay thế làm nguồn sự thật.
+8. `ProviderRequestAssetVersions` lưu liên kết từ provider request tới đúng version đã dùng. `ProviderRequests.RequestJson` chỉ lưu ID/version/hash, không lưu lại toàn bộ mô tả hoặc prompt hiệu lực.
+9. Mở khóa hay sửa tài sản không làm thay đổi clip đã tạo. Lần sinh clip mới chỉ dùng version mới sau khi người dùng khóa lại.
+10. Content plan AI đồng thời trả thư viện bối cảnh/đạo cụ/item và `asset_key` theo từng scene. Server materialize thành tài sản `Draft`, không tự khóa và không cho desktop ghi trực tiếp các bảng sự thật của thư viện.
+11. Người dùng có thể duyệt và khóa theo lô toàn bộ tài sản AI nháp đang được scene-plan hiện hành sử dụng. Server xác minh đủ tập tài sản, concurrency token và toàn bộ preflight trước khi ghi các version trong một lần lưu; tài sản `Manual` không bị khóa ngầm.
+12. Tại Storyboard, người dùng xác nhận tài sản ngay trên từng cảnh bằng nút **Xác nhận tài sản cảnh**. Hành động này gửi đúng tập ID/concurrency token đang hiển thị, kiểm tra lại assignment và prompt rồi khóa nguyên tử mọi tài sản nháp đang gắn với cảnh, kể cả nguồn `Manual`, vì đây là xác nhận tường minh của người dùng; không gọi provider, không tạo reservation và không phát sinh usage. Tài sản không gắn với cảnh không bị khóa.
+13. UI chính chỉ dùng ba trạng thái `Chờ xác nhận`, `Cần chỉnh sửa`, `Đã sẵn sàng` và không yêu cầu người dùng hiểu `Draft`, version hay giới hạn prompt kỹ thuật. Bộ đếm trong **Chi tiết nâng cao** chỉ hiển thị độ dài phần bắt buộc; prompt hoàn chỉnh được server tự co phần tùy chọn trong giới hạn Kling. Chỉ phần bắt buộc thực sự vượt giới hạn mới chặn thao tác.
+14. Đồng bộ lại asset plan dùng response của provider request đã hoàn tất, không gọi OpenAI lần nữa. Tài sản `Locked` hoặc nguồn `Manual` không bị ghi đè; tài sản AI nháp được phép cập nhật theo scene-plan mới. UI đặt thao tác này trong tùy chọn nâng cao với tên “Khôi phục đề xuất AI”.
+15. Dữ liệu assignment cũ sai quy tắc được trả về kèm blocker để UI yêu cầu sửa, không tự động xóa hoặc đổi bối cảnh.
+16. Hệ thống hiện chưa có endpoint sinh ảnh storyboard theo scene, vì vậy text continuity đang được áp dụng trên đường sinh clip video. Khi bổ sung ảnh scene sau này, đường đó phải đọc cùng assignment/version server-side; không tạo một thư viện ảnh hoặc prompt song song ở desktop.
 
 ## 8. Luồng sinh video đa provider
 
@@ -154,13 +177,14 @@ Ngân sách `0` có nghĩa là khóa phát sinh AI, không phải không giới 
 1. Người dùng chọn một hoặc nhiều cảnh trên storyboard; với cảnh có nhân vật, desktop chỉ cho tạo clip sau khi hồ sơ đã khóa và có ảnh tham chiếu chính được duyệt.
 2. Desktop đọc ảnh từ workspace, kiểm tra dung lượng và SHA-256 rồi gửi request trung lập provider gồm project, scene, scene-plan version, prompt version, `organizationId`, idempotency key và ảnh tham chiếu nếu có. Provider, model, prompt hiệu lực, thời lượng, tỷ lệ, độ phân giải và Native Audio được server đọc từ dữ liệu đã lưu/snapshot; dữ liệu Base64 không được ghi vào request log.
 3. Server xác minh lại quyền sở hữu project/scene, prompt version, character mapping, trạng thái nhân vật, ID ảnh, MIME, dung lượng và SHA-256 theo `MediaAsset`; dữ liệu client không được dùng để thay thế hồ sơ đã duyệt trên server.
-4. Server ghép prompt hiệu lực từ identity, trang phục, đặc điểm bất biến, điều cấm thay đổi và prompt của cảnh. Với model Kling 3.0 thường, ảnh chuẩn được gửi theo luồng image-to-video làm first frame; model Omni dùng element reference khi model đó được quản trị viên bật và cấu hình rate.
+4. Server ghép prompt hiệu lực bằng template có version. Với on-camera của video dài Kling, khối speech/performance đứng trước identity/tài sản, gắn người nói với người duy nhất trong ảnh first-frame, yêu cầu bắt đầu nói trong 0,5 giây đầu, thấy rõ môi/hàm/biểu cảm và cấm narrator hoặc chỉ mỉm cười im lặng. Với model Kling 3.0 thường, ảnh chuẩn được gửi theo luồng image-to-video làm first frame; model Omni dùng element reference khi model đó được quản trị viên bật và cấu hình rate.
 5. Server kiểm tra rate, ngân sách, giữ chi phí ước tính, gửi task Kling và ghi external task ID cùng credential version, character version, reference ID và hash.
 6. Worker server polling các task đến hạn. Desktop cũng có thể hỏi trạng thái nhưng không chịu trách nhiệm duy nhất cho polling.
 7. Khi Kling hoàn tất, server quyết toán theo reported cost nếu có; nếu không dùng estimated cost đã khóa.
 8. Desktop nhận URL tương đối trung lập provider của server: `/api/generation/videos/{providerRequestId}/content`. Endpoint Kling cũ chỉ được giữ cho tương thích, không phải đường gọi mặc định của desktop.
 9. Proxy xác thực lại user/license/tổ chức, chỉ cho HTTPS và host thuộc allowlist của provider, kiểm tra DNS chống SSRF, giới hạn redirect, MIME, dung lượng file và tổng dung lượng cache theo cấu hình.
 10. Clip tải xong được hiển thị ngay tại card của cảnh qua virtual media host cục bộ; cảnh chưa có clip dùng placeholder theo theme và không tự gọi thêm provider ảnh.
+11. Trước resolver/rate/budget/outbound, video dài Kling chặn voice-over còn gắn nhân vật, on-camera thiếu speaker/reference, speech mode không khớp `Dialogue`/`Narration`, Native Audio không phù hợp snapshot và prompt hình ảnh yêu cầu im lặng/khép miệng/lời dẫn ngoài khung hình.
 
 ### 8.2. Nghiệp vụ âm thanh của clip và video cuối
 
@@ -169,19 +193,20 @@ Luồng sản phẩm hiện tại chỉ dùng Native Audio do provider video đ�
 1. Mỗi cảnh có một `SpeechMode`: `None`, `OnCameraDialogue` hoặc `NativeVoiceOver`.
 2. OpenAI content planner trả riêng `spoken_text`, speaker, voice style, ambience và sound effects; `visual_prompt` không được lặp lại lời nói.
 3. Server đọc dữ liệu scene đã lưu, không tin prompt lời nói do desktop tự gửi, rồi dựng prompt theo adapter/template có version của provider snapshot. Prompt phải giữ nguyên lời đã duyệt, speaker, ngôn ngữ, voice style, ambience và SFX; on-camera dialogue còn yêu cầu đúng một người nói và lip-sync.
-4. Với Kling, lời nói được giới hạn theo thời lượng: tối đa 8 từ cho clip 3–5 giây, 18 từ cho 6–10 giây và 28 từ cho 11–15 giây. Vượt giới hạn phải chặn trước outbound, không tự cắt lời. Provider khác phải dùng capability/validation riêng của model đã snapshot.
+4. Hệ thống không áp dụng giới hạn số từ cố định theo thời lượng. `spoken_text` đã lưu được giữ nguyên khi dựng prompt provider; desktop và server không tự cắt lời hoặc chặn request chỉ vì số từ. Người dùng phải nghe duyệt kết quả vì lời quá dài vẫn có thể khiến provider nói nhanh, thiếu lời hoặc lệch khẩu hình.
 5. Kling hiện dùng `720p`, `NativeAudio = true` và `multi_shot = false`; BytePlus hiện dùng biến thể 720p/24fps/Native Audio theo catalog. Rate Active phải khớp đúng model, usage type và capability; thiếu rate/budget dừng trước outbound.
 6. Desktop tải raw `SceneVideo` qua proxy có xác thực, kiểm tra video bằng FFprobe và đo audio bằng `AudioQualityValidator`. Metadata chỉ lưu speech hash, mode và thống kê audio; không log nguyên văn lời hoặc provider URL.
 7. Clip thiếu audio stream hoặc gần như im lặng chuyển `NativeAudioInvalid`, không được duyệt và có thể sửa prompt/tạo lại bằng provider request mới.
-8. Clip có audio nghe được chuyển `AudioReviewRequired`. Người dùng phải phát preview, đối chiếu lời, người nói, phát âm, khẩu hình, ambience và SFX rồi bấm **Duyệt hình và âm thanh**.
-9. Chỉ khi duyệt, scene mới có `ApprovedGenerationId` và trạng thái `Approved`; project chỉ `ReadyToRender` khi toàn bộ scene đã duyệt.
-10. Workflow mặc định không gọi OpenAI Speech, không tải WAV, không tạo `SceneVoice`, không chạy `SceneAudioMixer` và không tạo `SceneVideoNarrated`. Không fallback ngầm sang TTS khi provider trả âm thanh sai hoặc im lặng.
+8. Attempt mới sau `NativeAudioInvalid` không tự chạy. Khi người dùng xác nhận request có phí mới, server đọc generation terminal và tự áp `speech-recovery-v1` cho on-camera: medium close-up/medium shot, nói ngay không có intro im lặng, room tone tối thiểu, không nhạc và không hành động cạnh tranh với lời. Profile/version được lưu trong request snapshot an toàn; full speech vẫn chỉ lưu hash.
+9. Clip có audio nghe được chuyển `AudioReviewRequired`. Người dùng phải phát preview và xác nhận đủ câu, đúng người nói/kiểu voice-over và khẩu hình/đồng bộ chấp nhận được trước khi bấm **Duyệt hình và âm thanh**. Loudness check không được mô tả như ASR hoặc kiểm tra lip-sync tự động.
+10. Chỉ khi duyệt, scene mới có `ApprovedGenerationId` và trạng thái `Approved`; project chỉ `ReadyToRender` khi toàn bộ scene đã duyệt.
+11. Workflow mặc định không gọi OpenAI Speech, không tải WAV, không tạo `SceneVoice`, không chạy `SceneAudioMixer` và không tạo `SceneVideoNarrated`. Không fallback ngầm sang TTS khi provider trả âm thanh sai hoặc im lặng.
 
 ### 8.3. Trạng thái triển khai và điều kiện vận hành hiện tại
 
-Source hiện hành đã có contract speech intent, OpenAI structured output, `KlingNativeAudioPromptComposer`, rate policy cho `720p + nativeAudio`, kiểm tra audio sau tải, trạng thái `NativeAudioInvalid`/`AudioReviewRequired`, API bridge duyệt scene và UI phân biệt lời nhân vật với native voice-over.
+Source hiện hành đã có contract speech intent, OpenAI structured output, policy tiếng Việt cho video dài Kling, template `kling-native-audio-v4-vietnamese-speech-first`, retry `speech-recovery-v1`, rate policy cho `720p + nativeAudio`, kiểm tra audio sau tải, trạng thái `NativeAudioInvalid`/`AudioReviewRequired`, checklist duyệt scene và UI phân biệt lời nhân vật với native voice-over.
 
-Source cũng đã có migration 4.0.4–4.0.6, admin video policy, generic contract/service/bridge, Seedance client/prompt composer, worker đa provider, cache/proxy/cleanup và pricing bằng `completion_tokens`. Trạng thái source không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus đã hoàn tất trên một môi trường triển khai.
+Source cũng đã có migration 4.0.4–4.0.8, admin video policy, generic contract/service/bridge, Seedance client/prompt composer, worker đa provider, cache/proxy/cleanup, pricing bằng `completion_tokens`, thư viện tài sản text và xác nhận tài sản theo scene. Trạng thái source không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus đã hoàn tất trên một môi trường triển khai. Riêng cải tiến xác nhận tài sản một chạm và prompt analyzer dùng schema 4.0.8 hiện có, không cần migration SQL bổ sung.
 
 Để chạy được trong một môi trường, vẫn phải thỏa đồng thời:
 
@@ -189,12 +214,15 @@ Source cũng đã có migration 4.0.4–4.0.6, admin video policy, generic contr
 - model có đủ rate Active đúng usage type/capability; Kling cần metadata `{"resolution":"720p","nativeAudio":true}`;
 - budget tổ chức và hạn mức thành viên còn đủ;
 - nhân vật của cảnh đã khóa và có ảnh reference primary nếu cảnh dùng nhân vật;
+- nếu cảnh có gắn tài sản text thì assignment hợp lệ, có đúng một `Background` và mọi tài sản đang gắn đã được xác nhận/khóa;
 - desktop có FFmpeg/FFprobe hợp lệ để kiểm tra clip và audio;
 - người dùng nghe/duyệt từng output; kiểm tra tự động chỉ phát hiện track im lặng, không chứng minh lời nói đúng ngữ nghĩa.
 
-Tiếng Việt được gắn nhãn **experimental/best-effort**. Tài liệu Kling 3.0 hiện công bố Native Audio đa ngôn ngữ cho Chinese, English, Japanese, Korean và Spanish, đồng thời cảnh báo ngôn ngữ ngoài danh sách có thể bị dịch sang English. Prompt vẫn yêu cầu giữ nguyên tiếng Việt, nhưng manual review là bắt buộc và chưa được xem là hỗ trợ production cho đến khi smoke test thực tế đạt.
+Trong workflow video dài `OpenAiStructuredPlan`, project snapshot Kling bắt buộc dùng lời tiếng Việt và metadata `vi-VN`; prompt hiệu lực cũng dùng wrapper tiếng Việt. Prompt tiếng Anh cũ, hồ sơ nhân vật/tài sản tiếng Anh hoặc chỉnh sửa scene bằng tiếng Anh bị chặn trước chi phí Kling và UI hướng dẫn sinh lại nội dung tiếng Việt. Luồng video ngắn `DirectShortVideo` vẫn giữ direct visual prompt theo nội dung người dùng nhập, không có speech intent chính thức và không bị policy video dài áp dụng.
 
-Kling Native Audio không phụ thuộc rate OpenAI Voice hoặc việc bật TTS. Runbook vẫn chạy migration 4.0.3 theo đúng chuỗi 4.0.0–4.0.6 để giữ schema tương thích; schema/entity/API TTS hiện hữu được giữ để đọc dữ liệu cũ và phát triển tính năng ghép giọng sau này, nhưng không nằm trên đường gọi mặc định.
+Policy nhân vật nói trực tiếp cũng chỉ bật khi đồng thời là `OpenAiStructuredPlan` và provider snapshot `Kling`. BytePlus/Seedance cùng `DirectShortVideo` không dùng template/recovery profile này. Dữ liệu lịch sử không bị migration hoặc tự đổi `Narration` thành `Dialogue`; request mới từ scene cũ phải sửa/sinh lại để thỏa policy.
+
+Kling Native Audio không phụ thuộc rate OpenAI Voice hoặc việc bật TTS. Runbook vẫn chạy migration 4.0.3 theo đúng chuỗi 4.0.0–4.0.8 để giữ schema tương thích; schema/entity/API TTS hiện hữu được giữ để đọc dữ liệu cũ và phát triển tính năng ghép giọng sau này, nhưng không nằm trên đường gọi mặc định.
 
 `ProjectRenderService` là đường gọi thực tế từ UI vào `FfmpegRenderService`. Service chỉ chọn `SceneVideo` thuộc đúng `ApprovedGenerationId` của từng scene trong scene-plan hiện hành, xác minh SHA-256 và cờ `nativeAudioAudible`, sau đó chuẩn hóa/concat theo thứ tự. Final MP4 chỉ được lưu thành `FinalVideo` khi có video stream, audio stream nghe được, đúng kích thước và thời lượng nằm trong tolerance; lỗi render chỉ retry cục bộ, không tạo request provider/TTS mới.
 
@@ -245,6 +273,19 @@ Usage response có tổng input token, output token, video second và nhóm theo
 - `GET /api/generation/kling/videos/{providerRequestId}`
 - `GET /api/generation/kling/videos/{providerRequestId}/content`
 
+### Thư viện text của project
+
+- `GET /api/projects/{projectId}/assets`
+- `POST /api/projects/{projectId}/assets`
+- `POST /api/projects/{projectId}/assets/materialize`
+- `PUT /api/projects/{projectId}/assets/{projectAssetId}`
+- `POST /api/projects/{projectId}/assets/{projectAssetId}/lock`
+- `POST /api/projects/{projectId}/assets/{projectAssetId}/unlock`
+- `POST /api/projects/{projectId}/assets/approve-ai`
+- `POST /api/projects/{projectId}/assets/scenes/{sceneId}/confirm`
+- `DELETE /api/projects/{projectId}/assets/{projectAssetId}`
+- `PUT /api/projects/{projectId}/assets/scenes/{sceneId}`
+
 ### Quên mật khẩu
 
 - `POST /api/auth/forgot-password`: nhận email và luôn trả thông báo chung để không tiết lộ tài khoản có tồn tại hay không.
@@ -291,6 +332,15 @@ Gateway giới hạn mặc định 30 request/phút cho mỗi user/IP.
 | `voice_audio_invalid` | Provider trả audio không phải WAV hợp lệ hoặc metadata audio không đạt |
 | `idempotency_key_conflict` | Key đã dùng cho payload khác |
 | `provider_credential_test_failed` | Credential mới bị provider từ chối; key cũ được giữ |
+| `project_asset_changed` / `project_asset_name_conflict` | Tài sản bị cập nhật đồng thời hoặc trùng tên trong cùng loại/project |
+| `project_asset_locked` / `project_asset_edit_denied` | Tài sản phải mở khóa trước khi sửa hoặc vai trò chỉ được xem |
+| `scene_asset_not_locked` / `scene_asset_version_missing` | Scene dùng tài sản chưa khóa hoặc thiếu version bất biến; chặn trước outbound |
+| `scene_asset_background_invalid` / `kling_prompt_too_long` | Assignment thiếu/thừa bối cảnh hoặc phần prompt bắt buộc vượt giới hạn Kling; chặn ngay khi lưu tài sản cảnh, trước outbound |
+| `project_asset_approval_stale` | Danh sách tài sản AI cần duyệt đã thay đổi; desktop phải tải lại trước khi khóa theo lô |
+| `scene_asset_confirmation_stale` | Assignment hoặc tài sản của cảnh đã thay đổi; desktop tải lại và yêu cầu người dùng xác nhận lại |
+| `kling_on_camera_speaker_required` / `kling_speech_intent_invalid` | Scene video dài Kling thiếu đúng một speaker/reference hoặc mode đã lưu không khớp `Dialogue`/`Narration`; sửa hoặc sinh lại cảnh trước khi tạo clip |
+| `kling_voice_over_character_not_allowed` | Voice-over của video dài Kling còn gắn nhân vật; chuyển sang on-camera hoặc bỏ nhân vật để thành B-roll |
+| `kling_on_camera_action_invalid` | Prompt hình ảnh yêu cầu im lặng/khép miệng/lời dẫn ngoài khung hình; sửa prompt trước khi tạo request có phí |
 
 ## 12. Bảo mật
 
@@ -321,9 +371,14 @@ Gateway giới hạn mặc định 30 request/phút cho mỗi user/IP.
 9. URL video provider không lộ cho desktop và proxy chặn SSRF.
 10. Toàn bộ solution Release biên dịch không cảnh báo và bộ test tự động đạt.
 11. Video request của luồng mới bật Native Audio và được quote theo đúng provider/model/rate/capability đã snapshot.
-12. Prompt provider chứa speech mode, nguyên văn lời cần nói, language, voice style, ambience và SFX; on-camera dialogue có đúng một speaker/lip-sync, và Kling word budget bị chặn trước outbound.
+12. Prompt provider chứa speech mode, nguyên văn lời cần nói, language, voice style, ambience và SFX; on-camera dialogue có đúng một speaker/lip-sync, không áp dụng ngưỡng số từ cố định theo thời lượng.
 13. Clip thiếu/không nghe được audio không thể duyệt; clip hợp lệ phải qua bước nghe và duyệt thủ công trước khi scene `Approved`.
 14. Workflow mặc định không gọi TTS, không tạo WAV/`SceneVideoNarrated` và retry Native Audio không phát sinh request trùng theo cùng idempotency key.
 15. Thiếu rate/budget, Viewer hoặc truy cập chéo project/character không tạo outbound request GPT-Image-2.
 16. Retry ảnh cùng idempotency key không tạo ảnh hoặc chi phí trùng; payload Base64 và prompt đầy đủ không xuất hiện trong request log.
 17. Ảnh được tải qua API có xác thực, kiểm tra hash trước khi lưu; sinh lại đổi primary nhưng không tự khóa nhân vật.
+18. Tài sản text chỉ ảnh hưởng scene được gắn; tài sản chưa khóa chặn video trước resolver/budget/outbound và không làm thay đổi clip cũ.
+19. Mỗi provider request video truy được đúng `ProjectAssetVersion` đã đưa vào prompt, còn request log không chứa toàn bộ mô tả chuẩn.
+20. Xác nhận tài sản trên card cảnh khóa nguyên tử đúng tập tài sản đang gắn, không khóa tài sản ngoài cảnh, không gọi provider và không ghi usage.
+21. Storyboard hiển thị đúng ba trạng thái tài sản có thể hành động; assignment sai yêu cầu sửa lựa chọn, assignment hợp lệ nhưng còn nháp yêu cầu xác nhận, assignment hợp lệ đã khóa báo sẵn sàng.
+22. Preflight Kling chỉ chặn khi phần prompt bắt buộc vượt giới hạn; phần scene/negative tùy chọn được composer tự co và không bị UI trình bày như lỗi giả.

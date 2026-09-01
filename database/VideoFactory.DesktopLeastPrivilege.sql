@@ -33,6 +33,14 @@ IF OBJECT_ID(N'[vf].[GeneratedVoiceOutputs]', N'U') IS NOT NULL
     DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[GeneratedVoiceOutputs] TO [VideoMakerDesktopRole];
 IF OBJECT_ID(N'[vf].[GeneratedVideoOutputs]', N'U') IS NOT NULL
     DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[GeneratedVideoOutputs] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[vf].[ProjectAssets]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[ProjectAssets] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[vf].[ProjectAssetVersions]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[ProjectAssetVersions] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[vf].[SceneAssetAssignments]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[SceneAssetAssignments] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[vf].[ProviderRequestAssetVersions]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[ProviderRequestAssetVersions] TO [VideoMakerDesktopRole];
 
 /* Organization, billing, credentials, Identity and data-protection keys are server-only. */
 DENY SELECT, INSERT, UPDATE, DELETE, EXECUTE ON SCHEMA::[ai] TO [VideoMakerDesktopRole];

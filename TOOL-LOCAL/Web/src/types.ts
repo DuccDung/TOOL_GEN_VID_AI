@@ -121,7 +121,44 @@ export type SceneSummary = {
   voiceStyle?: string | null;
   ambientAudio?: string | null;
   soundEffects?: string | null;
-  maximumSpokenWords: number;
+};
+
+export type ProjectAssetType = 'Background' | 'Prop' | 'Item';
+
+export type ProjectAssetSummary = {
+  projectAssetId: string;
+  assetType: ProjectAssetType;
+  name: string;
+  canonicalDescription: string;
+  status: 'Draft' | 'Locked';
+  currentVersion: number;
+  lockedAtUtc?: string | null;
+  updatedAtUtc: string;
+  concurrencyToken: string;
+  sceneIds: string[];
+  assetKey: string;
+  sourceKind: 'Manual' | 'AiGenerated';
+  sourcePlanVersion?: number | null;
+  generatedByProviderRequestId?: string | null;
+};
+
+export type SceneAssetAssignment = {
+  sceneId: string;
+  projectAssetIds: string[];
+  hasUnlockedAssets: boolean;
+  isValid: boolean;
+  backgroundCount: number;
+  promptCharacters: number;
+  promptLimit: number;
+  blockers?: string[] | null;
+  requiredPromptCharacters: number;
+};
+
+export type ProjectAssetLibrary = {
+  projectId: string;
+  canEdit: boolean;
+  assets: ProjectAssetSummary[];
+  sceneAssignments: SceneAssetAssignment[];
 };
 
 export type MediaToolStatus = {
@@ -153,6 +190,11 @@ export type ProjectDashboard = {
   voiceCode?: string | null;
   voiceSpeakingRate?: number | null;
   audioStrategy: 'ProviderNative' | 'KlingNative' | string;
+  videoProviderCode?: string | null;
+  videoModelCode?: string | null;
+  workflowStructureType?: string | null;
+  effectiveGenerationLanguageCode?: string | null;
+  requiresVietnameseContentRegeneration: boolean;
 };
 
 export type AiModel = {
@@ -170,6 +212,7 @@ export type DashboardState = {
   selectedOrganizationId: string;
   projects: ProjectSummary[];
   selectedProject?: ProjectDashboard | null;
+  assetLibrary?: ProjectAssetLibrary | null;
   models: AiModel[];
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
@@ -278,6 +321,17 @@ export type UpdateCharacterPayload = {
   wardrobe: string;
   immutableTraits: string[];
   forbiddenChanges: string[];
+};
+
+export type CreateProjectAssetPayload = {
+  assetType: ProjectAssetType;
+  name: string;
+  canonicalDescription: string;
+};
+
+export type UpdateProjectAssetPayload = CreateProjectAssetPayload & {
+  projectAssetId: string;
+  concurrencyToken: string;
 };
 
 export type DesktopRelease = {

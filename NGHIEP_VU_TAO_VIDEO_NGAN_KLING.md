@@ -2,7 +2,7 @@
 
 > Phạm vi: màn hình **Tạo video** tạo một clip duy nhất từ nội dung người dùng nhập.
 >
-> Cập nhật ngữ cảnh: 2026-08-31. Tài liệu này mô tả màn hình direct prompt một scene đã có trong source, bổ sung cho [Nghiệp vụ hệ thống VideoMaker](NGHIEP_VU_HE_THONG_VIDEOMAKER.md) và không thay thế nghiệp vụ dự án nhiều cảnh bằng OpenAI. Khi có khác biệt, tài liệu nghiệp vụ hệ thống và source hiện hành được ưu tiên.
+> Cập nhật ngữ cảnh: 2026-09-01. Tài liệu này mô tả màn hình direct prompt một scene đã có trong source, bổ sung cho [Nghiệp vụ hệ thống VideoMaker](NGHIEP_VU_HE_THONG_VIDEOMAKER.md) và không thay thế nghiệp vụ dự án nhiều cảnh bằng OpenAI. Chính sách bắt buộc nội dung tiếng Việt của `OpenAiStructuredPlan` dùng Kling không áp dụng cho luồng này. Khi có khác biệt, tài liệu nghiệp vụ hệ thống và source hiện hành được ưu tiên.
 
 ## 1. Mục đích
 

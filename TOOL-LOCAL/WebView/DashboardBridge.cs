@@ -6,6 +6,7 @@ using TOOL_LOCAL.Generation;
 using TOOL_SHARED.Contracts.Generation;
 using TOOL_LOCAL.Providers;
 using TOOL_LOCAL.Media;
+using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.WebView;
 
@@ -133,6 +134,33 @@ internal sealed class DashboardBridge : IDisposable
                 case "character.approve":
                     await ApproveCharacterAsync(request, cancellationToken);
                     break;
+                case "project-asset.create":
+                    await CreateProjectAssetAsync(request, cancellationToken);
+                    break;
+                case "project-asset.materialize":
+                    await SynchronizeProjectAssetPlanAsync(request.RequestId, cancellationToken);
+                    break;
+                case "project-asset.update":
+                    await UpdateProjectAssetAsync(request, cancellationToken);
+                    break;
+                case "project-asset.lock":
+                    await ChangeProjectAssetLockAsync(request, lockAsset: true, cancellationToken);
+                    break;
+                case "project-asset.unlock":
+                    await ChangeProjectAssetLockAsync(request, lockAsset: false, cancellationToken);
+                    break;
+                case "project-assets.approve-ai":
+                    await ApproveAiProjectAssetsAsync(request, cancellationToken);
+                    break;
+                case "project-asset.delete":
+                    await DeleteProjectAssetAsync(request, cancellationToken);
+                    break;
+                case "scene.assets.update":
+                    await UpdateSceneAssetsAsync(request, cancellationToken);
+                    break;
+                case "scene.assets.confirm":
+                    await ConfirmSceneAssetsAsync(request, cancellationToken);
+                    break;
                 case "providers.settings.get":
                     await GetProviderSettingsAsync(request.RequestId, cancellationToken);
                     break;
@@ -244,9 +272,9 @@ internal sealed class DashboardBridge : IDisposable
         var aspectRatio = payload.AspectRatio is "16:9" or "9:16" or "1:1"
             ? payload.AspectRatio
             : throw new ArgumentException("Tỷ lệ khung hình không được hỗ trợ.");
-        var languageCode = payload.LanguageCode is "vi-VN" or "en-US"
-            ? payload.LanguageCode
-            : throw new ArgumentException("Ngôn ngữ không được hỗ trợ.");
+        // Workflow Video Dài hiện dùng tiếng Việt xuyên suốt. Video Ngắn có
+        // contract riêng và không đi qua nhánh tạo project này.
+        const string languageCode = "vi-VN";
         var voiceCode = payload.VoiceCode?.Trim() switch
         {
             null or "" => null,
@@ -663,6 +691,189 @@ internal sealed class DashboardBridge : IDisposable
         }
     }
 
+    private async Task CreateProjectAssetAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        EnsureProjectAssetOperationAllowed();
+        var payload = request.Payload.Deserialize<CreateProjectAssetWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Nội dung tài sản cần tạo không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        await _generationClient.CreateProjectAssetAsync(
+            projectId,
+            new CreateProjectAssetRequest(payload.AssetType, payload.Name, payload.CanonicalDescription),
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new { message = "Đã tạo hồ sơ text ở trạng thái nháp." }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private Task SynchronizeProjectAssetPlanAsync(string? requestId, CancellationToken cancellationToken) =>
+        RunGenerationAsync(
+            requestId,
+            async (projectId, userId, token) =>
+            {
+                Post(new WebMessageResponse(
+                    "operation.notice",
+                    requestId,
+                    new { message = "Đang đồng bộ thư viện tài sản từ content plan đã lưu..." }));
+                var result = await _generationService.SynchronizeProjectAssetPlanAsync(projectId, userId, token);
+                Post(new WebMessageResponse(
+                    "operation.notice",
+                    requestId,
+                    new
+                    {
+                        message = $"Đã đồng bộ {result.CreatedAssets + result.UpdatedDraftAssets + result.PreservedAssets} tài sản cho {result.SceneAssignments} liên kết cảnh."
+                    }));
+            },
+            cancellationToken);
+
+    private async Task UpdateProjectAssetAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        EnsureProjectAssetOperationAllowed();
+        var payload = request.Payload.Deserialize<UpdateProjectAssetWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Nội dung tài sản cần cập nhật không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        await _generationClient.UpdateProjectAssetAsync(
+            projectId,
+            payload.ProjectAssetId,
+            new UpdateProjectAssetRequest(
+                payload.AssetType,
+                payload.Name,
+                payload.CanonicalDescription,
+                payload.ConcurrencyToken),
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new { message = "Đã cập nhật mô tả text của tài sản." }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task ChangeProjectAssetLockAsync(
+        WebMessageRequest request,
+        bool lockAsset,
+        CancellationToken cancellationToken)
+    {
+        EnsureProjectAssetOperationAllowed();
+        var payload = request.Payload.Deserialize<ProjectAssetActionWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Tài sản được chọn không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        var changeRequest = new ChangeProjectAssetLockRequest(payload.ConcurrencyToken);
+        if (lockAsset)
+        {
+            await _generationClient.LockProjectAssetAsync(
+                projectId,
+                payload.ProjectAssetId,
+                changeRequest,
+                cancellationToken);
+        }
+        else
+        {
+            await _generationClient.UnlockProjectAssetAsync(
+                projectId,
+                payload.ProjectAssetId,
+                changeRequest,
+                cancellationToken);
+        }
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new { message = lockAsset ? "Đã khóa phiên bản text cho các cảnh." : "Đã mở khóa tài sản để chỉnh sửa." }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task DeleteProjectAssetAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        EnsureProjectAssetOperationAllowed();
+        var payload = request.Payload.Deserialize<ProjectAssetActionWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Tài sản cần xóa không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        await _generationClient.DeleteProjectAssetAsync(
+            projectId,
+            payload.ProjectAssetId,
+            new DeleteProjectAssetRequest(payload.ConcurrencyToken),
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new { message = "Đã xóa tài sản nháp chưa từng được sử dụng." }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task ApproveAiProjectAssetsAsync(
+        WebMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureProjectAssetOperationAllowed();
+        var payload = request.Payload.Deserialize<ApproveAiProjectAssetsWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Danh sách tài sản AI cần duyệt không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        var result = await _generationClient.ApproveAiProjectAssetsAsync(
+            projectId,
+            new ApproveAiProjectAssetsRequest(payload.Assets ?? []),
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new
+            {
+                message = result.LockedAssets == 0
+                    ? "Không còn tài sản AI đang dùng cần khóa."
+                    : $"Đã duyệt và khóa {result.LockedAssets} tài sản AI. {result.ReadyScenes}/{result.TotalScenes} cảnh đã sẵn sàng về tài sản."
+            }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task UpdateSceneAssetsAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        EnsureProjectAssetOperationAllowed();
+        var payload = request.Payload.Deserialize<UpdateSceneAssetsWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Danh sách tài sản của cảnh không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        await _generationClient.UpdateSceneAssetAssignmentsAsync(
+            projectId,
+            payload.SceneId,
+            new UpdateSceneAssetAssignmentsRequest(payload.ProjectAssetIds ?? []),
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new { message = "Đã cập nhật tài sản áp dụng cho cảnh." }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task ConfirmSceneAssetsAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        EnsureProjectAssetOperationAllowed();
+        var payload = request.Payload.Deserialize<ConfirmSceneAssetsWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Tài sản của cảnh cần xác nhận không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        var result = await _generationClient.ConfirmSceneProjectAssetsAsync(
+            projectId,
+            payload.SceneId,
+            new ConfirmSceneProjectAssetsRequest(payload.Assets ?? []),
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new
+            {
+                message = result.LockedAssets > 0
+                    ? $"Đã xác nhận {result.LockedAssets} tài sản. Cảnh đã sẵn sàng để tạo clip."
+                    : "Tài sản của cảnh đã sẵn sàng để tạo clip."
+            }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private void EnsureProjectAssetOperationAllowed()
+    {
+        if (_generationRunning)
+        {
+            throw new ArgumentException("Không thể thay đổi thư viện tài sản khi tác vụ AI đang chạy.");
+        }
+    }
+
     private (Guid ProjectId, string UserId) CurrentProjectOwner()
     {
         var current = _sessionManager.Current
@@ -763,6 +974,13 @@ internal sealed class DashboardBridge : IDisposable
                     current.User.UserId,
                     cancellationToken)
                 : null;
+            ProjectAssetLibraryResponse? assetLibrary = null;
+            if (selectedProject is not null)
+            {
+                assetLibrary = await _generationClient.GetProjectAssetLibraryAsync(
+                    selectedProject.Project.ProjectId,
+                    cancellationToken);
+            }
             var models = await _projectService.ListAvailableModelsAsync(cancellationToken);
             GenerationProviderStatusResponse providerStatus;
             try
@@ -783,6 +1001,7 @@ internal sealed class DashboardBridge : IDisposable
                     selectedOrganizationId.Value,
                     projects,
                     selectedProject,
+                    assetLibrary,
                     models,
                     providerStatus,
                     mediaToolStatus,

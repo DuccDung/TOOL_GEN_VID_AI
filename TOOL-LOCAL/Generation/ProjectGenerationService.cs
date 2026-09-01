@@ -7,8 +7,10 @@ using TOOL_LOCAL.Authentication;
 using TOOL_LOCAL.Data;
 using TOOL_LOCAL.Data.Models;
 using TOOL_LOCAL.Media;
+using TOOL_LOCAL.Projects;
 using TOOL_LOCAL.Storage;
 using TOOL_SHARED.Contracts.Generation;
+using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.Generation;
 
@@ -43,7 +45,7 @@ internal sealed class ProjectGenerationService(
             version = (await readContext.Scripts
                 .Where(x => x.ProjectId == projectId)
                 .MaxAsync(x => (int?)x.Version, cancellationToken) ?? 0) + 1;
-            var keyPrefix = $"content:{projectId:N}:v{version}";
+            var keyPrefix = $"content:{projectId:N}:v{version}:{KlingLongFormVietnameseValidator.PolicyVersion}";
             var failedAttempts = await readContext.ProviderRequests
                 .AsNoTracking()
                 .CountAsync(
@@ -62,7 +64,37 @@ internal sealed class ProjectGenerationService(
             cancellationToken);
         ValidateContentPlan(response.Plan);
         await PersistContentPlanAsync(projectId, remoteUserId, version, response, cancellationToken);
+        await apiClient.MaterializeProjectAssetPlanAsync(
+            projectId,
+            new MaterializeProjectAssetPlanRequest(response.ProviderRequestId, version),
+            cancellationToken);
         return response;
+    }
+
+    public async Task<MaterializeProjectAssetPlanResponse> SynchronizeProjectAssetPlanAsync(
+        Guid projectId,
+        string remoteUserId,
+        CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        var scenePlanVersion = project.CurrentScenePlanVersion
+            ?? throw new ArgumentException("Dự án chưa có scene plan để đồng bộ tài sản AI.");
+        var keyPrefix = $"content:{projectId:N}:v{scenePlanVersion}";
+        var providerRequestId = await dbContext.ProviderRequests
+            .AsNoTracking()
+            .Where(x => x.ProjectId == projectId &&
+                        x.RequestKind == "Text" &&
+                        x.Status == "Completed" &&
+                        x.IdempotencyKey.StartsWith(keyPrefix))
+            .OrderByDescending(x => x.CompletedAtUtc)
+            .Select(x => (Guid?)x.ProviderRequestId)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new ArgumentException("Không tìm thấy content plan AI của phiên bản cảnh hiện hành.");
+        return await apiClient.MaterializeProjectAssetPlanAsync(
+            projectId,
+            new MaterializeProjectAssetPlanRequest(providerRequestId, scenePlanVersion),
+            cancellationToken);
     }
 
     public async Task<GenerateCharacterReferenceImageResponse> GenerateCharacterReferenceImageAsync(
@@ -405,20 +437,6 @@ internal sealed class ProjectGenerationService(
                 throw new ArgumentException("Hãy khóa nhân vật và chọn ảnh tham chiếu trước khi tạo video.");
             }
 
-            var sceneWithSpeechOverBudget = scenes.FirstOrDefault(scene =>
-                !string.IsNullOrWhiteSpace(scene.SpokenText) &&
-                NativeSpeechWordBudget.CountWords(scene.SpokenText) >
-                NativeSpeechWordBudget.MaximumWordsForDurationSeconds(
-                    checked((int)Math.Ceiling(scene.GenerationDurationMs / 1000m))));
-            if (sceneWithSpeechOverBudget is not null)
-            {
-                var wordCount = NativeSpeechWordBudget.CountWords(sceneWithSpeechOverBudget.SpokenText);
-                var maximumWords = NativeSpeechWordBudget.MaximumWordsForDurationSeconds(
-                    checked((int)Math.Ceiling(sceneWithSpeechOverBudget.GenerationDurationMs / 1000m)));
-                throw new ArgumentException(
-                    $"Cảnh {sceneWithSpeechOverBudget.SequenceNumber} có {wordCount} từ, vượt mức {maximumWords} từ. Hãy rút ngắn và lưu lời cảnh trước khi tạo clip.");
-            }
-
             project.Status = "GeneratingScenes";
             project.LastErrorCode = null;
             project.LastErrorMessage = null;
@@ -475,17 +493,6 @@ internal sealed class ProjectGenerationService(
                 CancellationToken.None);
             throw;
         }
-        catch (AccountClientException exception) when (IsSpeechWordBudgetError(exception.Code))
-        {
-            await UpdateProjectStatusAsync(
-                projectId,
-                remoteUserId,
-                "ScenePlanning",
-                SafeCode(exception.Code),
-                SafeMessage(exception.Message),
-                CancellationToken.None);
-            throw;
-        }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             var code = exception is AccountClientException accountException
@@ -516,6 +523,11 @@ internal sealed class ProjectGenerationService(
         {
             return;
         }
+        ValidateContentPlan(
+            response.Plan,
+            KlingLongFormSpeechIntentValidator.Applies(
+                project.VideoProviderCode,
+                KlingLongFormVietnameseValidator.OpenAiStructuredPlan));
 
         var now = DateTime.UtcNow;
         await dbContext.Concepts
@@ -560,7 +572,7 @@ internal sealed class ProjectGenerationService(
             ProjectId = projectId,
             ConceptId = concept.ConceptId,
             Version = version,
-            StructureType = "OpenAiStructuredPlan",
+            StructureType = KlingLongFormVietnameseValidator.OpenAiStructuredPlan,
             Title = response.Plan.Title,
             FullText = response.Plan.ScriptFullText,
             NarrationJson = JsonSerializer.Serialize(response.Plan.Scenes.Select(x => x.Narration), JsonOptions),
@@ -659,7 +671,9 @@ internal sealed class ProjectGenerationService(
                     generatedScene.SpeakerCharacterKey,
                     generatedScene.VoiceStyle,
                     generatedScene.AmbientAudio,
-                    generatedScene.SoundEffects
+                    generatedScene.SoundEffects,
+                    effectiveGenerationLanguageCode = response.EffectiveGenerationLanguageCode,
+                    generationLanguagePolicyVersion = response.GenerationLanguagePolicyVersion
                 }, JsonOptions),
                 Status = "PromptReady",
                 CreatedAtUtc = now,
@@ -671,11 +685,13 @@ internal sealed class ProjectGenerationService(
                 SceneId = sceneId,
                 Version = 1,
                 PromptTemplateName = "openai-content-plan",
-                PromptTemplateVersion = "2",
+                PromptTemplateVersion = "3",
                 CanonicalInputJson = JsonSerializer.Serialize(generatedScene, JsonOptions),
                 FinalPrompt = generatedScene.VisualPrompt,
                 NegativePrompt = response.Plan.NegativePrompt,
-                PromptHash = Sha256Hex(generatedScene.VisualPrompt + "\n" + response.Plan.NegativePrompt),
+                PromptHash = Sha256Hex(
+                    generatedScene.VisualPrompt + "\n" + response.Plan.NegativePrompt + "\n" +
+                    response.EffectiveGenerationLanguageCode + "\n" + response.GenerationLanguagePolicyVersion),
                 Status = "Approved",
                 CreatedAtUtc = now,
                 ApprovedAtUtc = now
@@ -750,28 +766,15 @@ internal sealed class ProjectGenerationService(
                 var attempt = await dbContext.ProviderRequests.CountAsync(
                     x => x.ProjectId == projectId && x.SceneId == scene.SceneId && x.RequestKind == "Video",
                     cancellationToken) + 1;
-                try
-                {
-                    task = await apiClient.SubmitVideoAsync(
-                        new SubmitVideoRequest(
-                            projectId,
-                            scene.SceneId,
-                            $"video:{prompt.ScenePromptId:N}:ref:{referenceImage?.CharacterReferenceId.ToString("N") ?? "none"}:attempt:{attempt}",
-                            ReferenceImage: referenceImage,
-                            ScenePlanVersion: scene.ScenePlanVersion,
-                            ScenePromptVersion: prompt.Version),
-                        cancellationToken);
-                }
-                catch (AccountClientException exception) when (IsSpeechWordBudgetError(exception.Code))
-                {
-                    await MarkSceneSpeechValidationFailedAsync(
+                task = await apiClient.SubmitVideoAsync(
+                    new SubmitVideoRequest(
                         projectId,
-                        remoteUserId,
                         scene.SceneId,
-                        exception,
-                        CancellationToken.None);
-                    throw;
-                }
+                        $"video:{prompt.ScenePromptId:N}:ref:{referenceImage?.CharacterReferenceId.ToString("N") ?? "none"}:attempt:{attempt}",
+                        ReferenceImage: referenceImage,
+                        ScenePlanVersion: scene.ScenePlanVersion,
+                        ScenePromptVersion: prompt.Version),
+                    cancellationToken);
             }
         }
 
@@ -1517,35 +1520,6 @@ internal sealed class ProjectGenerationService(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task MarkSceneSpeechValidationFailedAsync(
-        Guid projectId,
-        string remoteUserId,
-        Guid sceneId,
-        AccountClientException exception,
-        CancellationToken cancellationToken)
-    {
-        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
-        var scene = await dbContext.Scenes.SingleOrDefaultAsync(
-            x => x.SceneId == sceneId && x.ProjectId == projectId,
-            cancellationToken);
-        if (scene is null)
-        {
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-        scene.Status = "PromptInvalid";
-        scene.LastErrorCode = SafeCode(exception.Code);
-        scene.LastErrorMessage = SafeMessage(exception.Message);
-        scene.UpdatedAtUtc = now;
-        project.Status = "ScenePlanning";
-        project.LastErrorCode = SafeCode(exception.Code);
-        project.LastErrorMessage = SafeMessage(exception.Message);
-        project.UpdatedAtUtc = now;
-        await dbContext.SaveChangesAsync(cancellationToken);
-    }
-
     private async Task MarkMediaToolBlockedAsync(
         Guid projectId,
         string remoteUserId,
@@ -1592,7 +1566,9 @@ internal sealed class ProjectGenerationService(
             cancellationToken)
         ?? throw new ArgumentException("Không tìm thấy dự án của tài khoản hiện tại.");
 
-    private static void ValidateContentPlan(GeneratedContentPlan plan)
+    private static void ValidateContentPlan(
+        GeneratedContentPlan plan,
+        bool enforceKlingLongFormSpeechPolicy = false)
     {
         if (plan.Scenes.Count == 0 || plan.Scenes.Any(x => x.DurationSeconds is < 3 or > 30))
         {
@@ -1617,6 +1593,31 @@ internal sealed class ProjectGenerationService(
             throw new InvalidDataException("Content plan OpenAI có liên kết nhân vật không hợp lệ.");
         }
 
+        var assets = plan.Assets ?? [];
+        if (assets.Count > 0)
+        {
+            if (assets.Select(x => x.AssetKey).Distinct(StringComparer.OrdinalIgnoreCase).Count() != assets.Count ||
+                assets.Any(asset =>
+                    string.IsNullOrWhiteSpace(asset.AssetKey) ||
+                    string.IsNullOrWhiteSpace(asset.Name) ||
+                    string.IsNullOrWhiteSpace(asset.CanonicalDescription) ||
+                    !ProjectAssetTypes.IsSupported(asset.AssetType)))
+            {
+                throw new InvalidDataException("Content plan OpenAI có thư viện tài sản không hợp lệ.");
+            }
+            var assetByKey = assets.ToDictionary(x => x.AssetKey, StringComparer.OrdinalIgnoreCase);
+            foreach (var scene in plan.Scenes)
+            {
+                var sceneAssetKeys = (scene.AssetKeys ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                if (sceneAssetKeys.Length == 0 ||
+                    sceneAssetKeys.Any(key => !assetByKey.ContainsKey(key)) ||
+                    sceneAssetKeys.Count(key => assetByKey[key].AssetType == ProjectAssetTypes.Background) != 1)
+                {
+                    throw new InvalidDataException("Content plan OpenAI có liên kết tài sản và cảnh không hợp lệ.");
+                }
+            }
+        }
+
         foreach (var scene in plan.Scenes)
         {
             var mode = ResolveSpeechMode(scene);
@@ -1635,13 +1636,6 @@ internal sealed class ProjectGenerationService(
             {
                 throw new InvalidDataException("Cảnh có lời provider nhưng nội dung lời đang trống.");
             }
-            var wordCount = NativeSpeechWordBudget.CountWords(spokenText);
-            var maximumWords = NativeSpeechWordBudget.MaximumWordsForDurationSeconds(scene.DurationSeconds);
-            if (wordCount > maximumWords)
-            {
-                throw new InvalidDataException(
-                    $"Lời provider ở cảnh {scene.SequenceNumber} có {wordCount} từ, vượt mức {maximumWords} từ cho clip {scene.DurationSeconds} giây.");
-            }
             if (mode == KlingSpeechModes.OnCameraDialogue &&
                 (scene.CharacterKeys.Count != 1 ||
                  speaker is null ||
@@ -1652,6 +1646,18 @@ internal sealed class ProjectGenerationService(
             if (mode == KlingSpeechModes.NativeVoiceOver && speaker is not null)
             {
                 throw new InvalidDataException("Cảnh voice-over không được gắn nhân vật nói trực tiếp.");
+            }
+            if (enforceKlingLongFormSpeechPolicy)
+            {
+                var violation = KlingLongFormSpeechIntentValidator.FindViolation(
+                    mode,
+                    spokenText,
+                    speaker,
+                    scene.CharacterKeys.Count);
+                if (violation is not null)
+                {
+                    throw new InvalidDataException(violation);
+                }
             }
         }
     }
@@ -1761,9 +1767,6 @@ internal sealed class ProjectGenerationService(
     private static string SafeCode(string value) => value.Length <= 100 ? value : value[..100];
 
     private static string SafeMessage(string value) => value.Length <= 4000 ? value : value[..4000];
-
-    private static bool IsSpeechWordBudgetError(string? code) =>
-        code == "kling_spoken_text_too_long";
 
     private sealed record SceneWorkItem(
         Guid SceneId,

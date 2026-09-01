@@ -42,25 +42,16 @@ public sealed class ProviderErrorPresentationTests
     }
 
     [Fact]
-    public void ContentSpeechBudgetViolation_IsReturnedAsStructuredValidationError()
+    public void InvalidSpeechIntent_IsReturnedAsStructuredValidationError()
     {
         var providerException = new ProviderHttpException(
             "openai",
-            "openai_spoken_text_too_long",
-            "Nội dung AI cho cảnh 2 có 52 từ, vượt mức 28 từ cho clip 15 giây.",
-            errors: new Dictionary<string, string[]>
-            {
-                ["sceneNumber"] = ["2"],
-                ["durationSeconds"] = ["15"],
-                ["wordCount"] = ["52"],
-                ["maximumWords"] = ["28"]
-            });
+            "openai_invalid_speech_intent",
+            "OpenAI trả về người nói, kiểu lời hoặc nội dung lời không hợp lệ.");
 
         var result = GenerationService.ToApiException(providerException);
 
         Assert.Equal(StatusCodes.Status422UnprocessableEntity, result.StatusCode);
-        Assert.Equal("openai_spoken_text_too_long", result.Code);
-        Assert.Equal("2", Assert.Single(result.Errors!["sceneNumber"]));
-        Assert.Equal("28", Assert.Single(result.Errors["maximumWords"]));
+        Assert.Equal("openai_invalid_speech_intent", result.Code);
     }
 }

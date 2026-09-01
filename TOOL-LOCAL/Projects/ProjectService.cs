@@ -68,6 +68,10 @@ public sealed class ProjectService(
                 x.ActualCost,
                 x.BudgetLimit,
                 x.WorkspaceRelativePath,
+                x.VideoProviderCode,
+                x.VideoModelCode,
+                x.CurrentScriptVersion,
+                x.CurrentStyleVersion,
                 x.CurrentScenePlanVersion,
                 x.CurrentCharacterVersion,
                 x.CreatedAtUtc,
@@ -79,6 +83,31 @@ public sealed class ProjectService(
         {
             return null;
         }
+        var currentScript = project.CurrentScriptVersion is null
+            ? null
+            : await dbContext.Scripts
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.Version == project.CurrentScriptVersion.Value)
+                .Select(x => new
+                {
+                    x.StructureType,
+                    x.Title,
+                    x.FullText,
+                    ConceptTitle = x.Concept == null ? null : x.Concept.Title,
+                    ConceptHook = x.Concept == null ? null : x.Concept.SelectedHook,
+                    ConceptAngle = x.Concept == null ? null : x.Concept.Angle,
+                    ConceptAudience = x.Concept == null ? null : x.Concept.Audience,
+                    ConceptCallToAction = x.Concept == null ? null : x.Concept.CallToAction
+                })
+                .SingleOrDefaultAsync(cancellationToken);
+        var workflowStructureType = currentScript?.StructureType;
+        var currentStyle = project.CurrentStyleVersion is null
+            ? null
+            : await dbContext.StyleProfiles
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.Version == project.CurrentStyleVersion.Value)
+                .Select(x => new { x.VisualStyleJson, x.NegativeRulesJson })
+                .SingleOrDefaultAsync(cancellationToken);
 
         var progress = await dbContext.VwProjectProgresses
             .AsNoTracking()
@@ -108,30 +137,26 @@ public sealed class ProjectService(
             .Select(x => new { x.Status, x.ProgressPercent })
             .FirstOrDefaultAsync(cancellationToken);
 
-        var finalVideo = await dbContext.FinalVideos
+        var finalVideoCandidates = await dbContext.FinalVideos
             .AsNoTracking()
-            .Where(x => x.ProjectId == projectId)
+            .Where(x =>
+                x.ProjectId == projectId &&
+                x.RenderJob.Status == "Completed" &&
+                x.MediaAsset.AssetType == "FinalVideo" &&
+                x.MediaAsset.Status == "Ready" &&
+                x.MediaAsset.DeletedAtUtc == null &&
+                x.Status != "Rejected" &&
+                x.Status != "Invalid")
             .OrderByDescending(x => x.Version)
             .Select(x => new PreviewAsset(
                 x.ExportedPath,
                 x.MediaAsset.RelativePath,
                 x.MediaAsset.DurationMs,
                 x.MediaAsset.MimeType))
-            .FirstOrDefaultAsync(cancellationToken);
-
-        finalVideo ??= await dbContext.MediaAssets
-            .AsNoTracking()
-            .Where(x => x.ProjectId == projectId &&
-                        x.AssetType == "SceneVideo" &&
-                        x.Status == "Ready" &&
-                        x.DeletedAtUtc == null)
-            .OrderByDescending(x => x.CreatedAtUtc)
-            .Select(x => new PreviewAsset(
-                null,
-                x.RelativePath,
-                x.DurationMs,
-                x.MimeType))
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
+        var finalVideoPreview = finalVideoCandidates
+            .Select(candidate => CreatePreview(project.WorkspaceRelativePath, candidate))
+            .FirstOrDefault(preview => preview is not null);
 
         var characterRows = project.CurrentCharacterVersion.HasValue
             ? await dbContext.Characters
@@ -202,6 +227,10 @@ public sealed class ProjectService(
                     Prompt = x.ScenePrompts
                         .OrderByDescending(prompt => prompt.Version)
                         .Select(prompt => prompt.FinalPrompt)
+                        .FirstOrDefault(),
+                    NegativePrompt = x.ScenePrompts
+                        .OrderByDescending(prompt => prompt.Version)
+                        .Select(prompt => prompt.NegativePrompt)
                         .FirstOrDefault(),
                     HasActiveProviderRequest = x.ProviderRequests.Any(request =>
                         request.Status != "Completed" &&
@@ -349,7 +378,6 @@ public sealed class ProjectService(
                         ? null
                         : IsMediaToolError(scene.LastErrorCode) ||
                           IsNativeAudioError(scene.LastErrorCode) ||
-                          IsSpeechWordBudgetError(scene.LastErrorCode) ||
                           IsVideoProviderRetryError(scene.LastErrorCode)
                             ? scene.LastErrorMessage
                             : "Không thể hoàn tất clip cho cảnh này. Hãy kiểm tra prompt và thử lại.",
@@ -363,9 +391,7 @@ public sealed class ProjectService(
                     speakerCharacterName,
                     ReadStringProperty(scene.RequiredCapabilitiesJson, "voiceStyle"),
                     ReadStringProperty(scene.RequiredCapabilitiesJson, "ambientAudio"),
-                    ReadStringProperty(scene.RequiredCapabilitiesJson, "soundEffects"),
-                    NativeSpeechWordBudget.MaximumWordsForDurationSeconds(
-                        checked((int)Math.Ceiling(scene.GenerationDurationMs / 1000m))));
+                    ReadStringProperty(scene.RequiredCapabilitiesJson, "soundEffects"));
             })
             .ToArray();
 
@@ -409,6 +435,50 @@ public sealed class ProjectService(
                                 ReadBooleanProperty(scene.RequiredCapabilitiesJson, "muteOutputAudio"))
             ? "SilentOutput"
             : "ProviderNative";
+        var requiresKlingVietnamese = KlingLongFormVietnameseValidator.RequiresVietnamese(
+            project.VideoProviderCode,
+            workflowStructureType);
+        var requiresVietnameseContentRegeneration = requiresKlingVietnamese &&
+            (sceneRows.Any(scene => !string.Equals(
+                 ReadStringProperty(scene.RequiredCapabilitiesJson, "effectiveGenerationLanguageCode"),
+                 KlingLongFormVietnameseValidator.EffectiveLanguageCode,
+                 StringComparison.OrdinalIgnoreCase)) ||
+             KlingLongFormVietnameseValidator.HasNonVietnameseContent(
+                new string?[]
+                {
+                    currentScript?.Title,
+                    currentScript?.FullText,
+                    currentScript?.ConceptTitle,
+                    currentScript?.ConceptHook,
+                    currentScript?.ConceptAngle,
+                    currentScript?.ConceptAudience,
+                    currentScript?.ConceptCallToAction,
+                    ReadStringProperty(currentStyle?.VisualStyleJson, "description"),
+                    ReadStringProperty(currentStyle?.NegativeRulesJson, "prompt")
+                }.Concat(sceneRows.SelectMany(scene => new string?[]
+                {
+                    scene.StoryPurpose,
+                    scene.Narration,
+                    scene.Dialogue,
+                    scene.VisualDescription,
+                    scene.Prompt,
+                    scene.NegativePrompt,
+                    ReadStringProperty(scene.RequiredCapabilitiesJson, "voiceStyle"),
+                    ReadStringProperty(scene.RequiredCapabilitiesJson, "ambientAudio"),
+                    ReadStringProperty(scene.RequiredCapabilitiesJson, "soundEffects")
+                }).Concat(characterRows.SelectMany(character => new string?[]
+                {
+                    character.Role,
+                    character.VisualIdentity,
+                    ReadStringProperty(character.ProfileJson, "gender"),
+                    ReadStringProperty(character.ProfileJson, "face"),
+                    ReadStringProperty(character.ProfileJson, "hair"),
+                    ReadStringProperty(character.ProfileJson, "skin"),
+                    ReadStringProperty(character.ProfileJson, "body"),
+                    string.Join("; ", ReadStringArrayProperty(character.ProfileJson, "immutableTraits")),
+                    FormatWardrobe(character.WardrobeJson),
+                    string.Join("; ", ParseStringList(character.ForbiddenChangesJson))
+                })))));
 
         var summary = new ProjectSummary(
             project.ProjectId,
@@ -443,13 +513,20 @@ public sealed class ProjectService(
                 null),
             characterSummaries,
             sceneSummaries,
-            CreatePreview(project.WorkspaceRelativePath, finalVideo),
+            finalVideoPreview,
             string.IsNullOrWhiteSpace(project.LastErrorMessage)
                 ? null
                 : "Dự án gặp lỗi ở bước xử lý gần nhất.",
             project.VoiceCode,
             project.VoiceSpeakingRate,
-            audioStrategy);
+            audioStrategy,
+            project.VideoProviderCode,
+            project.VideoModelCode,
+            workflowStructureType,
+            requiresKlingVietnamese
+                ? KlingLongFormVietnameseValidator.EffectiveLanguageCode
+                : project.LanguageCode,
+            requiresVietnameseContentRegeneration);
     }
 
     public async Task UpdateSceneAsync(
@@ -528,27 +605,46 @@ public sealed class ProjectService(
         {
             throw new ArgumentException("Cảnh đã được gửi sang provider video nên không thể sửa prompt hiện hành.");
         }
-        if (speechMode == KlingSpeechModes.OnCameraDialogue && ParseGuidList(scene.CharacterIdsJson).Count != 1)
+        var characterCount = ParseGuidList(scene.CharacterIdsJson).Count;
+        if (speechMode == KlingSpeechModes.OnCameraDialogue && characterCount != 1)
         {
             throw new ArgumentException("Thoại trực tiếp cần đúng một nhân vật trong cảnh.", nameof(command));
         }
-        if (!string.IsNullOrWhiteSpace(narration))
-        {
-            var wordCount = NativeSpeechWordBudget.CountWords(narration);
-            var maximumWords = NativeSpeechWordBudget.MaximumWordsForDurationSeconds(
-                checked((int)(scene.GenerationDurationMs / 1000)));
-            if (wordCount > maximumWords)
-            {
-                throw new ArgumentException(
-                    $"Lời thoại có {wordCount} từ, vượt mức {maximumWords} từ cho cảnh này.",
-                    nameof(command));
-            }
-        }
-
         var previousPrompt = scene.ScenePrompts
             .OrderByDescending(x => x.Version)
             .FirstOrDefault()
             ?? throw new ArgumentException("Cảnh chưa có prompt để cập nhật.");
+        var structureType = await dbContext.Scripts
+            .AsNoTracking()
+            .Where(x => x.ScriptId == scene.ScriptId && x.ProjectId == projectId)
+            .Select(x => x.StructureType)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (KlingLongFormSpeechIntentValidator.Applies(project.VideoProviderCode, structureType))
+        {
+            var violation = KlingLongFormSpeechIntentValidator.FindViolation(
+                speechMode,
+                narration,
+                speechMode == KlingSpeechModes.OnCameraDialogue ? "scene-character" : null,
+                characterCount);
+            if (violation is not null)
+            {
+                throw new ArgumentException(violation, nameof(command));
+            }
+        }
+        if (KlingLongFormVietnameseValidator.RequiresVietnamese(project.VideoProviderCode, structureType))
+        {
+            KlingLongFormVietnameseValidator.RequireVietnamese(
+                [
+                    narration,
+                    voiceStyle,
+                    ambientAudio,
+                    soundEffects,
+                    visualDescription,
+                    promptText,
+                    previousPrompt.NegativePrompt
+                ],
+                "Nội dung cảnh của video dài dùng Kling phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
+        }
         previousPrompt.Status = "Superseded";
         var now = DateTime.UtcNow;
         // The scene is already tracked as an existing aggregate. Adding a prompt only
@@ -730,6 +826,19 @@ public sealed class ProjectService(
         if (character.Status != "Draft")
         {
             throw new ArgumentException("Nhân vật đã khóa. Hãy sinh phiên bản content mới nếu cần thay đổi nhận diện.");
+        }
+        var structureType = character.Project.CurrentScriptVersion is null
+            ? null
+            : await dbContext.Scripts
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.Version == character.Project.CurrentScriptVersion.Value)
+                .Select(x => x.StructureType)
+                .SingleOrDefaultAsync(cancellationToken);
+        if (KlingLongFormVietnameseValidator.RequiresVietnamese(character.Project.VideoProviderCode, structureType))
+        {
+            KlingLongFormVietnameseValidator.RequireVietnamese(
+                [role, visualIdentity, wardrobe, .. immutableTraits, .. forbiddenChanges],
+                "Hồ sơ nhân vật của video dài dùng Kling phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
         }
 
         var profile = JsonNode.Parse(character.ProfileJson) as JsonObject ?? new JsonObject();
@@ -1697,9 +1806,6 @@ public sealed class ProjectService(
             "audio_effectively_silent" or
             "kling_native_audio_missing" or
             "kling_native_audio_inaudible";
-
-    private static bool IsSpeechWordBudgetError(string? code) =>
-        code == "kling_spoken_text_too_long";
 
     private static bool IsVideoProviderRetryError(string? code) =>
         code is "provider_output_download_failed" or "provider_status_check_failed";
