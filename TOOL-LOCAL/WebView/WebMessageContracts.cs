@@ -34,7 +34,10 @@ internal sealed record DashboardStateResponse(
     GenerationProviderStatusResponse ProviderStatus,
     MediaToolStatusSummary MediaTools,
     CurrentLicenseResponse? License,
-    bool GenerationRunning);
+    bool GenerationRunning,
+    DashboardFeatureFlagsResponse Features);
+
+internal sealed record DashboardFeatureFlagsResponse(bool VietsubEnabled);
 
 internal sealed record SelectProjectWebRequest(Guid ProjectId);
 

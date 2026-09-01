@@ -15,6 +15,8 @@ public sealed class DesktopOptions
 
     public DesktopUpdateOptions Update { get; init; } = new();
 
+    public DesktopFeatureOptions Features { get; init; } = new();
+
     public static DesktopOptions Load() => Load(AppContext.BaseDirectory);
 
     internal static DesktopOptions Load(string applicationDirectory)
@@ -112,4 +114,9 @@ public sealed class DesktopUpdateOptions
     public string Platform { get; init; } = "win-x64";
 
     public int CheckIntervalSeconds { get; init; } = 120;
+}
+
+public sealed class DesktopFeatureOptions
+{
+    public bool VietsubEnabled { get; init; }
 }

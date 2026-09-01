@@ -10,6 +10,12 @@ using TOOL_SHARED.Contracts.Updates;
 using System.Text.Json;
 using TOOL_LOCAL.Generation;
 using TOOL_LOCAL.Media;
+using TOOL_LOCAL.Vietsub;
+using TOOL_LOCAL.Vietsub.Storage;
+using TOOL_LOCAL.Vietsub.Api;
+using TOOL_LOCAL.Vietsub.Media;
+using TOOL_LOCAL.Vietsub.Playback;
+using TOOL_LOCAL.Vietsub.Subtitles;
 
 namespace TOOL_LOCAL;
 
@@ -31,10 +37,17 @@ public partial class Form1 : Form
     private readonly DesktopPackageUpdateService? _packageUpdateService;
     private readonly DesktopUpdateOptions? _updateOptions;
     private readonly IMediaToolPreflightService? _mediaToolPreflight;
+    private readonly DesktopFeatureOptions? _featureOptions;
+    private readonly VietsubProjectStore? _vietsubProjectStore;
+    private readonly IVietsubProjectRegistryClient? _vietsubProjectRegistryClient;
+    private readonly VietsubMediaImportService? _vietsubMediaImportService;
+    private readonly VietsubTimelineThumbnailService? _vietsubThumbnailService;
+    private readonly VietsubSubtitleService? _vietsubSubtitleService;
     private WebView2? _webView;
     private Panel? _loadingPanel;
     private Label? _loadingLabel;
     private DashboardBridge? _bridge;
+    private VietsubWebBridge? _vietsubBridge;
     private bool _refreshing;
     private bool _closing;
     private bool _checkingUpdate;
@@ -62,7 +75,13 @@ public partial class Form1 : Form
         DesktopUpdateApiClient updateApiClient,
         DesktopPackageUpdateService packageUpdateService,
         DesktopUpdateOptions updateOptions,
-        IMediaToolPreflightService mediaToolPreflight) : this()
+        IMediaToolPreflightService mediaToolPreflight,
+        DesktopFeatureOptions featureOptions,
+        VietsubProjectStore? vietsubProjectStore,
+        IVietsubProjectRegistryClient? vietsubProjectRegistryClient,
+        VietsubMediaImportService? vietsubMediaImportService,
+        VietsubTimelineThumbnailService? vietsubThumbnailService,
+        VietsubSubtitleService? vietsubSubtitleService) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -75,6 +94,12 @@ public partial class Form1 : Form
         _packageUpdateService = packageUpdateService;
         _updateOptions = updateOptions;
         _mediaToolPreflight = mediaToolPreflight;
+        _featureOptions = featureOptions;
+        _vietsubProjectStore = vietsubProjectStore;
+        _vietsubProjectRegistryClient = vietsubProjectRegistryClient;
+        _vietsubMediaImportService = vietsubMediaImportService;
+        _vietsubThumbnailService = vietsubThumbnailService;
+        _vietsubSubtitleService = vietsubSubtitleService;
         _updateTimer.Interval = Math.Max(30, updateOptions.CheckIntervalSeconds) * 1000;
         ConfigureWindow();
         Shown += InitializeDashboardOnShown;
@@ -125,7 +150,7 @@ public partial class Form1 : Form
 
     private async void InitializeDashboardOnShown(object? sender, EventArgs eventArgs)
     {
-        if (_webView is null || _sessionManager is null || _licenseManager is null || _projectService is null || _projectRenderService is null || _generationService is null || _generationClient is null || _workspaceService is null || _mediaToolPreflight is null)
+        if (_webView is null || _sessionManager is null || _licenseManager is null || _projectService is null || _projectRenderService is null || _generationService is null || _generationClient is null || _workspaceService is null || _mediaToolPreflight is null || _featureOptions is null)
         {
             return;
         }
@@ -156,8 +181,33 @@ public partial class Form1 : Form
                 _generationService,
                 _generationClient,
                 _mediaToolPreflight,
+                _featureOptions.VietsubEnabled,
                 PostJsonToWebView,
                 CloseAfterLogout);
+            _vietsubBridge = new VietsubWebBridge(
+                _featureOptions.VietsubEnabled,
+                PostJsonToWebView,
+                _vietsubProjectStore,
+                () =>
+                {
+                    var current = _sessionManager.Current;
+                    var organizationId = _generationClient.SelectedOrganizationId;
+                    return current is null || organizationId is null
+                        ? null
+                        : new VietsubUserContext(current.User.UserId, organizationId.Value);
+                },
+                _vietsubProjectRegistryClient,
+                _vietsubMediaImportService,
+                SelectVietsubMediaFile,
+                _vietsubMediaImportService is null
+                    ? null
+                    : new VietsubMediaPlaybackService(
+                        _vietsubMediaImportService,
+                        _vietsubThumbnailService),
+                _vietsubThumbnailService,
+                _vietsubSubtitleService,
+                SelectVietsubSrtFile,
+                SelectVietsubSrtDestination);
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
             _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;
             _webView.CoreWebView2.Navigate($"https://{AppHostName}/index.html");
@@ -182,6 +232,10 @@ public partial class Form1 : Form
             MediaHostName,
             workspaceRoot,
             CoreWebView2HostResourceAccessKind.DenyCors);
+        coreWebView.AddWebResourceRequestedFilter(
+            $"https://{VietsubMediaPlaybackService.HostName}/*",
+            CoreWebView2WebResourceContext.All);
+        coreWebView.WebResourceRequested += WebViewOnVietsubMediaRequested;
 
         var settings = coreWebView.Settings;
         settings.IsWebMessageEnabled = true;
@@ -230,7 +284,49 @@ public partial class Form1 : Form
             return;
         }
 
+        if (_vietsubBridge is not null &&
+            await _vietsubBridge.TryHandleAsync(message, _shutdown.Token))
+        {
+            return;
+        }
+
         await _bridge.HandleAsync(message, _shutdown.Token);
+    }
+
+    private void WebViewOnVietsubMediaRequested(
+        object? sender,
+        CoreWebView2WebResourceRequestedEventArgs eventArgs)
+    {
+        if (_webView?.CoreWebView2 is not { } coreWebView
+            || !Uri.TryCreate(eventArgs.Request.Uri, UriKind.Absolute, out var requestUri)
+            || !requestUri.Host.Equals(VietsubMediaPlaybackService.HostName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string? rangeHeader = null;
+        try
+        {
+            rangeHeader = eventArgs.Request.Headers.GetHeader("Range");
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        var response = _vietsubBridge?.TryOpenPlaybackRequest(
+            requestUri,
+            eventArgs.Request.Method,
+            rangeHeader);
+        response ??= new VietsubPlaybackResponse(
+            404,
+            "Not Found",
+            "Cache-Control: no-store\r\n",
+            Stream.Null);
+        eventArgs.Response = coreWebView.Environment.CreateWebResourceResponse(
+            response.Content,
+            response.StatusCode,
+            response.ReasonPhrase,
+            response.Headers);
     }
 
     private void WebViewOnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs eventArgs)
@@ -484,6 +580,55 @@ public partial class Form1 : Form
         _webView.CoreWebView2.PostWebMessageAsJson(json);
     }
 
+    private string? SelectVietsubMediaFile()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Chọn video nguồn cho dự án Vietsub",
+            Filter = "Video được hỗ trợ|*.mp4;*.mkv;*.mov;*.webm|Tất cả tệp|*.*",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            Multiselect = false,
+            RestoreDirectory = true
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? dialog.FileName
+            : null;
+    }
+
+    private string? SelectVietsubSrtFile()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Nhập phụ đề SRT vào dự án Vietsub",
+            Filter = "Phụ đề SubRip (*.srt)|*.srt",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            Multiselect = false,
+            RestoreDirectory = true
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? dialog.FileName
+            : null;
+    }
+
+    private string? SelectVietsubSrtDestination()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Xuất phụ đề SRT",
+            Filter = "Phụ đề SubRip (*.srt)|*.srt",
+            AddExtension = true,
+            DefaultExt = "srt",
+            OverwritePrompt = true,
+            RestoreDirectory = true,
+            FileName = "phu-de-tieng-viet.srt"
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? dialog.FileName
+            : null;
+    }
+
     private void CloseAfterLogout()
     {
         if (_closing || IsDisposed)
@@ -568,6 +713,7 @@ public partial class Form1 : Form
         _refreshTimer.Stop();
         _shutdown.Cancel();
         _bridge?.Dispose();
+        _vietsubBridge?.Dispose();
         if (_licenseManager is not null)
         {
             _licenseManager.LicenseInvalidated -= LicenseManagerOnInvalidated;

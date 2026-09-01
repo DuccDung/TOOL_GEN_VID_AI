@@ -23,6 +23,7 @@ import {
   Image as ImageIcon,
   KeyRound,
   LayoutGrid,
+  Languages,
   Library,
   Link2,
   ListVideo,
@@ -59,6 +60,8 @@ import openAiLogo from '@lobehub/icons-static-svg/icons/openai.svg';
 import pikaLogo from '@lobehub/icons-static-svg/icons/pika.svg';
 import runwayLogo from '@lobehub/icons-static-svg/icons/runway.svg';
 import { isHosted, postToHost, subscribeToHost } from './bridge';
+import { VietsubPage } from './features/vietsub/VietsubPage';
+import { useVietsubModule } from './features/vietsub/useVietsubModule';
 import type {
   AiModel,
   CharacterSummary,
@@ -86,7 +89,7 @@ import type {
   UpdateProjectAssetPayload,
 } from './types';
 
-type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'apiKeys';
+type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'apiKeys';
 type LongVideoStepId = 'setup' | 'content' | 'assets' | 'storyboard' | 'export';
 type LongVideoStep = {
   id: LongVideoStepId;
@@ -139,6 +142,10 @@ const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
     title: 'Dự án của tôi',
     subtitle: 'Quản lý và tiếp tục các dự án video đã tạo.'
   },
+  vietsub: {
+    title: 'Dịch phụ đề',
+    subtitle: 'Tạo phụ đề tiếng Việt, giọng đọc và video hoàn chỉnh trong một workspace riêng.'
+  },
   apiKeys: {
     title: 'API AI tổ chức',
     subtitle: 'Trạng thái OpenAI, provider video và ngân sách do tổ chức quản lý tập trung.'
@@ -175,14 +182,23 @@ const emptyState: DashboardState = {
     ffprobeVersion: null,
     checkedAtUtc: ''
   },
-  generationRunning: false
+  generationRunning: false,
+  features: {
+    vietsubEnabled: false
+  }
 };
 
-const primaryMenu: Array<{ label: string; icon: LucideIcon; page?: Page }> = [
+const primaryMenu: Array<{
+  label: string;
+  icon: LucideIcon;
+  page?: Page;
+  feature?: keyof DashboardState['features'];
+}> = [
   { label: 'Dashboard', icon: Home, page: 'create' },
   { label: 'Dự án của tôi', icon: FolderOpen, page: 'projects' },
   { label: 'Tạo Video Dài', icon: Film, page: 'longVideo' },
   { label: 'Tạo Video Ngắn', icon: Play, page: 'shortVideo' },
+  { label: 'Dịch phụ đề', icon: Languages, page: 'vietsub', feature: 'vietsubEnabled' },
   { label: 'Nhân vật AI', icon: Users },
   { label: 'Thư viện video', icon: Library },
   { label: 'Lịch sử render', icon: Clock3 },
@@ -290,6 +306,7 @@ function App() {
   const [sceneSaveState, setSceneSaveState] = useState<SceneSaveState | null>(null);
   const [shortVideoProjectId, setShortVideoProjectId] = useState<string | null>(null);
   const pendingSceneSaveRef = useRef<PendingSceneSave | null>(null);
+  const vietsub = useVietsubModule(dashboard.features.vietsubEnabled);
 
   const notify = (message: string, error = false) => {
     const id = Date.now();
@@ -301,7 +318,10 @@ function App() {
     const unsubscribe = subscribeToHost((message: HostMessage) => {
       if (message.type === 'dashboard.state' && message.payload) {
         const nextDashboard = message.payload as DashboardState;
-        setDashboard(nextDashboard);
+        setDashboard({
+          ...nextDashboard,
+          features: nextDashboard.features ?? { vietsubEnabled: false }
+        });
         if (!nextDashboard.generationRunning) setCharacterImageBusyId(null);
         setAssetConfirmBusyId(null);
         setBusy(false);
@@ -426,6 +446,12 @@ function App() {
 
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    if (page === 'vietsub' && !dashboard.features.vietsubEnabled) {
+      setPage('create');
+    }
+  }, [dashboard.features.vietsubEnabled, page]);
 
   const handleNavigation = (label: string, target?: Page) => {
     setSidebarOpen(false);
@@ -854,6 +880,9 @@ function App() {
   };
 
   const generationBusy = busy || dashboard.generationRunning;
+  const pageBusy = page === 'vietsub'
+    ? vietsub.state.loading || vietsub.state.busy
+    : generationBusy;
   const checkMediaTools = () => {
     if (generationBusy) return;
     setBusy(true);
@@ -882,12 +911,16 @@ function App() {
         <Header
           dashboard={dashboard}
           page={page}
-          busy={generationBusy}
+          busy={pageBusy}
           onMenu={() => setSidebarOpen(true)}
           onCreate={() => setPage('longVideo')}
           onRefresh={() => {
-            setBusy(true);
-            postToHost('dashboard.refresh');
+            if (page === 'vietsub') {
+              vietsub.refresh();
+            } else {
+              setBusy(true);
+              postToHost('dashboard.refresh');
+            }
           }}
           onSelectProject={selectProject}
           onSelectOrganization={(organizationId) => {
@@ -898,7 +931,26 @@ function App() {
           onUnavailable={notify}
         />
 
-        {page === 'projects' ? (
+        {page === 'vietsub' ? (
+          <VietsubPage
+            state={vietsub.state}
+            onRefresh={vietsub.refresh}
+            onCreateProject={vietsub.createProject}
+            onOpenProject={vietsub.openProject}
+            onRenameProject={vietsub.renameProject}
+            onCloseProject={vietsub.closeProject}
+            onImportMedia={vietsub.importMedia}
+            onImportSrt={vietsub.importSrt}
+            onActivateSubtitleTrack={vietsub.activateSubtitleTrack}
+            onLoadSubtitlePage={vietsub.loadSubtitlePage}
+            onUpdateSubtitleCue={vietsub.updateSubtitleCue}
+            onSplitSubtitleCue={vietsub.splitSubtitleCue}
+            onAlignSubtitleCue={vietsub.alignSubtitleCue}
+            onDuplicateSubtitleCue={vietsub.duplicateSubtitleCue}
+            onDeleteSubtitleCue={vietsub.deleteSubtitleCue}
+            onExportSrt={vietsub.exportSrt}
+          />
+        ) : page === 'projects' ? (
           <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={() => setPage('longVideo')} />
         ) : page === 'shortVideo' ? (
           <ShortVideoPage
@@ -1332,15 +1384,17 @@ function Sidebar({
         </button>
 
         <nav className="sidebar-nav">
-          {primaryMenu.map(({ label, icon: Icon, page: target }) => (
-            <button
-              className={target === page ? 'active' : ''}
-              key={label}
-              onClick={() => onNavigate(label, target)}
-            >
-              <Icon size={18} /><span>{label}</span>
-            </button>
-          ))}
+          {primaryMenu
+            .filter(({ feature }) => !feature || dashboard.features[feature])
+            .map(({ label, icon: Icon, page: target }) => (
+              <button
+                className={target === page ? 'active' : ''}
+                key={label}
+                onClick={() => onNavigate(label, target)}
+              >
+                <Icon size={18} /><span>{label}</span>
+              </button>
+            ))}
           <div className="nav-divider" />
           {secondaryMenu.map(({ label, icon: Icon, page: target }) => (
             <button className={target === page ? 'active' : ''} key={label} onClick={() => onNavigate(label, target)}>
@@ -1418,7 +1472,7 @@ function Header({
           <Plus size={17} /> <span>Tạo video mới</span>
         </button>
       )}
-      {page !== 'apiKeys' && page !== 'shortVideo' && dashboard.projects.length > 0 && (
+      {page !== 'apiKeys' && page !== 'shortVideo' && page !== 'vietsub' && dashboard.projects.length > 0 && (
         <label className="project-picker">
           <span>Dự án</span>
           <select

@@ -7,6 +7,10 @@ using TOOL_LOCAL.Updates;
 using TOOL_LOCAL.Generation;
 using TOOL_LOCAL.Media;
 using TOOL_LOCAL.Providers;
+using TOOL_LOCAL.Vietsub.Storage;
+using TOOL_LOCAL.Vietsub.Api;
+using TOOL_LOCAL.Vietsub.Media;
+using TOOL_LOCAL.Vietsub.Subtitles;
 
 namespace TOOL_LOCAL;
 
@@ -128,6 +132,32 @@ internal static class Program
                     sceneVideoTrimmer);
                 var updateApiClient = new DesktopUpdateApiClient(updateHttpClient, sessionManager, options.Update);
                 var packageUpdateService = new DesktopPackageUpdateService(updateHttpClient);
+                VietsubProjectStore? vietsubProjectStore = null;
+                IVietsubProjectRegistryClient? vietsubProjectRegistryClient = null;
+                VietsubMediaImportService? vietsubMediaImportService = null;
+                VietsubTimelineThumbnailService? vietsubThumbnailService = null;
+                VietsubSubtitleService? vietsubSubtitleService = null;
+                if (options.Features.VietsubEnabled)
+                {
+                    var vietsubPaths = new VietsubAppPaths(options.Storage.WorkspaceRoot);
+                    var vietsubSubtitleStore = new VietsubSubtitleStore(vietsubPaths);
+                    vietsubProjectStore = new VietsubProjectStore(vietsubPaths, vietsubSubtitleStore);
+                    vietsubSubtitleService = new VietsubSubtitleService(vietsubPaths, vietsubSubtitleStore);
+                    vietsubProjectRegistryClient = new VietsubProjectRegistryClient(
+                        generationHttpClient,
+                        sessionManager,
+                        licenseManager);
+                    vietsubMediaImportService = new VietsubMediaImportService(
+                        vietsubPaths,
+                        mediaToolPreflight,
+                        mediaProbe);
+                    vietsubThumbnailService = new VietsubTimelineThumbnailService(
+                        vietsubPaths,
+                        vietsubMediaImportService,
+                        mediaToolPreflight,
+                        mediaToolPaths.FfmpegPath,
+                        mediaProcessRunner);
+                }
                 using var mainForm = new Form1(
                     sessionManager,
                     licenseManager,
@@ -139,7 +169,13 @@ internal static class Program
                     updateApiClient,
                     packageUpdateService,
                     options.Update,
-                    mediaToolPreflight);
+                    mediaToolPreflight,
+                    options.Features,
+                    vietsubProjectStore,
+                    vietsubProjectRegistryClient,
+                    vietsubMediaImportService,
+                    vietsubThumbnailService,
+                    vietsubSubtitleService);
                 try
                 {
                     Application.Run(mainForm);

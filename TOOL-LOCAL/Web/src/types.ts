@@ -218,6 +218,11 @@ export type DashboardState = {
   mediaTools: MediaToolStatus;
   license?: CurrentLicense | null;
   generationRunning: boolean;
+  features: DashboardFeatures;
+};
+
+export type DashboardFeatures = {
+  vietsubEnabled: boolean;
 };
 
 export type CurrentLicense = {

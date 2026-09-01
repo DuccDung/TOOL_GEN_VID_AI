@@ -20,6 +20,7 @@ internal sealed class DashboardBridge : IDisposable
     private readonly IProjectGenerationService _generationService;
     private readonly IGenerationClient _generationClient;
     private readonly IMediaToolPreflightService _mediaToolPreflight;
+    private readonly bool _vietsubEnabled;
     private readonly Action<string> _postJson;
     private readonly Action _closeApplication;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
@@ -40,6 +41,7 @@ internal sealed class DashboardBridge : IDisposable
         IProjectGenerationService generationService,
         IGenerationClient generationClient,
         IMediaToolPreflightService mediaToolPreflight,
+        bool vietsubEnabled,
         Action<string> postJson,
         Action closeApplication)
     {
@@ -50,6 +52,7 @@ internal sealed class DashboardBridge : IDisposable
         _generationService = generationService;
         _generationClient = generationClient;
         _mediaToolPreflight = mediaToolPreflight;
+        _vietsubEnabled = vietsubEnabled;
         _postJson = postJson;
         _closeApplication = closeApplication;
     }
@@ -1006,7 +1009,8 @@ internal sealed class DashboardBridge : IDisposable
                     providerStatus,
                     mediaToolStatus,
                     _licenseManager.Current,
-                    _generationRunning)));
+                    _generationRunning,
+                    new DashboardFeatureFlagsResponse(_vietsubEnabled))));
         }
         finally
         {

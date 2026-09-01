@@ -19,6 +19,8 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
 using TOOL_SHARED.Contracts.Common;
+using TOOL_SERVER.Vietsub;
+using TOOL_SERVER.Vietsub.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -102,6 +104,8 @@ builder.Services.AddDbContext<AiGovernanceDbContext>(options =>
 builder.Services.AddDbContext<ProviderAdminDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddDbContext<VideoFactoryDbContext>(options =>
+    options.UseSqlServer(connectionString));
+builder.Services.AddDbContext<VietsubDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddDbContext<DataProtectionKeyDbContext>(options =>
     options.UseSqlServer(connectionString));
@@ -205,6 +209,7 @@ builder.Services.AddScoped<IOrganizationProviderCredentialTester, OrganizationPr
 builder.Services.AddScoped<IAiPricingAdminService, AiPricingAdminService>();
 builder.Services.AddScoped<IAiBudgetService, AiBudgetService>();
 builder.Services.AddScoped<IGenerationAccessService, GenerationAccessService>();
+builder.Services.AddScoped<IVietsubProjectService, VietsubProjectService>();
 builder.Services.AddScoped<TOOL_SERVER.Projects.IProjectAssetService, TOOL_SERVER.Projects.ProjectAssetService>();
 builder.Services.AddScoped<IProviderCredentialProtector, ProviderCredentialProtector>();
 builder.Services.AddScoped<IProviderRuntimeResolver, ProviderRuntimeResolver>();
