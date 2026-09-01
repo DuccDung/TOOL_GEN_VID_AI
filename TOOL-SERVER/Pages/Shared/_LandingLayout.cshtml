@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f4f1ea" />
+    <meta name="description" content="@(ViewData["Description"] ?? "VideoMaker giúp bạn đi từ ý tưởng đến video hoàn chỉnh trong một workspace dễ nhìn và dễ kiểm soát.")" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="vi_VN" />
+    <meta property="og:title" content="@(ViewData["Title"] ?? "VideoMaker")" />
+    <meta property="og:description" content="@(ViewData["Description"] ?? "Lên ý tưởng, duyệt từng cảnh và hoàn thiện video theo cách của bạn.")" />
+    <title>@ViewData["Title"]</title>
+    <link rel="icon" href="~/favicon.ico" />
+    <link rel="stylesheet" href="~/css/landing.css" asp-append-version="true" />
+</head>
+<body>
+    <a class="skip-link" href="#main-content">Bỏ qua điều hướng</a>
+    @RenderBody()
+    <script src="~/js/landing.js" asp-append-version="true" defer></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>
