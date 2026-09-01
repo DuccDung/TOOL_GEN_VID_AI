@@ -73,6 +73,27 @@ internal static class ProviderCatalogBootstrapper
                     "Video",
                     "{\"endpoint\":\"contents/generations/tasks\",\"durations\":[4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30],\"minDurationSeconds\":4,\"maxDurationSeconds\":30,\"resolutions\":[\"720p\"],\"aspectRatios\":[\"16:9\",\"9:16\",\"1:1\"],\"framesPerSecond\":24,\"nativeAudio\":true,\"billingUsageType\":\"OutputToken\",\"billingUnit\":\"MillionTokens\",\"referenceImage\":true}",
                     false)
+            ]),
+        new(
+            ProviderCodes.Fal,
+            "fal",
+            "https://queue.fal.run/",
+            "{\"videoGeneration\":true,\"asyncQueue\":true,\"nativeAudio\":true,\"defaultEndpointId\":\"fal-ai/veo3.1/image-to-video\"}",
+            false,
+            [
+                new(
+                    FalVeoPolicy.StandardEndpointId,
+                    "Veo 3.1 Standard · Image to Video",
+                    "Video",
+                    "{\"endpointId\":\"fal-ai/veo3.1/image-to-video\",\"tier\":\"standard\",\"durations\":[4,6,8],\"resolutions\":[\"720p\"],\"aspectRatios\":[\"16:9\",\"9:16\"],\"framesPerSecond\":24,\"nativeAudio\":true,\"referenceImage\":true,\"imageToVideoOnly\":true,\"maximumReferenceImageBytes\":8388608,\"billingUsageType\":\"VideoSecond\",\"billingUnit\":\"Second\",\"autoFix\":false}",
+                    false,
+                    true),
+                new(
+                    FalVeoPolicy.FastEndpointId,
+                    "Veo 3.1 Fast · Image to Video",
+                    "Video",
+                    "{\"endpointId\":\"fal-ai/veo3.1/fast/image-to-video\",\"tier\":\"fast\",\"durations\":[4,6,8],\"resolutions\":[\"720p\"],\"aspectRatios\":[\"16:9\",\"9:16\"],\"framesPerSecond\":24,\"nativeAudio\":true,\"referenceImage\":true,\"imageToVideoOnly\":true,\"maximumReferenceImageBytes\":8388608,\"billingUsageType\":\"VideoSecond\",\"billingUnit\":\"Second\",\"autoFix\":false}",
+                    false)
             ])
     ];
 
@@ -177,7 +198,8 @@ internal static class ProviderCatalogBootstrapper
 
             foreach (var modelSeed in seed.Models)
             {
-                var isDefault = modelSeed.EnabledByDefault && defaultModalities.Add(modelSeed.Modality);
+                var isDefault = modelSeed.DefaultWhenDisabled ||
+                                modelSeed.EnabledByDefault && defaultModalities.Add(modelSeed.Modality);
                 provider.Models.Add(new AiProviderModel
                 {
                     ProviderModelId = Guid.NewGuid(),
@@ -216,7 +238,8 @@ internal static class ProviderCatalogBootstrapper
                 string.Equals(x.Modality, modelSeed.Modality, StringComparison.OrdinalIgnoreCase));
             if (model is null)
             {
-                var isDefault = modelSeed.EnabledByDefault && defaultModalities.Add(modelSeed.Modality);
+                var isDefault = modelSeed.DefaultWhenDisabled ||
+                                modelSeed.EnabledByDefault && defaultModalities.Add(modelSeed.Modality);
                 dbContext.ProviderModels.Add(new AiProviderModel
                 {
                     ProviderModelId = Guid.NewGuid(),
@@ -335,5 +358,6 @@ internal static class ProviderCatalogBootstrapper
         string DisplayName,
         string Modality,
         string CapabilitiesJson,
-        bool EnabledByDefault);
+        bool EnabledByDefault,
+        bool DefaultWhenDisabled = false);
 }

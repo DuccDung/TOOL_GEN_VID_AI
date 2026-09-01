@@ -544,16 +544,21 @@ function App() {
     const project = dashboard.selectedProject;
     if (!project || dashboard.generationRunning || sceneIds.length === 0) return;
     if (project.requiresVietnameseContentRegeneration) {
-      notify('Dự án Kling này còn nội dung tiếng Anh. Hãy sinh lại nội dung tiếng Việt trước khi tạo clip.', true);
+      notify('Dự án Video Dài này còn nội dung tiếng Anh. Hãy sinh lại nội dung tiếng Việt trước khi tạo clip.', true);
       return;
     }
     if (!dashboard.mediaTools.ready) {
       notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
       return;
     }
+    const longFormProviderCode = project.videoProviderCode?.toLowerCase();
+    if (longFormProviderCode === 'fal' && !['16:9', '9:16'].includes(project.project.aspectRatio)) {
+      notify('Veo chỉ hỗ trợ dự án Video Dài tỷ lệ 16:9 hoặc 9:16. Hãy tạo dự án với tỷ lệ phù hợp.', true);
+      return;
+    }
     const selectedSceneIds = new Set(sceneIds);
     const enforceKlingLongFormSpeechPolicy = project.workflowStructureType === 'OpenAiStructuredPlan' &&
-      project.videoProviderCode?.toLowerCase() === 'kling';
+      ['kling', 'fal'].includes(longFormProviderCode ?? '');
     const selectedScenes = project.scenes.filter((scene) => selectedSceneIds.has(scene.sceneId));
     if (selectedScenes.length !== selectedSceneIds.size) {
       notify('Danh sách cảnh đã thay đổi. Hãy chọn lại cảnh cần tạo.', true);
@@ -561,6 +566,22 @@ function App() {
     }
     const resumableScenes = selectedScenes.filter(sceneNeedsLocalCompletion);
     const newRequestScenes = selectedScenes.filter((scene) => !sceneNeedsLocalCompletion(scene));
+    if (longFormProviderCode === 'fal') {
+      const approvedCharacterFrameIds = new Set(project.characters
+        .filter((character) => character.status === 'Approved' &&
+          character.primaryReference?.isPrimary === true &&
+          character.primaryReference.approvalStatus === 'Approved')
+        .map((character) => character.characterId));
+      const scenesWithoutApprovedCharacterFrame = newRequestScenes.filter((scene) =>
+        scene.characters.length !== 1 || !approvedCharacterFrameIds.has(scene.characters[0].characterId));
+      if (scenesWithoutApprovedCharacterFrame.length > 0) {
+        notify(
+          `Cảnh ${scenesWithoutApprovedCharacterFrame.map((scene) => scene.sequenceNumber).join(', ')} chưa có first-frame nhân vật đã duyệt. Bản Veo đầu tiên chưa tự tạo first-frame cho B-roll.`,
+          true
+        );
+        return;
+      }
+    }
     const blockedAssetScenes = newRequestScenes.filter(
       (scene) => !areSceneAssetsReady(scene.sceneId, dashboard.assetLibrary ?? null)
     );
@@ -2107,15 +2128,15 @@ function LongVideoContentSummary({
     <section className="card long-video-content-summary">
       <div className="long-video-summary-heading"><div><span>NỘI DUNG HIỆN HÀNH</span><h3>{project.project.topic}</h3></div><strong className={project.totalScenes > 0 ? 'ready' : 'draft'}>{project.totalScenes > 0 ? 'Đã có scene plan' : 'Chờ sinh nội dung'}</strong></div>
       <div className="long-video-summary-grid">
-        <div><small>Ngôn ngữ nội dung</small><strong>{project.effectiveGenerationLanguageCode?.toLowerCase().startsWith('vi') && project.videoProviderCode?.toLowerCase() === 'kling'
-          ? 'Tiếng Việt (bắt buộc cho Video Dài dùng Kling)'
+        <div><small>Ngôn ngữ nội dung</small><strong>{project.effectiveGenerationLanguageCode?.toLowerCase().startsWith('vi') && ['kling', 'fal'].includes(project.videoProviderCode?.toLowerCase() ?? '')
+          ? `Tiếng Việt (bắt buộc cho Video Dài dùng ${project.videoProviderCode?.toLowerCase() === 'fal' ? 'Veo' : 'Kling'})`
           : formatLanguage(project.effectiveGenerationLanguageCode ?? project.languageCode)}</strong></div>
         <div><small>Thời lượng mục tiêu</small><strong>{formatDuration(project.project.targetDurationSeconds)}</strong></div>
         <div><small>Số cảnh</small><strong>{project.totalScenes}</strong></div>
         <div><small>OpenAI model</small><strong>{providerStatus.openAiModel ?? 'Chưa cấu hình'}</strong></div>
       </div>
       {project.requiresVietnameseContentRegeneration && (
-        <p className="long-video-language-warning">Nội dung hiện tại còn tiếng Anh và sẽ bị chặn trước khi gọi Kling. Hãy dùng hành động “Sinh lại nội dung tiếng Việt”.</p>
+        <p className="long-video-language-warning">Nội dung hiện tại còn tiếng Anh và sẽ bị chặn trước khi gọi provider video. Hãy dùng hành động “Sinh lại nội dung tiếng Việt”.</p>
       )}
     </section>
   );
@@ -2207,6 +2228,9 @@ function LongVideoContentScenes({ scenes }: { scenes: SceneSummary[] }) {
                   <div className="content-scene-meta">
                     <span><Clock3 size={13} /> Nội dung {durationSeconds}s</span>
                     <span><Film size={13} /> Provider {generationDurationSeconds}s</span>
+                    {generationDurationSeconds > durationSeconds && (
+                      <span><Clock3 size={13} /> Cắt đuôi {generationDurationSeconds - durationSeconds}s trước khi duyệt</span>
+                    )}
                     <span><Volume2 size={13} /> {speechModeLabel(scene.speechMode)}</span>
                   </div>
 
@@ -2331,7 +2355,7 @@ function GenerationActions({
         <span className="generation-eyebrow">API GENERATION</span>
         <h2>{requiresVietnamese ? 'Sinh lại nội dung tiếng Việt' : 'Tạo nội dung và prompt'}</h2>
         <p>{requiresVietnamese
-          ? 'Dự án video dài dùng Kling còn dữ liệu tiếng Anh. OpenAI cần tạo một version tiếng Việt mới trước khi sinh clip.'
+          ? 'Dự án video dài dùng provider Native Audio còn dữ liệu tiếng Anh. OpenAI cần tạo một version tiếng Việt mới trước khi sinh clip.'
           : 'OpenAI sẽ viết hook, kịch bản, chia cảnh và tạo prompt có cấu trúc.'}</p>
       </div>
       <div className="generation-provider-state">
@@ -2863,7 +2887,7 @@ function StoryboardSection({
   );
   const selectableKey = selectableScenes.map((scene) => `${scene.sceneId}:${scene.status}`).join('|');
   const enforceKlingLongFormSpeechPolicy = project?.workflowStructureType === 'OpenAiStructuredPlan' &&
-    project?.videoProviderCode?.toLowerCase() === 'kling';
+    ['kling', 'fal'].includes(project?.videoProviderCode?.toLowerCase() ?? '');
 
   useEffect(() => {
     if (!project) {

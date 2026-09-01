@@ -13,6 +13,7 @@
     usage: null,
     providers: null,
     videoPolicy: null,
+    longFormVideoPolicy: null,
     audit: null,
     pricing: null,
     memberSearch: '',
@@ -230,6 +231,7 @@
     organizationState.usage = null;
     organizationState.providers = null;
     organizationState.videoPolicy = null;
+    organizationState.longFormVideoPolicy = null;
     organizationState.audit = null;
     byId('organizationDirectory').classList.add('hidden');
     byId('organizationDetail').classList.remove('hidden');
@@ -244,6 +246,7 @@
     organizationState.usage = null;
     organizationState.providers = null;
     organizationState.videoPolicy = null;
+    organizationState.longFormVideoPolicy = null;
     organizationState.audit = null;
     byId('organizationDetail').classList.add('hidden');
     byId('organizationDirectory').classList.remove('hidden');
@@ -374,19 +377,21 @@
 
   async function loadProviders(force = false) {
     const root = byId('organizationTabContent');
-    if (organizationState.providers && organizationState.pricing && organizationState.videoPolicy !== undefined && !force) return renderProviders();
+    if (organizationState.providers && organizationState.pricing && organizationState.videoPolicy !== undefined && organizationState.longFormVideoPolicy !== undefined && !force) return renderProviders();
     root.innerHTML = loading('Đang tải trạng thái credential và rate...');
     const version = organizationState.version;
     try {
-      const [providers, pricing, videoPolicy] = await Promise.all([
+      const [providers, pricing, videoPolicy, longFormVideoPolicy] = await Promise.all([
         request('providers', `/api/organizations/${organizationState.selectedOrganizationId}/providers`),
         organizationState.pricing ? Promise.resolve(organizationState.pricing) : request('pricing-detail', '/api/admin/ai-pricing'),
-        request('video-policy', `/api/organizations/${organizationState.selectedOrganizationId}/video-policy`)
+        request('video-policy', `/api/organizations/${organizationState.selectedOrganizationId}/video-policy`),
+        request('long-form-video-policy', `/api/organizations/${organizationState.selectedOrganizationId}/video-policy?scope=LongForm`)
       ]);
       if (version !== organizationState.version) return;
       organizationState.providers = providers;
       organizationState.pricing = pricing;
       organizationState.videoPolicy = videoPolicy;
+      organizationState.longFormVideoPolicy = longFormVideoPolicy;
       renderProviders();
     } catch (error) {
       if (error.name !== 'AbortError') root.innerHTML = errorState(error, 'providers');
@@ -412,13 +417,29 @@
     return rate?.usageType === 'VideoSecond' && metadata.resolution?.toLowerCase() === '720p' && metadata.nativeAudio === true;
   }
 
+  function isFalVeoRate(rate, model) {
+    const metadata = rateMetadata(rate);
+    return rate?.usageType === 'VideoSecond' &&
+      metadata.resolution?.toLowerCase() === '720p' &&
+      metadata.nativeAudio === true &&
+      metadata.endpointId === model?.modelCode;
+  }
+
   function configuredRates(providerCode, model) {
     const rates = activeRates(model);
-    return providerCode === 'kling' ? rates.filter(isKlingNativeAudioRate) : rates;
+    return providerCode === 'kling'
+      ? rates.filter(isKlingNativeAudioRate)
+      : providerCode === 'fal'
+        ? rates.filter(rate => isFalVeoRate(rate, model))
+        : rates;
   }
 
   function rateVariantLabel(providerCode, rate) {
-    return providerCode === 'kling' && isKlingNativeAudioRate(rate) ? ' · 720p · Native Audio' : '';
+    return providerCode === 'kling' && isKlingNativeAudioRate(rate)
+      ? ' · 720p · Native Audio'
+      : providerCode === 'fal'
+        ? ' · 720p · Native Audio · 4/6/8s'
+        : '';
   }
 
   function providerReadiness(catalogProvider, providerStatus) {
@@ -429,6 +450,8 @@
         ? ['VideoSecond']
         : catalogProvider.providerCode === 'byteplus'
           ? ['OutputToken']
+          : catalogProvider.providerCode === 'fal'
+            ? ['VideoSecond']
           : [];
     const configured = new Set(configuredRates(catalogProvider.providerCode, model).map(rate => rate.usageType));
     const missing = required.filter(value => !configured.has(value));
@@ -447,12 +470,14 @@
   function renderProviders() {
     const root = byId('organizationTabContent');
     const providerStatuses = new Map((organizationState.providers || []).map(item => [item.providerCode, item]));
-    const catalog = (organizationState.pricing || []).filter(item => ['openai', 'kling', 'byteplus'].includes(item.providerCode));
-    const currentPolicy = organizationState.videoPolicy;
-    const videoModels = catalog.flatMap(provider => provider.isEnabled
+    const catalog = (organizationState.pricing || []).filter(item => ['openai', 'kling', 'byteplus', 'fal'].includes(item.providerCode));
+    const allVideoModels = catalog.flatMap(provider => provider.isEnabled
       ? (provider.models || []).filter(model => model.isEnabled && model.modality === 'Video').map(model => ({ provider, model }))
       : []);
-    const policyPanel = `<section class="provider-admin-card video-policy-card"><div class="provider-admin-heading"><span class="provider-logo">V</span><div><h3>Policy tạo video</h3><p>Desktop chỉ đọc policy này và không được chọn model.</p></div>${currentPolicy?.isActive ? statusPill(`v${currentPolicy.policyVersion}`, 'ready') : statusPill('Chưa cấu hình', 'blocked')}</div>${currentPolicy ? `<dl><div><dt>Provider</dt><dd>${escapeHtml(currentPolicy.providerName)}</dd></div><div><dt>Model</dt><dd>${escapeHtml(currentPolicy.modelCode)}</dd></div><div><dt>Biến thể</dt><dd>${escapeHtml(currentPolicy.resolution)} · ${currentPolicy.nativeAudio ? 'Native Audio' : 'Không âm thanh native'}</dd></div><div><dt>Cập nhật</dt><dd>${escapeHtml(formatDate(currentPolicy.updatedAtUtc))}</dd></div></dl>` : '<p class="provider-ready-note">Chọn một model video đã được Global Admin bật và đã có credential Active.</p>'}${capabilities().credentials ? `<form id="organizationVideoPolicyForm" class="inline-budget-form"><label>Model video do server sử dụng<select id="organizationVideoPolicyModel" required ${videoModels.length ? '' : 'disabled'}><option value="">Chọn provider / model</option>${videoModels.map(({ provider, model }) => `<option value="${escapeHtml(model.providerModelId)}" ${currentPolicy?.providerModelId === model.providerModelId ? 'selected' : ''}>${escapeHtml(provider.displayName)} · ${escapeHtml(model.displayName)}</option>`).join('')}</select></label><button type="submit" class="primary-button" ${videoModels.length ? '' : 'disabled'}>Lưu policy</button><small>Biến thể cố định: 720p · Native Audio. Dự án đã có snapshot sẽ không tự đổi model.</small><p class="form-message"></p></form>` : '<p class="form-hint">Chỉ Owner hoặc Organization Admin được đổi policy video.</p>'}</section>`;
+    const renderPolicyPanel = (scope, title, currentPolicy, models) =>
+      `<section class="provider-admin-card video-policy-card"><div class="provider-admin-heading"><span class="provider-logo">V</span><div><h3>${escapeHtml(title)}</h3><p>${scope === 'LongForm' ? 'Chỉ áp dụng workflow Video dài; Fal/Veo không được dùng cho Video ngắn.' : 'Policy mặc định cho Video ngắn và các workflow không phải Video dài.'}</p></div>${currentPolicy?.isActive ? statusPill(`v${currentPolicy.policyVersion}`, 'ready') : statusPill('Chưa cấu hình', 'blocked')}</div>${currentPolicy ? `<dl><div><dt>Provider</dt><dd>${escapeHtml(currentPolicy.providerName)}</dd></div><div><dt>Model</dt><dd>${escapeHtml(currentPolicy.modelCode)}</dd></div><div><dt>Biến thể</dt><dd>${escapeHtml(currentPolicy.resolution)} · ${currentPolicy.nativeAudio ? 'Native Audio' : 'Không âm thanh native'}</dd></div><div><dt>Phạm vi</dt><dd>${escapeHtml(currentPolicy.scope || scope)}</dd></div><div><dt>Cập nhật</dt><dd>${escapeHtml(formatDate(currentPolicy.updatedAtUtc))}</dd></div></dl>` : '<p class="provider-ready-note">Chọn một model video đã được Global Admin bật và đã có credential Active.</p>'}${capabilities().credentials ? `<form class="inline-budget-form organization-video-policy-form" data-policy-scope="${scope}"><label>Model video do server sử dụng<select class="organization-video-policy-model" required ${models.length ? '' : 'disabled'}><option value="">Chọn provider / model</option>${models.map(({ provider, model }) => `<option value="${escapeHtml(model.providerModelId)}" ${currentPolicy?.providerModelId === model.providerModelId ? 'selected' : ''}>${escapeHtml(provider.displayName)} · ${escapeHtml(model.displayName)}</option>`).join('')}</select></label><button type="submit" class="primary-button" ${models.length ? '' : 'disabled'}>Lưu policy</button><small>${scope === 'LongForm' ? 'Veo: 720p · Native Audio · 4/6/8 giây · 16:9/9:16. ' : ''}Dự án đã snapshot sẽ không tự đổi model.</small><p class="form-message"></p></form>` : '<p class="form-hint">Chỉ Owner hoặc Organization Admin được đổi policy video.</p>'}</section>`;
+    const defaultModels = allVideoModels.filter(({ provider }) => provider.providerCode !== 'fal');
+    const policyPanel = `<div class="provider-admin-grid">${renderPolicyPanel('Default', 'Policy mặc định / Video ngắn', organizationState.videoPolicy, defaultModels)}${renderPolicyPanel('LongForm', 'Policy Video dài', organizationState.longFormVideoPolicy, allVideoModels)}</div>`;
     root.innerHTML = `${policyPanel}<div class="provider-admin-grid">${catalog.map(provider => {
       const status = providerStatuses.get(provider.providerCode);
       const readiness = providerReadiness(provider, status);
@@ -463,21 +488,24 @@
           : `<button type="button" class="ghost-button" data-provider-unavailable="${escapeHtml(provider.providerCode)}" data-provider-name="${escapeHtml(provider.displayName)}">Xem cách kích hoạt</button>`;
       return `<article class="provider-admin-card"><div class="provider-admin-heading"><span class="provider-logo">${escapeHtml(provider.displayName.slice(0, 1).toUpperCase())}</span><div><h3>${escapeHtml(provider.displayName)}</h3><p>${escapeHtml(readiness.model?.modelCode || 'Chưa có model')}</p></div>${readiness.ready ? statusPill('Sẵn sàng', 'ready') : statusPill('Chưa sẵn sàng', 'blocked')}</div><dl><div><dt>Credential</dt><dd>${status?.configured ? `${escapeHtml(status.secretHint || '••••')} · v${escapeHtml(status.credentialVersion)}` : 'Chưa cấu hình'}</dd></div><div><dt>Trạng thái</dt><dd>${provider.isEnabled ? escapeHtml(status?.credentialStatus || 'NotConfigured') : 'ProviderInactive'}</dd></div><div><dt>Cập nhật</dt><dd>${escapeHtml(formatDate(status?.updatedAtUtc))}</dd></div><div><dt>Rate bắt buộc</dt><dd>${escapeHtml(readiness.required.join(', ') || 'Không xác định')}</dd></div></dl>${readiness.reasons.length ? `<ul class="provider-blockers">${readiness.reasons.map(reason => `<li><span>${escapeHtml(readinessMessages[reason] || reason)}${reason === 'pricing_not_configured' ? ` Thiếu: ${escapeHtml(readiness.missing.join(', '))}.` : ''}</span>${renderReadinessAction(reason, provider.providerCode)}</li>`).join('')}</ul>` : '<p class="provider-ready-note">Đủ budget, credential Active, model và rate bắt buộc.</p>'}${credentialControl}</article>`;
     }).join('')}</div>${!catalog.length ? '<div class="empty-state">Chưa có catalog provider AI.</div>' : ''}`;
-    byId('organizationVideoPolicyForm')?.addEventListener('submit', submitVideoPolicy);
+    document.querySelectorAll('.organization-video-policy-form').forEach(form => form.addEventListener('submit', submitVideoPolicy));
   }
 
   async function submitVideoPolicy(event) {
     event.preventDefault();
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
-    const providerModelId = byId('organizationVideoPolicyModel').value;
+    const providerModelId = form.querySelector('.organization-video-policy-model').value;
+    const scope = form.dataset.policyScope || 'Default';
     if (!providerModelId) return;
     setBusy(button, true, 'Đang lưu...');
     try {
-      organizationState.videoPolicy = await api(`/api/organizations/${organizationState.selectedOrganizationId}/video-policy`, {
+      const savedPolicy = await api(`/api/organizations/${organizationState.selectedOrganizationId}/video-policy`, {
         method: 'PUT',
-        body: JSON.stringify({ providerModelId, resolution: '720p', nativeAudio: true })
+        body: JSON.stringify({ providerModelId, resolution: '720p', nativeAudio: true, scope })
       });
+      if (scope === 'LongForm') organizationState.longFormVideoPolicy = savedPolicy;
+      else organizationState.videoPolicy = savedPolicy;
       toast('Đã cập nhật policy video. Dự án mới sẽ dùng policy này; dự án cũ giữ nguyên model.');
       organizationState.organizations = null;
       await loadOrganizations(true);
@@ -548,24 +576,30 @@
     const providers = organizationState.pricing || [];
     const openAi = providers.find(provider => provider.providerCode === 'openai');
     const kling = providers.find(provider => provider.providerCode === 'kling');
+    const fal = providers.find(provider => provider.providerCode === 'fal');
     const openAiModel = preferredGuideModel(openAi);
     const klingModel = preferredGuideModel(kling);
+    const falModels = (fal?.models || []).filter(model => model.modality === 'Video');
     const inputRate = guideRate(openAiModel, 'InputToken');
     const outputRate = guideRate(openAiModel, 'OutputToken');
     const videoRate = guideRate(klingModel, 'VideoSecond', 'kling');
+    const falRates = falModels.map(model => ({ model, rate: guideRate(model, 'VideoSecond', 'fal') }));
     const inputExample = tokenCostForGuide(inputRate, 10_000);
     const outputExample = tokenCostForGuide(outputRate, 2_000);
     const openAiExample = inputExample === null || outputExample === null ? null : inputExample + outputExample;
     const klingExample = videoRate?.unit === 'Second' ? Number(videoRate.unitPrice) * 10 : null;
+    const falExamples = falRates.map(({ model, rate }) => ({ model, rate, cost: rate?.unit === 'Second' ? Number(rate.unitPrice) * 8 : null }));
     const rows = [
       renderGuideRateRow(openAi, openAiModel, 'InputToken', inputRate),
       renderGuideRateRow(openAi, openAiModel, 'OutputToken', outputRate),
-      renderGuideRateRow(kling, klingModel, 'VideoSecond', videoRate)
+      renderGuideRateRow(kling, klingModel, 'VideoSecond', videoRate),
+      ...falRates.map(({ model, rate }) => renderGuideRateRow(fal, model, 'VideoSecond', rate))
     ].join('');
     root.innerHTML = `
       <div class="cost-guide-live-grid">
         <article><span>OPENAI · VÍ DỤ</span><h4>10.000 input + 2.000 output token</h4><strong>${openAiExample === null ? 'Chưa tính được' : escapeHtml(formatMoney(openAiExample, inputRate?.currencyCode || outputRate?.currencyCode || 'USD'))}</strong><small>${openAiExample === null ? 'Hãy cấu hình đủ InputToken và OutputToken.' : 'Tính bằng rate Active bên dưới.'}</small></article>
         <article><span>KLING · VÍ DỤ</span><h4>Video 720p · Native Audio · 10 giây</h4><strong>${klingExample === null ? 'Chưa tính được' : escapeHtml(formatMoney(klingExample, videoRate?.currencyCode || 'USD'))}</strong><small>${klingExample === null ? 'Hãy cấu hình đúng rate VideoSecond cho 720p Native Audio.' : 'Tính theo rate USD/giây của đúng biến thể 720p Native Audio.'}</small></article>
+        ${falExamples.map(({ model, rate, cost }) => `<article><span>FAL / VEO · VÍ DỤ</span><h4>${escapeHtml(model.displayName)} · 8 giây</h4><strong>${cost === null ? 'Chưa tính được' : escapeHtml(formatMoney(cost, rate?.currencyCode || 'USD'))}</strong><small>Rate riêng theo endpoint · 720p · Native Audio.</small></article>`).join('')}
       </div>
       <div class="table-scroll"><table class="data-table cost-guide-table"><thead><tr><th>Provider</th><th>Model</th><th>Usage type</th><th>Đơn vị</th><th>Đơn giá Active</th><th>Hiệu lực từ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
@@ -589,6 +623,8 @@
         ? ['VideoSecond']
         : providerCode === 'byteplus'
           ? ['OutputToken']
+          : providerCode === 'fal'
+            ? ['VideoSecond']
           : [];
   }
 
@@ -602,7 +638,7 @@
       const configured = new Set(rates.map(rate => rate.usageType));
       const missing = requiredRates(provider.providerCode).filter(value => !configured.has(value));
         const stateControls = `<button type="button" class="${model.isEnabled ? 'danger-button' : 'ghost-button'}" data-toggle-ai-model="${escapeHtml(model.providerModelId)}" data-ai-model-enabled="${model.isEnabled ? 'false' : 'true'}">${model.isEnabled ? 'Tắt model' : 'Bật model'}</button>${model.isEnabled && !model.isDefault ? `<button type="button" class="ghost-button" data-default-ai-model="${escapeHtml(model.providerModelId)}">Đặt mặc định</button>` : ''}`;
-        const variant = provider.providerCode === 'kling' ? ' · 720p · Native Audio' : provider.providerCode === 'byteplus' ? ' · token video hoàn tất' : '';
+        const variant = provider.providerCode === 'kling' ? ' · 720p · Native Audio' : provider.providerCode === 'fal' ? ' · 720p · Native Audio · exact endpoint' : provider.providerCode === 'byteplus' ? ' · token video hoàn tất' : '';
         return `<article class="pricing-model"><div class="pricing-model-heading"><div><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.modelCode)} · ${escapeHtml(model.modality)} · ${model.isEnabled ? 'Enabled' : 'Disabled'}${model.isDefault ? ' · Default' : ''}</small></div><div class="dialog-actions">${stateControls}<button type="button" class="primary-button" data-add-ai-rate="${escapeHtml(model.providerModelId)}" data-ai-rate-model="${escapeHtml(model.displayName)}" data-ai-rate-provider="${escapeHtml(provider.providerCode)}">${icon('plus')}<span>Tạo rate</span></button></div></div>${missing.length ? `<div class="organization-alert warning"><strong>Thiếu rate bắt buộc</strong><span>${escapeHtml(missing.join(', '))}${variant}</span></div>` : ''}${model.costRates.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Usage type</th><th>Đơn vị</th><th>Đơn giá</th><th>Hiệu lực</th><th>Trạng thái</th><th></th></tr></thead><tbody>${model.costRates.map(rate => `<tr><td><strong>${escapeHtml(rate.usageType + rateVariantLabel(provider.providerCode, rate))}</strong></td><td>${escapeHtml(rate.unit)}</td><td>${escapeHtml(formatMoney(rate.unitPrice, rate.currencyCode))}</td><td>${escapeHtml(formatDate(rate.effectiveFromUtc))}<br><small>đến ${escapeHtml(formatDate(rate.effectiveToUtc))}</small></td><td>${rate.isActive ? statusPill('Active', 'ready') : statusPill('Inactive', 'warning')}</td><td>${rate.isActive ? `<button type="button" class="danger-button" data-deactivate-ai-rate="${escapeHtml(rate.costRateId)}">Ngừng rate</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Model chưa có rate.</div>'}</article>`;
       }).join('');
       return `<section class="pricing-provider" data-pricing-provider="${escapeHtml(provider.providerCode)}"><div class="pricing-provider-heading"><div><span class="eyebrow">${escapeHtml(provider.providerCode)}</span><h3>${escapeHtml(provider.displayName)}</h3></div><div class="dialog-actions">${provider.isEnabled ? statusPill('Provider Active', 'ready') : statusPill('Provider Inactive', 'blocked')}${providerToggle}</div></div><div class="pricing-model-list">${models}</div></section>`;
@@ -677,8 +713,8 @@
     byId('aiRateModelId').value = modelId;
     byId('aiRateProviderCode').value = providerCode;
     byId('aiRateDialogTitle').textContent = `Tạo rate · ${modelName}`;
-    byId('aiRateVariantHint').classList.toggle('hidden', providerCode !== 'kling');
-    byId('aiRateUsageType').value = providerCode === 'kling'
+    byId('aiRateVariantHint').classList.toggle('hidden', providerCode !== 'kling' && providerCode !== 'fal');
+    byId('aiRateUsageType').value = providerCode === 'kling' || providerCode === 'fal'
       ? 'VideoSecond'
       : providerCode === 'byteplus'
         ? 'OutputToken'
@@ -801,8 +837,12 @@
     const button = form.querySelector('button[type="submit"]');
     const source = byId('aiRateSource').value.trim();
     const providerCode = byId('aiRateProviderCode').value;
+    const selectedModelId = byId('aiRateModelId').value;
+    const selectedModel = (organizationState.pricing || []).flatMap(provider => provider.models || []).find(model => model.providerModelId === selectedModelId);
     const metadata = providerCode === 'kling'
       ? { source: source || null, resolution: '720p', nativeAudio: true }
+      : providerCode === 'fal'
+        ? { source: source || null, resolution: '720p', nativeAudio: true, endpointId: selectedModel?.modelCode || null, tier: selectedModel?.modelCode?.includes('/fast/') ? 'fast' : 'standard' }
       : source ? { source } : null;
     setBusy(button, true, 'Đang tạo...');
     try {

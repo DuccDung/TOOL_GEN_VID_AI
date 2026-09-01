@@ -84,16 +84,17 @@ public sealed class DesktopStoryboardUiTests
     }
 
     [Fact]
-    public void KlingLongFormLanguagePolicy_IsVisibleAndDoesNotChangeShortVideoPromptFlow()
+    public void LongFormLanguagePolicy_IsVisibleForKlingAndFalAndDoesNotChangeShortVideoPromptFlow()
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
         var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
         var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
 
         Assert.Contains("requiresVietnameseContentRegeneration", types);
-        Assert.Contains("Tiếng Việt (bắt buộc cho Video Dài dùng Kling)", app);
+        Assert.Contains("Tiếng Việt (bắt buộc cho Video Dài dùng ${", app);
+        Assert.Contains("['kling', 'fal']", app);
         Assert.Contains("Sinh lại nội dung tiếng Việt", app);
-        Assert.Contains("Dự án Kling này còn nội dung tiếng Anh", app);
+        Assert.Contains("Dự án Video Dài này còn nội dung tiếng Anh", app);
         Assert.Contains("workflowStructureType", projectService);
         Assert.Contains("KlingLongFormVietnameseValidator.RequiresVietnamese", projectService);
 

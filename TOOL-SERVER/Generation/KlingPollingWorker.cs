@@ -90,7 +90,8 @@ internal sealed class VideoPollingProcessor(
         var dueIds = await dbContext.ProviderRequests
             .AsNoTracking()
             .Where(x => (x.ProviderCode == ProviderCodes.Kling ||
-                         x.ProviderCode == ProviderCodes.BytePlus) &&
+                         x.ProviderCode == ProviderCodes.BytePlus ||
+                         x.ProviderCode == ProviderCodes.Fal) &&
                         x.RequestKind == "Video" &&
                         x.OrganizationId != null &&
                         x.ExternalRequestId != null &&

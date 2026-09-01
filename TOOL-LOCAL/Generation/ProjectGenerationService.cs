@@ -41,11 +41,12 @@ internal sealed class ProjectGenerationService(
         string idempotencyKey;
         await using (var readContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
-            await RequireProjectAsync(readContext, projectId, remoteUserId, cancellationToken);
+            var project = await RequireProjectAsync(readContext, projectId, remoteUserId, cancellationToken);
             version = (await readContext.Scripts
                 .Where(x => x.ProjectId == projectId)
                 .MaxAsync(x => (int?)x.Version, cancellationToken) ?? 0) + 1;
-            var keyPrefix = $"content:{projectId:N}:v{version}:{KlingLongFormVietnameseValidator.PolicyVersion}";
+            var languagePolicyVersion = KlingLongFormVietnameseValidator.ResolvePolicyVersion(project.VideoProviderCode);
+            var keyPrefix = $"content:{projectId:N}:v{version}:{languagePolicyVersion}";
             var failedAttempts = await readContext.ProviderRequests
                 .AsNoTracking()
                 .CountAsync(
@@ -630,7 +631,13 @@ internal sealed class ProjectGenerationService(
         foreach (var generatedScene in response.Plan.Scenes.OrderBy(x => x.SequenceNumber))
         {
             var sceneId = Guid.NewGuid();
-            var durationMs = generatedScene.DurationSeconds * 1000L;
+            var contentDurationMs = generatedScene.DurationSeconds * 1000L;
+            var generationDurationSeconds = generatedScene.GenerationDurationSeconds ?? generatedScene.DurationSeconds;
+            var generationDurationMs = generationDurationSeconds * 1000L;
+            if (generationDurationMs < contentDurationMs)
+            {
+                throw new InvalidDataException("Thời lượng provider không được ngắn hơn thời lượng nội dung cảnh.");
+            }
             var scene = new Scene
             {
                 SceneId = sceneId,
@@ -652,10 +659,11 @@ internal sealed class ProjectGenerationService(
                 CameraDirection = "cinematic composition and controlled camera movement",
                 Lighting = response.Plan.VisualStyle,
                 Motion = "natural coherent subject motion",
-                ContentDurationMs = durationMs,
-                GenerationDurationMs = durationMs,
+                ContentDurationMs = contentDurationMs,
+                GenerationDurationMs = generationDurationMs,
                 TimelineStartMs = timelineMs,
-                TimelineEndMs = timelineMs + durationMs,
+                TimelineEndMs = timelineMs + contentDurationMs,
+                TailTrimMs = generationDurationMs - contentDurationMs,
                 CharacterIdsJson = JsonSerializer.Serialize(
                     generatedScene.CharacterKeys.Select(key => characterByKey[key].CharacterId),
                     JsonOptions),
@@ -664,7 +672,9 @@ internal sealed class ProjectGenerationService(
                 RequiredCapabilitiesJson = JsonSerializer.Serialize(new
                 {
                     textToVideo = true,
-                    maxDurationSeconds = 15,
+                    contentDurationSeconds = generatedScene.DurationSeconds,
+                    generationDurationSeconds,
+                    tailTrimSeconds = generationDurationSeconds - generatedScene.DurationSeconds,
                     project.AspectRatio,
                     nativeAudio = true,
                     speechMode = ResolveSpeechMode(generatedScene),
@@ -698,7 +708,7 @@ internal sealed class ProjectGenerationService(
             };
             scene.ScenePrompts.Add(prompt);
             scenes.Add(scene);
-            timelineMs += durationMs;
+            timelineMs += contentDurationMs;
         }
 
         dbContext.Scenes.AddRange(scenes);
@@ -1570,7 +1580,10 @@ internal sealed class ProjectGenerationService(
         GeneratedContentPlan plan,
         bool enforceKlingLongFormSpeechPolicy = false)
     {
-        if (plan.Scenes.Count == 0 || plan.Scenes.Any(x => x.DurationSeconds is < 3 or > 30))
+        if (plan.Scenes.Count == 0 || plan.Scenes.Any(x =>
+                x.DurationSeconds is < 1 or > 30 ||
+                (x.GenerationDurationSeconds ?? x.DurationSeconds) < x.DurationSeconds ||
+                (x.GenerationDurationSeconds ?? x.DurationSeconds) > 30))
         {
             throw new InvalidDataException("Content plan OpenAI không có danh sách cảnh hợp lệ.");
         }

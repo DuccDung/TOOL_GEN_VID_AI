@@ -42,6 +42,7 @@ public sealed class VideoPollingPolicyTests
 
         Assert.Contains("ExecuteUpdateAsync", worker, StringComparison.Ordinal);
         Assert.Contains("ClaimLeaseMinutes", worker, StringComparison.Ordinal);
+        Assert.Contains("x.ProviderCode == ProviderCodes.Fal", worker, StringComparison.Ordinal);
         Assert.Equal(
             1,
             worker.Split(".GetStatusAsync(", StringSplitOptions.None).Length - 1);

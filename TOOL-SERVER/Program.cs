@@ -216,6 +216,7 @@ builder.Services.AddScoped<IOpenAiSpeechClient, OpenAiSpeechClient>();
 builder.Services.AddScoped<IKlingVideoClient, KlingVideoClient>();
 builder.Services.AddScoped<IVideoProviderClient, KlingVideoProviderAdapter>();
 builder.Services.AddScoped<IVideoProviderClient, BytePlusVideoClient>();
+builder.Services.AddScoped<IVideoProviderClient, FalVeoVideoClient>();
 builder.Services.AddScoped<IVideoProviderRouter, VideoProviderRouter>();
 builder.Services.AddScoped<IGenerationService, GenerationService>();
 builder.Services.AddScoped<IGeneratedImageContentService, GeneratedImageContentService>();
@@ -249,6 +250,11 @@ builder.Services.AddHttpClient("KlingRuntime", client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");
 });
 builder.Services.AddHttpClient("BytePlusRuntime", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(2);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");
+});
+builder.Services.AddHttpClient("FalRuntime", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(2);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");

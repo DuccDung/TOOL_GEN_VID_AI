@@ -8,6 +8,7 @@ internal static class KlingLongFormVietnameseValidator
     public const string OpenAiStructuredPlan = "OpenAiStructuredPlan";
     public const string EffectiveLanguageCode = "vi-VN";
     public const string PolicyVersion = "kling-long-form-vietnamese-v1";
+    public const string FalPolicyVersion = "fal-veo-long-form-vietnamese-v1";
 
     private static readonly HashSet<char> VietnameseLetters = new(
         "ăâđêôơưĂÂĐÊÔƠƯ" +
@@ -25,8 +26,14 @@ internal static class KlingLongFormVietnameseValidator
     };
 
     public static bool RequiresVietnamese(string? providerCode, string? structureType) =>
-        string.Equals(providerCode, "kling", StringComparison.OrdinalIgnoreCase) &&
+        (string.Equals(providerCode, "kling", StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(providerCode, "fal", StringComparison.OrdinalIgnoreCase)) &&
         string.Equals(structureType, OpenAiStructuredPlan, StringComparison.Ordinal);
+
+    public static string ResolvePolicyVersion(string? providerCode) =>
+        string.Equals(providerCode, "fal", StringComparison.OrdinalIgnoreCase)
+            ? FalPolicyVersion
+            : PolicyVersion;
 
     public static bool ContainsHighConfidenceVietnamese(string? value)
     {

@@ -50,6 +50,7 @@ public sealed class OrganizationProviderCredential
 public sealed class OrganizationVideoPolicy
 {
     public Guid OrganizationId { get; set; }
+    public string PolicyScope { get; set; } = "Default";
     public Guid ProviderId { get; set; }
     public Guid ProviderModelId { get; set; }
     public int PolicyVersion { get; set; }

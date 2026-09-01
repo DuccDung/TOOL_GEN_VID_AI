@@ -72,7 +72,8 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
         builder.Entity<OrganizationVideoPolicy>(entity =>
         {
             entity.ToTable("OrganizationVideoPolicies", "ai");
-            entity.HasKey(x => x.OrganizationId);
+            entity.HasKey(x => new { x.OrganizationId, x.PolicyScope });
+            entity.Property(x => x.PolicyScope).HasMaxLength(20).IsUnicode(false);
             entity.Property(x => x.Resolution).HasMaxLength(20).IsUnicode(false);
             entity.Property(x => x.UpdatedByUserId).HasMaxLength(450);
             entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
@@ -80,8 +81,8 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
             entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
             entity.HasIndex(x => new { x.ProviderId, x.ProviderModelId, x.IsActive });
             entity.HasOne<Organization>()
-                .WithOne()
-                .HasForeignKey<OrganizationVideoPolicy>(x => x.OrganizationId)
+                .WithMany()
+                .HasForeignKey(x => x.OrganizationId)
                 .OnDelete(DeleteBehavior.NoAction);
         });
 

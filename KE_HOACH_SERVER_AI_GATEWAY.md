@@ -1,6 +1,6 @@
 # Kế hoạch và trạng thái triển khai Server AI Gateway
 
-> Cập nhật ngữ cảnh: 2026-09-01. Kiến trúc AI Gateway theo tổ chức, GPT-Image-2, Kling Native Audio 720p, gateway video đa provider Kling/BytePlus và thư viện continuity text-only theo scene đã được triển khai trong source. Video dài Kling dùng content/prompt tiếng Việt cùng policy speech-first; Storyboard hỗ trợ xác nhận tài sản theo từng cảnh, checklist duyệt lời và retry `speech-recovery-v1` có xác nhận chi phí. BytePlus/Seedance được seed disabled và chưa được coi là đã rollout nếu thiếu migration, credential, rate, policy và smoke test có phí. Gateway kiểm tra scene-plan/prompt/asset version, dùng snapshot idempotency theo tổ chức và không lưu raw provider payload, full continuity text/spoken text trong request log hoặc signed output URL. Migration chưa được tự động chạy trên database đang sử dụng.
+> Cập nhật ngữ cảnh: 2026-09-02. Kiến trúc AI Gateway theo tổ chức, GPT-Image-2, Kling Native Audio 720p, gateway video đa provider Kling/BytePlus/Fal và thư viện continuity text-only theo scene đã được triển khai trong source. Video dài Kling/Fal dùng content/prompt tiếng Việt cùng policy speech-first riêng theo provider; Fal/Veo chỉ chạy qua policy `LongForm`, Queue API, I2V 720p/Native Audio 4/6/8 giây và first-frame đã duyệt. BytePlus/Seedance và Fal/Veo được seed disabled và chưa được coi là đã rollout nếu thiếu migration, credential, rate, policy và smoke test có phí. Gateway kiểm tra scene-plan/prompt/asset version, dùng snapshot idempotency theo tổ chức và không lưu raw provider payload, full continuity text/spoken text trong request log hoặc signed output URL. Migration chưa được tự động chạy trên database đang sử dụng.
 
 Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; lệnh triển khai nằm tại `TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md`.
 
@@ -26,6 +26,7 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 - [x] Migration 4.0.4–4.0.6 cho policy video, project snapshot, cache output và trạng thái `PromptInvalid`/`AudioReviewRequired`/`NativeAudioInvalid`.
 - [x] Contract/API video trung lập provider; desktop không gửi provider/model/prompt/thời lượng/độ phân giải làm nguồn sự thật.
 - [x] BytePlus Seedance client, prompt composer, policy resolver, worker đa provider, pricing theo `completion_tokens` và output cache/proxy dùng chung.
+- [x] Fal/Veo Standard/Fast catalog disabled, credential `Key`, policy `LongForm`, exact duration allocator, first-frame preflight, speech-first composer, Queue submit/status/result, worker/cache/proxy và pricing `VideoSecond` theo endpoint.
 - [x] Catalog Seedance 2.0/2.5 được seed disabled; không tự bật provider, model, rate, credential hoặc policy tổ chức.
 - [x] Output proxy có authorization, DNS/IP SSRF checks, redirect/size limit.
 - [x] Generation API xác thực JWT/session/device/license/organization/project và rate limit.
@@ -54,14 +55,14 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 ## 2. Hạng mục vận hành phải làm khi triển khai
 
 - [ ] Backup và thử restore database đích.
-- [ ] Chạy `VideoFactory.Initial.sql`, migration 4.0.0 đến 4.0.8 và script least privilege theo runbook.
+- [ ] Chạy `VideoFactory.Initial.sql`, migration 4.0.0 đến 4.0.9 và script least privilege theo runbook.
 - [ ] Tạo database user riêng cho server và desktop.
 - [ ] Cấu hình JWT signing key/Data Protection cho môi trường production.
 - [ ] Tạo tổ chức, gán thành viên, budget và member limit thật.
 - [ ] Nhập rate riêng cho model Text, `gpt-image-2`, Kling và provider video thực sự rollout từ hợp đồng/provider dashboard.
 - [ ] Xác nhận tổ chức OpenAI đã được phép dùng GPT-Image-2; xử lý bước organization verification nếu provider yêu cầu.
 - [ ] Nhập production credential qua HTTPS bằng Owner/OrganizationAdmin.
-- [ ] Chạy staging smoke test có phê duyệt chi phí với OpenAI Text, GPT-Image-2 và Kling thật; smoke test BytePlus trên tổ chức thử nghiệm riêng nếu rollout Seedance.
+- [ ] Chạy staging smoke test có phê duyệt chi phí với OpenAI Text, GPT-Image-2 và Kling thật; smoke test BytePlus/Fal trên tổ chức thử nghiệm riêng nếu rollout provider tương ứng.
 - [ ] Đối chiếu usage ledger với hóa đơn/provider dashboard.
 - [ ] Phát hành desktop gateway sau khi server/migration/configuration sẵn sàng.
 - [ ] Theo dõi worker, provider 401/403/429/5xx và reservation quá hạn.

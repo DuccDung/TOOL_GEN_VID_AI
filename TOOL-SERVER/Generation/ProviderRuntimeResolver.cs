@@ -5,6 +5,7 @@ using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Domain.Providers;
 using TOOL_SERVER.Providers;
 using TOOL_SHARED.Contracts.Generation;
+using TOOL_SHARED.Contracts.Organizations;
 
 namespace TOOL_SERVER.Generation;
 
@@ -156,7 +157,9 @@ internal sealed class ProviderRuntimeResolver(
             provider.ProviderCode,
             model.ModelCode,
             baseUri,
-            ProviderCredentialAuthenticationTypes.Bearer,
+            provider.ProviderCode == ProviderCodes.Fal
+                ? ProviderCredentialAuthenticationTypes.Key
+                : ProviderCredentialAuthenticationTypes.Bearer,
             null,
             apiKey,
             model.CapabilitiesJson,
@@ -173,7 +176,8 @@ internal sealed class ProviderRuntimeResolver(
             .Include(x => x.Models)
             .Where(x => (x.ProviderCode == ProviderCodes.OpenAi ||
                          x.ProviderCode == ProviderCodes.Kling ||
-                         x.ProviderCode == ProviderCodes.BytePlus) && x.IsEnabled)
+                         x.ProviderCode == ProviderCodes.BytePlus ||
+                         x.ProviderCode == ProviderCodes.Fal) && x.IsEnabled)
             .ToListAsync(cancellationToken);
 
         var providerIds = providers.Select(x => x.ProviderId).ToArray();
@@ -193,7 +197,16 @@ internal sealed class ProviderRuntimeResolver(
         var policy = await governanceDbContext.OrganizationVideoPolicies
             .AsNoTracking()
             .SingleOrDefaultAsync(
-                x => x.OrganizationId == organizationId && x.IsActive,
+                x => x.OrganizationId == organizationId &&
+                     x.PolicyScope == OrganizationVideoPolicyScopes.LongForm &&
+                     x.IsActive,
+                cancellationToken);
+        policy ??= await governanceDbContext.OrganizationVideoPolicies
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                x => x.OrganizationId == organizationId &&
+                     x.PolicyScope == OrganizationVideoPolicyScopes.Default &&
+                     x.IsActive,
                 cancellationToken);
         var policyProvider = policy is null
             ? null
@@ -249,6 +262,7 @@ internal sealed class ProviderRuntimeResolver(
             ProviderCodes.OpenAi => baseUri.Host.Equals("api.openai.com", StringComparison.OrdinalIgnoreCase),
             ProviderCodes.Kling => baseUri.Host.Equals("api-singapore.klingai.com", StringComparison.OrdinalIgnoreCase),
             ProviderCodes.BytePlus => baseUri.Host.Equals("ark.ap-southeast.bytepluses.com", StringComparison.OrdinalIgnoreCase),
+            ProviderCodes.Fal => baseUri.Host.Equals("queue.fal.run", StringComparison.OrdinalIgnoreCase),
             _ => false
         };
 }
@@ -258,4 +272,5 @@ internal static class ProviderCodes
     public const string OpenAi = "openai";
     public const string Kling = "kling";
     public const string BytePlus = "byteplus";
+    public const string Fal = "fal";
 }

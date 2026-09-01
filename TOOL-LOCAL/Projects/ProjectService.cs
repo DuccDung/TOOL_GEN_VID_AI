@@ -643,7 +643,7 @@ public sealed class ProjectService(
                     promptText,
                     previousPrompt.NegativePrompt
                 ],
-                "Nội dung cảnh của video dài dùng Kling phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
+                "Nội dung cảnh của video dài dùng provider Native Audio phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
         }
         previousPrompt.Status = "Superseded";
         var now = DateTime.UtcNow;
@@ -838,7 +838,7 @@ public sealed class ProjectService(
         {
             KlingLongFormVietnameseValidator.RequireVietnamese(
                 [role, visualIdentity, wardrobe, .. immutableTraits, .. forbiddenChanges],
-                "Hồ sơ nhân vật của video dài dùng Kling phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
+                "Hồ sơ nhân vật của video dài dùng provider Native Audio phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
         }
 
         var profile = JsonNode.Parse(character.ProfileJson) as JsonObject ?? new JsonObject();

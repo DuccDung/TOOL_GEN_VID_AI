@@ -11,7 +11,7 @@ Các lệnh thay đổi database phải được chạy trong cửa sổ bảo t
 - Server có HTTPS hợp lệ và outbound HTTPS đến `api.openai.com:443`, `api-singapore.klingai.com:443`; nếu rollout Seedance, mở thêm `ark.ap-southeast.bytepluses.com:443` và các host output đã duyệt trong `Generation:VideoOutputs:AllowedHostSuffixes`.
 - Server và desktop dùng hai tài khoản database khác nhau.
 - Có một tài khoản VideoMaker mang global role `Admin`.
-- Có API key OpenAI/Kling và, nếu rollout, BytePlus do doanh nghiệp sở hữu; không gửi key qua chat, email hoặc file cấu hình desktop.
+- Có API key OpenAI/Kling và, nếu rollout, BytePlus/Fal do doanh nghiệp sở hữu; không gửi key qua chat, email hoặc file cấu hình desktop.
 
 ## 2. Nâng cấp database
 
@@ -28,10 +28,11 @@ sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
+sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.DesktopLeastPrivilege.sql
 ```
 
-`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance hay tự nhập giá. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI. Phải chạy các migration trước script least privilege.
+`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance/Fal hay tự nhập giá. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI; 4.0.9 tách policy `Default`/`LongForm`. Phải chạy các migration trước script least privilege.
 
 Luồng xác nhận tài sản trực tiếp trên card cảnh, endpoint `/confirm` và phép phân tích prompt bắt buộc sử dụng các bảng/cột của migration 4.0.7–4.0.8; không có file SQL mới riêng cho cải tiến UI này. Không chạy lại `VideoFactory.Initial.sql` trên database thật nếu chưa xác minh đúng quy trình nâng cấp, backup và khả năng restore.
 
@@ -55,7 +56,7 @@ SELECT [Code], [Name], [MonthlyBudgetLimit], [CurrencyCode]
 FROM [ai].[Organizations];
 ```
 
-Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.8-ai-generated-project-assets`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
+Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.9-fal-veo-long-form`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
 
 ## 3. Cấu hình server
 
@@ -79,7 +80,7 @@ dotnet user-secrets set --project TOOL-SERVER "Smtp:TimeoutSeconds" "30"
 
 Không lưu App Password trong source. Có thể chỉnh `PasswordReset:OtpLifetimeMinutes` trong khoảng 5–30 phút và `PasswordReset:MaxFailedAttempts` trong khoảng 3–10; mặc định lần lượt là 10 phút và 5 lần.
 
-Không thêm OpenAI/Kling/BytePlus key vào `appsettings.json`. ASP.NET Core Data Protection dùng application name `VideoMaker.Server` và lưu key ring trong database. Khi scale nhiều server, tất cả instance phải dùng cùng database key ring và cùng application name.
+Không thêm OpenAI/Kling/BytePlus/Fal key vào `appsettings.json`. ASP.NET Core Data Protection dùng application name `VideoMaker.Server` và lưu key ring trong database. Khi scale nhiều server, tất cả instance phải dùng cùng database key ring và cùng application name.
 
 Cache video và polling dùng cấu hình không chứa secret. Giá trị mặc định trong source là retention 48 giờ, tối đa 1 GiB/file, 20 GiB tổng; polling có lease 35 phút và dừng ở 3.000 lần hoặc 72 giờ. Chỉ đổi sau khi đã kiểm tra dung lượng đĩa, timeout mạng và chính sách lưu trữ của môi trường:
 
@@ -324,6 +325,10 @@ Invoke-RestMethod `
 ```
 
 Trong Admin Console, Global Admin chỉ bật provider/model Seedance sau khi rate và credential đã được kiểm tra. Sau đó Owner/OrganizationAdmin chọn model tại **Tổ chức & AI → Policy tạo video**. Policy chỉ áp dụng khi project được snapshot lần đầu; project đang dùng Kling không tự chuyển sang BytePlus. Workflow BytePlus chỉ nhận ảnh nhân vật `SourceType=Generated`, do OpenAI trong hệ thống tạo và đã được người dùng duyệt; ảnh tải lên/người thật bị chặn trước outbound.
+
+Nếu rollout Fal/Veo, nhập `FAL_KEY` qua cùng màn hình credential tổ chức; server kiểm tra quyền đọc hai endpoint đã allowlist bằng Fal Platform API và lưu credential với auth scheme `Key`. Tạo rate `VideoSecond` riêng cho Standard/Fast từ đúng dashboard/hợp đồng của tài khoản, sau đó chỉ bật provider/model trên staging và chọn model trong policy **Video dài (`LongForm`)**. Không chọn Fal cho policy `Default`. Request Veo bị khóa ở I2V 720p, Native Audio, 4/6/8 giây, 16:9/9:16 và `auto_fix=false`; mọi scene phải có first-frame đã duyệt, đúng tỷ lệ, tối đa 8 MB. B-roll thiếu first-frame bị chặn trước budget/outbound và không fallback sang T2V, Kling hoặc model tier khác.
+
+Fal Queue client gửi `X-Fal-No-Retry: 1`, `X-Fal-Store-IO: 0` và lifecycle object đủ cho cửa sổ polling/cache. Worker server polling `request_id`, đọc result URL chỉ trong bộ nhớ, kiểm tra allowlist `fal.media` hoặc exact `storage.googleapis.com`, rồi cache output trước khi desktop tải qua proxy tương đối. Không bật Fal production trước khi smoke test có phê duyệt chi phí xác nhận queue, audio tiếng Việt, crop/khẩu hình và đối soát ledger.
 
 ## 9. Cấu hình và phát hành desktop
 

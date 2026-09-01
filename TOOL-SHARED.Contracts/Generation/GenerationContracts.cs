@@ -40,7 +40,8 @@ public sealed record GeneratedContentScene(
     string? VoiceStyle = null,
     string? AmbientAudio = null,
     string? SoundEffects = null,
-    IReadOnlyList<string>? AssetKeys = null);
+    IReadOnlyList<string>? AssetKeys = null,
+    int? GenerationDurationSeconds = null);
 
 public sealed record GeneratedProjectAsset(
     string AssetKey,

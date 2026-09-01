@@ -46,7 +46,8 @@ internal sealed class VideoOutputOptions
     public Dictionary<string, string[]> AllowedHostSuffixes { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
         [ProviderCodes.Kling] = ["klingai.com", "kwaicdn.com", "kwimgs.com"],
-        [ProviderCodes.BytePlus] = ["bytepluses.com", "volces.com"]
+        [ProviderCodes.BytePlus] = ["bytepluses.com", "volces.com"],
+        [ProviderCodes.Fal] = ["fal.media", "=storage.googleapis.com"]
     };
 }
 
@@ -538,9 +539,11 @@ internal sealed class KlingOutputProxyService(
         var normalizedHost = host.Trim().TrimEnd('.');
         return suffixes.Any(suffix =>
         {
-            var normalizedSuffix = suffix.Trim().Trim('.');
+            var exactMatch = suffix.TrimStart().StartsWith('=');
+            var normalizedSuffix = suffix.Trim().TrimStart('=').Trim('.');
             return normalizedSuffix.Length > 0 &&
                    (normalizedHost.Equals(normalizedSuffix, StringComparison.OrdinalIgnoreCase) ||
+                    !exactMatch &&
                     normalizedHost.EndsWith($".{normalizedSuffix}", StringComparison.OrdinalIgnoreCase));
         });
     }
@@ -580,7 +583,13 @@ internal sealed class KlingOutputProxyService(
             }
             normalized[entry.Key.Trim()] = entry.Value?
                 .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Select(value => value.Trim().Trim('.'))
+                .Select(value =>
+                {
+                    var trimmed = value.Trim();
+                    return trimmed.StartsWith('=')
+                        ? $"={trimmed.TrimStart('=').Trim('.')}"
+                        : trimmed.Trim('.');
+                })
                 .Where(value => value.Length > 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray() ?? [];
