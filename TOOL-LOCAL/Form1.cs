@@ -10,6 +10,7 @@ using TOOL_SHARED.Contracts.Updates;
 using System.Text.Json;
 using TOOL_LOCAL.Generation;
 using TOOL_LOCAL.Media;
+using TOOL_LOCAL.Payments;
 
 namespace TOOL_LOCAL;
 
@@ -31,6 +32,7 @@ public partial class Form1 : Form
     private readonly DesktopPackageUpdateService? _packageUpdateService;
     private readonly DesktopUpdateOptions? _updateOptions;
     private readonly IMediaToolPreflightService? _mediaToolPreflight;
+    private readonly LicensePaymentApiClient? _licensePaymentClient;
     private WebView2? _webView;
     private Panel? _loadingPanel;
     private Label? _loadingLabel;
@@ -62,7 +64,8 @@ public partial class Form1 : Form
         DesktopUpdateApiClient updateApiClient,
         DesktopPackageUpdateService packageUpdateService,
         DesktopUpdateOptions updateOptions,
-        IMediaToolPreflightService mediaToolPreflight) : this()
+        IMediaToolPreflightService mediaToolPreflight,
+        LicensePaymentApiClient licensePaymentClient) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -75,6 +78,7 @@ public partial class Form1 : Form
         _packageUpdateService = packageUpdateService;
         _updateOptions = updateOptions;
         _mediaToolPreflight = mediaToolPreflight;
+        _licensePaymentClient = licensePaymentClient;
         _updateTimer.Interval = Math.Max(30, updateOptions.CheckIntervalSeconds) * 1000;
         ConfigureWindow();
         Shown += InitializeDashboardOnShown;
@@ -125,7 +129,7 @@ public partial class Form1 : Form
 
     private async void InitializeDashboardOnShown(object? sender, EventArgs eventArgs)
     {
-        if (_webView is null || _sessionManager is null || _licenseManager is null || _projectService is null || _projectRenderService is null || _generationService is null || _generationClient is null || _workspaceService is null || _mediaToolPreflight is null)
+        if (_webView is null || _sessionManager is null || _licenseManager is null || _projectService is null || _projectRenderService is null || _generationService is null || _generationClient is null || _workspaceService is null || _mediaToolPreflight is null || _licensePaymentClient is null)
         {
             return;
         }
@@ -156,6 +160,7 @@ public partial class Form1 : Form
                 _generationService,
                 _generationClient,
                 _mediaToolPreflight,
+                _licensePaymentClient,
                 PostJsonToWebView,
                 CloseAfterLogout);
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;

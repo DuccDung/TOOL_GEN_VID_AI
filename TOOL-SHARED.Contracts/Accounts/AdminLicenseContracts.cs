@@ -19,7 +19,11 @@ public sealed record AdminLicensePlanResponse(
     string? FeatureFlagsJson,
     bool IsActive,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    decimal? SalePriceVnd = null,
+    bool IsPublic = false,
+    int DisplayOrder = 0,
+    string? MarketingFeaturesJson = null);
 
 public sealed record SaveLicensePlanRequest(
     string PlanCode,
@@ -30,7 +34,11 @@ public sealed record SaveLicensePlanRequest(
     int OfflineGraceHours,
     int? DefaultDurationDays,
     string? FeatureFlagsJson,
-    bool IsActive);
+    bool IsActive,
+    decimal? SalePriceVnd = null,
+    bool IsPublic = false,
+    int DisplayOrder = 0,
+    string? MarketingFeaturesJson = null);
 
 public sealed record AdminUserLicenseResponse(
     Guid UserLicenseId,
@@ -72,6 +80,25 @@ public sealed record AdminUserDetailResponse(
     IReadOnlyList<AdminUserLicenseResponse> Licenses,
     IReadOnlyList<RegisteredDeviceResponse> Devices,
     IReadOnlyList<AdminSessionResponse> Sessions);
+
+public sealed record AdminLicensePaymentResponse(
+    Guid LicensePaymentId,
+    string UserId,
+    string UserEmail,
+    string OrderCode,
+    string TransferCode,
+    long? ProviderTransactionId,
+    Guid LicensePlanId,
+    string PlanCode,
+    string PlanName,
+    decimal AmountVnd,
+    int DurationDays,
+    string Status,
+    DateTime CreatedAtUtc,
+    DateTime ExpiresAtUtc,
+    DateTime? PaidAtUtc,
+    DateTime? FulfilledAtUtc,
+    Guid? FulfilledUserLicenseId);
 
 public sealed record GrantUserLicenseRequest(
     Guid LicensePlanId,

@@ -11,6 +11,8 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
 
     public CurrentLicenseResponse? Current { get; private set; }
 
+    public bool IsLocked => !HasValidLease;
+
     public bool HasValidLease =>
         Current is { HasActiveLicense: true, CurrentDeviceActivated: true } license &&
         EffectiveAccessExpiry(license) > DateTime.UtcNow &&
@@ -20,20 +22,7 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        var license = await apiClient.GetCurrentAsync(cancellationToken);
-        if (!license.HasActiveLicense)
-        {
-            throw Unavailable("Tài khoản chưa được admin cấp gói sử dụng.");
-        }
-
-        if (!license.CurrentDeviceActivated)
-        {
-            license = await apiClient.ActivateCurrentDeviceAsync(cancellationToken);
-        }
-
-        Current = await apiClient.HeartbeatAsync(cancellationToken);
-        EnsureResponseIsUsable(Current);
-        _heartbeatTask = RunHeartbeatLoopAsync(_shutdown.Token);
+        await RefreshNowAsync(cancellationToken);
     }
 
     public async Task<CurrentLicenseResponse> EnsureAccessAsync(CancellationToken cancellationToken = default)
@@ -41,9 +30,12 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
         await _sync.WaitAsync(cancellationToken);
         try
         {
-            if (_invalidReason is not null)
+            if (Current is not { HasActiveLicense: true })
             {
-                throw Unavailable(_invalidReason);
+                throw Unavailable(
+                    Current?.AccessMessage ??
+                    _invalidReason ??
+                    "Tài khoản chưa có gói sử dụng còn hiệu lực.");
             }
 
             if (Current is { } current && EffectiveAccessExpiry(current) > DateTime.UtcNow.AddMinutes(1))
@@ -51,9 +43,7 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
                 return Current;
             }
 
-            Current = await apiClient.HeartbeatAsync(cancellationToken);
-            EnsureResponseIsUsable(Current);
-            return Current;
+            return await RefreshCoreAsync(cancellationToken);
         }
         finally
         {
@@ -66,14 +56,81 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
         await _sync.WaitAsync(cancellationToken);
         try
         {
-            Current = await apiClient.HeartbeatAsync(cancellationToken);
-            EnsureResponseIsUsable(Current);
-            _invalidReason = null;
-            return Current;
+            return await RefreshCoreAsync(cancellationToken);
         }
         finally
         {
             _sync.Release();
+        }
+    }
+
+    private async Task<CurrentLicenseResponse> RefreshCoreAsync(CancellationToken cancellationToken)
+    {
+        var wasActive = Current?.HasActiveLicense == true;
+        var license = await apiClient.GetCurrentAsync(cancellationToken);
+        if (!license.HasActiveLicense)
+        {
+            Current = license;
+            _invalidReason = license.AccessMessage ?? "License không còn hiệu lực.";
+            if (wasActive)
+            {
+                LicenseInvalidated?.Invoke(_invalidReason);
+            }
+            return license;
+        }
+
+        if (!license.CurrentDeviceActivated)
+        {
+            try
+            {
+                license = await apiClient.ActivateCurrentDeviceAsync(cancellationToken);
+            }
+            catch (AccountClientException exception) when (exception.StatusCode == 409)
+            {
+                license = license with
+                {
+                    CurrentDeviceActivated = false,
+                    LeaseExpiresAtUtc = null,
+                    AccessState = LicenseAccessStates.DeviceLimit,
+                    AccessReasonCode = exception.Code,
+                    AccessMessage = exception.Message
+                };
+                Current = license;
+                _invalidReason = exception.Message;
+                return license;
+            }
+        }
+
+        try
+        {
+            license = await apiClient.HeartbeatAsync(cancellationToken);
+        }
+        catch (AccountClientException exception) when (exception.StatusCode == 409)
+        {
+            license = license with
+            {
+                CurrentDeviceActivated = false,
+                LeaseExpiresAtUtc = null,
+                AccessState = LicenseAccessStates.DeviceLimit,
+                AccessReasonCode = exception.Code,
+                AccessMessage = exception.Message
+            };
+            Current = license;
+            _invalidReason = exception.Message;
+            return license;
+        }
+        EnsureResponseIsUsable(license);
+        Current = license;
+        _invalidReason = null;
+        StartHeartbeatIfNeeded();
+        return license;
+    }
+
+    private void StartHeartbeatIfNeeded()
+    {
+        if (_heartbeatTask is null || _heartbeatTask.IsCompleted)
+        {
+            _heartbeatTask = RunHeartbeatLoopAsync(_shutdown.Token);
         }
     }
 
@@ -85,7 +142,15 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken);
-                await RefreshNowAsync(cancellationToken);
+                if (IsLocked)
+                {
+                    return;
+                }
+                var refreshed = await RefreshNowAsync(cancellationToken);
+                if (!refreshed.HasActiveLicense)
+                {
+                    return;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -93,7 +158,15 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
             }
             catch (AccountClientException exception) when (exception.StatusCode is 401 or 403 or 409 or 423)
             {
-                Invalidate(exception.Message);
+                try
+                {
+                    Current = await apiClient.GetCurrentAsync(cancellationToken);
+                }
+                catch (Exception refreshException) when (refreshException is AccountClientException or HttpRequestException)
+                {
+                    // Keep the last state and surface the original heartbeat failure.
+                }
+                Invalidate(Current?.AccessMessage ?? exception.Message);
                 return;
             }
             catch (HttpRequestException)

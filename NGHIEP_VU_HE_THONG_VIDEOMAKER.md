@@ -4,6 +4,8 @@
 
 > Cập nhật ngữ cảnh: 2026-09-01. Đây là nguồn sự thật nghiệp vụ toàn hệ thống. Source đã có thư viện tính nhất quán **text-only** cho bối cảnh/đạo cụ/item theo project, materialize đề xuất AI và xác nhận trực tiếp theo từng cảnh; ảnh tham chiếu của các loại tài sản này chưa thuộc phạm vi hiện tại. `NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md` và `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md` chỉ bổ sung chi tiết cho từng luồng; khi có khác biệt, tài liệu này được ưu tiên. Source code và migration vẫn là nguồn sự thật kỹ thuật.
 
+> Cập nhật license 2026-09-03: source đã có migration 4.0.10 và luồng gia hạn bằng chuyển khoản SePay. Thanh toán mặc định tắt và chưa được coi là rollout production nếu chưa rehearsal migration, cấu hình tài khoản nhận, webhook staging, đối soát và nghiệm thu UI thủ công.
+
 ## 1. Mục tiêu
 
 VideoMaker hỗ trợ người dùng nhập chủ đề, tự sinh content plan/kịch bản/prompt bằng OpenAI, sinh clip theo từng cảnh bằng provider video trong snapshot của project và tải clip qua server về workspace để tiếp tục quy trình dựng video.
@@ -32,11 +34,13 @@ Doanh nghiệp quản lý AI theo mô hình:
 - Polling video đa provider nền, kể cả khi desktop đã đóng; worker là polling owner duy nhất.
 - Tải ngay output có URL ngắn hạn vào cache server, ghi hash/MIME/size rồi proxy về desktop; không trả URL provider trực tiếp.
 - Ghi audit log và usage ledger.
+- Cung cấp gói license công khai, tạo payment/QR, đối soát webhook SePay và cấp hoặc gia hạn license đúng một lần.
 - Cung cấp Admin Console **Tổ chức & AI** để quản trị organization, member, budget/usage, credential, pricing và audit mà không trả secret về trình duyệt; trang **Cách tính chi phí** giải thích reservation/settlement và minh họa bằng rate Active hiện hành.
 
 ### VideoMaker Desktop
 
 - Đăng nhập, heartbeat license và chọn tổ chức.
+- Khi license thiếu/hết hạn, giữ phiên đăng nhập, khóa nghiệp vụ bằng overlay và cho phép chọn gói, thanh toán, polling rồi kích hoạt lại thiết bị.
 - Tạo/quản lý dự án và workspace.
 - Hiển thị storyboard theo kế hoạch cảnh hiện hành: lời đọc, mô tả hình ảnh, prompt, thời lượng, trạng thái và preview clip cục bộ.
 - Hiển thị hồ sơ nhân vật do OpenAI tách từ content plan; cho phép chỉnh hồ sơ nháp, chọn ảnh tham chiếu JPEG/PNG hoặc tạo/sinh lại ảnh chuẩn bằng GPT-Image-2, xem trước và chỉ khóa nhân vật khi người dùng xác nhận.
@@ -48,7 +52,7 @@ Doanh nghiệp quản lý AI theo mô hình:
 
 ### SQL Server
 
-- Schema `auth`: tài khoản, session, license và Data Protection keys.
+- Schema `auth`: tài khoản, session, license, giao dịch gia hạn SePay và Data Protection keys.
 - Schema `ai`: tổ chức, thành viên, credential tổ chức, kỳ ngân sách, reservation, usage ledger và audit.
 - Schema `vf`: dự án, cảnh, provider catalog, request log và dữ liệu sản xuất video.
 
@@ -77,6 +81,18 @@ Quy tắc bổ sung:
 - Danh sách dự án trên desktop được lọc theo tổ chức đang chọn.
 - Server luôn xác minh dự án thuộc đúng user và đúng tổ chức; không tin hoàn toàn dữ liệu từ desktop.
 - Dự án cũ được migration gắn vào tổ chức `legacy-default` khi có thể xác định chủ sở hữu.
+
+### 4.1. License và gia hạn bằng SePay
+
+- JWT/session/device xác định phiên đăng nhập; license xác định quyền sử dụng nghiệp vụ. Thiếu hoặc hết hạn license không tự thu hồi session.
+- `GET /api/license/current`, offer, tạo payment và đọc trạng thái payment được phép dùng với session/device hợp lệ mà không cần active license.
+- Desktop locked chỉ cho phép làm mới license, offer/payment/status, đăng xuất và các thao tác phục hồi đã allowlist; project, media, provider và generation vẫn bị bridge chặn.
+- Server là nguồn sự thật của gói, giá và thời hạn. Payment snapshot gói, entitlement, số tiền và tài khoản nhận; desktop không được gửi giá hoặc gọi SePay trực tiếp.
+- Webhook không yêu cầu API key; server chỉ nhận giao dịch tiền vào đúng tài khoản, transfer code trong nội dung và số tiền. `ProviderTransactionId` là duy nhất; payment và license được fulfillment trong cùng transaction `Serializable`.
+- Webhook hợp lệ đến sau thời hạn QR vẫn được xử lý vì tiền đã thực nhận. Webhook lặp không được gia hạn lần hai.
+- Chỉ trạng thái `Fulfilled` mới cho desktop refresh license, kích hoạt thiết bị và gỡ overlay. `Paid` chưa đủ để mở khóa.
+- `Suspended`, `Revoked` và `DeviceLimit` không tự mở bán gói; UI giữ khóa và hướng dẫn liên hệ quản trị viên.
+- Thông tin tài khoản nhận chỉ ở server. Khi payment bị tắt, không nới lỏng license guard; webhook của payment đã tạo vẫn phải tiếp tục được xử lý trong thời gian đối soát.
 
 ## 5. Credential OpenAI/Kling/BytePlus/Fal
 
@@ -288,6 +304,16 @@ Usage response có tổng input token, output token, video second và nhóm theo
 - `DELETE /api/projects/{projectId}/assets/{projectAssetId}`
 - `PUT /api/projects/{projectId}/assets/scenes/{sceneId}`
 
+### License và SePay
+
+- `GET /api/license/current`: trả `Active`, `Missing`, `Expired`, `Suspended`, `Revoked` hoặc `DeviceLimit` cùng giờ server.
+- `GET /api/license/offers`: lấy gói public/active/có giá và thời hạn hợp lệ.
+- `POST /api/license/payments`: tạo hoặc tái sử dụng payment pending bằng `planId` và idempotency key.
+- `GET /api/license/payments/current`: khôi phục payment pending khi desktop mở lại.
+- `GET /api/license/payments/{orderCode}/status`: chỉ chủ payment được đọc trạng thái.
+- `POST /api/payments/sepay/webhook`: endpoint công khai, không yêu cầu API key hoặc JWT desktop; chỉ fulfillment khi payload khớp tài khoản, transfer code và số tiền.
+- `GET /api/admin/licenses/payments`: chỉ Global Admin được tra chính xác theo order code, transfer code hoặc provider transaction ID và lọc trạng thái; response không trả snapshot tài khoản nhận, idempotency key, entitlement hoặc provider reference.
+
 ### Quên mật khẩu
 
 - `POST /api/auth/forgot-password`: nhận email và luôn trả thông báo chung để không tiết lộ tài khoản có tồn tại hay không.
@@ -304,6 +330,10 @@ Gateway giới hạn mặc định 30 request/phút cho mỗi user/IP.
 | Mã | Ý nghĩa |
 |---|---|
 | `license_unavailable` | License hoặc lease thiết bị không hợp lệ |
+| `license_missing` / `license_expired` | Phiên còn hợp lệ nhưng app bị khóa vì chưa có hoặc đã hết gói |
+| `payments_unavailable` | SePay đang tắt hoặc cấu hình server chưa hợp lệ; không tạo payment mới |
+| `invalid_payment_request` / `license_offer_not_found` | Yêu cầu payment hoặc gói bán không hợp lệ |
+| `license_payment_not_found` | Payment không tồn tại hoặc không thuộc user hiện tại |
 | `invalid_credentials` | Email hoặc mật khẩu sai; giữ màn hình đăng nhập để user nhập lại |
 | `account_locked` / `account_unavailable` | Tài khoản bị khóa hoặc không được phép đăng nhập |
 | `invalid_refresh_token` / `session_expired` | Phiên đã hết hạn hoặc bị thu hồi; desktop xóa token cục bộ và đưa user về đăng nhập |
@@ -355,6 +385,8 @@ Gateway giới hạn mặc định 30 request/phút cho mỗi user/IP.
 - License lease được kiểm tra tại từng request AI và download.
 - Credential mã hóa bằng Data Protection keys lưu trong database của server.
 - Không log hoặc trả API key; audit chỉ ghi secret hint.
+- Webhook SePay không dùng API key theo phạm vi MVP, được giới hạn kích thước/rate và không lưu payload đầy đủ; transaction ID provider có unique index. Vì endpoint không có bằng chứng mật mã về nguồn gửi, chỉ triển khai sau khi đã chấp nhận rủi ro giả mạo và phải đối soát giao dịch thực tế định kỳ.
+- Desktop chỉ được tải ảnh QR từ hai host HTTPS allowlist `qr.sepay.vn` và `vietqr.app`; không mở `img-src` cho host tùy ý.
 - Base URL provider dùng allowlist host/HTTPS/port cố định.
 - Output proxy chỉ nhận host thuộc allowlist của đúng provider, kiểm tra lại mọi redirect và chặn loopback, private, link-local, carrier-grade NAT, IPv6 nội bộ cùng DNS rebinding. Signed output URL chỉ tồn tại trong bộ nhớ khi tải cache, không ghi vào request log mới và không trả cho desktop.
 - Desktop SQL user dùng role tối thiểu; bị deny schema `ai`, `auth`, `dbo`, provider credentials, provider requests và usage truth.

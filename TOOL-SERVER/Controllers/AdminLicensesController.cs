@@ -19,6 +19,14 @@ public sealed class AdminLicensesController(IAdminLicenseService licenseService)
     public Task<IReadOnlyList<AdminLicensePlanResponse>> GetPlans(CancellationToken cancellationToken) =>
         licenseService.GetPlansAsync(cancellationToken);
 
+    [HttpGet("payments")]
+    public Task<IReadOnlyList<AdminLicensePaymentResponse>> GetPayments(
+        [FromQuery] string? search,
+        [FromQuery] string? status,
+        [FromQuery] int? take,
+        CancellationToken cancellationToken) =>
+        licenseService.GetPaymentsAsync(search, status, take, cancellationToken);
+
     [HttpPost("plans")]
     public Task<AdminLicensePlanResponse> CreatePlan(
         [FromBody] SaveLicensePlanRequest request,

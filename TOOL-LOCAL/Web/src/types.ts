@@ -235,6 +235,61 @@ export type CurrentLicense = {
   serverTimeUtc: string;
   leaseExpiresAtUtc?: string | null;
   heartbeatIntervalSeconds: number;
+  accessState?: 'Active' | 'Missing' | 'Expired' | 'Suspended' | 'Revoked' | 'DeviceLimit' | null;
+  accessReasonCode?: string | null;
+  accessMessage?: string | null;
+};
+
+export type LicenseOffer = {
+  licensePlanId: string;
+  planCode: string;
+  name: string;
+  description?: string | null;
+  priceVnd: number;
+  durationDays: number;
+  maxActivatedDevices: number;
+  marketingFeatures: string[];
+  displayOrder: number;
+};
+
+export type LicensePaymentCheckout = {
+  orderCode: string;
+  transferCode: string;
+  planCode: string;
+  planName: string;
+  durationDays: number;
+  amountVnd: number;
+  receiverBankCode: string;
+  receiverAccountNumber: string;
+  receiverAccountName: string;
+  transferContent: string;
+  qrImageUrl: string;
+  status: string;
+  createdAtUtc: string;
+  expiresAtUtc: string;
+  serverTimeUtc: string;
+  reusedExistingPayment: boolean;
+  isPaid: boolean;
+  isFulfilled: boolean;
+  isExpired: boolean;
+};
+
+export type LicensePaymentStatus = {
+  orderCode: string;
+  status: string;
+  expiresAtUtc: string;
+  serverTimeUtc: string;
+  paidAtUtc?: string | null;
+  fulfilledAtUtc?: string | null;
+  isPaid: boolean;
+  isFulfilled: boolean;
+  isExpired: boolean;
+  failureCode?: string | null;
+  message?: string | null;
+};
+
+export type CurrentLicensePayment = {
+  payment?: LicensePaymentCheckout | null;
 };
 
 export type ProviderSettings = {
@@ -284,7 +339,7 @@ export type GenerationProviderStatus = {
 
 export type HostMessage<T = unknown> = {
   type: string;
-  requestId?: string;
+  requestId?: string | null;
   payload?: T;
   error?: { code: string; message: string };
 };

@@ -26,6 +26,19 @@ public sealed record CurrentLicenseResponse(
     bool CurrentDeviceActivated,
     DateTime ServerTimeUtc = default,
     DateTime? LeaseExpiresAtUtc = null,
-    int HeartbeatIntervalSeconds = 300);
+    int HeartbeatIntervalSeconds = 300,
+    string? AccessState = null,
+    string? AccessReasonCode = null,
+    string? AccessMessage = null);
 
 public sealed record LicenseHeartbeatRequest(Guid SessionId);
+
+public static class LicenseAccessStates
+{
+    public const string Active = "Active";
+    public const string Missing = "Missing";
+    public const string Expired = "Expired";
+    public const string Suspended = "Suspended";
+    public const string Revoked = "Revoked";
+    public const string DeviceLimit = "DeviceLimit";
+}

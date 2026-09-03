@@ -23,6 +23,8 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
 
     public DbSet<LicenseActivation> LicenseActivations => Set<LicenseActivation>();
 
+    public DbSet<LicensePayment> LicensePayments => Set<LicensePayment>();
+
     public DbSet<AppRelease> AppReleases => Set<AppRelease>();
 
     public DbSet<AppReleaseArtifact> AppReleaseArtifacts => Set<AppReleaseArtifact>();
@@ -161,6 +163,8 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
             entity.Property(x => x.PlanCode).HasMaxLength(50).IsUnicode(false);
             entity.Property(x => x.Name).HasMaxLength(200);
             entity.Property(x => x.Description).HasMaxLength(1000);
+            entity.Property(x => x.SalePriceVnd).HasPrecision(19, 0);
+            entity.Property(x => x.MarketingFeaturesJson).HasColumnType("nvarchar(max)");
             entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
@@ -202,6 +206,40 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
             entity.HasIndex(x => new { x.UserLicenseId, x.DeviceId }).IsUnique();
             entity.HasOne(x => x.UserLicense).WithMany(x => x.Activations).HasForeignKey(x => x.UserLicenseId).OnDelete(DeleteBehavior.NoAction);
             entity.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        builder.Entity<LicensePayment>(entity =>
+        {
+            entity.ToTable("LicensePayments", "auth");
+            entity.HasKey(x => x.LicensePaymentId);
+            entity.Property(x => x.LicensePaymentId).HasDefaultValueSql("NEWSEQUENTIALID()");
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.OrderCode).HasMaxLength(40).IsUnicode(false);
+            entity.Property(x => x.TransferCode).HasMaxLength(40).IsUnicode(false);
+            entity.Property(x => x.IdempotencyKey).HasMaxLength(100).IsUnicode(false);
+            entity.Property(x => x.PriceSnapshotVnd).HasPrecision(19, 0);
+            entity.Property(x => x.PlanCodeSnapshot).HasMaxLength(50).IsUnicode(false);
+            entity.Property(x => x.PlanNameSnapshot).HasMaxLength(200);
+            entity.Property(x => x.EntitlementSnapshotJson).HasColumnType("nvarchar(max)");
+            entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.ReceiverBankCodeSnapshot).HasMaxLength(50).IsUnicode(false);
+            entity.Property(x => x.ReceiverAccountNumberSnapshot).HasMaxLength(50).IsUnicode(false);
+            entity.Property(x => x.ReceiverAccountNameSnapshot).HasMaxLength(200);
+            entity.Property(x => x.ProviderReferenceCode).HasMaxLength(100);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.ExpiresAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.PaidAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.FulfilledAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.FailureCode).HasMaxLength(100).IsUnicode(false);
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => x.OrderCode).IsUnique();
+            entity.HasIndex(x => x.TransferCode).IsUnique();
+            entity.HasIndex(x => new { x.UserId, x.IdempotencyKey }).IsUnique();
+            entity.HasIndex(x => x.ProviderTransactionId).IsUnique().HasFilter("[ProviderTransactionId] IS NOT NULL");
+            entity.HasIndex(x => new { x.UserId, x.LicensePlanId, x.Status, x.ExpiresAtUtc });
+            entity.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.LicensePlan).WithMany().HasForeignKey(x => x.LicensePlanId).OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.FulfilledUserLicense).WithMany().HasForeignKey(x => x.FulfilledUserLicenseId).OnDelete(DeleteBehavior.NoAction);
         });
     }
 

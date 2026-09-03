@@ -29,10 +29,11 @@ sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
+sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.DesktopLeastPrivilege.sql
 ```
 
-`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance/Fal hay tự nhập giá. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI; 4.0.9 tách policy `Default`/`LongForm`. Phải chạy các migration trước script least privilege.
+`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance/Fal, tự nhập giá hoặc tự bật thanh toán. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10 thêm gói bán công khai và bảng payment SePay. Phải chạy các migration trước script least privilege.
 
 Luồng xác nhận tài sản trực tiếp trên card cảnh, endpoint `/confirm` và phép phân tích prompt bắt buộc sử dụng các bảng/cột của migration 4.0.7–4.0.8; không có file SQL mới riêng cho cải tiến UI này. Không chạy lại `VideoFactory.Initial.sql` trên database thật nếu chưa xác minh đúng quy trình nâng cấp, backup và khả năng restore.
 
@@ -56,7 +57,7 @@ SELECT [Code], [Name], [MonthlyBudgetLimit], [CurrencyCode]
 FROM [ai].[Organizations];
 ```
 
-Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.9-fal-veo-long-form`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
+Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.10-license-sepay-payments`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
 
 ## 3. Cấu hình server
 
@@ -81,6 +82,8 @@ dotnet user-secrets set --project TOOL-SERVER "Smtp:TimeoutSeconds" "30"
 Không lưu App Password trong source. Có thể chỉnh `PasswordReset:OtpLifetimeMinutes` trong khoảng 5–30 phút và `PasswordReset:MaxFailedAttempts` trong khoảng 3–10; mặc định lần lượt là 10 phút và 5 lần.
 
 Không thêm OpenAI/Kling/BytePlus/Fal key vào `appsettings.json`. ASP.NET Core Data Protection dùng application name `VideoMaker.Server` và lưu key ring trong database. Khi scale nhiều server, tất cả instance phải dùng cùng database key ring và cùng application name.
+
+Thanh toán SePay mặc định tắt. Chỉ bật `Payments:Sepay:Enabled` sau khi migration 4.0.10 đã được rehearsal, gói bán đã cấu hình và webhook staging đã kiểm tra. Tài khoản nhận phải nằm ngoài source; lệnh và checklist chi tiết ở `HUONG_DAN_CAU_HINH_SEPAY_LICENSE.md`. Webhook MVP không dùng API key và chỉ đối soát tài khoản, transfer code cùng số tiền, vì vậy phải chấp nhận rủi ro giả mạo trước khi public endpoint. Nếu tắt tạo payment nhưng còn giao dịch pending, giữ nguyên cấu hình tài khoản nhận hợp lệ để webhook cũ tiếp tục được đối soát.
 
 Cache video và polling dùng cấu hình không chứa secret. Giá trị mặc định trong source là retention 48 giờ, tối đa 1 GiB/file, 20 GiB tổng; polling có lease 35 phút và dừng ở 3.000 lần hoặc 72 giờ. Chỉ đổi sau khi đã kiểm tra dung lượng đĩa, timeout mạng và chính sách lưu trữ của môi trường:
 
@@ -343,6 +346,8 @@ Desktop `appsettings.json` chỉ cần URL server, connection string workflow v�
 
 ## 10. Smoke test
 
+Trước smoke test AI, kiểm tra riêng luồng license SePay trên staging theo `HUONG_DAN_CAU_HINH_SEPAY_LICENSE.md`: user hết hạn phải mở được app ở trạng thái locked, QR phải quét ra đúng tài khoản/số tiền/nội dung, webhook sai không cấp license và webhook hợp lệ/lặp chỉ fulfillment một lần. Không dùng webhook hoặc giao dịch production cho kiểm thử tự động.
+
 Thực hiện bằng một tài khoản Member có license và device lease hợp lệ:
 
 1. Đăng nhập desktop và xác nhận thấy đúng tổ chức.
@@ -378,6 +383,8 @@ Invoke-RestMethod `
   -Headers $adminHeaders
 ```
 
+Nếu rollout SePay, cấu hình metrics exporter thu meter `VideoMaker.Payments`/counter `videomaker.license_payment.events`. Global Admin có thể đối soát exact order code hoặc provider transaction ID bằng `GET /api/admin/licenses/payments?search=<VALUE>&take=100`; dùng thêm `status=Paid` để phát hiện bản ghi đã nhận tiền nhưng chưa fulfillment. Response quản trị đã loại snapshot tài khoản nhận, idempotency, entitlement, provider reference và raw webhook; không bổ sung các dữ liệu này vào log/dashboard.
+
 ## 11. Rollback ứng dụng
 
 Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage và audit phải được giữ để đối soát. Khi rollback Seedance, ngừng tạo project mới, chuyển policy của tổ chức thử nghiệm về Kling cho project mới, chờ task BytePlus đang chạy về terminal rồi mới disable model/credential; project đã snapshot BytePlus không tự đổi provider. Nếu cần quay lại binary trước, chặn quyền AI và đặt budget tổ chức về `0` trước; không tái phát API key xuống desktop.
@@ -385,7 +392,7 @@ Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage
 ## 12. Checklist production
 
 - [ ] Backup và thử restore database.
-- [ ] Migration 4.0.0 đến 4.0.8 có trong `ai.SchemaVersions`; 4.0.4 đến 4.0.8 đã chạy idempotent trên database clone.
+- [ ] Migration 4.0.0 đến 4.0.10 có trong `ai.SchemaVersions`; 4.0.4 đến 4.0.10 đã chạy idempotent trên database clone.
 - [ ] Server/desktop dùng database user khác nhau.
 - [ ] HTTPS hợp lệ; không cho HTTP public.
 - [ ] JWT signing key nằm trong secret manager.
@@ -400,6 +407,7 @@ Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage
 - [ ] Worker video đa provider, dọn output ảnh/video tạm, credential retirement và budget reconciliation đang chạy.
 - [ ] Dung lượng cache, retention, output-host allowlist và quyền ghi thư mục `Generation:VideoOutputs:StorageRoot` đã được kiểm tra.
 - [ ] Log/telemetry không chứa Authorization header, prompt nhạy cảm hoặc provider key.
+- [ ] Tài khoản nhận SePay nằm trong secret store; QR và webhook không API key đã qua staging, payload không bị ghi đầy đủ vào log và rủi ro giả mạo đã được chấp nhận.
 - [ ] Desktop mới không còn UI/mã BYOK và đã dọn credential cũ.
 - [ ] Storyboard hiển thị ba trạng thái tài sản `Chờ xác nhận`/`Cần chỉnh sửa`/`Đã sẵn sàng`; xác nhận theo cảnh không tạo provider request hoặc usage.
 - [ ] Video dài Kling có content/prompt/speech/character/asset tiếng Việt và metadata `vi-VN`; video ngắn direct prompt cùng BytePlus vẫn giữ hành vi riêng.

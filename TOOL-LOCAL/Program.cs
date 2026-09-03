@@ -7,6 +7,7 @@ using TOOL_LOCAL.Updates;
 using TOOL_LOCAL.Generation;
 using TOOL_LOCAL.Media;
 using TOOL_LOCAL.Providers;
+using TOOL_LOCAL.Payments;
 
 namespace TOOL_LOCAL;
 
@@ -54,6 +55,7 @@ internal static class Program
 
                 var licenseApiClient = new LicenseApiClient(httpClient, sessionManager);
                 var licenseManager = new LicenseSessionManager(licenseApiClient);
+                var licensePaymentClient = new LicensePaymentApiClient(httpClient, sessionManager);
                 try
                 {
                     licenseManager.InitializeAsync().GetAwaiter().GetResult();
@@ -139,7 +141,8 @@ internal static class Program
                     updateApiClient,
                     packageUpdateService,
                     options.Update,
-                    mediaToolPreflight);
+                    mediaToolPreflight,
+                    licensePaymentClient);
                 try
                 {
                     Application.Run(mainForm);
