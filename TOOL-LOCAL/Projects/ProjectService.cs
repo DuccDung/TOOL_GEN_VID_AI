@@ -83,23 +83,27 @@ public sealed class ProjectService(
         {
             return null;
         }
-        var currentScript = project.CurrentScriptVersion is null
-            ? null
-            : await dbContext.Scripts
-                .AsNoTracking()
-                .Where(x => x.ProjectId == projectId && x.Version == project.CurrentScriptVersion.Value)
-                .Select(x => new
-                {
-                    x.StructureType,
-                    x.Title,
-                    x.FullText,
-                    ConceptTitle = x.Concept == null ? null : x.Concept.Title,
-                    ConceptHook = x.Concept == null ? null : x.Concept.SelectedHook,
-                    ConceptAngle = x.Concept == null ? null : x.Concept.Angle,
-                    ConceptAudience = x.Concept == null ? null : x.Concept.Audience,
-                    ConceptCallToAction = x.Concept == null ? null : x.Concept.CallToAction
-                })
-                .SingleOrDefaultAsync(cancellationToken);
+        var currentScriptVersion = project.CurrentScriptVersion;
+        var currentScript = await dbContext.Scripts
+            .AsNoTracking()
+            .Where(x =>
+                x.ProjectId == projectId &&
+                (x.Status == "Approved" || x.Version == currentScriptVersion))
+            .OrderByDescending(x => x.Version == currentScriptVersion)
+            .ThenByDescending(x => x.Version)
+            .Select(x => new
+            {
+                x.Version,
+                x.StructureType,
+                x.Title,
+                x.FullText,
+                ConceptTitle = x.Concept == null ? null : x.Concept.Title,
+                ConceptHook = x.Concept == null ? null : x.Concept.SelectedHook,
+                ConceptAngle = x.Concept == null ? null : x.Concept.Angle,
+                ConceptAudience = x.Concept == null ? null : x.Concept.Audience,
+                ConceptCallToAction = x.Concept == null ? null : x.Concept.CallToAction
+            })
+            .FirstOrDefaultAsync(cancellationToken);
         var workflowStructureType = currentScript?.StructureType;
         var currentStyle = project.CurrentStyleVersion is null
             ? null
@@ -492,6 +496,20 @@ public sealed class ProjectService(
             project.ActualCost,
             project.BudgetLimit,
             project.UpdatedAtUtc);
+        var content = currentScript is null || string.IsNullOrWhiteSpace(currentScript.FullText)
+            ? null
+            : new ProjectContentSummary(
+                currentScript.Version,
+                !string.IsNullOrWhiteSpace(currentScript.Title)
+                    ? currentScript.Title
+                    : !string.IsNullOrWhiteSpace(currentScript.ConceptTitle)
+                        ? currentScript.ConceptTitle
+                        : project.Topic,
+                currentScript.FullText,
+                currentScript.ConceptHook,
+                currentScript.ConceptAngle,
+                currentScript.ConceptAudience,
+                currentScript.ConceptCallToAction);
 
         return new ProjectDashboard(
             summary,
@@ -526,7 +544,8 @@ public sealed class ProjectService(
             requiresKlingVietnamese
                 ? KlingLongFormVietnameseValidator.EffectiveLanguageCode
                 : project.LanguageCode,
-            requiresVietnameseContentRegeneration);
+            requiresVietnameseContentRegeneration,
+            content);
     }
 
     public async Task UpdateSceneAsync(
@@ -643,7 +662,7 @@ public sealed class ProjectService(
                     promptText,
                     previousPrompt.NegativePrompt
                 ],
-                "Nội dung cảnh của video dài dùng Kling phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
+                "Nội dung cảnh của video dài dùng provider Native Audio phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
         }
         previousPrompt.Status = "Superseded";
         var now = DateTime.UtcNow;
@@ -838,7 +857,7 @@ public sealed class ProjectService(
         {
             KlingLongFormVietnameseValidator.RequireVietnamese(
                 [role, visualIdentity, wardrobe, .. immutableTraits, .. forbiddenChanges],
-                "Hồ sơ nhân vật của video dài dùng Kling phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
+                "Hồ sơ nhân vật của video dài dùng provider Native Audio phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
         }
 
         var profile = JsonNode.Parse(character.ProfileJson) as JsonObject ?? new JsonObject();

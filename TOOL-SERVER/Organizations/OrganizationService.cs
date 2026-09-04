@@ -53,7 +53,7 @@ public interface IOrganizationService
     Task<OrganizationSummaryResponse> UpdateBudgetAsync(Guid organizationId, UpdateOrganizationBudgetRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrganizationProviderResponse>> GetProvidersAsync(Guid organizationId, string userId, CancellationToken cancellationToken);
     Task<OrganizationProviderCredentialRotationResult> RotateProviderCredentialAsync(Guid organizationId, string providerCode, SaveOrganizationProviderCredentialRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
-    Task<OrganizationVideoPolicyResponse?> GetVideoPolicyAsync(Guid organizationId, string userId, CancellationToken cancellationToken);
+    Task<OrganizationVideoPolicyResponse?> GetVideoPolicyAsync(Guid organizationId, string userId, string scope, CancellationToken cancellationToken);
     Task<OrganizationVideoPolicyResponse> UpdateVideoPolicyAsync(Guid organizationId, UpdateOrganizationVideoPolicyRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
     Task<OrganizationUsageResponse> GetUsageAsync(Guid organizationId, string userId, int take, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrganizationAuditItemResponse>> GetAuditAsync(Guid organizationId, string userId, int take, CancellationToken cancellationToken);
@@ -114,7 +114,8 @@ internal sealed partial class OrganizationService(
                 .ThenInclude(x => x.CostRates)
             .Where(x => x.ProviderCode == ProviderCodes.OpenAi ||
                         x.ProviderCode == ProviderCodes.Kling ||
-                        x.ProviderCode == ProviderCodes.BytePlus)
+                        x.ProviderCode == ProviderCodes.BytePlus ||
+                        x.ProviderCode == ProviderCodes.Fal)
             .ToListAsync(cancellationToken);
         var now = UtcNow();
         var result = new List<OrganizationSummaryResponse>(memberships.Count);
@@ -133,9 +134,13 @@ internal sealed partial class OrganizationService(
                     .Where(x => x.IsActive &&
                                 x.EffectiveFromUtc <= now &&
                                 (x.EffectiveToUtc == null || x.EffectiveToUtc > now) &&
-                                (provider.ProviderCode != ProviderCodes.Kling ||
-                                 x.UsageType != "VideoSecond" ||
-                                 KlingNativeAudioPolicy.MatchesRateMetadata(x.MetadataJson)))
+                                (x.UsageType != "VideoSecond" ||
+                                 provider.ProviderCode switch
+                                 {
+                                     ProviderCodes.Kling => KlingNativeAudioPolicy.MatchesRateMetadata(x.MetadataJson),
+                                     ProviderCodes.Fal when model is not null => FalVeoPolicy.MatchesRateMetadata(x.MetadataJson, model.ModelCode),
+                                     _ => true
+                                 }))
                     .Select(x => x.UsageType) ?? [];
                 return OrganizationReadinessEvaluator.Evaluate(
                     provider.ProviderCode,
@@ -230,7 +235,8 @@ internal sealed partial class OrganizationService(
                 x.Role,
                 x.Status,
                 x.MonthlyBudgetLimit,
-                x.JoinedAtUtc);
+                x.JoinedAtUtc,
+                x.IsProvisioningManaged);
         }).ToArray();
     }
 
@@ -265,11 +271,12 @@ internal sealed partial class OrganizationService(
         }
         membership.Role = role;
         membership.Status = OrganizationMemberStatuses.Active;
+        membership.IsProvisioningManaged = false;
         membership.MonthlyBudgetLimit = request.MonthlyBudgetLimit;
         membership.UpdatedAtUtc = now;
         AddAudit(organizationId, context, "OrganizationMemberAdded", new { user.Id, user.Email, role, request.MonthlyBudgetLimit });
         await governanceDb.SaveChangesAsync(cancellationToken);
-        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, membership.Status, membership.MonthlyBudgetLimit, membership.JoinedAtUtc);
+        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, membership.Status, membership.MonthlyBudgetLimit, membership.JoinedAtUtc, membership.IsProvisioningManaged);
     }
 
     public async Task<OrganizationMemberResponse> UpdateMemberAsync(
@@ -311,12 +318,13 @@ internal sealed partial class OrganizationService(
         }
         member.Role = role;
         member.Status = status;
+        member.IsProvisioningManaged = false;
         member.MonthlyBudgetLimit = request.MonthlyBudgetLimit;
         member.UpdatedAtUtc = UtcNow();
         AddAudit(organizationId, context, "OrganizationMemberUpdated", new { memberUserId, role, status, request.MonthlyBudgetLimit });
         await governanceDb.SaveChangesAsync(cancellationToken);
         var user = await accountDb.Users.AsNoTracking().SingleAsync(x => x.Id == memberUserId, cancellationToken);
-        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, status, member.MonthlyBudgetLimit, member.JoinedAtUtc);
+        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, status, member.MonthlyBudgetLimit, member.JoinedAtUtc, member.IsProvisioningManaged);
     }
 
     public async Task<OrganizationSummaryResponse> UpdateBudgetAsync(
@@ -464,12 +472,16 @@ internal sealed partial class OrganizationService(
     public async Task<OrganizationVideoPolicyResponse?> GetVideoPolicyAsync(
         Guid organizationId,
         string userId,
+        string scope,
         CancellationToken cancellationToken)
     {
         await RequireMembershipAsync(organizationId, userId, cancellationToken);
+        scope = ValidateVideoPolicyScope(scope);
         var policy = await governanceDb.OrganizationVideoPolicies
             .AsNoTracking()
-            .SingleOrDefaultAsync(x => x.OrganizationId == organizationId, cancellationToken);
+            .SingleOrDefaultAsync(
+                x => x.OrganizationId == organizationId && x.PolicyScope == scope,
+                cancellationToken);
         if (policy is null)
         {
             return null;
@@ -491,6 +503,7 @@ internal sealed partial class OrganizationService(
                 "organization_role_denied",
                 "Vai trò hiện tại không có quyền quản lý policy video.");
         }
+        var scope = ValidateVideoPolicyScope(request.Scope);
         var model = await providerDb.ProviderModels
             .AsNoTracking()
             .Include(x => x.Provider)
@@ -507,6 +520,14 @@ internal sealed partial class OrganizationService(
         var resolution = request.Resolution.Trim();
         var capabilities = VideoModelCapabilities.Parse(model.CapabilitiesJson, model.Provider.ProviderCode);
         ProjectVideoPolicyResolver.ValidateVariant(resolution, request.NativeAudio, capabilities);
+        if (model.Provider.ProviderCode == ProviderCodes.Fal &&
+            scope != OrganizationVideoPolicyScopes.LongForm)
+        {
+            throw new AccountApiException(
+                StatusCodes.Status422UnprocessableEntity,
+                "fal_long_form_only",
+                "Fal/Veo chỉ được cấu hình cho policy Video dài.");
+        }
 
         var credentialReady = await governanceDb.OrganizationProviderCredentials
             .AsNoTracking()
@@ -525,12 +546,15 @@ internal sealed partial class OrganizationService(
 
         var now = UtcNow();
         var policy = await governanceDb.OrganizationVideoPolicies
-            .SingleOrDefaultAsync(x => x.OrganizationId == organizationId, cancellationToken);
+            .SingleOrDefaultAsync(
+                x => x.OrganizationId == organizationId && x.PolicyScope == scope,
+                cancellationToken);
         if (policy is null)
         {
             policy = new OrganizationVideoPolicy
             {
                 OrganizationId = organizationId,
+                PolicyScope = scope,
                 PolicyVersion = 1,
                 CreatedAtUtc = now,
                 RowVersion = new byte[8]
@@ -560,6 +584,7 @@ internal sealed partial class OrganizationService(
             {
                 model.Provider.ProviderCode,
                 model.ModelCode,
+                policy.PolicyScope,
                 policy.PolicyVersion,
                 policy.Resolution,
                 policy.NativeAudio
@@ -577,7 +602,8 @@ internal sealed partial class OrganizationService(
             policy.Resolution,
             policy.NativeAudio,
             policy.IsActive,
-            policy.UpdatedAtUtc);
+            policy.UpdatedAtUtc,
+            policy.PolicyScope);
     }
 
     public async Task<OrganizationUsageResponse> GetUsageAsync(
@@ -844,7 +870,24 @@ internal sealed partial class OrganizationService(
             policy.Resolution,
             policy.NativeAudio,
             policy.IsActive,
-            policy.UpdatedAtUtc);
+            policy.UpdatedAtUtc,
+            policy.PolicyScope);
+    }
+
+    private static string ValidateVideoPolicyScope(string? value)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value)
+            ? OrganizationVideoPolicyScopes.Default
+            : value.Trim();
+        return normalized switch
+        {
+            OrganizationVideoPolicyScopes.Default => normalized,
+            OrganizationVideoPolicyScopes.LongForm => normalized,
+            _ => throw new AccountApiException(
+                StatusCodes.Status422UnprocessableEntity,
+                "video_policy_scope_invalid",
+                "Pháº¡m vi policy video khÃ´ng há»£p lá»‡.")
+        };
     }
 
     private static string ValidateRole(string value)

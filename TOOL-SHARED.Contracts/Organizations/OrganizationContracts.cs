@@ -9,6 +9,12 @@ public static class OrganizationRoles
     public const string Viewer = "Viewer";
 }
 
+public static class OrganizationVideoPolicyScopes
+{
+    public const string Default = "Default";
+    public const string LongForm = "LongForm";
+}
+
 public sealed record OrganizationAiReadinessResponse(
     string ProviderCode,
     string? ModelCode,
@@ -44,7 +50,8 @@ public sealed record OrganizationMemberResponse(
     string Role,
     string Status,
     decimal? MonthlyBudgetLimit,
-    DateTime JoinedAtUtc);
+    DateTime JoinedAtUtc,
+    bool IsProvisioningManaged = false);
 
 public sealed record CreateOrganizationRequest(
     string Name,
@@ -94,12 +101,14 @@ public sealed record OrganizationVideoPolicyResponse(
     string Resolution,
     bool NativeAudio,
     bool IsActive,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    string Scope = OrganizationVideoPolicyScopes.Default);
 
 public sealed record UpdateOrganizationVideoPolicyRequest(
     Guid ProviderModelId,
     string Resolution = "720p",
-    bool NativeAudio = true);
+    bool NativeAudio = true,
+    string Scope = OrganizationVideoPolicyScopes.Default);
 
 public sealed record OrganizationUsageItemResponse(
     Guid LedgerEntryId,

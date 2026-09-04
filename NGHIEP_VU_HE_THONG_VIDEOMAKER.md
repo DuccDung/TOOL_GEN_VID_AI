@@ -1,8 +1,10 @@
 # Nghiệp vụ hệ thống VideoMaker 4.0
 
-> Trạng thái hiện tại: AI Gateway tập trung theo tổ chức. Tài liệu BYOK 3.0 đã hết hiệu lực. Source hỗ trợ policy video bất biến theo project, Kling và BytePlus Seedance dưới cùng gateway; BytePlus/Seedance được seed disabled và chỉ được bật theo tổ chức sau migration, credential, rate và smoke test có phí. Luồng mặc định hiện vẫn là **Kling Native Audio 720p** cho tới khi quản trị viên chủ động chọn policy khác. Desktop bắt buộc preview/nghe/duyệt từng clip, chỉ render `SceneVideo` của đúng `ApprovedGenerationId`; TTS/WAV được giữ tương thích nhưng không fallback ngầm.
+> Trạng thái hiện tại: AI Gateway tập trung theo tổ chức. Tài liệu BYOK 3.0 đã hết hiệu lực. Source hỗ trợ policy video bất biến theo project, Kling, BytePlus Seedance và Fal/Veo dưới cùng gateway; BytePlus/Seedance và Fal/Veo được seed disabled và chỉ được bật theo tổ chức sau migration, credential, rate và smoke test có phí. Policy `Default` và `LongForm` đã tách riêng; Fal/Veo bản đầu chỉ được chọn cho `LongForm`. Luồng mặc định hiện vẫn là **Kling Native Audio 720p** cho tới khi quản trị viên chủ động chọn policy khác. Desktop bắt buộc preview/nghe/duyệt từng clip, chỉ render `SceneVideo` của đúng `ApprovedGenerationId`; TTS/WAV được giữ tương thích nhưng không fallback ngầm.
 
 > Cập nhật ngữ cảnh: 2026-09-01. Đây là nguồn sự thật nghiệp vụ toàn hệ thống. Source đã có thư viện tính nhất quán **text-only** cho bối cảnh/đạo cụ/item theo project, materialize đề xuất AI và xác nhận trực tiếp theo từng cảnh; ảnh tham chiếu của các loại tài sản này chưa thuộc phạm vi hiện tại. `NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md` và `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md` chỉ bổ sung chi tiết cho từng luồng; khi có khác biệt, tài liệu này được ưu tiên. Source code và migration vẫn là nguồn sự thật kỹ thuật.
+
+> Cập nhật license 2026-09-03: source đã có migration 4.0.10 và luồng gia hạn bằng chuyển khoản SePay. Thanh toán mặc định tắt và chưa được coi là rollout production nếu chưa rehearsal migration, cấu hình tài khoản nhận, webhook staging, đối soát và nghiệm thu UI thủ công.
 
 ## 1. Mục tiêu
 
@@ -25,18 +27,20 @@ Doanh nghiệp quản lý AI theo mô hình:
 - Xác thực JWT, session và device claim.
 - Kiểm tra license và lease thiết bị.
 - Quản lý tổ chức, thành viên và vai trò.
-- Mã hóa, rotate và thu hồi credential OpenAI/Kling/BytePlus.
+- Mã hóa, rotate và thu hồi credential OpenAI/Kling/BytePlus/Fal.
 - Lưu bảng giá nội bộ, giữ ngân sách trước request và quyết toán sau request.
-- Gọi OpenAI Responses/Image API và provider video Kling hoặc BytePlus theo policy.
+- Gọi OpenAI Responses/Image API và provider video Kling, BytePlus hoặc Fal/Veo theo policy.
 - Lưu ảnh sinh tạm thời tối đa khoảng 24 giờ, cung cấp API tải binary có xác thực và dọn payload hết hạn.
 - Polling video đa provider nền, kể cả khi desktop đã đóng; worker là polling owner duy nhất.
 - Tải ngay output có URL ngắn hạn vào cache server, ghi hash/MIME/size rồi proxy về desktop; không trả URL provider trực tiếp.
 - Ghi audit log và usage ledger.
+- Cung cấp gói license công khai, tạo payment/QR, đối soát webhook SePay và cấp hoặc gia hạn license đúng một lần.
 - Cung cấp Admin Console **Tổ chức & AI** để quản trị organization, member, budget/usage, credential, pricing và audit mà không trả secret về trình duyệt; trang **Cách tính chi phí** giải thích reservation/settlement và minh họa bằng rate Active hiện hành.
 
 ### VideoMaker Desktop
 
 - Đăng nhập, heartbeat license và chọn tổ chức.
+- Khi license thiếu/hết hạn, giữ phiên đăng nhập, khóa nghiệp vụ bằng overlay và cho phép chọn gói, thanh toán, polling rồi kích hoạt lại thiết bị.
 - Tạo/quản lý dự án và workspace.
 - Hiển thị storyboard theo kế hoạch cảnh hiện hành: lời đọc, mô tả hình ảnh, prompt, thời lượng, trạng thái và preview clip cục bộ.
 - Hiển thị hồ sơ nhân vật do OpenAI tách từ content plan; cho phép chỉnh hồ sơ nháp, chọn ảnh tham chiếu JPEG/PNG hoặc tạo/sinh lại ảnh chuẩn bằng GPT-Image-2, xem trước và chỉ khóa nhân vật khi người dùng xác nhận.
@@ -48,7 +52,7 @@ Doanh nghiệp quản lý AI theo mô hình:
 
 ### SQL Server
 
-- Schema `auth`: tài khoản, session, license và Data Protection keys.
+- Schema `auth`: tài khoản, session, license, giao dịch gia hạn SePay và Data Protection keys.
 - Schema `ai`: tổ chức, thành viên, credential tổ chức, kỳ ngân sách, reservation, usage ledger và audit.
 - Schema `vf`: dự án, cảnh, provider catalog, request log và dữ liệu sản xuất video.
 
@@ -78,7 +82,32 @@ Quy tắc bổ sung:
 - Server luôn xác minh dự án thuộc đúng user và đúng tổ chức; không tin hoàn toàn dữ liệu từ desktop.
 - Dự án cũ được migration gắn vào tổ chức `legacy-default` khi có thể xác định chủ sở hữu.
 
-## 5. Credential OpenAI/Kling/BytePlus
+### 4.1. License và gia hạn bằng SePay
+
+- JWT/session/device xác định phiên đăng nhập; license xác định quyền sử dụng nghiệp vụ. Thiếu hoặc hết hạn license không tự thu hồi session.
+- `GET /api/license/current`, offer, tạo payment và đọc trạng thái payment được phép dùng với session/device hợp lệ mà không cần active license.
+- Desktop locked chỉ cho phép làm mới license, offer/payment/status, đăng xuất và các thao tác phục hồi đã allowlist; project, media, provider và generation vẫn bị bridge chặn.
+- Server là nguồn sự thật của gói, giá và thời hạn. Payment snapshot gói, entitlement, số tiền và tài khoản nhận; desktop không được gửi giá hoặc gọi SePay trực tiếp.
+- Webhook không yêu cầu API key; server chỉ nhận giao dịch tiền vào đúng tài khoản, transfer code trong nội dung và số tiền. `ProviderTransactionId` là duy nhất; payment và license được fulfillment trong cùng transaction `Serializable`.
+- Webhook hợp lệ đến sau thời hạn QR vẫn được xử lý vì tiền đã thực nhận. Webhook lặp không được gia hạn lần hai.
+- Chỉ trạng thái `Fulfilled` mới cho desktop refresh license, kích hoạt thiết bị và gỡ overlay. `Paid` chưa đủ để mở khóa.
+- `Suspended`, `Revoked` và `DeviceLimit` không tự mở bán gói; UI giữ khóa và hướng dẫn liên hệ quản trị viên.
+- Thông tin tài khoản nhận chỉ ở server. Khi payment bị tắt, không nới lỏng license guard; webhook của payment đã tạo vẫn phải tiếp tục được xử lý trong thời gian đối soát.
+
+### 4.2. Tự động phân bổ người mua gói vào tổ chức
+
+- Một gói license công khai có thể được ánh xạ tới đúng một pool tổ chức đang hoạt động. Một tổ chức chỉ được tham gia một pool tự động đang hoạt động tại một thời điểm.
+- Global Admin chuẩn bị pool và sức chứa; tổ chức chỉ nhận người tự động khi đang `Active`, đã bật nhận người và được đánh dấu sẵn sàng sau khi credential, video policy cùng ngân sách đã được kiểm tra. Credential vẫn phải đi qua quyền Owner/OrganizationAdmin, test provider và mã hóa trên server.
+- Sức chứa thương mại chỉ tính assignment khách hàng ở trạng thái `Reserved`, `Scheduled` hoặc `Active`; Owner, OrganizationAdmin và membership vận hành thủ công không bị quy trình license tự động chiếm hoặc giải phóng seat.
+- Tạo payment phải giữ một seat trong transaction `Serializable` trước khi trả QR. Tổ chức được chọn theo priority, sau đó theo tỷ lệ sử dụng thấp nhất và khóa định danh ổn định để không vượt sức chứa khi nhiều người mua đồng thời.
+- Webhook hợp lệ chỉ chuyển payment sang `Fulfilled` sau khi license, seat assignment và membership `Member` đã cùng được cấp thành công. Idempotency phải ngăn webhook/request lặp gia hạn license hoặc chiếm seat lần hai.
+- Payment hết hạn giải phóng reservation. Nếu tiền đến muộn, server thử phân bổ lại; khi pool đã đầy, payment giữ trạng thái đã nhận tiền nhưng chờ provisioning, phát cảnh báo và cho phép retry thay vì báo hoàn tất giả.
+- Gia hạn cùng gói ưu tiên giữ nguyên tổ chức. Đổi gói tạo assignment theo pool mới vào đúng thời điểm license mới có hiệu lực; membership tự động cũ chỉ bị tạm ngưng/giải phóng theo vòng đời license và không làm mất dữ liệu dự án.
+- Membership tự động và membership thủ công phải có dấu vết riêng. Worker không được hạ vai trò, khóa hoặc xóa Owner/OrganizationAdmin hay membership do admin quản lý thủ công.
+- Sau fulfillment, desktop làm mới license và danh sách tổ chức rồi ưu tiên chọn tổ chức vừa được cấp. Người dùng vẫn phải thỏa license/device lease, membership, role, project ownership, budget và provider readiness ở từng request AI.
+- Gói không tự suy ra chi phí AI từ giá bán. Hạn mức AI của thành viên hoặc pool phải được Global Admin cấu hình rõ; thiếu rate/budget/credential vẫn fail closed trước outbound call.
+
+## 5. Credential OpenAI/Kling/BytePlus/Fal
 
 ### Tạo hoặc rotate
 
@@ -100,6 +129,7 @@ API không bao giờ trả lại key. Response chỉ có trạng thái, version 
 - Mỗi model OpenAI, gồm model Text và `gpt-image-2`, cần hai rate riêng: `InputToken` và `OutputToken`; hỗ trợ đơn vị `Token`, `1KTokens`, `MillionTokens`. Không dùng rate model Text để tính ảnh.
 - Kling cần `VideoSecond` với đơn vị `Second`; luồng hiện tại chỉ nhận rate có metadata `resolution=720p` và `nativeAudio=true`.
 - BytePlus Seedance cần `OutputToken`; rate thuộc đúng model và dùng đơn vị token được Global Admin nhập từ hợp đồng/dashboard hiện hành. Estimate dùng capability 720p/24fps, settlement dùng actual `usage.completion_tokens` và rate snapshot của request.
+- Fal/Veo Standard và Fast cần rate `VideoSecond` riêng cho đúng endpoint; metadata phải exact-match `endpointId`, `resolution=720p` và `nativeAudio=true`. Server không tự đoán hoặc seed giá Fal.
 - Hệ thống không tự giả định giá provider. Thiếu rate làm request dừng với `pricing_not_configured` trước khi gọi provider.
 - Mỗi request lưu `RateSnapshotJson`; thay đổi bảng giá sau đó không làm đổi chi phí của request đang chạy.
 
@@ -184,17 +214,17 @@ Giai đoạn hiện tại chỉ quản lý text, không tải lên hoặc sinh �
 8. Desktop nhận URL tương đối trung lập provider của server: `/api/generation/videos/{providerRequestId}/content`. Endpoint Kling cũ chỉ được giữ cho tương thích, không phải đường gọi mặc định của desktop.
 9. Proxy xác thực lại user/license/tổ chức, chỉ cho HTTPS và host thuộc allowlist của provider, kiểm tra DNS chống SSRF, giới hạn redirect, MIME, dung lượng file và tổng dung lượng cache theo cấu hình.
 10. Clip tải xong được hiển thị ngay tại card của cảnh qua virtual media host cục bộ; cảnh chưa có clip dùng placeholder theo theme và không tự gọi thêm provider ảnh.
-11. Trước resolver/rate/budget/outbound, video dài Kling chặn voice-over còn gắn nhân vật, on-camera thiếu speaker/reference, speech mode không khớp `Dialogue`/`Narration`, Native Audio không phù hợp snapshot và prompt hình ảnh yêu cầu im lặng/khép miệng/lời dẫn ngoài khung hình.
+11. Trước resolver/rate/budget/outbound, video dài Kling/Fal chặn voice-over còn gắn nhân vật, on-camera thiếu speaker/reference, speech mode không khớp `Dialogue`/`Narration`, Native Audio không phù hợp snapshot và prompt hình ảnh yêu cầu im lặng/khép miệng/lời dẫn ngoài khung hình. Riêng Fal/Veo bản đầu còn yêu cầu first-frame PNG/JPEG đã duyệt, tối đa 8 MB, tối thiểu 720p và đúng 16:9/9:16; B-roll chưa có first-frame bị chặn, không fallback Text-to-Video.
 
 ### 8.2. Nghiệp vụ âm thanh của clip và video cuối
 
-Luồng sản phẩm hiện tại chỉ dùng Native Audio do provider video đã snapshot cho project sinh trực tiếp cùng clip. Kling 3.0 là policy mặc định; BytePlus chỉ đi vào luồng này sau rollout có kiểm soát:
+Luồng sản phẩm hiện tại chỉ dùng Native Audio do provider video đã snapshot cho project sinh trực tiếp cùng clip. Kling 3.0 là policy mặc định; BytePlus và Fal/Veo chỉ đi vào luồng này sau rollout có kiểm soát:
 
 1. Mỗi cảnh có một `SpeechMode`: `None`, `OnCameraDialogue` hoặc `NativeVoiceOver`.
 2. OpenAI content planner trả riêng `spoken_text`, speaker, voice style, ambience và sound effects; `visual_prompt` không được lặp lại lời nói.
 3. Server đọc dữ liệu scene đã lưu, không tin prompt lời nói do desktop tự gửi, rồi dựng prompt theo adapter/template có version của provider snapshot. Prompt phải giữ nguyên lời đã duyệt, speaker, ngôn ngữ, voice style, ambience và SFX; on-camera dialogue còn yêu cầu đúng một người nói và lip-sync.
 4. Hệ thống không áp dụng giới hạn số từ cố định theo thời lượng. `spoken_text` đã lưu được giữ nguyên khi dựng prompt provider; desktop và server không tự cắt lời hoặc chặn request chỉ vì số từ. Người dùng phải nghe duyệt kết quả vì lời quá dài vẫn có thể khiến provider nói nhanh, thiếu lời hoặc lệch khẩu hình.
-5. Kling hiện dùng `720p`, `NativeAudio = true` và `multi_shot = false`; BytePlus hiện dùng biến thể 720p/24fps/Native Audio theo catalog. Rate Active phải khớp đúng model, usage type và capability; thiếu rate/budget dừng trước outbound.
+5. Kling hiện dùng `720p`, `NativeAudio = true` và `multi_shot = false`; BytePlus dùng biến thể 720p/24fps/Native Audio; Fal/Veo chỉ dùng I2V 720p/Native Audio, thời lượng 4/6/8 giây, tỷ lệ 16:9/9:16 và luôn gửi `auto_fix=false`. Rate Active phải khớp đúng model, usage type và capability; thiếu rate/budget dừng trước outbound.
 6. Desktop tải raw `SceneVideo` qua proxy có xác thực, kiểm tra video bằng FFprobe và đo audio bằng `AudioQualityValidator`. Metadata chỉ lưu speech hash, mode và thống kê audio; không log nguyên văn lời hoặc provider URL.
 7. Clip thiếu audio stream hoặc gần như im lặng chuyển `NativeAudioInvalid`, không được duyệt và có thể sửa prompt/tạo lại bằng provider request mới.
 8. Attempt mới sau `NativeAudioInvalid` không tự chạy. Khi người dùng xác nhận request có phí mới, server đọc generation terminal và tự áp `speech-recovery-v1` cho on-camera: medium close-up/medium shot, nói ngay không có intro im lặng, room tone tối thiểu, không nhạc và không hành động cạnh tranh với lời. Profile/version được lưu trong request snapshot an toàn; full speech vẫn chỉ lưu hash.
@@ -204,23 +234,24 @@ Luồng sản phẩm hiện tại chỉ dùng Native Audio do provider video đ�
 
 ### 8.3. Trạng thái triển khai và điều kiện vận hành hiện tại
 
-Source hiện hành đã có contract speech intent, OpenAI structured output, policy tiếng Việt cho video dài Kling, template `kling-native-audio-v4-vietnamese-speech-first`, retry `speech-recovery-v1`, rate policy cho `720p + nativeAudio`, kiểm tra audio sau tải, trạng thái `NativeAudioInvalid`/`AudioReviewRequired`, checklist duyệt scene và UI phân biệt lời nhân vật với native voice-over.
+Source hiện hành đã có contract speech intent, OpenAI structured output, policy tiếng Việt cho video dài Kling/Fal, template riêng `kling-native-audio-v4-vietnamese-speech-first` và `veo-native-audio-v1-vietnamese-speech-first`, recovery profile riêng, rate policy theo capability, kiểm tra audio sau tải, trạng thái `NativeAudioInvalid`/`AudioReviewRequired`, checklist duyệt scene và UI phân biệt lời nhân vật với native voice-over.
 
-Source cũng đã có migration 4.0.4–4.0.8, admin video policy, generic contract/service/bridge, Seedance client/prompt composer, worker đa provider, cache/proxy/cleanup, pricing bằng `completion_tokens`, thư viện tài sản text và xác nhận tài sản theo scene. Trạng thái source không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus đã hoàn tất trên một môi trường triển khai. Riêng cải tiến xác nhận tài sản một chạm và prompt analyzer dùng schema 4.0.8 hiện có, không cần migration SQL bổ sung.
+Source cũng đã có migration 4.0.4–4.0.9, admin policy `Default`/`LongForm`, generic contract/service/bridge, Seedance và Fal Queue client/prompt composer, worker đa provider, cache/proxy/cleanup, pricing theo provider, thư viện tài sản text và xác nhận tài sản theo scene. Trạng thái source không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus/Fal đã hoàn tất trên một môi trường triển khai.
 
 Để chạy được trong một môi trường, vẫn phải thỏa đồng thời:
 
 - tổ chức có credential Active, model video Active và policy Active cho provider được chọn; mặc định là Kling;
 - model có đủ rate Active đúng usage type/capability; Kling cần metadata `{"resolution":"720p","nativeAudio":true}`;
+- nếu dùng Fal/Veo, policy phải là `LongForm`, endpoint thuộc allowlist Standard/Fast, aspect ratio là 16:9/9:16 và mọi scene cần first-frame hợp lệ;
 - budget tổ chức và hạn mức thành viên còn đủ;
 - nhân vật của cảnh đã khóa và có ảnh reference primary nếu cảnh dùng nhân vật;
 - nếu cảnh có gắn tài sản text thì assignment hợp lệ, có đúng một `Background` và mọi tài sản đang gắn đã được xác nhận/khóa;
 - desktop có FFmpeg/FFprobe hợp lệ để kiểm tra clip và audio;
 - người dùng nghe/duyệt từng output; kiểm tra tự động chỉ phát hiện track im lặng, không chứng minh lời nói đúng ngữ nghĩa.
 
-Trong workflow video dài `OpenAiStructuredPlan`, project snapshot Kling bắt buộc dùng lời tiếng Việt và metadata `vi-VN`; prompt hiệu lực cũng dùng wrapper tiếng Việt. Prompt tiếng Anh cũ, hồ sơ nhân vật/tài sản tiếng Anh hoặc chỉnh sửa scene bằng tiếng Anh bị chặn trước chi phí Kling và UI hướng dẫn sinh lại nội dung tiếng Việt. Luồng video ngắn `DirectShortVideo` vẫn giữ direct visual prompt theo nội dung người dùng nhập, không có speech intent chính thức và không bị policy video dài áp dụng.
+Trong workflow video dài `OpenAiStructuredPlan`, project snapshot Kling hoặc Fal/Veo bắt buộc dùng lời tiếng Việt và metadata `vi-VN`; prompt hiệu lực dùng template riêng theo provider. Prompt tiếng Anh cũ, hồ sơ nhân vật/tài sản tiếng Anh hoặc chỉnh sửa scene bằng tiếng Anh bị chặn trước chi phí provider và UI hướng dẫn sinh lại nội dung tiếng Việt. Luồng video ngắn `DirectShortVideo` vẫn giữ direct visual prompt theo nội dung người dùng nhập, không có speech intent chính thức và không bị policy video dài áp dụng.
 
-Policy nhân vật nói trực tiếp cũng chỉ bật khi đồng thời là `OpenAiStructuredPlan` và provider snapshot `Kling`. BytePlus/Seedance cùng `DirectShortVideo` không dùng template/recovery profile này. Dữ liệu lịch sử không bị migration hoặc tự đổi `Narration` thành `Dialogue`; request mới từ scene cũ phải sửa/sinh lại để thỏa policy.
+Policy nhân vật nói trực tiếp bật khi đồng thời là `OpenAiStructuredPlan` và provider snapshot Kling hoặc Fal; mỗi provider giữ template/recovery version riêng để audit dữ liệu lịch sử. BytePlus/Seedance cùng `DirectShortVideo` không dùng policy này. Dữ liệu lịch sử không bị migration hoặc tự đổi `Narration` thành `Dialogue`; request mới từ scene cũ phải sửa/sinh lại để thỏa policy.
 
 Kling Native Audio không phụ thuộc rate OpenAI Voice hoặc việc bật TTS. Runbook vẫn chạy migration 4.0.3 theo đúng chuỗi 4.0.0–4.0.8 để giữ schema tương thích; schema/entity/API TTS hiện hữu được giữ để đọc dữ liệu cũ và phát triển tính năng ghép giọng sau này, nhưng không nằm trên đường gọi mặc định.
 
@@ -286,6 +317,16 @@ Usage response có tổng input token, output token, video second và nhóm theo
 - `DELETE /api/projects/{projectId}/assets/{projectAssetId}`
 - `PUT /api/projects/{projectId}/assets/scenes/{sceneId}`
 
+### License và SePay
+
+- `GET /api/license/current`: trả `Active`, `Missing`, `Expired`, `Suspended`, `Revoked` hoặc `DeviceLimit` cùng giờ server.
+- `GET /api/license/offers`: lấy gói public/active/có giá và thời hạn hợp lệ.
+- `POST /api/license/payments`: tạo hoặc tái sử dụng payment pending bằng `planId` và idempotency key.
+- `GET /api/license/payments/current`: khôi phục payment pending khi desktop mở lại.
+- `GET /api/license/payments/{orderCode}/status`: chỉ chủ payment được đọc trạng thái.
+- `POST /api/payments/sepay/webhook`: endpoint công khai, không yêu cầu API key hoặc JWT desktop; chỉ fulfillment khi payload khớp tài khoản, transfer code và số tiền.
+- `GET /api/admin/licenses/payments`: chỉ Global Admin được tra chính xác theo order code, transfer code hoặc provider transaction ID và lọc trạng thái; response không trả snapshot tài khoản nhận, idempotency key, entitlement hoặc provider reference.
+
 ### Quên mật khẩu
 
 - `POST /api/auth/forgot-password`: nhận email và luôn trả thông báo chung để không tiết lộ tài khoản có tồn tại hay không.
@@ -302,6 +343,10 @@ Gateway giới hạn mặc định 30 request/phút cho mỗi user/IP.
 | Mã | Ý nghĩa |
 |---|---|
 | `license_unavailable` | License hoặc lease thiết bị không hợp lệ |
+| `license_missing` / `license_expired` | Phiên còn hợp lệ nhưng app bị khóa vì chưa có hoặc đã hết gói |
+| `payments_unavailable` | SePay đang tắt hoặc cấu hình server chưa hợp lệ; không tạo payment mới |
+| `invalid_payment_request` / `license_offer_not_found` | Yêu cầu payment hoặc gói bán không hợp lệ |
+| `license_payment_not_found` | Payment không tồn tại hoặc không thuộc user hiện tại |
 | `invalid_credentials` | Email hoặc mật khẩu sai; giữ màn hình đăng nhập để user nhập lại |
 | `account_locked` / `account_unavailable` | Tài khoản bị khóa hoặc không được phép đăng nhập |
 | `invalid_refresh_token` / `session_expired` | Phiên đã hết hạn hoặc bị thu hồi; desktop xóa token cục bộ và đưa user về đăng nhập |
@@ -353,6 +398,8 @@ Gateway giới hạn mặc định 30 request/phút cho mỗi user/IP.
 - License lease được kiểm tra tại từng request AI và download.
 - Credential mã hóa bằng Data Protection keys lưu trong database của server.
 - Không log hoặc trả API key; audit chỉ ghi secret hint.
+- Webhook SePay không dùng API key theo phạm vi MVP, được giới hạn kích thước/rate và không lưu payload đầy đủ; transaction ID provider có unique index. Vì endpoint không có bằng chứng mật mã về nguồn gửi, chỉ triển khai sau khi đã chấp nhận rủi ro giả mạo và phải đối soát giao dịch thực tế định kỳ.
+- Desktop chỉ được tải ảnh QR từ hai host HTTPS allowlist `qr.sepay.vn` và `vietqr.app`; không mở `img-src` cho host tùy ý.
 - Base URL provider dùng allowlist host/HTTPS/port cố định.
 - Output proxy chỉ nhận host thuộc allowlist của đúng provider, kiểm tra lại mọi redirect và chặn loopback, private, link-local, carrier-grade NAT, IPv6 nội bộ cùng DNS rebinding. Signed output URL chỉ tồn tại trong bộ nhớ khi tải cache, không ghi vào request log mới và không trả cho desktop.
 - Desktop SQL user dùng role tối thiểu; bị deny schema `ai`, `auth`, `dbo`, provider credentials, provider requests và usage truth.

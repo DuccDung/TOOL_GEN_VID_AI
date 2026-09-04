@@ -93,9 +93,21 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
         CancellationToken cancellationToken)
     {
         var license = await FindCurrentLicenseAsync(userId, cancellationToken);
-        return license is null
-            ? EmptyLicense(UtcNow())
-            : await BuildLicenseResponseAsync(license, currentDeviceId, cancellationToken);
+        if (license is not null)
+        {
+            return await BuildLicenseResponseAsync(license, currentDeviceId, cancellationToken);
+        }
+
+        var latestLicense = await dbContext.UserLicenses
+            .AsNoTracking()
+            .Include(x => x.LicensePlan)
+            .Where(x => x.UserId == userId)
+            .OrderByDescending(x => x.ExpiresAtUtc)
+            .ThenByDescending(x => x.CreatedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+        return latestLicense is null
+            ? EmptyLicense(UtcNow(), LicenseAccessStates.Missing, "license_missing", "Tài khoản chưa có gói sử dụng.")
+            : BuildInactiveLicenseResponse(latestLicense, UtcNow());
     }
 
     public async Task<CurrentLicenseResponse> ActivateCurrentDeviceAsync(
@@ -275,6 +287,15 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
                  x.DeviceId == currentDeviceId &&
                  x.Status == "Active",
             cancellationToken);
+        var assignedOrganization = await (
+                from assignment in dbContext.OrganizationSeatAssignments.AsNoTracking()
+                join organization in dbContext.Organizations.AsNoTracking()
+                    on assignment.OrganizationId equals organization.OrganizationId
+                where assignment.UserLicenseId == license.UserLicenseId &&
+                      (assignment.Status == "Active" || assignment.Status == "Scheduled")
+                orderby assignment.Status == "Active" descending, assignment.UpdatedAtUtc descending
+                select new { organization.OrganizationId, organization.Name })
+            .FirstOrDefaultAsync(cancellationToken);
         var now = UtcNow();
         return new CurrentLicenseResponse(
             true,
@@ -291,11 +312,83 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
             currentDeviceActivated,
             now,
             currentDeviceActivated ? LicensePolicy.LeaseExpiry(now, license.ExpiresAtUtc) : null,
-            LicensePolicy.DefaultHeartbeatIntervalSeconds);
+            LicensePolicy.DefaultHeartbeatIntervalSeconds,
+            LicenseAccessStates.Active,
+            null,
+            null,
+            assignedOrganization?.OrganizationId,
+            assignedOrganization?.Name);
     }
 
-    private static CurrentLicenseResponse EmptyLicense(DateTime now) =>
-        new(false, null, null, null, null, null, null, 0, 0, 0, null, false, now, null, LicensePolicy.DefaultHeartbeatIntervalSeconds);
+    private static CurrentLicenseResponse BuildInactiveLicenseResponse(UserLicense license, DateTime now)
+    {
+        var accessState = license.Status switch
+        {
+            "Suspended" => LicenseAccessStates.Suspended,
+            "Revoked" => LicenseAccessStates.Revoked,
+            _ when license.ExpiresAtUtc is { } expiresAt && expiresAt <= now => LicenseAccessStates.Expired,
+            "Expired" => LicenseAccessStates.Expired,
+            _ => LicenseAccessStates.Missing
+        };
+        var reasonCode = accessState switch
+        {
+            LicenseAccessStates.Suspended => "license_suspended",
+            LicenseAccessStates.Revoked => "license_revoked",
+            LicenseAccessStates.Expired => "license_expired",
+            _ => "license_missing"
+        };
+        var message = accessState switch
+        {
+            LicenseAccessStates.Suspended => "Gói sử dụng đang bị tạm khóa. Vui lòng liên hệ quản trị viên.",
+            LicenseAccessStates.Revoked => "Gói sử dụng đã bị thu hồi. Vui lòng liên hệ quản trị viên.",
+            LicenseAccessStates.Expired => "Gói sử dụng đã hết hạn. Vui lòng chọn gói để tiếp tục.",
+            _ => "Tài khoản chưa có gói sử dụng."
+        };
+        return new CurrentLicenseResponse(
+            false,
+            license.UserLicenseId,
+            license.LicensePlan.PlanCode,
+            license.LicensePlan.Name,
+            license.Status,
+            license.StartsAtUtc,
+            license.ExpiresAtUtc,
+            license.LicensePlan.MaxActivatedDevices,
+            0,
+            license.LicensePlan.OfflineGraceHours,
+            license.EntitlementSnapshotJson ?? license.LicensePlan.FeatureFlagsJson,
+            false,
+            now,
+            null,
+            LicensePolicy.DefaultHeartbeatIntervalSeconds,
+            accessState,
+            reasonCode,
+            message);
+    }
+
+    private static CurrentLicenseResponse EmptyLicense(
+        DateTime now,
+        string accessState,
+        string reasonCode,
+        string message) =>
+        new(
+            false,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            0,
+            0,
+            0,
+            null,
+            false,
+            now,
+            null,
+            LicensePolicy.DefaultHeartbeatIntervalSeconds,
+            accessState,
+            reasonCode,
+            message);
 
     private DateTime UtcNow() => timeProvider.GetUtcNow().UtcDateTime;
 }

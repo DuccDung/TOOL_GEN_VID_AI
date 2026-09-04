@@ -9,6 +9,7 @@ using TOOL_SERVER.Data;
 using TOOL_SERVER.Models;
 using TOOL_SERVER.Organizations;
 using TOOL_SHARED.Contracts.Generation;
+using TOOL_SHARED.Contracts.Organizations;
 using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_SERVER.Generation;
@@ -339,15 +340,24 @@ internal sealed class GenerationService(
             videoSnapshot = await projectVideoPolicyResolver.ResolveAsync(
                 project,
                 access.OrganizationId,
+                OrganizationVideoPolicyScopes.LongForm,
                 cancellationToken);
         }
+        var longFormVideoProviderCode = videoSnapshot?.ProviderCode ?? project.VideoProviderCode;
         var requiresKlingVietnamese = KlingLongFormLanguagePolicy.RequiresVietnamese(
-            videoSnapshot?.ProviderCode ?? project.VideoProviderCode,
+            longFormVideoProviderCode,
             GenerationWorkflowTypes.OpenAiStructuredPlan);
-        var effectiveGenerationLanguageCode = KlingLongFormLanguagePolicy.Resolve(
-            videoSnapshot?.ProviderCode ?? project.VideoProviderCode,
-            project.LanguageCode,
+        var requiresFalVietnamese = FalVeoPolicy.AppliesToLongForm(
+            longFormVideoProviderCode,
             GenerationWorkflowTypes.OpenAiStructuredPlan);
+        var requiresLongFormVietnamese = requiresKlingVietnamese || requiresFalVietnamese;
+        var enforceLongFormSpeechPolicy = requiresLongFormVietnamese;
+        var effectiveGenerationLanguageCode = requiresFalVietnamese
+            ? FalVeoPolicy.VietnameseLanguageCode
+            : KlingLongFormLanguagePolicy.Resolve(
+                longFormVideoProviderCode,
+                project.LanguageCode,
+                GenerationWorkflowTypes.OpenAiStructuredPlan);
         var requestJson = JsonSerializer.Serialize(new
         {
             project.ProjectId,
@@ -362,14 +372,16 @@ internal sealed class GenerationService(
             project.VideoResolution,
             project.VideoNativeAudio,
             EffectiveGenerationLanguageCode = effectiveGenerationLanguageCode,
-            GenerationLanguagePolicyVersion = requiresKlingVietnamese
-                ? KlingLongFormLanguagePolicy.PolicyVersion
-                : null,
-            SpeechIntentPolicyVersion = KlingLongFormSpeechPolicy.Applies(
-                videoSnapshot?.ProviderCode ?? project.VideoProviderCode,
-                GenerationWorkflowTypes.OpenAiStructuredPlan)
-                ? KlingLongFormSpeechPolicy.PolicyVersion
-                : null
+            GenerationLanguagePolicyVersion = requiresFalVietnamese
+                ? FalVeoPolicy.LanguagePolicyVersion
+                : requiresKlingVietnamese
+                    ? KlingLongFormLanguagePolicy.PolicyVersion
+                    : null,
+            SpeechIntentPolicyVersion = requiresFalVietnamese
+                ? FalVeoPolicy.SpeechPolicyVersion
+                : requiresKlingVietnamese
+                    ? KlingLongFormSpeechPolicy.PolicyVersion
+                    : null
         }, JsonOptions);
         var requestHash = Sha256Hex(requestJson);
         var existing = await dbContext.ProviderRequests
@@ -462,19 +474,17 @@ internal sealed class GenerationService(
                 project.TargetDurationSeconds,
                 Sha256Hex(userId),
                 videoSnapshot?.Capabilities ?? VideoModelCapabilities.KlingDefault,
-                KlingLongFormSpeechPolicy.Applies(
-                    videoSnapshot?.ProviderCode ?? project.VideoProviderCode,
-                    GenerationWorkflowTypes.OpenAiStructuredPlan),
+                enforceLongFormSpeechPolicy,
                 cancellationToken);
             var result = providerResult;
-            if (requiresKlingVietnamese)
+            if (requiresLongFormVietnamese)
             {
                 var languageViolations = KlingVietnameseContentValidator.FindPlanViolations(result.Plan);
                 if (languageViolations.Count > 0)
                 {
                     throw new ProviderHttpException(
                         ProviderCodes.OpenAi,
-                        "kling_content_language_invalid",
+                        requiresFalVietnamese ? "fal_content_language_invalid" : "kling_content_language_invalid",
                         "OpenAI trả về nội dung chưa hoàn toàn bằng tiếng Việt. Hãy thử sinh lại nội dung.",
                         errors: new Dictionary<string, string[]>
                         {
@@ -490,7 +500,11 @@ internal sealed class GenerationService(
                 result.OutputTokens,
                 result.Plan,
                 effectiveGenerationLanguageCode,
-                requiresKlingVietnamese ? KlingLongFormLanguagePolicy.PolicyVersion : null);
+                requiresFalVietnamese
+                    ? FalVeoPolicy.LanguagePolicyVersion
+                    : requiresKlingVietnamese
+                        ? KlingLongFormLanguagePolicy.PolicyVersion
+                        : null);
             requestLog.ExternalRequestId = NullIfEmpty(result.ResponseId);
             requestLog.Status = "Completed";
             requestLog.ResponseJson = JsonSerializer.Serialize(response, JsonOptions);
@@ -612,7 +626,11 @@ internal sealed class GenerationService(
         var requiresKlingVietnamese = KlingLongFormLanguagePolicy.RequiresVietnamese(
             project.VideoProviderCode,
             structureType);
-        if (requiresKlingVietnamese)
+        var requiresFalVietnamese = FalVeoPolicy.AppliesToLongForm(
+            project.VideoProviderCode,
+            structureType);
+        var requiresLongFormVietnamese = requiresKlingVietnamese || requiresFalVietnamese;
+        if (requiresLongFormVietnamese)
         {
             var languageViolations = KlingVietnameseContentValidator.FindViolations([
                 ("character.name", character.Name, true),
@@ -631,8 +649,8 @@ internal sealed class GenerationService(
             {
                 throw new AccountApiException(
                     StatusCodes.Status422UnprocessableEntity,
-                    "kling_prompt_language_invalid",
-                    "Hồ sơ nhân vật của video dài dùng Kling phải bằng tiếng Việt. Hãy sinh lại nội dung tiếng Việt trước khi tạo ảnh.",
+                    requiresFalVietnamese ? "fal_prompt_language_invalid" : "kling_prompt_language_invalid",
+                    "Hồ sơ nhân vật của video dài dùng provider Native Audio phải bằng tiếng Việt. Hãy sinh lại nội dung tiếng Việt trước khi tạo ảnh.",
                     new Dictionary<string, string[]>
                     {
                         ["fields"] = languageViolations.ToArray()
@@ -640,7 +658,7 @@ internal sealed class GenerationService(
             }
         }
 
-        var prompt = ComposeCharacterReferencePrompt(character, requiresKlingVietnamese);
+        var prompt = ComposeCharacterReferencePrompt(character, requiresLongFormVietnamese);
         var promptHash = Sha256Hex(prompt);
         var requestJson = JsonSerializer.Serialize(new
         {
@@ -1178,10 +1196,6 @@ internal sealed class GenerationService(
             request.ProjectId,
             cancellationToken);
         var project = access.Project!;
-        var snapshot = await policyResolver.ResolveAsync(
-            project,
-            access.OrganizationId,
-            cancellationToken);
         var scene = await dbContext.Scenes
             .AsNoTracking()
             .Where(x => x.SceneId == request.SceneId && x.ProjectId == request.ProjectId)
@@ -1190,6 +1204,7 @@ internal sealed class GenerationService(
                 x.ScriptId,
                 x.ScenePlanVersion,
                 x.CharacterIdsJson,
+                x.ContentDurationMs,
                 x.GenerationDurationMs,
                 x.Narration,
                 x.Dialogue,
@@ -1217,6 +1232,13 @@ internal sealed class GenerationService(
             .Where(x => x.ScriptId == scene.ScriptId && x.ProjectId == request.ProjectId)
             .Select(x => x.StructureType)
             .SingleOrDefaultAsync(cancellationToken);
+        var snapshot = await policyResolver.ResolveAsync(
+            project,
+            access.OrganizationId,
+            structureType == GenerationWorkflowTypes.OpenAiStructuredPlan
+                ? OrganizationVideoPolicyScopes.LongForm
+                : OrganizationVideoPolicyScopes.Default,
+            cancellationToken);
         if (scene.Prompt is null)
         {
             throw Conflict("scene_prompt_not_ready", "Cảnh chưa có prompt được duyệt để tạo video.");
@@ -1243,13 +1265,21 @@ internal sealed class GenerationService(
                 "Thời lượng cảnh phải là số giây nguyên hợp lệ với model video.");
         }
         var durationSeconds = checked((int)(scene.GenerationDurationMs / 1000));
-        if (durationSeconds < snapshot.Capabilities.MinimumDurationSeconds ||
-            durationSeconds > snapshot.Capabilities.MaximumDurationSeconds)
+        if (!snapshot.Capabilities.AllowedDurationsSeconds.Contains(durationSeconds))
         {
             throw new AccountApiException(
                 StatusCodes.Status422UnprocessableEntity,
                 "video_duration_not_supported",
-                $"Model {snapshot.ModelName} chỉ hỗ trợ cảnh từ {snapshot.Capabilities.MinimumDurationSeconds} đến {snapshot.Capabilities.MaximumDurationSeconds} giây.");
+                $"Model {snapshot.ModelName} chỉ hỗ trợ các thời lượng: {string.Join(", ", snapshot.Capabilities.AllowedDurationsSeconds.Order())} giây.");
+        }
+        if (scene.ContentDurationMs <= 0 ||
+            scene.ContentDurationMs > scene.GenerationDurationMs ||
+            scene.ContentDurationMs % 1000 != 0)
+        {
+            throw new AccountApiException(
+                StatusCodes.Status422UnprocessableEntity,
+                "video_content_duration_invalid",
+                "Thời lượng nội dung cảnh phải là số giây nguyên dương và không vượt quá thời lượng provider.");
         }
         if (!snapshot.Capabilities.AspectRatios.Contains(project.AspectRatio))
         {
@@ -1309,20 +1339,54 @@ internal sealed class GenerationService(
         {
             throw new ArgumentException("Cảnh không gắn nhân vật nên không được gửi ảnh tham chiếu.");
         }
+        if (snapshot.ProviderCode == ProviderCodes.Fal)
+        {
+            if (referenceImage is null || character?.Reference is null)
+            {
+                throw new AccountApiException(
+                    StatusCodes.Status422UnprocessableEntity,
+                    "fal_first_frame_required",
+                    "Veo Image-to-Video cần first-frame đã duyệt. Bản đầu chưa hỗ trợ tự tạo first-frame cho cảnh B-roll.");
+            }
+            try
+            {
+                FalVeoPolicy.ValidateFirstFrame(
+                    referenceImage,
+                    character.Reference.Width,
+                    character.Reference.Height,
+                    project.AspectRatio);
+            }
+            catch (KlingPromptValidationException exception)
+            {
+                throw new AccountApiException(
+                    StatusCodes.Status422UnprocessableEntity,
+                    exception.Code,
+                    exception.Message);
+            }
+        }
         var projectAssets = await LoadSceneProjectAssetSnapshotsAsync(
             request.ProjectId,
             request.SceneId,
             cancellationToken);
-        var effectiveGenerationLanguageCode = KlingLongFormLanguagePolicy.Resolve(
-            snapshot.ProviderCode,
-            project.LanguageCode,
-            structureType);
         var requiresKlingVietnamese = KlingLongFormLanguagePolicy.RequiresVietnamese(
             snapshot.ProviderCode,
             structureType);
+        var requiresFalVietnamese = FalVeoPolicy.AppliesToLongForm(
+            snapshot.ProviderCode,
+            structureType);
+        var requiresLongFormVietnamese = requiresKlingVietnamese || requiresFalVietnamese;
+        var effectiveGenerationLanguageCode = requiresFalVietnamese
+            ? FalVeoPolicy.VietnameseLanguageCode
+            : KlingLongFormLanguagePolicy.Resolve(
+                snapshot.ProviderCode,
+                project.LanguageCode,
+                structureType);
         var enforceKlingLongFormSpeechPolicy = KlingLongFormSpeechPolicy.Applies(
             snapshot.ProviderCode,
             structureType);
+        var enforceFalLongFormSpeechPolicy = requiresFalVietnamese;
+        var enforceLongFormSpeechPolicy =
+            enforceKlingLongFormSpeechPolicy || enforceFalLongFormSpeechPolicy;
         var existing = await dbContext.ProviderRequests
             .SingleOrDefaultAsync(
                 x => x.OrganizationId == access.OrganizationId &&
@@ -1355,20 +1419,39 @@ internal sealed class GenerationService(
                         "Cảnh nhân vật nói trực tiếp cần model Kling có Native Audio được bật trong snapshot dự án.");
                 }
             }
+            else if (enforceFalLongFormSpeechPolicy)
+            {
+                FalVeoPolicy.ValidateSpeech(
+                    speech,
+                    ReadStringProperty(scene.RequiredCapabilitiesJson, "speechMode"),
+                    characterIds.Count,
+                    scene.Prompt.FinalPrompt);
+                if (!snapshot.NativeAudio || !snapshot.Capabilities.NativeAudio)
+                {
+                    throw new KlingPromptValidationException(
+                        "fal_native_audio_required",
+                        "Workflow Veo yêu cầu Native Audio được bật trong snapshot dự án.");
+                }
+            }
             speechRecoveryProfile = await ResolveSpeechRecoveryProfileAsync(
                 request.SceneId,
                 speech.Mode,
-                enforceKlingLongFormSpeechPolicy,
+                enforceLongFormSpeechPolicy
+                    ? requiresFalVietnamese
+                        ? FalVeoPolicy.SpeechRecoveryProfile
+                        : KlingNativeAudioPromptComposer.SpeechRecoveryProfile
+                    : null,
                 existing,
                 cancellationToken);
-            if (requiresKlingVietnamese)
+            if (requiresLongFormVietnamese)
             {
-                ValidateKlingLongFormPromptSources(
+                ValidateLongFormPromptSources(
                     scene.Prompt.FinalPrompt,
                     scene.Prompt.NegativePrompt,
                     character,
                     speech,
-                    projectAssets);
+                    projectAssets,
+                    snapshot.ProviderCode);
             }
             effectivePrompt = snapshot.ProviderCode switch
             {
@@ -1390,6 +1473,15 @@ internal sealed class GenerationService(
                     durationSeconds,
                     project.AspectRatio,
                     projectAssets),
+                ProviderCodes.Fal => ComposeFalVeoPrompt(
+                    scene.Prompt.FinalPrompt,
+                    scene.Prompt.NegativePrompt,
+                    character,
+                    speech,
+                    durationSeconds,
+                    project.AspectRatio,
+                    projectAssets,
+                    speechRecoveryProfile),
                 _ => throw new AccountApiException(
                     StatusCodes.Status503ServiceUnavailable,
                     "video_provider_not_supported",
@@ -1412,9 +1504,12 @@ internal sealed class GenerationService(
             null,
             true,
             cancellationToken);
-        var templateVersion = snapshot.ProviderCode == ProviderCodes.BytePlus
-            ? SeedanceNativeAudioPromptComposer.TemplateVersion
-            : KlingNativeAudioPromptComposer.ResolveTemplateVersion(requiresKlingVietnamese);
+        var templateVersion = snapshot.ProviderCode switch
+        {
+            ProviderCodes.BytePlus => SeedanceNativeAudioPromptComposer.TemplateVersion,
+            ProviderCodes.Fal => FalVeoPolicy.PromptTemplateVersion,
+            _ => KlingNativeAudioPromptComposer.ResolveTemplateVersion(requiresKlingVietnamese)
+        };
         var requestJson = JsonSerializer.Serialize(new
         {
             OrganizationId = access.OrganizationId,
@@ -1431,14 +1526,19 @@ internal sealed class GenerationService(
             SpeechHash = Sha256Hex(speech.SpokenText),
             project.LanguageCode,
             EffectiveGenerationLanguageCode = effectiveGenerationLanguageCode,
-            GenerationLanguagePolicyVersion = requiresKlingVietnamese
-                ? KlingLongFormLanguagePolicy.PolicyVersion
-                : null,
-            SpeechIntentPolicyVersion = enforceKlingLongFormSpeechPolicy
-                ? KlingLongFormSpeechPolicy.PolicyVersion
-                : null,
+            GenerationLanguagePolicyVersion = requiresFalVietnamese
+                ? FalVeoPolicy.LanguagePolicyVersion
+                : requiresKlingVietnamese
+                    ? KlingLongFormLanguagePolicy.PolicyVersion
+                    : null,
+            SpeechIntentPolicyVersion = enforceFalLongFormSpeechPolicy
+                ? FalVeoPolicy.SpeechPolicyVersion
+                : enforceKlingLongFormSpeechPolicy
+                    ? KlingLongFormSpeechPolicy.PolicyVersion
+                    : null,
             SpeechRecoveryProfile = speechRecoveryProfile,
             WorkflowStructureType = structureType,
+            ContentDurationSeconds = scene.ContentDurationMs / 1000,
             DurationSeconds = durationSeconds,
             project.AspectRatio,
             snapshot.Resolution,
@@ -1771,17 +1871,20 @@ internal sealed class GenerationService(
             speechRecoveryProfile = await ResolveSpeechRecoveryProfileAsync(
                 request.SceneId,
                 speech.Mode,
-                enforceKlingLongFormSpeechPolicy,
+                enforceKlingLongFormSpeechPolicy
+                    ? KlingNativeAudioPromptComposer.SpeechRecoveryProfile
+                    : null,
                 existing,
                 cancellationToken);
             if (requiresKlingVietnamese)
             {
-                ValidateKlingLongFormPromptSources(
+                ValidateLongFormPromptSources(
                     scene.Prompt.FinalPrompt,
                     scene.Prompt.NegativePrompt,
                     character,
                     speech,
-                    projectAssets);
+                    projectAssets,
+                    ProviderCodes.Kling);
             }
             effectivePrompt = ComposeKlingPrompt(
                 scene.Prompt.FinalPrompt,
@@ -2393,7 +2496,9 @@ internal sealed class GenerationService(
                         reference.MediaAsset.Sha256,
                         reference.MediaAsset.SizeBytes,
                         reference.MediaAsset.SourceType,
-                        reference.MediaAsset.SourceProviderCode))
+                        reference.MediaAsset.SourceProviderCode,
+                        reference.MediaAsset.Width,
+                        reference.MediaAsset.Height))
                     .FirstOrDefault()))
             .SingleOrDefaultAsync(cancellationToken)
             ?? throw Conflict("character_not_ready", "Không tìm thấy nhân vật đã gắn với cảnh.");
@@ -2467,11 +2572,11 @@ internal sealed class GenerationService(
     private async Task<string?> ResolveSpeechRecoveryProfileAsync(
         Guid sceneId,
         string speechMode,
-        bool enforceKlingLongFormSpeechPolicy,
+        string? expectedRecoveryProfile,
         ProviderRequest? existingRequest,
         CancellationToken cancellationToken)
     {
-        if (!enforceKlingLongFormSpeechPolicy || speechMode != KlingSpeechModes.OnCameraDialogue)
+        if (expectedRecoveryProfile is null || speechMode != KlingSpeechModes.OnCameraDialogue)
         {
             return null;
         }
@@ -2483,7 +2588,7 @@ internal sealed class GenerationService(
                 "speechRecoveryProfile");
             return string.Equals(
                 recordedProfile,
-                KlingNativeAudioPromptComposer.SpeechRecoveryProfile,
+                expectedRecoveryProfile,
                 StringComparison.Ordinal)
                 ? recordedProfile
                 : null;
@@ -2497,7 +2602,7 @@ internal sealed class GenerationService(
             .Select(x => x.Status)
             .FirstOrDefaultAsync(cancellationToken);
         return string.Equals(latestGenerationStatus, "NativeAudioInvalid", StringComparison.Ordinal)
-            ? KlingNativeAudioPromptComposer.SpeechRecoveryProfile
+            ? expectedRecoveryProfile
             : null;
     }
 
@@ -2594,6 +2699,36 @@ internal sealed class GenerationService(
             aspectRatio);
     }
 
+    internal static string ComposeFalVeoPrompt(
+        string scenePrompt,
+        string? negativePrompt,
+        CharacterPromptSnapshot? character,
+        KlingNativeSpeechPrompt? speech = null,
+        int durationSeconds = 8,
+        string aspectRatio = "16:9",
+        IReadOnlyList<ProjectAssetPromptSnapshot>? projectAssets = null,
+        string? speechRecoveryProfile = null)
+    {
+        speech ??= new KlingNativeSpeechPrompt(
+            KlingSpeechModes.None,
+            string.Empty,
+            FalVeoPolicy.VietnameseLanguageCode,
+            null,
+            null,
+            null,
+            null);
+        var identityParts = BuildIdentityParts(character, useVietnameseTemplate: true);
+        identityParts.AddRange(BuildProjectAssetParts(projectAssets, useVietnameseTemplate: true));
+        return FalVeoPromptComposer.Compose(
+            identityParts,
+            scenePrompt,
+            negativePrompt,
+            speech,
+            durationSeconds,
+            aspectRatio,
+            speechRecoveryProfile);
+    }
+
     private static List<string> BuildIdentityParts(
         CharacterPromptSnapshot? character,
         bool useVietnameseTemplate = false)
@@ -2664,12 +2799,13 @@ internal sealed class GenerationService(
         }
     }
 
-    private static void ValidateKlingLongFormPromptSources(
+    private static void ValidateLongFormPromptSources(
         string scenePrompt,
         string? negativePrompt,
         CharacterPromptSnapshot? character,
         KlingNativeSpeechPrompt speech,
-        IReadOnlyList<ProjectAssetPromptSnapshot> projectAssets)
+        IReadOnlyList<ProjectAssetPromptSnapshot> projectAssets,
+        string providerCode)
     {
         var fields = new List<(string Field, string? Value, bool Required)>
         {
@@ -2709,8 +2845,10 @@ internal sealed class GenerationService(
         {
             throw new AccountApiException(
                 StatusCodes.Status422UnprocessableEntity,
-                "kling_prompt_language_invalid",
-                "Nội dung video dài dùng Kling phải bằng tiếng Việt. Hãy sửa lại hoặc sinh lại nội dung tiếng Việt trước khi tạo clip.",
+                providerCode == ProviderCodes.Fal
+                    ? "fal_prompt_language_invalid"
+                    : "kling_prompt_language_invalid",
+                "Nội dung video dài dùng provider Native Audio phải bằng tiếng Việt. Hãy sửa lại hoặc sinh lại nội dung tiếng Việt trước khi tạo clip.",
                 new Dictionary<string, string[]>
                 {
                     ["fields"] = violations.ToArray()
@@ -3159,7 +3297,9 @@ internal sealed class GenerationService(
         string Sha256,
         long SizeBytes,
         string SourceType = "Unknown",
-        string? SourceProviderCode = null);
+        string? SourceProviderCode = null,
+        int? Width = null,
+        int? Height = null);
 
     private static OpenAiImageOptions ValidatedImageOptions(OpenAiImageOptions options)
     {

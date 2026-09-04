@@ -11,6 +11,7 @@ using TOOL_LOCAL.Vietsub.Storage;
 using TOOL_LOCAL.Vietsub.Api;
 using TOOL_LOCAL.Vietsub.Media;
 using TOOL_LOCAL.Vietsub.Subtitles;
+using TOOL_LOCAL.Payments;
 
 namespace TOOL_LOCAL;
 
@@ -58,6 +59,7 @@ internal static class Program
 
                 var licenseApiClient = new LicenseApiClient(httpClient, sessionManager);
                 var licenseManager = new LicenseSessionManager(licenseApiClient);
+                var licensePaymentClient = new LicensePaymentApiClient(httpClient, sessionManager);
                 try
                 {
                     licenseManager.InitializeAsync().GetAwaiter().GetResult();
@@ -175,7 +177,8 @@ internal static class Program
                     vietsubProjectRegistryClient,
                     vietsubMediaImportService,
                     vietsubThumbnailService,
-                    vietsubSubtitleService);
+                    vietsubSubtitleService,
+                    licensePaymentClient);
                 try
                 {
                     Application.Run(mainForm);

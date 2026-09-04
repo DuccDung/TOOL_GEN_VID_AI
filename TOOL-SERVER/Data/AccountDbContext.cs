@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using TOOL_SERVER.Domain.Accounts;
+using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Domain.Updates;
 
 namespace TOOL_SERVER.Data;
@@ -23,6 +24,20 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
 
     public DbSet<LicenseActivation> LicenseActivations => Set<LicenseActivation>();
 
+    public DbSet<LicensePayment> LicensePayments => Set<LicensePayment>();
+
+    public DbSet<Organization> Organizations => Set<Organization>();
+
+    public DbSet<OrganizationMember> OrganizationMembers => Set<OrganizationMember>();
+
+    public DbSet<OrganizationPool> OrganizationPools => Set<OrganizationPool>();
+
+    public DbSet<OrganizationPoolOrganization> OrganizationPoolOrganizations => Set<OrganizationPoolOrganization>();
+
+    public DbSet<LicensePlanOrganizationPool> LicensePlanOrganizationPools => Set<LicensePlanOrganizationPool>();
+
+    public DbSet<OrganizationSeatAssignment> OrganizationSeatAssignments => Set<OrganizationSeatAssignment>();
+
     public DbSet<AppRelease> AppReleases => Set<AppRelease>();
 
     public DbSet<AppReleaseArtifact> AppReleaseArtifacts => Set<AppReleaseArtifact>();
@@ -37,6 +52,7 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
         ConfigureRefreshTokens(builder);
         ConfigureAudit(builder);
         ConfigureLicenses(builder);
+        ConfigureOrganizationProvisioning(builder);
         ConfigureDesktopReleases(builder);
     }
 
@@ -161,6 +177,8 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
             entity.Property(x => x.PlanCode).HasMaxLength(50).IsUnicode(false);
             entity.Property(x => x.Name).HasMaxLength(200);
             entity.Property(x => x.Description).HasMaxLength(1000);
+            entity.Property(x => x.SalePriceVnd).HasPrecision(19, 0);
+            entity.Property(x => x.MarketingFeaturesJson).HasColumnType("nvarchar(max)");
             entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
@@ -203,6 +221,40 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
             entity.HasOne(x => x.UserLicense).WithMany(x => x.Activations).HasForeignKey(x => x.UserLicenseId).OnDelete(DeleteBehavior.NoAction);
             entity.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.NoAction);
         });
+
+        builder.Entity<LicensePayment>(entity =>
+        {
+            entity.ToTable("LicensePayments", "auth");
+            entity.HasKey(x => x.LicensePaymentId);
+            entity.Property(x => x.LicensePaymentId).HasDefaultValueSql("NEWSEQUENTIALID()");
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.OrderCode).HasMaxLength(40).IsUnicode(false);
+            entity.Property(x => x.TransferCode).HasMaxLength(40).IsUnicode(false);
+            entity.Property(x => x.IdempotencyKey).HasMaxLength(100).IsUnicode(false);
+            entity.Property(x => x.PriceSnapshotVnd).HasPrecision(19, 0);
+            entity.Property(x => x.PlanCodeSnapshot).HasMaxLength(50).IsUnicode(false);
+            entity.Property(x => x.PlanNameSnapshot).HasMaxLength(200);
+            entity.Property(x => x.EntitlementSnapshotJson).HasColumnType("nvarchar(max)");
+            entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.ReceiverBankCodeSnapshot).HasMaxLength(50).IsUnicode(false);
+            entity.Property(x => x.ReceiverAccountNumberSnapshot).HasMaxLength(50).IsUnicode(false);
+            entity.Property(x => x.ReceiverAccountNameSnapshot).HasMaxLength(200);
+            entity.Property(x => x.ProviderReferenceCode).HasMaxLength(100);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.ExpiresAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.PaidAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.FulfilledAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.FailureCode).HasMaxLength(100).IsUnicode(false);
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => x.OrderCode).IsUnique();
+            entity.HasIndex(x => x.TransferCode).IsUnique();
+            entity.HasIndex(x => new { x.UserId, x.IdempotencyKey }).IsUnique();
+            entity.HasIndex(x => x.ProviderTransactionId).IsUnique().HasFilter("[ProviderTransactionId] IS NOT NULL");
+            entity.HasIndex(x => new { x.UserId, x.LicensePlanId, x.Status, x.ExpiresAtUtc });
+            entity.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.LicensePlan).WithMany().HasForeignKey(x => x.LicensePlanId).OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.FulfilledUserLicense).WithMany().HasForeignKey(x => x.FulfilledUserLicenseId).OnDelete(DeleteBehavior.NoAction);
+        });
     }
 
     private static void ConfigureDesktopReleases(ModelBuilder builder)
@@ -240,5 +292,82 @@ public sealed class AccountDbContext(DbContextOptions<AccountDbContext> options)
                 .HasForeignKey(x => x.AppReleaseId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+    }
+
+    private static void ConfigureOrganizationProvisioning(ModelBuilder builder)
+    {
+        builder.Entity<Organization>(entity =>
+        {
+            entity.ToTable("Organizations", "ai");
+            entity.HasKey(x => x.OrganizationId);
+            entity.Property(x => x.OrganizationId).HasDefaultValueSql("NEWSEQUENTIALID()");
+            entity.Property(x => x.Code).HasMaxLength(80).IsUnicode(false);
+            entity.Property(x => x.Name).HasMaxLength(200);
+            entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.MonthlyBudgetLimit).HasPrecision(19, 6);
+            entity.Property(x => x.CurrencyCode).HasMaxLength(3).IsFixedLength().IsUnicode(false);
+            entity.Property(x => x.CreatedByUserId).HasMaxLength(450);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => x.Code).IsUnique();
+        });
+
+        builder.Entity<OrganizationMember>(entity =>
+        {
+            entity.ToTable("OrganizationMembers", "ai");
+            entity.HasKey(x => new { x.OrganizationId, x.UserId });
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.Role).HasMaxLength(30).IsUnicode(false);
+            entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.IsProvisioningManaged).HasDefaultValue(false);
+            entity.Property(x => x.MonthlyBudgetLimit).HasPrecision(19, 6);
+            entity.Property(x => x.JoinedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => new { x.UserId, x.Status });
+            entity.HasOne(x => x.Organization)
+                .WithMany(x => x.Members)
+                .HasForeignKey(x => x.OrganizationId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        AiGovernanceDbContext.ConfigureSeatProvisioning(builder);
+
+        builder.Entity<OrganizationPoolOrganization>()
+            .HasOne<OrganizationPool>()
+            .WithMany()
+            .HasForeignKey(x => x.OrganizationPoolId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<OrganizationPoolOrganization>()
+            .HasOne<Organization>()
+            .WithMany()
+            .HasForeignKey(x => x.OrganizationId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<LicensePlanOrganizationPool>()
+            .HasOne<LicensePlan>()
+            .WithOne()
+            .HasForeignKey<LicensePlanOrganizationPool>(x => x.LicensePlanId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<LicensePlanOrganizationPool>()
+            .HasOne<OrganizationPool>()
+            .WithMany()
+            .HasForeignKey(x => x.OrganizationPoolId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<OrganizationSeatAssignment>()
+            .HasOne<OrganizationPoolOrganization>()
+            .WithMany()
+            .HasForeignKey(x => new { x.OrganizationPoolId, x.OrganizationId })
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<OrganizationSeatAssignment>()
+            .HasOne<LicensePayment>()
+            .WithOne()
+            .HasForeignKey<OrganizationSeatAssignment>(x => x.LicensePaymentId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<OrganizationSeatAssignment>()
+            .HasOne<UserLicense>()
+            .WithMany()
+            .HasForeignKey(x => x.UserLicenseId)
+            .OnDelete(DeleteBehavior.NoAction);
     }
 }

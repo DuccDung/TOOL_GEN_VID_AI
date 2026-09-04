@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,6 +13,7 @@ import {
   Clock3,
   CreditCard,
   Crown,
+  Copy,
   Database,
   Download,
   FileText,
@@ -76,6 +77,10 @@ import type {
   DesktopUpdateProgress,
   GenerationProviderStatus,
   HostMessage,
+  CurrentLicensePayment,
+  LicenseOffer,
+  LicensePaymentCheckout,
+  LicensePaymentStatus,
   MediaToolStatus,
   OrganizationSummary,
   PipelineStage,
@@ -126,6 +131,15 @@ type PendingSceneSave = {
   requestId: string;
   sceneId: string;
 };
+type LicenseRequestKind = 'offers' | 'current' | 'create' | 'status' | 'refresh';
+
+function resolveSelectedProjectPage(workflowStructureType?: string | null): Extract<Page, 'shortVideo' | 'longVideo'> {
+  return workflowStructureType === 'DirectShortVideo' ? 'shortVideo' : 'longVideo';
+}
+
+function isSelectedProjectResponse(pendingRequestId: string | null, responseRequestId?: string | null): boolean {
+  return pendingRequestId !== null && pendingRequestId === responseRequestId;
+}
 
 const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
   create: {
@@ -316,17 +330,39 @@ function App() {
   const [assetConfirmBusyId, setAssetConfirmBusyId] = useState<string | null>(null);
   const [mediaInstallProgress, setMediaInstallProgress] = useState<DesktopUpdateProgress | null>(null);
   const [sceneSaveState, setSceneSaveState] = useState<SceneSaveState | null>(null);
-  const [shortVideoProjectId, setShortVideoProjectId] = useState<string | null>(null);
+  const [licenseOffers, setLicenseOffers] = useState<LicenseOffer[]>([]);
+  const [licenseCheckout, setLicenseCheckout] = useState<LicensePaymentCheckout | null>(null);
+  const [licensePaymentStatus, setLicensePaymentStatus] = useState<LicensePaymentStatus | null>(null);
+  const [licensePaymentBusy, setLicensePaymentBusy] = useState(false);
+  const [licensePaymentError, setLicensePaymentError] = useState<string | null>(null);
   const pendingSceneSaveRef = useRef<PendingSceneSave | null>(null);
   const vietsub = useVietsubModule(
     dashboard.features.vietsubEnabled,
     dashboard.selectedOrganizationId
   );
+  const selectedProjectRequestRef = useRef<string | null>(null);
+  const licenseRequestsRef = useRef(new Map<string, LicenseRequestKind>());
+  const licenseBootstrapRequestedRef = useRef(false);
+  const licenseStatusInFlightRef = useRef(false);
 
   const notify = (message: string, error = false) => {
     const id = Date.now();
     setToasts((current) => [...current, { id, message, error }]);
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3600);
+  };
+
+  const postLicenseRequest = <T,>(kind: LicenseRequestKind, type: string, payload?: T) => {
+    const requestId = postToHost(type, payload);
+    licenseRequestsRef.current.set(requestId, kind);
+    return requestId;
+  };
+
+  const requestLicenseBootstrap = () => {
+    if (licenseBootstrapRequestedRef.current) return;
+    licenseBootstrapRequestedRef.current = true;
+    setLicensePaymentError(null);
+    postLicenseRequest('offers', 'license.offers.get');
+    postLicenseRequest('current', 'license.payment.current.get');
   };
 
   useEffect(() => {
@@ -340,16 +376,85 @@ function App() {
         if (!nextDashboard.generationRunning) setCharacterImageBusyId(null);
         setAssetConfirmBusyId(null);
         setBusy(false);
+        if (isSelectedProjectResponse(selectedProjectRequestRef.current, message.requestId)) {
+          selectedProjectRequestRef.current = null;
+          setPage(resolveSelectedProjectPage(nextDashboard.selectedProject?.workflowStructureType));
+        }
+        if (nextDashboard.license?.hasActiveLicense && nextDashboard.license.currentDeviceActivated) {
+          licenseBootstrapRequestedRef.current = false;
+          licenseStatusInFlightRef.current = false;
+          licenseRequestsRef.current.clear();
+          setLicenseCheckout(null);
+          setLicensePaymentStatus(null);
+          setLicensePaymentError(null);
+          setLicensePaymentBusy(false);
+        } else if (nextDashboard.license?.accessState === 'Missing' || nextDashboard.license?.accessState === 'Expired') {
+          requestLicenseBootstrap();
+        }
         return;
       }
 
-      if (message.type === 'short-video.started' && message.payload) {
-        const payload = message.payload as { projectId?: string };
-        if (payload.projectId) setShortVideoProjectId(payload.projectId);
+      if (message.type === 'license.offers' && message.payload) {
+        if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
+        setLicenseOffers(message.payload as LicenseOffer[]);
+        return;
+      }
+
+      if (message.type === 'license.payment.current' && message.payload) {
+        if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
+        const current = message.payload as CurrentLicensePayment;
+        if (current.payment) {
+          setLicenseCheckout(current.payment);
+          setLicensePaymentStatus(null);
+        }
+        return;
+      }
+
+      if (message.type === 'license.payment.checkout' && message.payload) {
+        if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
+        setLicenseCheckout(message.payload as LicensePaymentCheckout);
+        setLicensePaymentStatus(null);
+        setLicensePaymentError(null);
+        setLicensePaymentBusy(false);
+        return;
+      }
+
+      if (message.type === 'license.payment.status' && message.payload) {
+        const status = message.payload as LicensePaymentStatus;
+        licenseStatusInFlightRef.current = status.isFulfilled;
+        if (message.requestId && !status.isFulfilled) licenseRequestsRef.current.delete(message.requestId);
+        setLicensePaymentStatus(status);
+        setLicensePaymentError(null);
+        setLicensePaymentBusy(status.isFulfilled);
+        return;
+      }
+
+      if (message.type === 'license.activated' && message.payload) {
+        if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
+        licenseStatusInFlightRef.current = false;
+        setLicensePaymentBusy(false);
+        const license = message.payload as DashboardState['license'];
+        setDashboard((current) => ({ ...current, license }));
+        notify(license?.assignedOrganizationName
+          ? `Gói và tổ chức ${license.assignedOrganizationName} đã sẵn sàng.`
+          : 'Gói sử dụng đã sẵn sàng.');
         return;
       }
 
       if (message.type === 'operation.error') {
+        if (isSelectedProjectResponse(selectedProjectRequestRef.current, message.requestId)) {
+          selectedProjectRequestRef.current = null;
+        }
+        const licenseRequestKind = message.requestId
+          ? licenseRequestsRef.current.get(message.requestId)
+          : undefined;
+        if (licenseRequestKind) {
+          if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
+          if (licenseRequestKind === 'status') licenseStatusInFlightRef.current = false;
+          setLicensePaymentBusy(false);
+          setLicensePaymentError(message.error?.message ?? 'Không thể hoàn tất thao tác thanh toán.');
+          return;
+        }
         const pendingSceneSave = pendingSceneSaveRef.current;
         if (pendingSceneSave && pendingSceneSave.requestId === message.requestId) {
           pendingSceneSaveRef.current = null;
@@ -393,8 +498,12 @@ function App() {
       }
 
       if (message.type === 'license.invalidated') {
-        setDashboard((current) => ({ ...current, license: null }));
-        notify(String((message.payload as { message?: string })?.message ?? 'License không còn hiệu lực.'), true);
+        const reason = String((message.payload as { message?: string })?.message ?? 'License không còn hiệu lực.');
+        setDashboard((current) => current.license
+          ? { ...current, license: { ...current.license, hasActiveLicense: false, currentDeviceActivated: false, accessMessage: reason } }
+          : current);
+        licenseBootstrapRequestedRef.current = false;
+        postLicenseRequest('refresh', 'license.refresh');
         return;
       }
 
@@ -476,6 +585,45 @@ function App() {
     }
   }, [sidebarCollapsed]);
 
+  const requestLicensePaymentStatus = () => {
+    if (!licenseCheckout || licenseStatusInFlightRef.current) return;
+    licenseStatusInFlightRef.current = true;
+    postLicenseRequest('status', 'license.payment.status', { orderCode: licenseCheckout.orderCode });
+  };
+
+  useEffect(() => {
+    if (!licenseCheckout || licensePaymentStatus?.isFulfilled || licensePaymentStatus?.isExpired) return;
+    const initialTimer = window.setTimeout(requestLicensePaymentStatus, 1200);
+    const pollTimer = window.setInterval(requestLicensePaymentStatus, 5000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(pollTimer);
+    };
+  }, [licenseCheckout?.orderCode, licensePaymentStatus?.isFulfilled, licensePaymentStatus?.isExpired]);
+
+  const createLicensePayment = (licensePlanId: string) => {
+    if (licensePaymentBusy) return;
+    setLicensePaymentBusy(true);
+    setLicensePaymentError(null);
+    postLicenseRequest('create', 'license.payment.create', {
+      licensePlanId,
+      idempotencyKey: crypto.randomUUID()
+    });
+  };
+
+  const retryLicenseBootstrap = () => {
+    licenseBootstrapRequestedRef.current = false;
+    setLicensePaymentError(null);
+    requestLicenseBootstrap();
+  };
+
+  const resetExpiredLicensePayment = () => {
+    licenseStatusInFlightRef.current = false;
+    setLicenseCheckout(null);
+    setLicensePaymentStatus(null);
+    setLicensePaymentError(null);
+  };
+
   const handleNavigation = (label: string, target?: Page) => {
     setSidebarOpen(false);
     if (target) {
@@ -489,8 +637,7 @@ function App() {
 
   const selectProject = (projectId: string) => {
     setBusy(true);
-    postToHost('project.select', { projectId });
-    if (page !== 'create') setPage('longVideo');
+    selectedProjectRequestRef.current = postToHost('project.select', { projectId });
   };
 
   const createProject = (payload: CreateProjectPayload) => {
@@ -593,16 +740,21 @@ function App() {
     const project = dashboard.selectedProject;
     if (!project || dashboard.generationRunning || sceneIds.length === 0) return;
     if (project.requiresVietnameseContentRegeneration) {
-      notify('Dự án Kling này còn nội dung tiếng Anh. Hãy sinh lại nội dung tiếng Việt trước khi tạo clip.', true);
+      notify('Dự án Video Dài này còn nội dung tiếng Anh. Hãy sinh lại nội dung tiếng Việt trước khi tạo clip.', true);
       return;
     }
     if (!dashboard.mediaTools.ready) {
       notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
       return;
     }
+    const longFormProviderCode = project.videoProviderCode?.toLowerCase();
+    if (longFormProviderCode === 'fal' && !['16:9', '9:16'].includes(project.project.aspectRatio)) {
+      notify('Veo chỉ hỗ trợ dự án Video Dài tỷ lệ 16:9 hoặc 9:16. Hãy tạo dự án với tỷ lệ phù hợp.', true);
+      return;
+    }
     const selectedSceneIds = new Set(sceneIds);
     const enforceKlingLongFormSpeechPolicy = project.workflowStructureType === 'OpenAiStructuredPlan' &&
-      project.videoProviderCode?.toLowerCase() === 'kling';
+      ['kling', 'fal'].includes(longFormProviderCode ?? '');
     const selectedScenes = project.scenes.filter((scene) => selectedSceneIds.has(scene.sceneId));
     if (selectedScenes.length !== selectedSceneIds.size) {
       notify('Danh sách cảnh đã thay đổi. Hãy chọn lại cảnh cần tạo.', true);
@@ -610,6 +762,22 @@ function App() {
     }
     const resumableScenes = selectedScenes.filter(sceneNeedsLocalCompletion);
     const newRequestScenes = selectedScenes.filter((scene) => !sceneNeedsLocalCompletion(scene));
+    if (longFormProviderCode === 'fal') {
+      const approvedCharacterFrameIds = new Set(project.characters
+        .filter((character) => character.status === 'Approved' &&
+          character.primaryReference?.isPrimary === true &&
+          character.primaryReference.approvalStatus === 'Approved')
+        .map((character) => character.characterId));
+      const scenesWithoutApprovedCharacterFrame = newRequestScenes.filter((scene) =>
+        scene.characters.length !== 1 || !approvedCharacterFrameIds.has(scene.characters[0].characterId));
+      if (scenesWithoutApprovedCharacterFrame.length > 0) {
+        notify(
+          `Cảnh ${scenesWithoutApprovedCharacterFrame.map((scene) => scene.sequenceNumber).join(', ')} chưa có first-frame nhân vật đã duyệt. Bản Veo đầu tiên chưa tự tạo first-frame cho B-roll.`,
+          true
+        );
+        return;
+      }
+    }
     const blockedAssetScenes = newRequestScenes.filter(
       (scene) => !areSceneAssetsReady(scene.sceneId, dashboard.assetLibrary ?? null)
     );
@@ -906,6 +1074,8 @@ function App() {
   const pageBusy = page === 'vietsub'
     ? vietsub.state.loading || vietsub.state.busy
     : generationBusy;
+  const licenseLocked = Boolean(dashboard.license &&
+    (!dashboard.license.hasActiveLicense || !dashboard.license.currentDeviceActivated));
   const checkMediaTools = () => {
     if (generationBusy) return;
     setBusy(true);
@@ -955,7 +1125,7 @@ function App() {
               const closed = await vietsub.closeProject();
               if (!closed) return;
             }
-            setShortVideoProjectId(null);
+            selectedProjectRequestRef.current = null;
             setBusy(true);
             postToHost('organization.select', { organizationId });
           }}
@@ -988,7 +1158,7 @@ function App() {
           <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={() => setPage('longVideo')} />
         ) : page === 'shortVideo' ? (
           <ShortVideoPage
-            project={dashboard.selectedProject?.project.projectId === shortVideoProjectId
+            project={dashboard.selectedProject?.workflowStructureType === 'DirectShortVideo'
               ? dashboard.selectedProject
               : null}
             providerStatus={dashboard.providerStatus}
@@ -1020,7 +1190,6 @@ function App() {
           <LongVideoPage
             project={dashboard.selectedProject ?? null}
             assetLibrary={dashboard.assetLibrary ?? null}
-            models={dashboard.models}
             providerStatus={dashboard.providerStatus}
             mediaTools={dashboard.mediaTools}
             busy={generationBusy}
@@ -1131,6 +1300,22 @@ function App() {
         <MediaToolInstallModal progress={mediaInstallProgress} />
       )}
 
+      {!busy && licenseLocked && dashboard.license && (
+        <LicenseGateOverlay
+          license={dashboard.license}
+          offers={licenseOffers}
+          checkout={licenseCheckout}
+          paymentStatus={licensePaymentStatus}
+          busy={licensePaymentBusy}
+          error={licensePaymentError}
+          onSelectPlan={createLicensePayment}
+          onRefreshStatus={requestLicensePaymentStatus}
+          onResetExpired={resetExpiredLicensePayment}
+          onRetry={retryLicenseBootstrap}
+          onLogout={() => postToHost('auth.logout')}
+        />
+      )}
+
       <div className="toast-stack" aria-live="polite">
         {toasts.map((toast) => (
           <div className={`toast ${toast.error ? 'toast-error' : ''}`} key={toast.id}>
@@ -1144,6 +1329,323 @@ function App() {
       </div>
     </div>
   );
+}
+
+function LicenseGateOverlay({
+  license,
+  offers,
+  checkout,
+  paymentStatus,
+  busy,
+  error,
+  onSelectPlan,
+  onRefreshStatus,
+  onResetExpired,
+  onRetry,
+  onLogout
+}: {
+  license: NonNullable<DashboardState['license']>;
+  offers: LicenseOffer[];
+  checkout: LicensePaymentCheckout | null;
+  paymentStatus: LicensePaymentStatus | null;
+  busy: boolean;
+  error: string | null;
+  onSelectPlan: (licensePlanId: string) => void;
+  onRefreshStatus: () => void;
+  onResetExpired: () => void;
+  onRetry: () => void;
+  onLogout: () => void;
+}) {
+  const cardRef = useRef<HTMLElement>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const canPurchase = license.accessState === 'Missing' || license.accessState === 'Expired' || !license.accessState;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const focusInside = (preferLast = false) => {
+      const card = cardRef.current;
+      if (!card) return;
+      const focusable = Array.from(card.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      ));
+      const target = preferLast ? focusable.at(-1) : focusable[0];
+      if (target) target.focus();
+      else card.focus();
+    };
+
+    focusInside();
+
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.key !== 'Tab' || !cardRef.current) return;
+      const focusable = Array.from(cardRef.current.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!cardRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        focusInside(event.shiftKey);
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    const containFocus = (event: FocusEvent) => {
+      const card = cardRef.current;
+      if (card && event.target instanceof Node && !card.contains(event.target)) {
+        event.stopPropagation();
+        focusInside();
+      }
+    };
+    window.addEventListener('keydown', trapFocus, true);
+    window.addEventListener('focusin', containFocus, true);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', trapFocus, true);
+      window.removeEventListener('focusin', containFocus, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const card = cardRef.current;
+      if (!card) return;
+      card.scrollTo({ top: 0, behavior: 'auto' });
+      if (card.contains(document.activeElement)) return;
+      const target = card.querySelector<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      );
+      if (target) target.focus();
+      else card.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [checkout?.orderCode]);
+
+  useEffect(() => {
+    if (!checkout) return;
+    setServerClockOffsetMs(parseServerUtc(checkout.serverTimeUtc) - Date.now());
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [checkout?.orderCode]);
+
+  const remainingSeconds = checkout
+    ? Math.max(0, Math.floor((parseServerUtc(checkout.expiresAtUtc) - (nowMs + serverClockOffsetMs)) / 1000))
+    : 0;
+  const isExpired = Boolean(checkout &&
+    !(checkout.isPaid || paymentStatus?.isPaid) &&
+    (checkout.isExpired || paymentStatus?.isExpired || remainingSeconds <= 0));
+  const isFulfilled = Boolean(checkout &&
+    (checkout.isFulfilled || paymentStatus?.isFulfilled));
+  const isPaid = Boolean(checkout &&
+    (checkout.isPaid || paymentStatus?.isPaid));
+  const assignedOrganizationName = paymentStatus?.assignedOrganizationName || checkout?.assignedOrganizationName;
+  const provisioningStatus = paymentStatus?.provisioningStatus || checkout?.provisioningStatus;
+
+  const copyValue = async (field: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+    }
+    setCopiedField(field);
+    window.setTimeout(() => setCopiedField((current) => current === field ? null : current), 1600);
+  };
+
+  return (
+    <div className="license-gate-overlay" role="presentation">
+      <section
+        ref={cardRef}
+        className={`license-gate-card ${checkout ? 'has-checkout' : ''}`}
+        role="dialog"
+        tabIndex={-1}
+        aria-modal="true"
+        aria-labelledby="license-gate-title"
+        aria-describedby="license-gate-description"
+      >
+        <header className="license-gate-header">
+          <div className="license-gate-brand"><Crown size={21} /><span>VIDEOMAKER</span></div>
+          <button type="button" className="license-gate-logout" onClick={onLogout}><LogOut size={16} />Đăng xuất</button>
+        </header>
+
+        {!checkout ? (
+          <div className="license-offer-view">
+            <div className="license-gate-intro">
+              <span className="license-gate-icon"><LockKeyhole size={26} /></span>
+              <div>
+                <span className="license-gate-eyebrow">QUYỀN SỬ DỤNG</span>
+                <h1 id="license-gate-title">
+                  {license.accessState === 'Expired' ? 'Gói sử dụng đã hết hạn' :
+                    license.accessState === 'Suspended' ? 'Gói sử dụng đang bị tạm khóa' :
+                      license.accessState === 'Revoked' ? 'Gói sử dụng đã bị thu hồi' : 'Chọn gói để bắt đầu'}
+                </h1>
+                <p id="license-gate-description">
+                  {license.accessMessage || 'Bạn cần một gói đang hoạt động để sử dụng các tính năng VideoMaker.'}
+                </p>
+              </div>
+            </div>
+
+            {canPurchase ? (
+              <>
+                <div className="license-plan-grid">
+                  {offers.map((offer, index) => {
+                    const recommended = index === 1 || (offers.length === 1 && index === 0);
+                    return (
+                      <article className={`license-plan-option ${recommended ? 'recommended' : ''}`} key={offer.licensePlanId}>
+                        <div className="license-plan-heading">
+                          <span className="license-plan-code">Gói {offer.durationDays} ngày</span>
+                          {recommended && <span className="license-plan-badge">Phổ biến</span>}
+                        </div>
+                        <h2>{offer.name}</h2>
+                        <p>{offer.description || `Quyền sử dụng VideoMaker trong ${offer.durationDays} ngày.`}</p>
+                        <div className="license-plan-price"><strong>{formatVnd(offer.priceVnd)}</strong><span>cho {offer.durationDays} ngày</span></div>
+                        <div className={`license-seat-availability ${offer.organizationSeatAvailable ? 'available' : 'unavailable'}`}>
+                          {offer.organizationSeatAvailable
+                            ? `${offer.organizationPoolName || 'Cụm tổ chức'} · còn ${offer.availableOrganizationSeats ?? 0} chỗ`
+                            : 'Tạm hết tổ chức sẵn sàng'}
+                        </div>
+                        <button type="button" disabled={busy || !offer.organizationSeatAvailable} onClick={() => onSelectPlan(offer.licensePlanId)}>
+                          {busy ? <><LoaderCircle className="spin" size={17} />Đang tạo mã</> : <>Chọn gói này<ArrowRight size={17} /></>}
+                        </button>
+                        <ul>
+                          {(offer.marketingFeatures.length ? offer.marketingFeatures : [
+                            `${offer.maxActivatedDevices} thiết bị được kích hoạt`,
+                            'Sử dụng đầy đủ quy trình tạo và dựng video',
+                            'Tự động kích hoạt sau khi thanh toán'
+                          ]).map((feature) => <li key={feature}><Check size={16} />{feature}</li>)}
+                        </ul>
+                      </article>
+                    );
+                  })}
+                </div>
+                {!offers.length && !error && <div className="license-loading"><LoaderCircle className="spin" size={22} />Đang tải các gói sử dụng...</div>}
+              </>
+            ) : (
+              <div className="license-support-notice"><TriangleAlert size={20} /><span>Trạng thái này cần quản trị viên hỗ trợ và không thể tự mở khóa bằng thanh toán.</span></div>
+            )}
+
+            {error && <div className="license-payment-error"><TriangleAlert size={18} /><span>{error}</span><button type="button" onClick={onRetry}>Thử lại</button></div>}
+          </div>
+        ) : (
+          <div className="license-checkout-view">
+            <div className="license-checkout-heading">
+              <button type="button" className="license-back-button" disabled={busy && isFulfilled} onClick={onResetExpired}><ArrowLeft size={17} />Các gói</button>
+              <div>
+                <span className="license-gate-eyebrow">THANH TOÁN QUA SEPAY</span>
+                <h1 id="license-gate-title">Thanh toán {checkout.planName}</h1>
+                <p id="license-gate-description">Quét QR hoặc chuyển khoản đúng số tiền và nội dung bên dưới.</p>
+              </div>
+            </div>
+
+            <div className="license-checkout-layout">
+              <div className="license-qr-panel">
+                <div className="license-qr-frame">
+                  <img src={checkout.qrImageUrl} referrerPolicy="no-referrer" alt={`QR thanh toán ${checkout.planName}`} />
+                </div>
+                <span className={`license-payment-state ${isFulfilled ? 'success' : isExpired ? 'expired' : ''}`}>
+                  {isFulfilled ? <><CircleCheck size={17} />Đã nhận thanh toán</> :
+                    isExpired ? <><Clock3 size={17} />Mã đã hết hạn</> :
+                      isPaid ? <><LoaderCircle className="spin" size={17} />Đang cấp tổ chức</> :
+                        busy ? <><LoaderCircle className="spin" size={17} />Đang kiểm tra</> :
+                        <><RefreshCw size={17} />Đang chờ thanh toán</>}
+                </span>
+                {!isPaid && !isExpired && !isFulfilled && <strong className="license-countdown">{formatCountdown(remainingSeconds)}</strong>}
+              </div>
+
+              <div className="license-transfer-panel">
+                <div className="license-transfer-summary"><span>Tổng thanh toán</span><strong>{formatVnd(checkout.amountVnd)}</strong><small>{checkout.durationDays} ngày sử dụng</small></div>
+                <TransferRow label="Ngân hàng" value={checkout.receiverBankCode} />
+                <TransferRow label="Số tài khoản" value={checkout.receiverAccountNumber} action={
+                  <button type="button" onClick={() => copyValue('account', checkout.receiverAccountNumber)}><Copy size={15} />{copiedField === 'account' ? 'Đã chép' : 'Sao chép'}</button>
+                } />
+                <TransferRow label="Chủ tài khoản" value={checkout.receiverAccountName} />
+                <TransferRow label="Nội dung chuyển khoản" value={checkout.transferContent} emphasis action={
+                  <button type="button" onClick={() => copyValue('content', checkout.transferContent)}><Copy size={15} />{copiedField === 'content' ? 'Đã chép' : 'Sao chép'}</button>
+                } />
+                {assignedOrganizationName && (
+                  <TransferRow label="Tổ chức được cấp" value={assignedOrganizationName} />
+                )}
+                {provisioningStatus && (
+                  <TransferRow label="Trạng thái phân bổ" value={provisioningStatus} />
+                )}
+                <div className="license-transfer-warning"><TriangleAlert size={17} /><span>Chuyển đúng số tiền và nội dung để hệ thống tự động nhận diện giao dịch.</span></div>
+                {(paymentStatus?.message || error) && (
+                  <div className={`license-status-message ${error ? 'error' : ''}`}>{error || paymentStatus?.message}</div>
+                )}
+                <div className="license-checkout-actions">
+                  {isExpired ? (
+                    <button type="button" className="license-primary-action" onClick={onResetExpired}>Tạo mã thanh toán mới</button>
+                  ) : (
+                    <button type="button" className="license-primary-action" disabled={busy || isFulfilled} onClick={onRefreshStatus}>
+                      {busy || isFulfilled ? <><LoaderCircle className="spin" size={17} />Đang kích hoạt</> : <><RefreshCw size={17} />Tôi đã thanh toán</>}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function TransferRow({
+  label,
+  value,
+  emphasis = false,
+  action
+}: {
+  label: string;
+  value: string;
+  emphasis?: boolean;
+  action?: ReactNode;
+}) {
+  return (
+    <div className={`license-transfer-row ${emphasis ? 'emphasis' : ''}`}>
+      <div><span>{label}</span><strong>{value}</strong></div>
+      {action}
+    </div>
+  );
+}
+
+function formatVnd(value: number) {
+  return `${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(value)} đ`;
+}
+
+function parseServerUtc(value: string) {
+  const timestamp = value.trim();
+  const hasTimeZone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(timestamp);
+  return new Date(hasTimeZone ? timestamp : `${timestamp}Z`).getTime();
+}
+
+function formatCountdown(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+  const seconds = Math.max(0, totalSeconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
 }
 
 function ConfirmationModal({
@@ -1615,16 +2117,6 @@ function ShortVideoPage({
 
   return (
     <div className="page-shell short-video-page">
-      <section className="short-video-hero">
-        <div className="short-video-hero-icon"><Film size={28} /></div>
-        <div>
-          <span className="short-video-eyebrow">KLING QUICK CREATE</span>
-          <h2>Một nội dung, một clip ngắn theo ý bạn</h2>
-          <p>Nội dung được dùng trực tiếp làm prompt hình ảnh. VideoMaker không gọi OpenAI và không tự thêm lời thoại.</p>
-        </div>
-        <div className="short-video-fixed-badge"><Clock3 size={15} /> Chọn từ 5–15 giây</div>
-      </section>
-
       <div className="short-video-layout">
         <section className="card short-video-form-card">
           <div className="short-video-section-heading">
@@ -1919,7 +2411,6 @@ function DashboardPage({
 function LongVideoPage({
   project,
   assetLibrary,
-  models,
   providerStatus,
   mediaTools,
   busy,
@@ -1954,7 +2445,6 @@ function LongVideoPage({
 }: {
   project: ProjectDashboard | null;
   assetLibrary: ProjectAssetLibrary | null;
-  models: AiModel[];
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
   busy: boolean;
@@ -1994,9 +2484,10 @@ function LongVideoPage({
 
   useEffect(() => {
     setActiveStep(getSuggestedLongVideoStep(project));
-  }, [projectId]);
+  }, [projectId, suggestedStep]);
 
   const activeStepIndex = longVideoSteps.findIndex((step) => step.id === activeStep);
+  const projectStageIndex = longVideoSteps.findIndex((step) => step.id === suggestedStep);
   const activeStepDefinition = longVideoSteps[activeStepIndex] ?? longVideoSteps[0];
   const previousStep = activeStepIndex > 0 ? longVideoSteps[activeStepIndex - 1] : null;
   const nextStep = activeStepIndex < longVideoSteps.length - 1 ? longVideoSteps[activeStepIndex + 1] : null;
@@ -2013,7 +2504,6 @@ function LongVideoPage({
           </section>
         )}
         <CreateVideoCard busy={busy} onCreate={onCreate} />
-        <ModelsSection models={models} />
       </>;
     }
 
@@ -2106,35 +2596,34 @@ function LongVideoPage({
 
   return (
     <div className="page-shell long-video-page">
-      <section className="long-video-workspace-header">
-        <div className="long-video-workspace-copy">
-          <span className="long-video-eyebrow">LONG-FORM STUDIO</span>
-          <div><h2>{project?.project.name ?? 'Workspace video nhiều cảnh'}</h2>{project && <span className="long-video-project-status">{translateProjectStatus(project.project.status)}</span>}</div>
-          <p>{project ? project.project.topic : 'Bắt đầu từ chủ đề, phát triển kịch bản, chuẩn hóa nhân vật và dựng video theo từng cảnh.'}</p>
-        </div>
-        <div className="long-video-workspace-meta">
-          <span><strong>{project?.totalScenes ?? 0}</strong>Cảnh</span>
-          <span><strong>{project?.approvedScenes ?? 0}</strong>Đã duyệt</span>
-          <span><strong>{Math.round(project?.overallProgressPercent ?? 0)}%</strong>Tiến độ</span>
-        </div>
-      </section>
-
       <nav className="long-video-stepper" aria-label="Quy trình tạo video dài">
         {longVideoSteps.map((step, index) => {
           const Icon = step.icon;
           const available = isLongVideoStepAvailable(step.id, project);
-            const completed = isLongVideoStepCompleted(step.id, project);
+          const completed = isLongVideoStepCompleted(step.id, project);
+          const isProjectStage = index === projectStageIndex;
+          const isProgressed = index < projectStageIndex;
           return (
             <button
               key={step.id}
-              className={`${activeStep === step.id ? 'active' : ''} ${completed ? 'completed' : ''}`}
+              className={[
+                activeStep === step.id ? 'active' : '',
+                completed ? 'completed' : '',
+                isProjectStage ? 'project-current' : '',
+                isProgressed ? 'progressed' : ''
+              ].filter(Boolean).join(' ')}
               disabled={!available}
               onClick={() => setActiveStep(step.id)}
               aria-current={activeStep === step.id ? 'step' : undefined}
+              aria-label={`Bước ${index + 1}: ${step.label}${isProjectStage ? ' — Giai đoạn hiện tại của dự án' : ''}`}
             >
               <span className="long-video-step-number">{completed ? <Check size={15} strokeWidth={3} /> : <Icon size={16} />}</span>
               <span className="long-video-step-copy"><small>Bước {index + 1}</small><strong>{step.shortLabel}</strong></span>
-              {index < longVideoSteps.length - 1 && <span className="long-video-step-line" />}
+              {index < longVideoSteps.length - 1 && (
+                <span className={`long-video-step-line ${isProgressed ? 'progressed' : ''}`} aria-hidden="true">
+                  <span className="long-video-step-light" />
+                </span>
+              )}
             </button>
           );
         })}
@@ -2196,7 +2685,7 @@ function isLongVideoStepCompleted(
 ): boolean {
   if (!project) return false;
   if (step === 'setup') return true;
-  if (step === 'content') return project.totalScenes > 0;
+  if (step === 'content') return Boolean(project.content);
   if (step === 'assets') {
     return project.totalScenes > 0 && project.characters.every(
       (character) => character.status === 'Approved' && Boolean(character.primaryReference?.previewUrl)
@@ -2219,19 +2708,57 @@ function LongVideoContentSummary({
     return <section className="card long-video-blocked-step"><FileText size={30} /><h3>Chưa có dự án</h3><p>Quay lại bước Thiết lập và tạo project trước khi sinh nội dung.</p></section>;
   }
 
+  const content = project.content;
+  const hasSavedContent = Boolean(content?.scriptFullText.trim());
+  const contentFailed = !hasSavedContent && project.project.status === 'Failed';
+  const statusLabel = hasSavedContent
+    ? 'Đã lưu kịch bản'
+    : contentFailed
+      ? 'Sinh nội dung thất bại'
+      : 'Chưa có nội dung đã lưu';
+  const statusTone = hasSavedContent ? 'ready' : contentFailed ? 'error' : 'draft';
+
   return (
     <section className="card long-video-content-summary">
-      <div className="long-video-summary-heading"><div><span>NỘI DUNG HIỆN HÀNH</span><h3>{project.project.topic}</h3></div><strong className={project.totalScenes > 0 ? 'ready' : 'draft'}>{project.totalScenes > 0 ? 'Đã có scene plan' : 'Chờ sinh nội dung'}</strong></div>
+      <div className="long-video-summary-heading"><div><span>NỘI DUNG HIỆN HÀNH</span><h3>{content?.title ?? project.project.topic}</h3></div><strong className={statusTone}>{statusLabel}</strong></div>
       <div className="long-video-summary-grid">
-        <div><small>Ngôn ngữ nội dung</small><strong>{project.effectiveGenerationLanguageCode?.toLowerCase().startsWith('vi') && project.videoProviderCode?.toLowerCase() === 'kling'
-          ? 'Tiếng Việt (bắt buộc cho Video Dài dùng Kling)'
+        <div><small>Ngôn ngữ nội dung</small><strong>{project.effectiveGenerationLanguageCode?.toLowerCase().startsWith('vi') && ['kling', 'fal'].includes(project.videoProviderCode?.toLowerCase() ?? '')
+          ? `Tiếng Việt (bắt buộc cho Video Dài dùng ${project.videoProviderCode?.toLowerCase() === 'fal' ? 'Veo' : 'Kling'})`
           : formatLanguage(project.effectiveGenerationLanguageCode ?? project.languageCode)}</strong></div>
         <div><small>Thời lượng mục tiêu</small><strong>{formatDuration(project.project.targetDurationSeconds)}</strong></div>
         <div><small>Số cảnh</small><strong>{project.totalScenes}</strong></div>
         <div><small>OpenAI model</small><strong>{providerStatus.openAiModel ?? 'Chưa cấu hình'}</strong></div>
       </div>
+      {hasSavedContent && content ? (
+        <div className="long-video-saved-content">
+          <div className="long-video-content-metadata">
+            <div><small>Hook</small><p>{content.hook || 'Chưa có'}</p></div>
+            <div><small>Góc triển khai</small><p>{content.angle || 'Chưa có'}</p></div>
+            <div><small>Đối tượng người xem</small><p>{content.audience || 'Chưa có'}</p></div>
+            <div><small>Kêu gọi hành động</small><p>{content.callToAction || 'Chưa có'}</p></div>
+          </div>
+          <article className="long-video-script-content">
+            <header>
+              <div><span>KỊCH BẢN ĐÃ TẠO</span><h4>{content.title}</h4></div>
+              <strong>Phiên bản {content.scriptVersion}</strong>
+            </header>
+            <p>{content.scriptFullText}</p>
+          </article>
+          {project.totalScenes === 0 && (
+            <p className="long-video-scene-plan-warning">Kịch bản đã được lưu nhưng dự án chưa có scene plan để hiển thị.</p>
+          )}
+        </div>
+      ) : (
+        <div className={`long-video-content-empty${contentFailed ? ' error' : ''}`}>
+          <FileText size={24} />
+          <div>
+            <strong>{contentFailed ? 'Lần sinh trước thất bại, dự án chưa có content đã lưu' : 'Dự án chưa có content đã lưu'}</strong>
+            <p>{project.lastErrorMessage ?? 'Hãy tạo nội dung để lưu content plan và kịch bản cho dự án này.'}</p>
+          </div>
+        </div>
+      )}
       {project.requiresVietnameseContentRegeneration && (
-        <p className="long-video-language-warning">Nội dung hiện tại còn tiếng Anh và sẽ bị chặn trước khi gọi Kling. Hãy dùng hành động “Sinh lại nội dung tiếng Việt”.</p>
+        <p className="long-video-language-warning">Nội dung hiện tại còn tiếng Anh và sẽ bị chặn trước khi gọi provider video. Hãy dùng hành động “Sinh lại nội dung tiếng Việt”.</p>
       )}
     </section>
   );
@@ -2323,6 +2850,9 @@ function LongVideoContentScenes({ scenes }: { scenes: SceneSummary[] }) {
                   <div className="content-scene-meta">
                     <span><Clock3 size={13} /> Nội dung {durationSeconds}s</span>
                     <span><Film size={13} /> Provider {generationDurationSeconds}s</span>
+                    {generationDurationSeconds > durationSeconds && (
+                      <span><Clock3 size={13} /> Cắt đuôi {generationDurationSeconds - durationSeconds}s trước khi duyệt</span>
+                    )}
                     <span><Volume2 size={13} /> {speechModeLabel(scene.speechMode)}</span>
                   </div>
 
@@ -2447,7 +2977,7 @@ function GenerationActions({
         <span className="generation-eyebrow">API GENERATION</span>
         <h2>{requiresVietnamese ? 'Sinh lại nội dung tiếng Việt' : 'Tạo nội dung và prompt'}</h2>
         <p>{requiresVietnamese
-          ? 'Dự án video dài dùng Kling còn dữ liệu tiếng Anh. OpenAI cần tạo một version tiếng Việt mới trước khi sinh clip.'
+          ? 'Dự án video dài dùng provider Native Audio còn dữ liệu tiếng Anh. OpenAI cần tạo một version tiếng Việt mới trước khi sinh clip.'
           : 'OpenAI sẽ viết hook, kịch bản, chia cảnh và tạo prompt có cấu trúc.'}</p>
       </div>
       <div className="generation-provider-state">
@@ -2979,7 +3509,7 @@ function StoryboardSection({
   );
   const selectableKey = selectableScenes.map((scene) => `${scene.sceneId}:${scene.status}`).join('|');
   const enforceKlingLongFormSpeechPolicy = project?.workflowStructureType === 'OpenAiStructuredPlan' &&
-    project?.videoProviderCode?.toLowerCase() === 'kling';
+    ['kling', 'fal'].includes(project?.videoProviderCode?.toLowerCase() ?? '');
 
   useEffect(() => {
     if (!project) {
@@ -3044,21 +3574,6 @@ function StoryboardSection({
           <p>
             {scenes.length} cảnh · {formatDuration(totalDurationSeconds)} · Đã hoàn thành {completedScenes}/{scenes.length} clip
           </p>
-        </div>
-        <div className="storyboard-provider-state">
-          <span className={providerStatus.openAiReady ? 'ready' : 'missing'}>
-            OpenAI · {providerStatus.openAiReady ? providerStatus.openAiModel : 'chưa sẵn sàng'}
-          </span>
-          <span className={providerStatus.videoReady ? 'ready' : 'missing'}>
-            Video · {providerStatus.videoReady ? `${providerStatus.videoProviderName ?? providerStatus.videoProviderCode} / ${providerStatus.videoModel}` : 'chưa sẵn sàng'}
-          </span>
-          <span className={providerStatus.videoReady ? 'ready' : 'missing'}>
-            Native Audio · {providerStatus.videoReady && providerStatus.videoNativeAudio ? 'bật theo policy server' : 'chưa sẵn sàng'}
-          </span>
-          <span className={mediaTools.ready ? 'ready' : 'missing'}>
-            Media · {mediaTools.ready ? 'FFmpeg sẵn sàng' : 'chưa cấu hình'}
-          </span>
-          <span className="ready">Âm thanh · nghe và duyệt từng cảnh</span>
         </div>
         <div className="storyboard-toolbar">
           <button

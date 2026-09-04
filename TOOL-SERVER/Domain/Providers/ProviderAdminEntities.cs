@@ -153,6 +153,7 @@ public static class ProviderCredentialAuthenticationTypes
 {
     public const string Bearer = "Bearer";
     public const string Header = "Header";
+    public const string Key = "Key";
 }
 
 public static class ProviderCredentialTestStatuses
@@ -161,4 +162,3 @@ public static class ProviderCredentialTestStatuses
     public const string Healthy = "Healthy";
     public const string Failed = "Failed";
 }
-

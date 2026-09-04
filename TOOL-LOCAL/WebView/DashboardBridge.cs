@@ -6,6 +6,8 @@ using TOOL_LOCAL.Generation;
 using TOOL_SHARED.Contracts.Generation;
 using TOOL_LOCAL.Providers;
 using TOOL_LOCAL.Media;
+using TOOL_LOCAL.Payments;
+using TOOL_SHARED.Contracts.Accounts;
 using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.WebView;
@@ -20,6 +22,7 @@ internal sealed class DashboardBridge : IDisposable
     private readonly IProjectGenerationService _generationService;
     private readonly IGenerationClient _generationClient;
     private readonly IMediaToolPreflightService _mediaToolPreflight;
+    private readonly LicensePaymentApiClient _licensePaymentClient;
     private readonly bool _vietsubEnabled;
     private readonly Action<string> _postJson;
     private readonly Action _closeApplication;
@@ -41,6 +44,7 @@ internal sealed class DashboardBridge : IDisposable
         IProjectGenerationService generationService,
         IGenerationClient generationClient,
         IMediaToolPreflightService mediaToolPreflight,
+        LicensePaymentApiClient licensePaymentClient,
         bool vietsubEnabled,
         Action<string> postJson,
         Action closeApplication)
@@ -52,6 +56,7 @@ internal sealed class DashboardBridge : IDisposable
         _generationService = generationService;
         _generationClient = generationClient;
         _mediaToolPreflight = mediaToolPreflight;
+        _licensePaymentClient = licensePaymentClient;
         _vietsubEnabled = vietsubEnabled;
         _postJson = postJson;
         _closeApplication = closeApplication;
@@ -82,6 +87,15 @@ internal sealed class DashboardBridge : IDisposable
             return;
         }
 
+        if (_licenseManager.IsLocked && !IsAllowedWhileLocked(request.Type))
+        {
+            PostError(
+                request.RequestId,
+                "license_required",
+                _licenseManager.Current?.AccessMessage ?? "Bạn cần có gói sử dụng còn hiệu lực.");
+            return;
+        }
+
         try
         {
             switch (request.Type)
@@ -97,6 +111,21 @@ internal sealed class DashboardBridge : IDisposable
                         request.RequestId,
                         cancellationToken,
                         selectDefaultProject: _selectedProjectId.HasValue);
+                    break;
+                case "license.refresh":
+                    await RefreshLicenseAsync(request.RequestId, cancellationToken);
+                    break;
+                case "license.offers.get":
+                    await GetLicenseOffersAsync(request.RequestId, cancellationToken);
+                    break;
+                case "license.payment.create":
+                    await CreateLicensePaymentAsync(request, cancellationToken);
+                    break;
+                case "license.payment.current.get":
+                    await GetCurrentLicensePaymentAsync(request.RequestId, cancellationToken);
+                    break;
+                case "license.payment.status":
+                    await GetLicensePaymentStatusAsync(request, cancellationToken);
                     break;
                 case "project.select":
                     await SelectProjectAsync(request, cancellationToken);
@@ -240,6 +269,75 @@ internal sealed class DashboardBridge : IDisposable
             null,
             cancellationToken,
             selectDefaultProject: _selectedProjectId.HasValue);
+
+    private async Task RefreshLicenseAsync(string? requestId, CancellationToken cancellationToken)
+    {
+        await _licenseManager.RefreshNowAsync(cancellationToken);
+        await RefreshAsync(requestId, cancellationToken, selectDefaultProject: false);
+    }
+
+    private async Task GetLicenseOffersAsync(string? requestId, CancellationToken cancellationToken)
+    {
+        var offers = await _licensePaymentClient.GetOffersAsync(cancellationToken);
+        Post(new WebMessageResponse("license.offers", requestId, offers));
+    }
+
+    private async Task CreateLicensePaymentAsync(
+        WebMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<CreateLicensePaymentWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Gói thanh toán không hợp lệ.");
+        var checkout = await _licensePaymentClient.CreatePaymentAsync(
+            new CreateLicensePaymentRequest(payload.LicensePlanId, payload.IdempotencyKey),
+            cancellationToken);
+        Post(new WebMessageResponse("license.payment.checkout", request.RequestId, checkout));
+    }
+
+    private async Task GetCurrentLicensePaymentAsync(
+        string? requestId,
+        CancellationToken cancellationToken)
+    {
+        var current = await _licensePaymentClient.GetCurrentPaymentAsync(cancellationToken);
+        Post(new WebMessageResponse("license.payment.current", requestId, current));
+    }
+
+    private async Task GetLicensePaymentStatusAsync(
+        WebMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<LicensePaymentStatusWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Giao dịch thanh toán không hợp lệ.");
+        if (string.IsNullOrWhiteSpace(payload.OrderCode) || payload.OrderCode.Length > 40)
+        {
+            throw new ArgumentException("Giao dịch thanh toán không hợp lệ.");
+        }
+
+        var status = await _licensePaymentClient.GetStatusAsync(payload.OrderCode.Trim(), cancellationToken);
+        Post(new WebMessageResponse("license.payment.status", request.RequestId, status));
+        if (!status.IsFulfilled)
+        {
+            return;
+        }
+
+        var license = await _licenseManager.RefreshNowAsync(cancellationToken);
+        if (!license.HasActiveLicense || !license.CurrentDeviceActivated)
+        {
+            PostError(
+                request.RequestId,
+                "license_activation_pending",
+                license.AccessMessage ?? "Đã nhận thanh toán nhưng chưa thể kích hoạt thiết bị.");
+            return;
+        }
+
+        if (license.AssignedOrganizationId is { } assignedOrganizationId)
+        {
+            await _generationClient.SelectOrganizationAsync(assignedOrganizationId, cancellationToken);
+        }
+
+        Post(new WebMessageResponse("license.activated", request.RequestId, license));
+        await RefreshAsync(request.RequestId, cancellationToken, selectDefaultProject: false);
+    }
 
     private async Task SelectProjectAsync(WebMessageRequest request, CancellationToken cancellationToken)
     {
@@ -947,6 +1045,37 @@ internal sealed class DashboardBridge : IDisposable
         {
             var current = _sessionManager.Current
                 ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
+            if (_licenseManager.Current is { HasActiveLicense: true } && !_licenseManager.HasValidLease)
+            {
+                await _licenseManager.RefreshNowAsync(cancellationToken);
+            }
+            if (_licenseManager.IsLocked)
+            {
+                _selectedProjectId = null;
+                Post(new WebMessageResponse(
+                    "dashboard.state",
+                    requestId,
+                    new DashboardStateResponse(
+                        current.User,
+                        [],
+                        Guid.Empty,
+                        [],
+                        null,
+                        null,
+                        [],
+                        new GenerationProviderStatusResponse(false, null, false, null),
+                        new MediaToolStatusSummary(
+                            false,
+                            "license_required",
+                            "Kích hoạt gói sử dụng để kiểm tra công cụ media.",
+                            null,
+                            null,
+                            DateTime.UtcNow),
+                        _licenseManager.Current,
+                        false,
+                        new DashboardFeatureFlagsResponse(_vietsubEnabled))));
+                return;
+            }
             var organizations = await _generationClient.GetOrganizationsAsync(cancellationToken);
             if (organizations.Count == 0)
             {
@@ -1048,6 +1177,16 @@ internal sealed class DashboardBridge : IDisposable
 
         return normalized;
     }
+
+    internal static bool IsAllowedWhileLocked(string operationType) => operationType is
+        "app.ready" or
+        "dashboard.refresh" or
+        "license.refresh" or
+        "license.offers.get" or
+        "license.payment.create" or
+        "license.payment.current.get" or
+        "license.payment.status" or
+        "auth.logout";
 
     private static string CreateProjectName(string topic)
     {

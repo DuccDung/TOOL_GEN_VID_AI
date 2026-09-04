@@ -10,6 +10,10 @@ public sealed class LicensePlan
     public int OfflineGraceHours { get; set; }
     public int? DefaultDurationDays { get; set; }
     public string? FeatureFlagsJson { get; set; }
+    public decimal? SalePriceVnd { get; set; }
+    public bool IsPublic { get; set; }
+    public int DisplayOrder { get; set; }
+    public string? MarketingFeaturesJson { get; set; }
     public bool IsActive { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }

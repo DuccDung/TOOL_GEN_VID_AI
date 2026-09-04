@@ -13,6 +13,10 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
     public DbSet<AiBudgetReservation> AiBudgetReservations => Set<AiBudgetReservation>();
     public DbSet<AiUsageLedgerEntry> AiUsageLedger => Set<AiUsageLedgerEntry>();
     public DbSet<OrganizationAuditLog> OrganizationAuditLogs => Set<OrganizationAuditLog>();
+    public DbSet<OrganizationPool> OrganizationPools => Set<OrganizationPool>();
+    public DbSet<OrganizationPoolOrganization> OrganizationPoolOrganizations => Set<OrganizationPoolOrganization>();
+    public DbSet<LicensePlanOrganizationPool> LicensePlanOrganizationPools => Set<LicensePlanOrganizationPool>();
+    public DbSet<OrganizationSeatAssignment> OrganizationSeatAssignments => Set<OrganizationSeatAssignment>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -40,6 +44,7 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
             entity.Property(x => x.UserId).HasMaxLength(450);
             entity.Property(x => x.Role).HasMaxLength(30).IsUnicode(false);
             entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.IsProvisioningManaged).HasDefaultValue(false);
             entity.Property(x => x.MonthlyBudgetLimit).HasPrecision(19, 6);
             entity.Property(x => x.JoinedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
@@ -72,7 +77,8 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
         builder.Entity<OrganizationVideoPolicy>(entity =>
         {
             entity.ToTable("OrganizationVideoPolicies", "ai");
-            entity.HasKey(x => x.OrganizationId);
+            entity.HasKey(x => new { x.OrganizationId, x.PolicyScope });
+            entity.Property(x => x.PolicyScope).HasMaxLength(20).IsUnicode(false);
             entity.Property(x => x.Resolution).HasMaxLength(20).IsUnicode(false);
             entity.Property(x => x.UpdatedByUserId).HasMaxLength(450);
             entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
@@ -80,8 +86,8 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
             entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
             entity.HasIndex(x => new { x.ProviderId, x.ProviderModelId, x.IsActive });
             entity.HasOne<Organization>()
-                .WithOne()
-                .HasForeignKey<OrganizationVideoPolicy>(x => x.OrganizationId)
+                .WithMany()
+                .HasForeignKey(x => x.OrganizationId)
                 .OnDelete(DeleteBehavior.NoAction);
         });
 
@@ -158,6 +164,88 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
                 .WithMany()
                 .HasForeignKey(x => x.OrganizationId)
                 .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        ConfigureSeatProvisioning(builder);
+    }
+
+    internal static void ConfigureSeatProvisioning(ModelBuilder builder)
+    {
+        builder.Entity<OrganizationPool>(entity =>
+        {
+            entity.ToTable("OrganizationPools", "ai");
+            entity.HasKey(x => x.OrganizationPoolId);
+            entity.Property(x => x.OrganizationPoolId).HasDefaultValueSql("NEWSEQUENTIALID()");
+            entity.Property(x => x.Code).HasMaxLength(50).IsUnicode(false);
+            entity.Property(x => x.Name).HasMaxLength(200);
+            entity.Property(x => x.AllocationStrategy).HasMaxLength(30).IsUnicode(false);
+            entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => x.Code).IsUnique();
+        });
+
+        builder.Entity<OrganizationPoolOrganization>(entity =>
+        {
+            entity.ToTable("OrganizationPoolOrganizations", "ai");
+            entity.HasKey(x => new { x.OrganizationPoolId, x.OrganizationId });
+            entity.Property(x => x.ReadinessMessage).HasMaxLength(500);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => x.OrganizationId)
+                .IsUnique()
+                .HasFilter("[IsAutoAssignmentEnabled] = 1");
+            entity.HasIndex(x => new
+            {
+                x.OrganizationPoolId,
+                x.IsAutoAssignmentEnabled,
+                x.IsReady,
+                x.Priority,
+                x.OrganizationId
+            });
+        });
+
+        builder.Entity<LicensePlanOrganizationPool>(entity =>
+        {
+            entity.ToTable("LicensePlanOrganizationPools", "ai");
+            entity.HasKey(x => x.LicensePlanId);
+            entity.Property(x => x.DefaultMemberMonthlyBudgetLimit).HasPrecision(19, 6);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => new { x.OrganizationPoolId, x.IsActive });
+        });
+
+        builder.Entity<OrganizationSeatAssignment>(entity =>
+        {
+            entity.ToTable("OrganizationSeatAssignments", "ai");
+            entity.HasKey(x => x.OrganizationSeatAssignmentId);
+            entity.Property(x => x.OrganizationSeatAssignmentId).HasDefaultValueSql("NEWSEQUENTIALID()");
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.ReservedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.ReservationExpiresAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.StartsAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.EndsAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.ActivatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.ReleasedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.ReleaseReason).HasMaxLength(500);
+            entity.Property(x => x.FailureCode).HasMaxLength(100).IsUnicode(false);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => x.LicensePaymentId).IsUnique();
+            entity.HasIndex(x => new
+            {
+                x.OrganizationPoolId,
+                x.OrganizationId,
+                x.Status,
+                x.ReservationExpiresAtUtc
+            });
+            entity.HasIndex(x => new { x.UserId, x.Status, x.EndsAtUtc });
+            entity.HasIndex(x => new { x.Status, x.ReservationExpiresAtUtc, x.StartsAtUtc, x.EndsAtUtc });
         });
     }
 }

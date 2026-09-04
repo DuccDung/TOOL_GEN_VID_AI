@@ -170,44 +170,17 @@ public sealed class AuthService(
             throw InvalidRefreshToken();
         }
 
-        if (existingToken.ExpiresAtUtc <= now ||
-            existingToken.Session.Status != SessionStatuses.Active ||
-            existingToken.Session.AbsoluteExpiresAtUtc <= now ||
-            existingToken.Session.Device is null ||
-            existingToken.Session.Device.IsRevoked)
+        if (!HasValidRefreshContext(existingToken, now))
         {
             await RevokeSessionAsync(existingToken.SessionId, "Session or refresh token expired", now, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             throw InvalidRefreshToken();
         }
+        var deviceId = existingToken.Session.Device!.DeviceId;
 
         var user = await userManager.FindByIdAsync(existingToken.UserId) ?? throw InvalidRefreshToken();
         EnsureAccountCanSignIn(user);
         var roles = await userManager.GetRolesAsync(user);
-        if (!roles.Contains("Admin", StringComparer.OrdinalIgnoreCase))
-        {
-            var hasValidActivation = await dbContext.UserLicenses.AnyAsync(
-                license => license.UserId == user.Id &&
-                           (license.Status == "Active" || license.Status == "Trial") &&
-                           license.StartsAtUtc <= now &&
-                           (license.ExpiresAtUtc == null || license.ExpiresAtUtc > now) &&
-                           license.LicensePlan.IsActive &&
-                           license.Activations.Any(activation =>
-                               activation.DeviceId == existingToken.Session.Device.DeviceId &&
-                               activation.Status == "Active" &&
-                               !activation.Device.IsRevoked),
-                cancellationToken);
-            if (!hasValidActivation)
-            {
-                await RevokeSessionAsync(existingToken.SessionId, "License or device activation is no longer valid", now, cancellationToken);
-                await WriteAuditAsync(user.Id, "LicenseRefreshDenied", false, client, cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                throw new AccountApiException(
-                    StatusCodes.Status403Forbidden,
-                    "license_required",
-                    "License hoặc thiết bị không còn hiệu lực.");
-            }
-        }
 
         var claimed = await dbContext.RefreshTokens
             .Where(x => x.RefreshTokenId == existingToken.RefreshTokenId &&
@@ -229,7 +202,7 @@ public sealed class AuthService(
             user,
             roles,
             existingToken.SessionId,
-            existingToken.Session.Device.DeviceId);
+            deviceId);
         var newRefreshMaterial = tokenFactory.CreateRefreshToken();
         var replacementTokenId = Guid.NewGuid();
 
@@ -263,11 +236,17 @@ public sealed class AuthService(
             user,
             roles,
             existingToken.SessionId,
-            existingToken.Session.Device.DeviceId,
+            deviceId,
             accessToken,
             newRefreshMaterial.PlainTextToken,
             Min(newRefreshMaterial.ExpiresAtUtc, existingToken.Session.AbsoluteExpiresAtUtc));
     }
+
+    internal static bool HasValidRefreshContext(RefreshToken token, DateTime now) =>
+        token.ExpiresAtUtc > now &&
+        token.Session.Status == SessionStatuses.Active &&
+        token.Session.AbsoluteExpiresAtUtc > now &&
+        token.Session.Device is { IsRevoked: false };
 
     public async Task LogoutAsync(
         string userId,

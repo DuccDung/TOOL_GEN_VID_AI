@@ -1,3 +1,4 @@
+using TOOL_SERVER.Generation;
 using TOOL_SERVER.Organizations;
 using TOOL_SHARED.Contracts.Organizations;
 
@@ -107,6 +108,22 @@ public sealed class OrganizationAdminProjectionTests
         Assert.True(result.Ready);
         Assert.Empty(result.MissingUsageTypes);
         Assert.Empty(result.BlockingReasons);
+    }
+
+    [Fact]
+    public void Readiness_FalRequiresVideoSecondRate()
+    {
+        var result = OrganizationReadinessEvaluator.Evaluate(
+            "fal",
+            FalVeoPolicy.StandardEndpointId,
+            providerEnabled: true,
+            modelEnabled: true,
+            credentialActive: true,
+            budgetLimit: 25,
+            []);
+
+        Assert.False(result.Ready);
+        Assert.Equal(["VideoSecond"], result.MissingUsageTypes);
     }
 
     [Fact]

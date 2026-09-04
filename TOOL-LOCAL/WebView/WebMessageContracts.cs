@@ -109,3 +109,9 @@ internal sealed record ConfirmSceneAssetsWebRequest(
     IReadOnlyList<ApproveProjectAssetInput> Assets);
 
 internal sealed record TestProviderWebRequest(string ProviderCode);
+
+internal sealed record CreateLicensePaymentWebRequest(
+    Guid LicensePlanId,
+    string IdempotencyKey);
+
+internal sealed record LicensePaymentStatusWebRequest(string OrderCode);

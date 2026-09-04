@@ -100,8 +100,9 @@ public sealed class OrganizationsController(IOrganizationService organizationSer
     [HttpGet("{organizationId:guid}/video-policy")]
     public Task<OrganizationVideoPolicyResponse?> GetVideoPolicy(
         Guid organizationId,
-        CancellationToken cancellationToken) =>
-        organizationService.GetVideoPolicyAsync(organizationId, UserId(), cancellationToken);
+        CancellationToken cancellationToken,
+        [FromQuery] string scope = OrganizationVideoPolicyScopes.Default) =>
+        organizationService.GetVideoPolicyAsync(organizationId, UserId(), scope, cancellationToken);
 
     [HttpPut("{organizationId:guid}/video-policy")]
     public Task<OrganizationVideoPolicyResponse> UpdateVideoPolicy(

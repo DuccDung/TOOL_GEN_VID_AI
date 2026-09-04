@@ -3,12 +3,14 @@ using Microsoft.EntityFrameworkCore;
 using TOOL_SERVER.Authentication;
 using TOOL_SERVER.Data;
 using TOOL_SERVER.Models;
+using TOOL_SHARED.Contracts.Organizations;
 
 namespace TOOL_SERVER.Generation;
 
 internal sealed record VideoModelCapabilities(
     int MinimumDurationSeconds,
     int MaximumDurationSeconds,
+    IReadOnlySet<int> AllowedDurationsSeconds,
     int FramesPerSecond,
     IReadOnlySet<string> Resolutions,
     IReadOnlySet<string> AspectRatios,
@@ -18,6 +20,7 @@ internal sealed record VideoModelCapabilities(
     public static VideoModelCapabilities KlingDefault { get; } = new(
         3,
         15,
+        Enumerable.Range(3, 13).ToHashSet(),
         24,
         new HashSet<string>(["720p"], StringComparer.OrdinalIgnoreCase),
         new HashSet<string>(["16:9", "9:16", "1:1"], StringComparer.OrdinalIgnoreCase),
@@ -30,6 +33,7 @@ internal sealed record VideoModelCapabilities(
             ? new VideoModelCapabilities(
                 4,
                 15,
+                Enumerable.Range(4, 12).ToHashSet(),
                 24,
                 new HashSet<string>(["720p"], StringComparer.OrdinalIgnoreCase),
                 new HashSet<string>(["16:9", "9:16", "1:1"], StringComparer.OrdinalIgnoreCase),
@@ -49,10 +53,18 @@ internal sealed record VideoModelCapabilities(
                           ReadIntArray(root, "durations").DefaultIfEmpty(fallback.MinimumDurationSeconds).Min();
             var maximum = ReadInt(root, "maxDurationSeconds") ??
                           ReadIntArray(root, "durations").DefaultIfEmpty(fallback.MaximumDurationSeconds).Max();
+            var configuredDurations = ReadIntArray(root, "durations")
+                .Where(x => x > 0)
+                .Distinct()
+                .ToHashSet();
+            var allowedDurations = configuredDurations.Count > 0
+                ? configuredDurations
+                : Enumerable.Range(minimum, maximum - minimum + 1).ToHashSet();
             var fps = ReadInt(root, "framesPerSecond") ?? fallback.FramesPerSecond;
             return new VideoModelCapabilities(
                 minimum,
                 maximum,
+                allowedDurations,
                 fps,
                 ReadStringSet(root, "resolutions", fallback.Resolutions),
                 ReadStringSet(root, "aspectRatios", fallback.AspectRatios),
@@ -112,6 +124,7 @@ internal interface IProjectVideoPolicyResolver
     Task<ProjectVideoSnapshot> ResolveAsync(
         Project project,
         Guid organizationId,
+        string policyScope,
         CancellationToken cancellationToken);
 }
 
@@ -123,6 +136,7 @@ internal sealed class ProjectVideoPolicyResolver(
     public async Task<ProjectVideoSnapshot> ResolveAsync(
         Project project,
         Guid organizationId,
+        string policyScope,
         CancellationToken cancellationToken)
     {
         if (project.OrganizationId != organizationId)
@@ -149,15 +163,31 @@ internal sealed class ProjectVideoPolicyResolver(
                 cancellationToken);
         }
 
+        policyScope = ValidatePolicyScope(policyScope);
         var policy = await governanceDb.OrganizationVideoPolicies
             .AsNoTracking()
             .SingleOrDefaultAsync(
-                x => x.OrganizationId == organizationId && x.IsActive,
-                cancellationToken)
-            ?? throw new AccountApiException(
+                x => x.OrganizationId == organizationId &&
+                     x.PolicyScope == policyScope &&
+                     x.IsActive,
+                cancellationToken);
+        if (policy is null && policyScope == OrganizationVideoPolicyScopes.LongForm)
+        {
+            policy = await governanceDb.OrganizationVideoPolicies
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    x => x.OrganizationId == organizationId &&
+                         x.PolicyScope == OrganizationVideoPolicyScopes.Default &&
+                         x.IsActive,
+                    cancellationToken);
+        }
+        if (policy is null)
+        {
+            throw new AccountApiException(
                 StatusCodes.Status503ServiceUnavailable,
                 "video_policy_not_configured",
                 "Tổ chức chưa cấu hình model tạo video. Hãy liên hệ quản trị viên tổ chức.");
+        }
         var provider = await providerDb.Providers
             .AsNoTracking()
             .Include(x => x.Models)
@@ -247,4 +277,14 @@ internal sealed class ProjectVideoPolicyResolver(
             StatusCodes.Status503ServiceUnavailable,
             "video_snapshot_unavailable",
             "Provider/model đã gắn với dự án không còn trong catalog. Không tự động chuyển sang model khác.");
+
+    private static string ValidatePolicyScope(string? value) => value switch
+    {
+        OrganizationVideoPolicyScopes.Default => value,
+        OrganizationVideoPolicyScopes.LongForm => value,
+        _ => throw new AccountApiException(
+            StatusCodes.Status422UnprocessableEntity,
+            "video_policy_scope_invalid",
+            "Phạm vi policy video không hợp lệ.")
+    };
 }

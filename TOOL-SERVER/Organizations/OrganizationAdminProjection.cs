@@ -130,6 +130,8 @@ internal static class OrganizationReadinessEvaluator
                 ? new[] { "VideoSecond" }
                 : providerCode.Equals("byteplus", StringComparison.OrdinalIgnoreCase)
                     ? new[] { "OutputToken" }
+                : providerCode.Equals("fal", StringComparison.OrdinalIgnoreCase)
+                    ? new[] { "VideoSecond" }
                 : [];
         var configuredUsageTypes = activeUsageTypes.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var missingUsageTypes = requiredUsageTypes
@@ -187,6 +189,7 @@ internal static class OrganizationAuditDataSanitizer
         "version",
         "secretHint",
         "modelCode",
+        "policyScope",
         "policyVersion",
         "resolution",
         "nativeAudio"

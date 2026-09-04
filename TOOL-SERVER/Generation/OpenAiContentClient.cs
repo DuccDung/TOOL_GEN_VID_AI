@@ -94,14 +94,10 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
             throw new ArgumentException("Luồng tạo nội dung tự động hiện hỗ trợ video tối đa 360 giây.");
         }
 
-        var sceneCount = Math.Max(
-            1,
-            (int)Math.Ceiling(targetDurationSeconds / (decimal)videoCapabilities.MaximumDurationSeconds));
-        var durations = AllocateDurations(
-            targetDurationSeconds,
-            sceneCount,
-            videoCapabilities.MinimumDurationSeconds,
-            videoCapabilities.MaximumDurationSeconds);
+        var durationAllocations = VideoDurationAllocator.Allocate(targetDurationSeconds, videoCapabilities);
+        var sceneCount = durationAllocations.Count;
+        var durations = durationAllocations.Select(x => x.ContentDurationSeconds).ToArray();
+        var generationDurations = durationAllocations.Select(x => x.GenerationDurationSeconds).ToArray();
         var speechContracts = CreateSpeechContracts(durations, enforceKlingLongFormSpeechPolicy);
         var schema = CreateSchema(sceneCount);
         var languageInstructions = string.Equals(
@@ -123,7 +119,7 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
                   "Do not return non-English prose in any human-readable field. All spoken_text must be natural English intended for English pronunciation. "
                 : "Write all audience-facing content in the requested project language. ";
         var speechPolicyInstructions = enforceKlingLongFormSpeechPolicy
-            ? "For this long-form Kling plan, one visible character plus spoken_text must use OnCameraDialogue; spoken_text with no character must use NativeVoiceOver; NativeVoiceOver must have an empty character_keys array. " +
+            ? "For this long-form native-audio video plan, one visible character plus spoken_text must use OnCameraDialogue; spoken_text with no character must use NativeVoiceOver; NativeVoiceOver must have an empty character_keys array. " +
               "For every OnCameraDialogue scene, visual_prompt must visibly show the presenter speaking with the face and mouth clear, starting early and gesturing naturally while speaking. The main action must not be only standing, posing or smiling. "
             : string.Empty;
         var requestBody = new
@@ -149,7 +145,9 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
                 "Do not inventory insignificant transient objects. canonical_description must contain the immutable visual details needed to keep the asset consistent between clips.",
             input = $"Create a complete video content plan. Topic: {topic}\nLanguage: {languageCode}\nPlatform: {platform}\nAspect ratio: {aspectRatio}\n" +
                     $"Exact total duration: {targetDurationSeconds} seconds. Return exactly {sceneCount} scenes in chronological order. " +
-                     $"Scene durations in order are exactly: {string.Join(", ", durations.Select((seconds, index) => $"scene {index + 1} = {seconds}s"))}. " +
+                     $"Content durations in order are exactly: {string.Join(", ", durations.Select((seconds, index) => $"scene {index + 1} = {seconds}s"))}. " +
+                     $"Provider generation durations in order are fixed by the server: {string.Join(", ", generationDurations.Select((seconds, index) => $"scene {index + 1} = {seconds}s"))}. " +
+                     "Finish all spoken_text before the content duration boundary; any provider-only tail will be trimmed. " +
                      $"Mandatory spoken_text contracts (follow each line exactly):\n{speechContracts}\n" +
                      "The visual_prompt for each scene must describe subject, environment, lighting, action, camera framing, and motion without duplicating spoken_text. " +
                      "When a recurring presenter is useful, keep the same face, hair, body proportions, clothing and accessories between scenes. " +
@@ -234,7 +232,8 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
                 Required(scene.VoiceStyle, "voice_style"),
                 Required(scene.AmbientAudio, "ambient_audio"),
                 Required(scene.SoundEffects, "sound_effects"),
-                scene.AssetKeys.Select(RequiredAssetKey).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()))
+                scene.AssetKeys.Select(RequiredAssetKey).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                generationDurations[index]))
             .ToArray();
         var assets = planDto.Assets
             .Select(asset =>
@@ -390,29 +389,6 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
         ["maxItems"] = maximum,
         ["items"] = StringSchema()
     };
-
-    private static int[] AllocateDurations(
-        int totalSeconds,
-        int sceneCount,
-        int minimumDurationSeconds,
-        int maximumDurationSeconds)
-    {
-        var result = Enumerable.Repeat(totalSeconds / sceneCount, sceneCount).ToArray();
-        for (var index = 0; index < totalSeconds % sceneCount; index++)
-        {
-            result[index]++;
-        }
-
-        if (result.Any(x => x < minimumDurationSeconds || x > maximumDurationSeconds))
-        {
-            throw new AccountApiException(
-                StatusCodes.Status422UnprocessableEntity,
-                "video_duration_not_supported",
-                $"Không thể chia thời lượng dự án thành các clip từ {minimumDurationSeconds} đến {maximumDurationSeconds} giây cho model đã chọn.");
-        }
-
-        return result;
-    }
 
     private static void ValidatePlan(
         OpenAiPlanDto plan,
@@ -689,6 +665,10 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
         if (provider.AuthenticationType == "Bearer")
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", provider.ApiKey);
+        }
+        else if (provider.AuthenticationType == "Key")
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Key", provider.ApiKey);
         }
         else
         {

@@ -22,6 +22,7 @@ public sealed class OrganizationMember
     public string UserId { get; set; } = null!;
     public string Role { get; set; } = OrganizationMemberRoles.Member;
     public string Status { get; set; } = OrganizationMemberStatuses.Active;
+    public bool IsProvisioningManaged { get; set; }
     public decimal? MonthlyBudgetLimit { get; set; }
     public DateTime JoinedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
@@ -50,6 +51,7 @@ public sealed class OrganizationProviderCredential
 public sealed class OrganizationVideoPolicy
 {
     public Guid OrganizationId { get; set; }
+    public string PolicyScope { get; set; } = "Default";
     public Guid ProviderId { get; set; }
     public Guid ProviderModelId { get; set; }
     public int PolicyVersion { get; set; }

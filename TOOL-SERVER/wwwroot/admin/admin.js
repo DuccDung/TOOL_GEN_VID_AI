@@ -265,9 +265,9 @@ function renderPlans() {
   }
   root.innerHTML = `<div class="plan-grid">${state.plans.map(plan => `
     <article class="plan-card-admin ${plan.isActive ? '' : 'inactive'}">
-      <div class="plan-card-top"><span class="plan-symbol">${icon('id-card')}</span><span class="status-pill ${plan.isActive ? 'status-healthy' : ''}">${plan.isActive ? 'Active' : 'Inactive'}</span></div>
+      <div class="plan-card-top"><span class="plan-symbol">${icon('id-card')}</span><span class="status-pill ${plan.isActive && plan.isPublic ? 'status-healthy' : ''}">${plan.isPublic ? 'Public' : (plan.isActive ? 'Internal' : 'Inactive')}</span></div>
       <h3>${escapeHtml(plan.name)}</h3><code>${escapeHtml(plan.planCode)}</code><p>${escapeHtml(plan.description || 'Chưa có mô tả cho gói này.')}</p>
-      <dl><div><dt>Thời hạn</dt><dd>${plan.defaultDurationDays ? `${plan.defaultDurationDays} ngày` : 'Tùy chỉnh'}</dd></div><div><dt>Thiết bị</dt><dd>${plan.maxActivatedDevices}</dd></div><div><dt>Phiên đồng thời</dt><dd>${plan.maxConcurrentSessions}</dd></div><div><dt>Offline grace</dt><dd>${plan.offlineGraceHours} giờ</dd></div></dl>
+      <dl><div><dt>Thời hạn</dt><dd>${plan.defaultDurationDays ? `${plan.defaultDurationDays} ngày` : 'Tùy chỉnh'}</dd></div><div><dt>Giá bán</dt><dd>${plan.salePriceVnd ? `${new Intl.NumberFormat('vi-VN').format(plan.salePriceVnd)} đ` : 'Chưa đặt'}</dd></div><div><dt>Thiết bị</dt><dd>${plan.maxActivatedDevices}</dd></div><div><dt>Thứ tự</dt><dd>${plan.displayOrder || 0}</dd></div><div><dt>Phiên đồng thời</dt><dd>${plan.maxConcurrentSessions}</dd></div><div><dt>Offline grace</dt><dd>${plan.offlineGraceHours} giờ</dd></div></dl>
       <button class="ghost-button" data-edit-plan="${plan.licensePlanId}">${icon('pencil')}<span>Chỉnh sửa gói</span></button>
     </article>`).join('')}</div>`;
 }
@@ -323,6 +323,18 @@ function syncGrantDuration() {
   document.getElementById('grantDuration').value = option?.dataset.days || 30;
 }
 
+function syncPlanSalesRequirements() {
+  const form = document.getElementById('planForm');
+  const isPublic = document.getElementById('planPublic').checked;
+  const duration = document.getElementById('planDuration');
+  const salePrice = document.getElementById('planSalePrice');
+  duration.required = isPublic;
+  salePrice.required = isPublic;
+  duration.setCustomValidity(isPublic && !duration.value ? 'Vui lòng nhập thời hạn mặc định cho gói được mở bán.' : '');
+  salePrice.setCustomValidity(isPublic && !salePrice.value ? 'Vui lòng nhập giá bán VND cho gói được mở bán.' : '');
+  if (!isPublic || (duration.value && salePrice.value)) form.querySelector('.dialog-message').textContent = '';
+}
+
 function openPlanDialog(plan = null) {
   const form = document.getElementById('planForm');
   form.reset();
@@ -333,10 +345,16 @@ function openPlanDialog(plan = null) {
   document.getElementById('planName').value = plan?.name || '';
   document.getElementById('planDescription').value = plan?.description || '';
   document.getElementById('planDuration').value = plan?.defaultDurationDays || '';
+  document.getElementById('planSalePrice').value = plan?.salePriceVnd || '';
+  document.getElementById('planDisplayOrder').value = plan?.displayOrder || 0;
+  try { document.getElementById('planMarketingFeatures').value = JSON.parse(plan?.marketingFeaturesJson || '[]').join('\n'); }
+  catch { document.getElementById('planMarketingFeatures').value = ''; }
   document.getElementById('planDevices').value = plan?.maxActivatedDevices || 1;
   document.getElementById('planSessions').value = plan?.maxConcurrentSessions || 1;
   document.getElementById('planOffline').value = plan?.offlineGraceHours || 0;
   document.getElementById('planActive').checked = plan?.isActive ?? true;
+  document.getElementById('planPublic').checked = plan?.isPublic ?? false;
+  syncPlanSalesRequirements();
   document.getElementById('planDialogTitle').textContent = plan ? 'Chỉnh sửa gói' : 'Tạo gói';
   document.getElementById('planDialog').showModal();
 }
@@ -460,11 +478,19 @@ document.getElementById('grantForm').addEventListener('submit', async event => {
   finally { setBusy(button, false); }
 });
 
+document.getElementById('planPublic').addEventListener('change', syncPlanSalesRequirements);
+document.getElementById('planDuration').addEventListener('input', syncPlanSalesRequirements);
+document.getElementById('planSalePrice').addEventListener('input', syncPlanSalesRequirements);
+document.getElementById('planForm').addEventListener('invalid', event => {
+  event.currentTarget.querySelector('.dialog-message').textContent = event.target.validationMessage;
+}, true);
+
 document.getElementById('planForm').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
   const id = document.getElementById('planId').value;
-  const body = { planCode: document.getElementById('planCode').value, name: document.getElementById('planName').value, description: document.getElementById('planDescription').value || null, maxActivatedDevices: Number(document.getElementById('planDevices').value), maxConcurrentSessions: Number(document.getElementById('planSessions').value), offlineGraceHours: Number(document.getElementById('planOffline').value), defaultDurationDays: document.getElementById('planDuration').value ? Number(document.getElementById('planDuration').value) : null, featureFlagsJson: id ? state.plans.find(x => x.licensePlanId === id)?.featureFlagsJson || null : null, isActive: document.getElementById('planActive').checked };
+  const marketingFeatures = document.getElementById('planMarketingFeatures').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  const body = { planCode: document.getElementById('planCode').value, name: document.getElementById('planName').value, description: document.getElementById('planDescription').value || null, maxActivatedDevices: Number(document.getElementById('planDevices').value), maxConcurrentSessions: Number(document.getElementById('planSessions').value), offlineGraceHours: Number(document.getElementById('planOffline').value), defaultDurationDays: document.getElementById('planDuration').value ? Number(document.getElementById('planDuration').value) : null, featureFlagsJson: id ? state.plans.find(x => x.licensePlanId === id)?.featureFlagsJson || null : null, isActive: document.getElementById('planActive').checked, salePriceVnd: document.getElementById('planSalePrice').value ? Number(document.getElementById('planSalePrice').value) : null, isPublic: document.getElementById('planPublic').checked, displayOrder: Number(document.getElementById('planDisplayOrder').value || 0), marketingFeaturesJson: marketingFeatures.length ? JSON.stringify(marketingFeatures) : null };
   const button = form.querySelector('button[type="submit"]'); setBusy(button, true, 'Đang lưu...');
   try { await api(id ? `/api/admin/licenses/plans/${id}` : '/api/admin/licenses/plans', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) }); document.getElementById('planDialog').close(); toast('Đã lưu gói sử dụng.'); await loadAll(); }
   catch (error) { form.querySelector('.dialog-message').textContent = error.message; }

@@ -95,6 +95,7 @@
             <section class="view-panel hidden" data-panel="organizations">
                 <div class="organization-scope-bar" role="tablist" aria-label="Phạm vi quản trị Tổ chức và AI">
                     <button type="button" class="scope-tab active" id="organizationScopeButton" data-organization-scope="directory" role="tab" aria-selected="true">Tổ chức</button>
+                    <button type="button" class="scope-tab" id="poolScopeButton" data-organization-scope="pools" role="tab" aria-selected="false">Phân bổ gói</button>
                     <button type="button" class="scope-tab" id="pricingScopeButton" data-organization-scope="pricing" role="tab" aria-selected="false">Bảng giá AI</button>
                     <button type="button" class="scope-tab" id="costGuideScopeButton" data-organization-scope="cost-guide" role="tab" aria-selected="false">Cách tính chi phí</button>
                 </div>
@@ -121,6 +122,14 @@
                             <button type="button" class="organization-tab" data-organization-tab="audit" role="tab" aria-selected="false">Nhật ký</button>
                         </div>
                         <div id="organizationTabContent" class="organization-tab-content" aria-live="polite"></div>
+                    </section>
+                </div>
+
+                <div id="organizationPools" class="hidden">
+                    <section class="panel management-panel">
+                        <div class="section-heading"><div><span class="eyebrow">LICENSE ORGANIZATION POOLS</span><h2>Pool và sức chứa tổ chức</h2></div><button class="primary-button" id="addOrganizationPoolButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo pool</span></button></div>
+                        <p class="form-hint">Payment chỉ được tạo sau khi server giữ được chỗ trong một tổ chức Active, đã bật nhận người và vượt qua kiểm tra sẵn sàng.</p>
+                        <div id="organizationPoolConsole" aria-live="polite"></div>
                     </section>
                 </div>
 
@@ -154,7 +163,7 @@
 
                         <section class="cost-guide-section" aria-labelledby="videoGuideHeading">
                             <div class="cost-guide-heading"><span>02</span><div><h3 id="videoGuideHeading">Kling tính theo giây video</h3><p>VideoMaker dùng rate <strong>VideoSecond</strong>; thời lượng càng dài thì khoản giữ càng lớn.</p></div></div>
-                            <div class="cost-guide-formula kling"><span>Công thức ước tính</span><code>Số giây video × đơn giá VideoSecond</code><small>Desktop hiện gửi Kling 3.0 ở 720p và tắt Native Audio. Khi thay đổi độ phân giải hoặc âm thanh, phải đối chiếu lại rate provider.</small></div>
+                            <div class="cost-guide-formula kling"><span>Công thức ước tính</span><code>Số giây provider × đơn giá VideoSecond của đúng model</code><small>Kling và Fal/Veo dùng 720p + Native Audio. Fal Standard/Fast phải có rate riêng theo endpoint; không dùng chung một đơn giá.</small></div>
                         </section>
 
                         <section class="cost-guide-section" aria-labelledby="budgetGuideHeading">
@@ -171,7 +180,7 @@
                         <section class="cost-guide-section cost-guide-limitations" aria-labelledby="limitGuideHeading">
                             <div class="cost-guide-heading"><span>!</span><div><h3 id="limitGuideHeading">Phạm vi và giới hạn hiện tại</h3></div></div>
                             <ul><li>Mỗi model OpenAI, gồm model Text và GPT-Image-2, cần rate InputToken và OutputToken riêng; không dùng rate của model Text để tính ảnh. VideoMaker chưa tách riêng cached input, tool fee, long-context, regional processing hoặc chương trình giảm giá.</li><li>Kling hiện dùng một VideoSecond rate cho model; bảng giá theo resolution, audio và loại workflow phải được Admin quy đổi đúng với cấu hình thực tế.</li><li>Luôn lấy giá từ hợp đồng hoặc Developer Console của chính tài khoản đang gắn credential. Không sao chép giá từ blog hoặc dịch vụ trung gian.</li></ul>
-                            <div class="cost-guide-sources"><a href="https://developers.openai.com/api/docs/models" target="_blank" rel="noopener noreferrer">Model và giá API OpenAI ↗</a><a href="https://kling.ai/document-api/pricing/base/video" target="_blank" rel="noopener noreferrer">Bảng giá API Kling ↗</a></div>
+                            <div class="cost-guide-sources"><a href="https://developers.openai.com/api/docs/models" target="_blank" rel="noopener noreferrer">Model và giá API OpenAI ↗</a><a href="https://kling.ai/document-api/pricing/base/video" target="_blank" rel="noopener noreferrer">Bảng giá API Kling ↗</a><a href="https://fal.ai/dashboard" target="_blank" rel="noopener noreferrer">Fal dashboard ↗</a></div>
                         </section>
                     </article>
                 </div>
@@ -197,7 +206,7 @@
 
     <dialog id="planDialog" class="admin-dialog">
         <form id="planForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">LICENSE PLAN</span><h2 id="planDialogTitle">Tạo gói</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
-            <input type="hidden" id="planId" /><div class="form-grid"><label>Mã gói<input id="planCode" maxlength="80" placeholder="monthly-30" required /></label><label>Tên gói<input id="planName" maxlength="200" required /></label><label class="full">Mô tả<textarea id="planDescription" rows="3"></textarea></label><label>Thời hạn mặc định (ngày)<input id="planDuration" type="number" min="1" max="3650" /></label><label>Số thiết bị<input id="planDevices" type="number" min="1" max="100" value="1" required /></label><label>Phiên đồng thời<input id="planSessions" type="number" min="1" max="100" value="1" required /></label><label>Offline grace (giờ)<input id="planOffline" type="number" min="0" max="720" value="0" required /></label><label class="toggle-row full"><input id="planActive" type="checkbox" checked /><span class="toggle"></span><span>Cho phép cấp gói này</span></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu gói</button></div>
+            <input type="hidden" id="planId" /><div class="form-grid"><label>Mã gói<input id="planCode" maxlength="80" placeholder="monthly-30" required /></label><label>Tên gói<input id="planName" maxlength="200" required /></label><label class="full">Mô tả<textarea id="planDescription" rows="3"></textarea></label><label>Thời hạn mặc định (ngày)<input id="planDuration" type="number" min="1" max="3650" /></label><label>Giá bán (VND)<input id="planSalePrice" type="number" min="1" max="1000000000000" step="1" /></label><label>Thứ tự hiển thị<input id="planDisplayOrder" type="number" min="0" max="10000" value="0" required /></label><label>Số thiết bị<input id="planDevices" type="number" min="1" max="100" value="1" required /></label><label>Phiên đồng thời<input id="planSessions" type="number" min="1" max="100" value="1" required /></label><label>Offline grace (giờ)<input id="planOffline" type="number" min="0" max="720" value="0" required /></label><label class="full">Quyền lợi hiển thị (mỗi dòng một mục)<textarea id="planMarketingFeatures" rows="4" maxlength="2500"></textarea></label><label class="toggle-row"><input id="planActive" type="checkbox" checked /><span class="toggle"></span><span>Cho phép cấp gói này</span></label><label class="toggle-row"><input id="planPublic" type="checkbox" /><span class="toggle"></span><span>Hiển thị để người dùng mua</span></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu gói</button></div>
         </form>
     </dialog>
 
@@ -219,6 +228,24 @@
         </form>
     </dialog>
 
+    <dialog id="organizationPoolDialog" class="admin-dialog small-dialog">
+        <form method="dialog" id="organizationPoolForm"><div class="dialog-heading"><div><span class="eyebrow">ORGANIZATION POOL</span><h2 id="organizationPoolDialogTitle">Tạo pool</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="organizationPoolId" /><div class="form-grid"><label>Mã pool<input id="organizationPoolCode" maxlength="50" required /></label><label>Tên pool<input id="organizationPoolName" maxlength="200" required /></label><label class="full">Trạng thái<select id="organizationPoolStatus"><option>Active</option><option>Inactive</option></select></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu pool</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationPoolOrganizationDialog" class="admin-dialog small-dialog">
+        <form method="dialog" id="organizationPoolOrganizationForm"><div class="dialog-heading"><div><span class="eyebrow">POOL CAPACITY</span><h2>Cấu hình tổ chức</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="poolOrganizationPoolId" /><div class="form-grid"><label class="full">Tổ chức<select id="poolOrganizationId" required></select></label><label>Sức chứa khách hàng<input id="poolOrganizationCapacity" type="number" min="1" max="100000" required /></label><label>Độ ưu tiên<input id="poolOrganizationPriority" type="number" min="0" max="100000" value="100" required /></label><label class="full checkbox-label"><input id="poolOrganizationAuto" type="checkbox" /> Bật nhận người tự động</label><label class="full checkbox-label"><input id="poolOrganizationReady" type="checkbox" /> Kiểm tra và đánh dấu sẵn sàng</label></div><p class="form-hint">Khi bật “sẵn sàng”, server kiểm tra budget, OpenAI, video policy, credential và rate hiện hành.</p><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu sức chứa</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationPoolPlanDialog" class="admin-dialog small-dialog">
+        <form method="dialog" id="organizationPoolPlanForm"><div class="dialog-heading"><div><span class="eyebrow">PLAN MAPPING</span><h2>Gắn gói vào pool</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="poolPlanPoolId" /><div class="form-grid"><label class="full">Gói license<select id="poolPlanId" required></select></label><label class="full">Hạn mức AI thành viên/tháng (USD, không bắt buộc)<input id="poolPlanMemberBudget" type="number" min="0" max="100000000" step="0.000001" /></label><label class="full checkbox-label"><input id="poolPlanActive" type="checkbox" checked /> Mapping đang hoạt động</label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu mapping</button></div>
+        </form>
+    </dialog>
+
     <dialog id="organizationCredentialDialog" class="admin-dialog small-dialog">
         <form id="organizationCredentialForm" method="dialog" autocomplete="off"><div class="dialog-heading"><div><span class="eyebrow">PROVIDER CREDENTIAL</span><h2 id="organizationCredentialDialogTitle">Cấu hình credential</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
             <input type="hidden" id="organizationCredentialProvider" /><div class="form-grid"><label class="full">Tên gợi nhớ<input id="organizationCredentialName" maxlength="100" autocomplete="off" placeholder="Ví dụ: OpenAI production" /></label><label class="full">API key<input id="organizationCredentialKey" type="password" minlength="8" maxlength="10000" autocomplete="new-password" autocapitalize="off" spellcheck="false" required /><small class="input-help warning-text">Key chỉ được gửi một lần để kiểm tra và mã hóa trên server; không thể xem lại.</small></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Kiểm tra và lưu</button></div>
@@ -233,7 +260,7 @@
 
     <dialog id="aiRateDialog" class="admin-dialog small-dialog">
         <form id="aiRateForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">AI COST RATE</span><h2 id="aiRateDialogTitle">Tạo đơn giá</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
-            <input type="hidden" id="aiRateModelId" /><input type="hidden" id="aiRateProviderCode" /><div class="form-grid"><label>Loại sử dụng<select id="aiRateUsageType"><option>InputToken</option><option>OutputToken</option><option>VideoSecond</option></select></label><label>Đơn vị<select id="aiRateUnit"><option>MillionTokens</option><option>1KTokens</option><option>Token</option><option>Second</option></select></label><label>Đơn giá USD<input id="aiRatePrice" type="number" min="0.000001" max="1000000" step="0.000001" required /></label><label>Tiền tệ<select id="aiRateCurrency"><option value="USD">USD</option></select></label><label class="full">Nguồn giá / ghi chú<input id="aiRateSource" maxlength="200" placeholder="provider-contract" /></label><p id="aiRateVariantHint" class="form-hint full hidden">Rate Kling này áp dụng riêng cho video 720p có Native Audio; nhập USD/giây từ hợp đồng hoặc dashboard provider, không nhập số credit.</p></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Tạo rate mới</button></div>
+            <input type="hidden" id="aiRateModelId" /><input type="hidden" id="aiRateProviderCode" /><div class="form-grid"><label>Loại sử dụng<select id="aiRateUsageType"><option>InputToken</option><option>OutputToken</option><option>VideoSecond</option></select></label><label>Đơn vị<select id="aiRateUnit"><option>MillionTokens</option><option>1KTokens</option><option>Token</option><option>Second</option></select></label><label>Đơn giá USD<input id="aiRatePrice" type="number" min="0.000001" max="1000000" step="0.000001" required /></label><label>Tiền tệ<select id="aiRateCurrency"><option value="USD">USD</option></select></label><label class="full">Nguồn giá / ghi chú<input id="aiRateSource" maxlength="200" placeholder="provider-contract" /></label><p id="aiRateVariantHint" class="form-hint full hidden">Rate video áp dụng riêng cho đúng model/endpoint 720p có Native Audio; nhập USD/giây từ hợp đồng hoặc dashboard provider, không nhập số credit.</p></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Tạo rate mới</button></div>
         </form>
     </dialog>
 

@@ -53,6 +53,27 @@ public sealed class DesktopStoryboardUiTests
     }
 
     [Fact]
+    public void StoryboardHeader_HidesProviderBadgeStackAndKeepsSceneActions()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var styles = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "styles.css");
+        var componentStart = app.IndexOf("function StoryboardSection", StringComparison.Ordinal);
+        var componentEnd = app.IndexOf("function SceneCard", componentStart, StringComparison.Ordinal);
+        Assert.True(componentStart >= 0 && componentEnd > componentStart);
+        var component = app[componentStart..componentEnd];
+
+        Assert.DoesNotContain("storyboard-provider-state", component, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenAI ·", component, StringComparison.Ordinal);
+        Assert.DoesNotContain("Native Audio ·", component, StringComparison.Ordinal);
+        Assert.Contains("className=\"storyboard-toolbar\"", component);
+        Assert.Contains("className=\"storyboard-select-all\"", component);
+        Assert.Contains("className=\"storyboard-generate\"", component);
+        Assert.Contains("grid-template-columns: minmax(0,1fr) auto", styles);
+        Assert.Contains("padding: 12px 16px", styles);
+        Assert.DoesNotContain(".storyboard-provider-state", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LongVideoContentStep_RendersReadOnlyDetailsForEveryGeneratedScene()
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
@@ -84,16 +105,71 @@ public sealed class DesktopStoryboardUiTests
     }
 
     [Fact]
-    public void KlingLongFormLanguagePolicy_IsVisibleAndDoesNotChangeShortVideoPromptFlow()
+    public void LongVideoContentStep_RendersPersistedScriptWithoutDependingOnSceneCount()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
+        var contracts = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectContracts.cs");
+        var service = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+
+        Assert.Contains("content?: ProjectContentSummary | null", types);
+        Assert.Contains("public sealed record ProjectContentSummary", contracts);
+        Assert.Contains("new ProjectContentSummary(", service);
+        Assert.Contains("x.Status == \"Approved\" || x.Version == currentScriptVersion", service);
+        Assert.Contains("const content = project.content", app);
+        Assert.Contains("content.scriptFullText", app);
+        Assert.Contains("KỊCH BẢN ĐÃ TẠO", app);
+        Assert.Contains("Dự án chưa có content đã lưu", app);
+        Assert.Contains("if (step === 'content') return Boolean(project.content);", app);
+
+        var componentStart = app.IndexOf("function LongVideoContentSummary", StringComparison.Ordinal);
+        var componentEnd = app.IndexOf("function LongVideoContentScenes", componentStart, StringComparison.Ordinal);
+        Assert.True(componentStart >= 0 && componentEnd > componentStart);
+        var component = app[componentStart..componentEnd];
+        Assert.DoesNotContain("postToHost(", component, StringComparison.Ordinal);
+        Assert.DoesNotContain("onGenerateContent", component, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LongVideoWorkspace_UsesFloatingAnimatedProjectStageWithoutHeaderOrModelCard()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var styles = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "styles.css");
+        var componentStart = app.IndexOf("function LongVideoPage", StringComparison.Ordinal);
+        var componentEnd = app.IndexOf("function getSuggestedLongVideoStep", componentStart, StringComparison.Ordinal);
+
+        Assert.True(componentStart >= 0 && componentEnd > componentStart);
+        var component = app[componentStart..componentEnd];
+
+        Assert.DoesNotContain("long-video-workspace-header", component, StringComparison.Ordinal);
+        Assert.DoesNotContain("<ModelsSection models={models} />", component, StringComparison.Ordinal);
+        Assert.Contains("const projectStageIndex", component);
+        Assert.Contains("[projectId, suggestedStep]", component);
+        Assert.Contains("isProjectStage ? 'project-current'", component);
+        Assert.Contains("isProgressed ? 'progressed'", component);
+        Assert.Contains("long-video-step-light", component);
+        Assert.Contains("Giai đoạn hiện tại của dự án", component);
+
+        Assert.Contains(".long-video-stepper { display: grid", styles);
+        Assert.Contains("background: transparent; border: 0; box-shadow: none", styles);
+        Assert.Contains("@keyframes long-video-progress-light", styles);
+        Assert.Contains("@keyframes long-video-current-step", styles);
+        Assert.Contains("@media (prefers-reduced-motion: reduce)", styles);
+        Assert.DoesNotContain(".long-video-workspace-header", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LongFormLanguagePolicy_IsVisibleForKlingAndFalAndDoesNotChangeShortVideoPromptFlow()
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
         var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
         var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
 
         Assert.Contains("requiresVietnameseContentRegeneration", types);
-        Assert.Contains("Tiếng Việt (bắt buộc cho Video Dài dùng Kling)", app);
+        Assert.Contains("Tiếng Việt (bắt buộc cho Video Dài dùng ${", app);
+        Assert.Contains("['kling', 'fal']", app);
         Assert.Contains("Sinh lại nội dung tiếng Việt", app);
-        Assert.Contains("Dự án Kling này còn nội dung tiếng Anh", app);
+        Assert.Contains("Dự án Video Dài này còn nội dung tiếng Anh", app);
         Assert.Contains("workflowStructureType", projectService);
         Assert.Contains("KlingLongFormVietnameseValidator.RequiresVietnamese", projectService);
 
@@ -101,7 +177,8 @@ public sealed class DesktopStoryboardUiTests
         var shortVideoEnd = app.IndexOf("function LongVideoPage", shortVideoStart, StringComparison.Ordinal);
         Assert.True(shortVideoStart >= 0 && shortVideoEnd > shortVideoStart);
         var shortVideoComponent = app[shortVideoStart..shortVideoEnd];
-        Assert.Contains("Nội dung được dùng trực tiếp làm prompt hình ảnh", shortVideoComponent);
+        Assert.Contains("Nội dung này được gửi thẳng vào prompt Kling, không qua OpenAI.", shortVideoComponent);
+        Assert.DoesNotContain("short-video-hero", shortVideoComponent, StringComparison.Ordinal);
         Assert.DoesNotContain("requiresVietnameseContentRegeneration", shortVideoComponent, StringComparison.Ordinal);
     }
 

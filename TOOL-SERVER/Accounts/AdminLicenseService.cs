@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
@@ -45,6 +46,106 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
         .Select(ToPlanResponse)
         .ToArray();
 
+    public async Task<IReadOnlyList<AdminLicensePaymentResponse>> GetPaymentsAsync(
+        string? search,
+        string? status,
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        var limit = take ?? 100;
+        if (limit is < 1 or > 200)
+        {
+            throw Validation("invalid_payment_page_size", "Số giao dịch mỗi lần phải từ 1 đến 200.");
+        }
+
+        var term = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        if (term?.Length > 100)
+        {
+            throw Validation("invalid_payment_search", "Từ khóa tra cứu không được vượt quá 100 ký tự.");
+        }
+
+        string? normalizedStatus = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            normalizedStatus = PaymentStatuses.FirstOrDefault(x =>
+                x.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (normalizedStatus is null)
+            {
+                throw Validation("invalid_payment_status", "Trạng thái giao dịch không hợp lệ.");
+            }
+        }
+
+        IQueryable<LicensePayment> query = dbContext.LicensePayments
+            .AsNoTracking()
+            .Include(x => x.User);
+        if (term is not null)
+        {
+            var code = term.ToUpperInvariant();
+            var isProviderTransactionId = long.TryParse(
+                term,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var providerTransactionId);
+            query = query.Where(x =>
+                x.OrderCode == code ||
+                x.TransferCode == code ||
+                (isProviderTransactionId && x.ProviderTransactionId == providerTransactionId));
+        }
+        if (normalizedStatus is not null)
+        {
+            query = query.Where(x => x.Status == normalizedStatus);
+        }
+
+        var payments = await query
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .ThenByDescending(x => x.LicensePaymentId)
+            .Take(limit)
+            .ToListAsync(cancellationToken);
+        var paymentIds = payments.Select(x => x.LicensePaymentId).ToArray();
+        var assignments = await (
+                from assignment in dbContext.OrganizationSeatAssignments.AsNoTracking()
+                join organization in dbContext.Organizations.AsNoTracking()
+                    on assignment.OrganizationId equals organization.OrganizationId
+                where paymentIds.Contains(assignment.LicensePaymentId)
+                select new
+                {
+                    assignment.LicensePaymentId,
+                    assignment.OrganizationId,
+                    OrganizationName = organization.Name,
+                    assignment.Status,
+                    assignment.FailureCode
+                })
+            .ToDictionaryAsync(x => x.LicensePaymentId, cancellationToken);
+        return payments
+            .Select(x =>
+            {
+                assignments.TryGetValue(x.LicensePaymentId, out var assignment);
+                return new AdminLicensePaymentResponse(
+                x.LicensePaymentId,
+                x.UserId,
+                x.User.Email ?? string.Empty,
+                x.OrderCode,
+                x.TransferCode,
+                x.ProviderTransactionId,
+                x.LicensePlanId,
+                x.PlanCodeSnapshot,
+                x.PlanNameSnapshot,
+                x.PriceSnapshotVnd,
+                x.DurationSnapshotDays,
+                x.Status,
+                x.CreatedAtUtc,
+                x.ExpiresAtUtc,
+                x.PaidAtUtc,
+                x.FulfilledAtUtc,
+                x.FulfilledUserLicenseId,
+                assignment?.OrganizationId,
+                assignment?.OrganizationName,
+                assignment?.Status,
+                x.FailureCode ?? assignment?.FailureCode);
+            })
+            .ToArray();
+    }
+
     public async Task<AdminLicensePlanResponse> CreatePlanAsync(
         SaveLicensePlanRequest request,
         string adminUserId,
@@ -67,6 +168,10 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
             OfflineGraceHours = normalized.OfflineGraceHours,
             DefaultDurationDays = normalized.DefaultDurationDays,
             FeatureFlagsJson = normalized.FeatureFlagsJson,
+            SalePriceVnd = normalized.SalePriceVnd,
+            IsPublic = normalized.IsPublic,
+            DisplayOrder = normalized.DisplayOrder,
+            MarketingFeaturesJson = normalized.MarketingFeaturesJson,
             IsActive = normalized.IsActive,
             CreatedAtUtc = now,
             UpdatedAtUtc = now
@@ -100,6 +205,10 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
         plan.OfflineGraceHours = normalized.OfflineGraceHours;
         plan.DefaultDurationDays = normalized.DefaultDurationDays;
         plan.FeatureFlagsJson = normalized.FeatureFlagsJson;
+        plan.SalePriceVnd = normalized.SalePriceVnd;
+        plan.IsPublic = normalized.IsPublic;
+        plan.DisplayOrder = normalized.DisplayOrder;
+        plan.MarketingFeaturesJson = normalized.MarketingFeaturesJson;
         plan.IsActive = normalized.IsActive;
         plan.UpdatedAtUtc = UtcNow();
         AddAudit(adminUserId, "LicensePlanUpdated", new { plan.LicensePlanId, plan.PlanCode }, plan.UpdatedAtUtc);
@@ -428,7 +537,11 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
         plan.FeatureFlagsJson,
         plan.IsActive,
         plan.CreatedAtUtc,
-        plan.UpdatedAtUtc);
+        plan.UpdatedAtUtc,
+        plan.SalePriceVnd,
+        plan.IsPublic,
+        plan.DisplayOrder,
+        plan.MarketingFeaturesJson);
 
     private static AdminUserLicenseResponse ToLicenseResponse(UserLicense license) => new(
         license.UserLicenseId,
@@ -464,6 +577,19 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
         {
             throw Validation("invalid_plan_duration", "Thời hạn hoặc thời gian offline không hợp lệ.");
         }
+        if (request.SalePriceVnd is { } price &&
+            (price <= 0 || price > 1_000_000_000_000m || decimal.Truncate(price) != price))
+        {
+            throw Validation("invalid_sale_price", "Giá bán phải là số nguyên VND dương.");
+        }
+        if (request.IsPublic && (request.SalePriceVnd is null || request.DefaultDurationDays is null))
+        {
+            throw Validation("invalid_public_plan", "Gói bán công khai phải có giá và thời hạn mặc định.");
+        }
+        if (request.DisplayOrder is < 0 or > 10000)
+        {
+            throw Validation("invalid_display_order", "Thứ tự hiển thị không hợp lệ.");
+        }
 
         return new NormalizedPlan(
             code,
@@ -473,7 +599,45 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
             request.OfflineGraceHours,
             request.DefaultDurationDays,
             LicensePolicy.MergeMaxConcurrentSessions(request.FeatureFlagsJson, request.MaxConcurrentSessions),
-            request.IsActive);
+            request.IsActive,
+            request.SalePriceVnd,
+            request.IsPublic,
+            request.DisplayOrder,
+            NormalizeMarketingFeatures(request.MarketingFeaturesJson));
+    }
+
+    private static string? NormalizeMarketingFeatures(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new JsonException();
+            }
+
+            var features = document.RootElement
+                .EnumerateArray()
+                .Select(x => x.ValueKind == JsonValueKind.String ? x.GetString()?.Trim() : null)
+                .ToArray();
+            if (features.Length > 12 || features.Any(x => string.IsNullOrWhiteSpace(x) || x.Length > 200))
+            {
+                throw new JsonException();
+            }
+
+            return JsonSerializer.Serialize(features);
+        }
+        catch (JsonException)
+        {
+            throw Validation(
+                "invalid_marketing_features",
+                "Quyền lợi hiển thị phải là JSON array gồm tối đa 12 chuỗi.");
+        }
     }
 
     private static void RevokeLicense(UserLicense license, string reason, DateTime now)
@@ -571,5 +735,18 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
         int OfflineGraceHours,
         int? DefaultDurationDays,
         string FeatureFlagsJson,
-        bool IsActive);
+        bool IsActive,
+        decimal? SalePriceVnd,
+        bool IsPublic,
+        int DisplayOrder,
+        string? MarketingFeaturesJson);
+
+    private static readonly string[] PaymentStatuses =
+    [
+        LicensePaymentStatuses.Pending,
+        LicensePaymentStatuses.Paid,
+        LicensePaymentStatuses.Fulfilled,
+        LicensePaymentStatuses.Expired,
+        LicensePaymentStatuses.Failed
+    ];
 }

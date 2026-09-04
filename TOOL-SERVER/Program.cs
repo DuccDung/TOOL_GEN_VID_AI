@@ -13,6 +13,7 @@ using TOOL_SERVER.Infrastructure;
 using TOOL_SERVER.Generation;
 using TOOL_SERVER.Organizations;
 using TOOL_SERVER.Providers;
+using TOOL_SERVER.Payments;
 using TOOL_SERVER.Updates;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.DataProtection;
@@ -74,6 +75,36 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+    options.AddPolicy("license-payment-create", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"license-payment-create:{httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? httpContext.Connection.RemoteIpAddress?.ToString()}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("license-payment-status", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"license-payment-status:{httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? httpContext.Connection.RemoteIpAddress?.ToString()}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 180,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("sepay-webhook", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"sepay-webhook:{httpContext.Connection.RemoteIpAddress}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
 });
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services
@@ -90,6 +121,11 @@ builder.Services
     .AddOptions<SmtpOptions>()
     .Bind(builder.Configuration.GetSection(SmtpOptions.SectionName))
     .Validate(SmtpOptions.IsValidOrDisabled, "SMTP configuration is invalid.")
+    .ValidateOnStart();
+builder.Services
+    .AddOptions<SepayPaymentOptions>()
+    .Bind(builder.Configuration.GetSection(SepayPaymentOptions.SectionName))
+    .Validate(SepayPaymentOptions.IsValidOrDisabled, "SePay payment configuration is invalid.")
     .ValidateOnStart();
 builder.Services.Configure<FormOptions>(options =>
     options.MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024);
@@ -204,7 +240,12 @@ builder.Services.AddScoped<IPasswordResetOtpStore, PasswordResetOtpStore>();
 builder.Services.AddSingleton<IPasswordResetEmailSender, SmtpPasswordResetEmailSender>();
 builder.Services.AddScoped<IAccountManagementService, AccountManagementService>();
 builder.Services.AddScoped<IAdminLicenseService, AdminLicenseService>();
+builder.Services.AddSingleton<ILicensePaymentTelemetry, LicensePaymentTelemetry>();
+builder.Services.AddScoped<ILicensePaymentService, LicensePaymentService>();
 builder.Services.AddScoped<IOrganizationService, OrganizationService>();
+builder.Services.AddScoped<IOrganizationProvisioningReadinessEvaluator, OrganizationProvisioningReadinessEvaluator>();
+builder.Services.AddScoped<IOrganizationSeatProvisioningService, OrganizationSeatProvisioningService>();
+builder.Services.AddScoped<IOrganizationProvisioningAdminService, OrganizationProvisioningAdminService>();
 builder.Services.AddScoped<IOrganizationProviderCredentialTester, OrganizationProviderCredentialTester>();
 builder.Services.AddScoped<IAiPricingAdminService, AiPricingAdminService>();
 builder.Services.AddScoped<IAiBudgetService, AiBudgetService>();
@@ -221,6 +262,7 @@ builder.Services.AddScoped<IOpenAiSpeechClient, OpenAiSpeechClient>();
 builder.Services.AddScoped<IKlingVideoClient, KlingVideoClient>();
 builder.Services.AddScoped<IVideoProviderClient, KlingVideoProviderAdapter>();
 builder.Services.AddScoped<IVideoProviderClient, BytePlusVideoClient>();
+builder.Services.AddScoped<IVideoProviderClient, FalVeoVideoClient>();
 builder.Services.AddScoped<IVideoProviderRouter, VideoProviderRouter>();
 builder.Services.AddScoped<IGenerationService, GenerationService>();
 builder.Services.AddScoped<IGeneratedImageContentService, GeneratedImageContentService>();
@@ -232,6 +274,7 @@ builder.Services.AddScoped<IVideoPollingProcessor, VideoPollingProcessor>();
 builder.Services.AddHostedService<VideoPollingWorker>();
 builder.Services.AddHostedService<ProviderCredentialRetirementWorker>();
 builder.Services.AddHostedService<BudgetReconciliationWorker>();
+builder.Services.AddHostedService<OrganizationSeatProvisioningWorker>();
 builder.Services.AddHostedService<GeneratedImageCleanupWorker>();
 builder.Services.AddHostedService<GeneratedVoiceCleanupWorker>();
 builder.Services.AddHostedService<GeneratedVideoCleanupWorker>();
@@ -254,6 +297,11 @@ builder.Services.AddHttpClient("KlingRuntime", client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");
 });
 builder.Services.AddHttpClient("BytePlusRuntime", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(2);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");
+});
+builder.Services.AddHttpClient("FalRuntime", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(2);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");

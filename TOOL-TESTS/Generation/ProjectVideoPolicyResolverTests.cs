@@ -5,6 +5,7 @@ using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Domain.Providers;
 using TOOL_SERVER.Generation;
 using TOOL_SERVER.Models;
+using TOOL_SHARED.Contracts.Organizations;
 
 namespace TOOL_TESTS.Generation;
 
@@ -96,7 +97,11 @@ public sealed class ProjectVideoPolicyResolverTests
         var project = NewProject(organizationId);
         var resolver = new ProjectVideoPolicyResolver(governanceDb, providerDb, TimeProvider.System);
 
-        var first = await resolver.ResolveAsync(project, organizationId, CancellationToken.None);
+        var first = await resolver.ResolveAsync(
+            project,
+            organizationId,
+            OrganizationVideoPolicyScopes.Default,
+            CancellationToken.None);
 
         Assert.Equal(ProviderCodes.BytePlus, first.ProviderCode);
         Assert.Equal("dreamina-seedance-2-5-260628", first.ModelCode);
@@ -108,7 +113,11 @@ public sealed class ProjectVideoPolicyResolverTests
         provider.Models.Single().IsEnabled = false;
         await providerDb.SaveChangesAsync();
 
-        var preserved = await resolver.ResolveAsync(project, organizationId, CancellationToken.None);
+        var preserved = await resolver.ResolveAsync(
+            project,
+            organizationId,
+            OrganizationVideoPolicyScopes.Default,
+            CancellationToken.None);
 
         Assert.Equal(first.ProviderCode, preserved.ProviderCode);
         Assert.Equal(first.ModelCode, preserved.ModelCode);
@@ -186,10 +195,127 @@ public sealed class ProjectVideoPolicyResolverTests
         var resolver = new ProjectVideoPolicyResolver(governanceDb, providerDb, TimeProvider.System);
 
         var exception = await Assert.ThrowsAsync<AccountApiException>(
-            () => resolver.ResolveAsync(NewProject(organizationId), organizationId, CancellationToken.None));
+            () => resolver.ResolveAsync(
+                NewProject(organizationId),
+                organizationId,
+                OrganizationVideoPolicyScopes.Default,
+                CancellationToken.None));
 
         Assert.Equal("video_model_not_enabled", exception.Code);
     }
+
+    [Fact]
+    public async Task ResolveAsync_UsesRequestedScopeAndPreservesExistingSnapshot()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        await using var governanceDb = new AiGovernanceDbContext(
+            new DbContextOptionsBuilder<AiGovernanceDbContext>()
+                .UseInMemoryDatabase($"scoped-video-policy-governance-{suffix}")
+                .Options);
+        await using var providerDb = new ProviderAdminDbContext(
+            new DbContextOptionsBuilder<ProviderAdminDbContext>()
+                .UseInMemoryDatabase($"scoped-video-policy-provider-{suffix}")
+                .Options);
+        var organizationId = Guid.NewGuid();
+        var providerId = Guid.NewGuid();
+        var defaultModelId = Guid.NewGuid();
+        var longFormModelId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        governanceDb.OrganizationVideoPolicies.AddRange(
+            new OrganizationVideoPolicy
+            {
+                OrganizationId = organizationId,
+                PolicyScope = OrganizationVideoPolicyScopes.Default,
+                ProviderId = providerId,
+                ProviderModelId = defaultModelId,
+                PolicyVersion = 2,
+                Resolution = "720p",
+                NativeAudio = true,
+                IsActive = true,
+                UpdatedByUserId = "owner",
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                RowVersion = new byte[8]
+            },
+            new OrganizationVideoPolicy
+            {
+                OrganizationId = organizationId,
+                PolicyScope = OrganizationVideoPolicyScopes.LongForm,
+                ProviderId = providerId,
+                ProviderModelId = longFormModelId,
+                PolicyVersion = 5,
+                Resolution = "720p",
+                NativeAudio = true,
+                IsActive = true,
+                UpdatedByUserId = "owner",
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                RowVersion = new byte[8]
+            });
+        var provider = new AiProvider
+        {
+            ProviderId = providerId,
+            ProviderCode = ProviderCodes.Kling,
+            DisplayName = "Kling AI",
+            BaseUrl = "https://api-singapore.klingai.com/v1/",
+            IsEnabled = true,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            RowVersion = new byte[8]
+        };
+        provider.Models.Add(NewVideoModel(defaultModelId, providerId, provider, "kling-default", now));
+        provider.Models.Add(NewVideoModel(longFormModelId, providerId, provider, "kling-long-form", now));
+        providerDb.Providers.Add(provider);
+        await governanceDb.SaveChangesAsync();
+        await providerDb.SaveChangesAsync();
+        var resolver = new ProjectVideoPolicyResolver(governanceDb, providerDb, TimeProvider.System);
+        var shortProject = NewProject(organizationId);
+        var longProject = NewProject(organizationId);
+
+        var shortSnapshot = await resolver.ResolveAsync(
+            shortProject,
+            organizationId,
+            OrganizationVideoPolicyScopes.Default,
+            CancellationToken.None);
+        var longSnapshot = await resolver.ResolveAsync(
+            longProject,
+            organizationId,
+            OrganizationVideoPolicyScopes.LongForm,
+            CancellationToken.None);
+
+        Assert.Equal("kling-default", shortSnapshot.ModelCode);
+        Assert.Equal(2, shortSnapshot.PolicyVersion);
+        Assert.Equal("kling-long-form", longSnapshot.ModelCode);
+        Assert.Equal(5, longSnapshot.PolicyVersion);
+
+        var preserved = await resolver.ResolveAsync(
+            shortProject,
+            organizationId,
+            OrganizationVideoPolicyScopes.LongForm,
+            CancellationToken.None);
+        Assert.Equal("kling-default", preserved.ModelCode);
+        Assert.Equal(2, preserved.PolicyVersion);
+    }
+
+    private static AiProviderModel NewVideoModel(
+        Guid modelId,
+        Guid providerId,
+        AiProvider provider,
+        string code,
+        DateTime now) => new()
+    {
+        ProviderModelId = modelId,
+        ProviderId = providerId,
+        Provider = provider,
+        ModelCode = code,
+        DisplayName = code,
+        Modality = "Video",
+        IsEnabled = true,
+        CapabilitiesJson = """{"minDurationSeconds":3,"maxDurationSeconds":15,"resolutions":["720p"],"aspectRatios":["16:9"],"nativeAudio":true,"referenceImage":true}""",
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+        RowVersion = new byte[8]
+    };
 
     private static Project NewProject(Guid organizationId) => new()
     {

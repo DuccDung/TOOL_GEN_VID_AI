@@ -206,6 +206,44 @@ public sealed class AiCostEstimatorTests
         Assert.Equal(0.6912m, actual);
     }
 
+    [Fact]
+    public async Task FalQuote_UsesExactEndpointRateAndGenerationDuration()
+    {
+        var modelId = Guid.NewGuid();
+        await using var dbContext = CreateContext();
+        dbContext.ProviderModels.Add(new ProviderModel
+        {
+            ProviderModelId = modelId,
+            ProviderId = Guid.NewGuid(),
+            ModelCode = FalVeoPolicy.StandardEndpointId,
+            DisplayName = "Veo Standard",
+            Modality = "Video",
+            IsEnabled = true,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            RowVersion = new byte[8]
+        });
+        dbContext.CostRates.AddRange(
+            Rate(modelId, 0.25m, "{\"resolution\":\"720p\",\"nativeAudio\":true,\"endpointId\":\"fal-ai/veo3.1/image-to-video\"}"),
+            Rate(modelId, 99m, "{\"resolution\":\"720p\",\"nativeAudio\":true,\"endpointId\":\"fal-ai/veo3.1/fast/image-to-video\"}"));
+        await dbContext.SaveChangesAsync();
+        var estimator = new AiCostEstimator(dbContext, TimeProvider.System);
+
+        var quote = await estimator.QuoteVideoAsync(
+            ProviderCodes.Fal,
+            modelId,
+            8,
+            "720p",
+            true,
+            24,
+            CancellationToken.None);
+
+        Assert.Equal(2m, quote.EstimatedCost);
+        using var snapshot = JsonDocument.Parse(quote.RateSnapshotJson);
+        Assert.Single(snapshot.RootElement.EnumerateArray());
+        Assert.Equal(0.25m, snapshot.RootElement[0].GetProperty("unitPrice").GetDecimal());
+    }
+
     [Theory]
     [InlineData("1080p", true)]
     [InlineData("720p", false)]

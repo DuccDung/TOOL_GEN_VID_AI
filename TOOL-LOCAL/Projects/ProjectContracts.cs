@@ -136,6 +136,15 @@ public sealed record UpdateCharacterCommand(
     IReadOnlyList<string> ImmutableTraits,
     IReadOnlyList<string> ForbiddenChanges);
 
+public sealed record ProjectContentSummary(
+    int ScriptVersion,
+    string Title,
+    string ScriptFullText,
+    string? Hook,
+    string? Angle,
+    string? Audience,
+    string? CallToAction);
+
 public sealed record ProjectDashboard(
     ProjectSummary Project,
     string LanguageCode,
@@ -160,7 +169,8 @@ public sealed record ProjectDashboard(
     string? VideoModelCode = null,
     string? WorkflowStructureType = null,
     string? EffectiveGenerationLanguageCode = null,
-    bool RequiresVietnameseContentRegeneration = false);
+    bool RequiresVietnameseContentRegeneration = false,
+    ProjectContentSummary? Content = null);
 
 public sealed record AiModelSummary(
     string ProviderCode,

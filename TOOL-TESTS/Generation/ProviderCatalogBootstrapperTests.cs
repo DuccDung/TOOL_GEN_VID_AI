@@ -26,11 +26,11 @@ public sealed class ProviderCatalogBootstrapperTests
         await using var services = CreateServices(interceptor);
 
         await ProviderCatalogBootstrapper.EnsureAsync(services);
-        Assert.Equal(3, interceptor.SaveAttempts);
+        Assert.Equal(4, interceptor.SaveAttempts);
 
         await ProviderCatalogBootstrapper.EnsureAsync(services);
 
-        Assert.Equal(3, interceptor.SaveAttempts);
+        Assert.Equal(4, interceptor.SaveAttempts);
         await using var scope = services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ProviderAdminDbContext>();
         var providers = await dbContext.Providers
@@ -39,7 +39,7 @@ public sealed class ProviderCatalogBootstrapperTests
             .OrderBy(x => x.ProviderCode)
             .ToListAsync();
 
-        Assert.Equal(3, providers.Count);
+        Assert.Equal(4, providers.Count);
         var openAi = Assert.Single(providers, x => x.ProviderCode == "openai");
         Assert.Equal(3, openAi.Models.Count);
         Assert.Single(openAi.Models, x => x.ModelCode == "gpt-5.6-luna" && x.Modality == "Text");
@@ -55,6 +55,14 @@ public sealed class ProviderCatalogBootstrapperTests
         Assert.All(bytePlus.Models, model => Assert.False(model.IsEnabled));
         Assert.Single(bytePlus.Models, x => x.ModelCode == "dreamina-seedance-2-0-260128" && x.Modality == "Video");
         Assert.Single(bytePlus.Models, x => x.ModelCode == "dreamina-seedance-2-5-260628" && x.Modality == "Video");
+
+        var fal = Assert.Single(providers, x => x.ProviderCode == "fal");
+        Assert.False(fal.IsEnabled);
+        Assert.Contains("\"defaultEndpointId\":\"fal-ai/veo3.1/image-to-video\"", fal.CapabilitiesJson);
+        Assert.Equal(2, fal.Models.Count);
+        Assert.All(fal.Models, model => Assert.False(model.IsEnabled));
+        Assert.Single(fal.Models, x => x.ModelCode == FalVeoPolicy.StandardEndpointId && x.Modality == "Video" && x.IsDefault);
+        Assert.Single(fal.Models, x => x.ModelCode == FalVeoPolicy.FastEndpointId && x.Modality == "Video" && !x.IsDefault);
     }
 
     [Fact]
@@ -108,15 +116,15 @@ public sealed class ProviderCatalogBootstrapperTests
 
         await ProviderCatalogBootstrapper.EnsureAsync(services);
 
-        Assert.Equal(4, interceptor.SaveAttempts);
+        Assert.Equal(5, interceptor.SaveAttempts);
         var contextIds = interceptor.ContextIds.ToArray();
-        Assert.Equal(4, contextIds.Length);
+        Assert.Equal(5, contextIds.Length);
         Assert.NotEqual(contextIds[0], contextIds[1]);
 
         await using var scope = services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ProviderAdminDbContext>();
-        Assert.Equal(3, await dbContext.Providers.CountAsync());
-        Assert.Equal(6, await dbContext.ProviderModels.CountAsync());
+        Assert.Equal(4, await dbContext.Providers.CountAsync());
+        Assert.Equal(8, await dbContext.ProviderModels.CountAsync());
     }
 
     [Fact]

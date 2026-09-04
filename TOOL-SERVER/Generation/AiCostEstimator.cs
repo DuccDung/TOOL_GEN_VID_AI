@@ -104,6 +104,26 @@ internal sealed class AiCostEstimator(
                 nativeAudio,
                 cancellationToken);
         }
+        if (providerCode == ProviderCodes.Fal)
+        {
+            if (!resolution.Equals(FalVeoPolicy.Resolution, StringComparison.OrdinalIgnoreCase) || !nativeAudio)
+            {
+                return new AiCostQuote(0, "USD", "[]");
+            }
+            var falRates = await CurrentRatesAsync(providerModelId, cancellationToken);
+            var modelCode = await ModelCodeAsync(providerModelId, cancellationToken);
+            var rate = falRates.FirstOrDefault(x =>
+                x.UsageType == "VideoSecond" &&
+                FalVeoPolicy.MatchesRateMetadata(x.MetadataJson, modelCode));
+            if (rate is null)
+            {
+                return EmptyQuote(falRates);
+            }
+            return new AiCostQuote(
+                Round(rate.UnitPrice * durationSeconds),
+                rate.CurrencyCode,
+                Snapshot([rate]));
+        }
         if (providerCode != ProviderCodes.BytePlus ||
             !resolution.Equals("720p", StringComparison.OrdinalIgnoreCase) ||
             !nativeAudio)
@@ -257,6 +277,13 @@ internal sealed class AiCostEstimator(
             .OrderByDescending(x => x.EffectiveFromUtc)
             .ToListAsync(cancellationToken);
     }
+
+    private async Task<string> ModelCodeAsync(Guid providerModelId, CancellationToken cancellationToken) =>
+        await dbContext.ProviderModels
+            .AsNoTracking()
+            .Where(x => x.ProviderModelId == providerModelId)
+            .Select(x => x.ModelCode)
+            .SingleOrDefaultAsync(cancellationToken) ?? string.Empty;
 
     private static decimal TokenCost(CostRate rate, long tokens) =>
         TokenCost(rate.Unit, rate.UnitPrice, tokens);

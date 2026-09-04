@@ -379,7 +379,11 @@ public sealed class GenerationServiceKlingLongFormPromptTests
 
     private sealed class StubVideoPolicyResolver : IProjectVideoPolicyResolver
     {
-        public Task<ProjectVideoSnapshot> ResolveAsync(Project project, Guid organizationId, CancellationToken cancellationToken) =>
+        public Task<ProjectVideoSnapshot> ResolveAsync(
+            Project project,
+            Guid organizationId,
+            string policyScope,
+            CancellationToken cancellationToken) =>
             Task.FromResult(new ProjectVideoSnapshot(
                 ProviderCodes.Kling,
                 "Kling",

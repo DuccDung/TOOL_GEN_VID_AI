@@ -15,7 +15,8 @@ public sealed class KlingOutputProxySecurityTests
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
             [ProviderCodes.Kling] = ["klingai.com", "kwaicdn.com", "kwimgs.com"],
-            [ProviderCodes.BytePlus] = ["bytepluses.com", "volces.com"]
+            [ProviderCodes.BytePlus] = ["bytepluses.com", "volces.com"],
+            [ProviderCodes.Fal] = ["fal.media", "=storage.googleapis.com"]
         };
 
     [Theory]
@@ -56,6 +57,11 @@ public sealed class KlingOutputProxySecurityTests
     [InlineData("byteplus", "media.klingai.com", false)]
     [InlineData("kling", "media.kwaicdn.com", true)]
     [InlineData("kling", "klingai.com.evil.example", false)]
+    [InlineData("fal", "cdn.fal.media", true)]
+    [InlineData("fal", "fal.media.evil.example", false)]
+    [InlineData("fal", "storage.googleapis.com", true)]
+    [InlineData("fal", "attacker.storage.googleapis.com", false)]
+    [InlineData("fal", "storage.googleapis.com.evil.example", false)]
     [InlineData("unknown", "media.volces.com", false)]
     [InlineData("byteplus", "127.0.0.1", false)]
     public void ProviderOutputProxy_RequiresHostOwnedByTheSelectedProvider(
