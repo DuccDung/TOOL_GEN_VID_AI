@@ -61,12 +61,38 @@ internal sealed record VietsubSubtitlePageQuery(
     string? Status,
     string? Speaker);
 
+internal sealed record VietsubTimelineCueSummary(
+    Guid CueId,
+    int CueIndex,
+    long StartMilliseconds,
+    long EndMilliseconds,
+    bool Locked,
+    string? QualityStatus,
+    bool HasWarnings,
+    bool HasTranslation,
+    string PreviewText);
+
+internal sealed record VietsubTimelineWindow(
+    Guid TrackId,
+    int TrackRevision,
+    long WindowStartMilliseconds,
+    long WindowEndMilliseconds,
+    bool Truncated,
+    IReadOnlyList<VietsubTimelineCueSummary> Cues);
+
+internal sealed record VietsubTimelineWindowQuery(
+    Guid? TrackId,
+    long WindowStartMilliseconds,
+    long WindowEndMilliseconds,
+    int MaximumCues);
+
 internal sealed partial class VietsubSubtitleService(
     VietsubAppPaths paths,
     VietsubSubtitleStore store)
 {
     internal const int MaximumCueCount = 20_000;
     internal const int MaximumPageSize = 200;
+    internal const int MaximumTimelineCues = 500;
     private const int MaximumPageTextCharacters = 120_000;
     private const int MaximumTextLength = 10_000;
     private const long MaximumSrtSizeBytes = 10L * 1024 * 1024;
@@ -240,6 +266,101 @@ internal sealed partial class VietsubSubtitleService(
             speaker,
             speakers,
             page);
+    }
+
+    public async Task<VietsubTimelineWindow> GetTimelineWindowAsync(
+        VietsubProjectManifest project,
+        VietsubTimelineWindowQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        var trackId = query.TrackId ?? project.ActiveSubtitleTrackId;
+        var mediaDurationMilliseconds = project.SourceVideo?.Metadata.DurationSeconds * 1000m;
+        if (!trackId.HasValue
+            || trackId.Value == Guid.Empty
+            || query.WindowStartMilliseconds < 0
+            || query.WindowEndMilliseconds <= query.WindowStartMilliseconds
+            || (mediaDurationMilliseconds.HasValue
+                && query.WindowStartMilliseconds > mediaDurationMilliseconds.Value + 1_000m))
+        {
+            throw TimelineWindowInvalid();
+        }
+
+        var maximumCues = Math.Clamp(
+            query.MaximumCues <= 0 ? 500 : query.MaximumCues,
+            1,
+            MaximumTimelineCues);
+        var result = await store.LoadTimelineWindowAsync(
+            project.ProjectId,
+            trackId.Value,
+            query.WindowStartMilliseconds,
+            query.WindowEndMilliseconds,
+            maximumCues,
+            cancellationToken) ?? throw TrackNotFound();
+        return new VietsubTimelineWindow(
+            trackId.Value,
+            result.TrackRevision,
+            query.WindowStartMilliseconds,
+            query.WindowEndMilliseconds,
+            result.Truncated,
+            result.Cues.Select(cue => new VietsubTimelineCueSummary(
+                cue.CueId,
+                cue.CueIndex,
+                cue.StartMilliseconds,
+                cue.EndMilliseconds,
+                cue.OriginalLocked || cue.TranslationLocked,
+                cue.QualityStatus,
+                cue.HasWarnings,
+                cue.HasTranslation,
+                cue.PreviewText)).ToArray());
+    }
+
+    public async Task<int> UpdateCueTimingAsync(
+        VietsubProjectManifest project,
+        Guid trackId,
+        Guid cueId,
+        int expectedTrackRevision,
+        long startMilliseconds,
+        long endMilliseconds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        if (trackId == Guid.Empty
+            || cueId == Guid.Empty
+            || project.ActiveSubtitleTrackId != trackId
+            || expectedTrackRevision < 1)
+        {
+            throw TimelineEditConflict();
+        }
+
+        var tracks = await store.LoadTracksAsync(project.ProjectId, cancellationToken);
+        var track = ResolveTrack(project, tracks, trackId);
+        if (track.Revision != expectedTrackRevision)
+        {
+            throw TimelineEditConflict();
+        }
+
+        var mediaDurationMilliseconds = project.SourceVideo?.Metadata.DurationSeconds * 1000m;
+        if (startMilliseconds < 0
+            || endMilliseconds <= startMilliseconds + 99
+            || (mediaDurationMilliseconds.HasValue && endMilliseconds > mediaDurationMilliseconds.Value + 1m))
+        {
+            throw TimelineWindowInvalid();
+        }
+
+        // Giữ policy SRT hiện hành: cue được phép chồng thời gian; editor chỉ khóa biên,
+        // thời lượng tối thiểu, media duration và revision để không đổi dữ liệu ngoài ý muốn.
+
+        var cue = FindCue(track, cueId, out _);
+        if (cue.StartMilliseconds == startMilliseconds && cue.EndMilliseconds == endMilliseconds)
+        {
+            return track.Revision;
+        }
+        cue.StartMilliseconds = startMilliseconds;
+        cue.EndMilliseconds = endMilliseconds;
+        cue.UpdatedAtUtc = DateTime.UtcNow;
+        await SaveMutationAsync(project.ProjectId, track, cancellationToken);
+        return track.Revision;
     }
 
     public async Task UpdateCueAsync(
@@ -760,6 +881,12 @@ internal sealed partial class VietsubSubtitleService(
 
     private static VietsubSubtitleException TimelineInvalid() =>
         new("vietsub_srt_timeline_invalid", "Timestamp SRT không hợp lệ.");
+
+    private static VietsubSubtitleException TimelineWindowInvalid() =>
+        new("vietsub_timeline_window_invalid", "Khoảng thời gian timeline không hợp lệ.");
+
+    private static VietsubSubtitleException TimelineEditConflict() =>
+        new("vietsub_timeline_edit_conflict", "Track phụ đề đã thay đổi. Hãy tải lại timeline trước khi chỉnh tiếp.");
 
     private static VietsubSubtitleException TrackNotFound() =>
         new("vietsub_subtitle_track_not_found", "Không tìm thấy track phụ đề đang chọn.");

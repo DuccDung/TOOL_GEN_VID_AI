@@ -63,6 +63,37 @@ public sealed class VietsubMediaTests
     }
 
     [Fact]
+    public async Task Playback_returns_stable_recovery_code_when_linked_source_changed()
+    {
+        using var workspace = new TemporaryWorkspace();
+        var sourcePath = workspace.WriteFile("changed-playback.mp4", CreateBytes(4096));
+        var project = CreateProjectManifest();
+        var (service, paths, _) = CreateImportService(workspace.Root);
+        paths.CreateProjectDirectories(project.ProjectId);
+        project.SourceVideo = await service.ImportAsync(project, sourcePath, VietsubMediaImportMode.Link);
+        var playback = new VietsubMediaPlaybackService(service);
+        var playbackUrl = VietsubMediaPlaybackService.CreatePlaybackUrl(
+            project.ProjectId,
+            project.SourceVideo.MediaId);
+
+        await File.AppendAllTextAsync(sourcePath, "changed");
+        File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+        var response = playback.Open(new Uri(playbackUrl), "GET", null, project);
+
+        Assert.NotNull(response);
+        Assert.Equal(409, response.StatusCode);
+        Assert.Contains(
+            "X-Vietsub-Error-Code: vietsub_media_source_changed",
+            response.Headers,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "X-Vietsub-Recovery-Action: relink-or-copy-source",
+            response.Headers,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(sourcePath, response.Headers, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Cancelled_copy_removes_partial_and_destination()
     {
         using var workspace = new TemporaryWorkspace();

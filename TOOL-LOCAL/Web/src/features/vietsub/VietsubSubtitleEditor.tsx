@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState
+} from 'react';
 import {
   AlignStartHorizontal,
   ChevronLeft,
@@ -16,6 +24,7 @@ import type {
   VietsubSubtitleCue,
   VietsubSubtitlePage,
   VietsubSubtitlePageQuery,
+  VietsubSaveState,
   VietsubSubtitleStatus,
   VietsubSubtitleWorkspace
 } from './types';
@@ -26,29 +35,38 @@ type VietsubSubtitleEditorProps = {
   busy: boolean;
   notice?: string | null;
   sourceLanguageCode: string;
-  playheadMilliseconds: number;
+  activeCueId?: string | null;
+  getPlayheadMilliseconds: () => number;
+  selectedCueId?: string | null;
   onImportSrt: (languageCode: string) => void;
   onActivateTrack: (trackId: string) => void;
   onLoadPage: (query: VietsubSubtitlePageQuery) => void;
   onUpdateCue: (cue: Pick<
     VietsubSubtitleCue,
     'cueId' | 'originalText' | 'translatedText' | 'speaker'
-  >) => void;
+  >) => Promise<boolean>;
   onSplitCue: (cueId: string, positionMilliseconds: number) => void;
   onAlignCue: (cueId: string, positionMilliseconds: number) => void;
   onDuplicateCue: (cueId: string) => void;
   onDeleteCue: (cueId: string) => void;
   onExportSrt: (mode: 'ORIGINAL' | 'TRANSLATED') => void;
-  onSeek: (positionMilliseconds: number) => void;
+  onSelectCue: (cueId: string, positionMilliseconds: number) => void;
+  onSaveStateChange: (state: VietsubSaveState) => void;
 };
 
-export function VietsubSubtitleEditor({
+export type VietsubSubtitleEditorHandle = {
+  flushPendingEdits: () => Promise<boolean>;
+};
+
+const VietsubSubtitleEditorComponent = forwardRef<VietsubSubtitleEditorHandle, VietsubSubtitleEditorProps>(function VietsubSubtitleEditor({
   workspace,
   page,
   busy,
   notice,
   sourceLanguageCode,
-  playheadMilliseconds,
+  activeCueId,
+  getPlayheadMilliseconds,
+  selectedCueId,
   onImportSrt,
   onActivateTrack,
   onLoadPage,
@@ -58,15 +76,54 @@ export function VietsubSubtitleEditor({
   onDuplicateCue,
   onDeleteCue,
   onExportSrt,
-  onSeek
-}: VietsubSubtitleEditorProps) {
+  onSelectCue,
+  onSaveStateChange
+}: VietsubSubtitleEditorProps, ref) {
   const [languageCode, setLanguageCode] = useState(
     sourceLanguageCode === 'auto' ? 'en' : sourceLanguageCode
   );
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<VietsubSubtitleStatus>('ALL');
   const [speaker, setSpeaker] = useState('');
+  const searchTrackRef = useRef<string | null>(null);
+  const cueFlushersRef = useRef(new Map<string, () => Promise<boolean>>());
+  const cueSaveStatesRef = useRef(new Map<string, VietsubSaveState>());
   const activeTrackId = workspace?.activeTrackId ?? null;
+
+  const publishSaveState = useCallback(() => {
+    const states = [...cueSaveStatesRef.current.values()];
+    const next = states.includes('error')
+      ? 'error'
+      : states.includes('saving')
+        ? 'saving'
+        : states.includes('dirty')
+          ? 'dirty'
+          : 'saved';
+    onSaveStateChange(next);
+  }, [onSaveStateChange]);
+
+  const reportCueSaveState = useCallback((cueId: string, state: VietsubSaveState) => {
+    if (state === 'saved') cueSaveStatesRef.current.delete(cueId);
+    else cueSaveStatesRef.current.set(cueId, state);
+    publishSaveState();
+  }, [publishSaveState]);
+
+  const registerCueFlusher = useCallback((cueId: string, flush: () => Promise<boolean>) => {
+    cueFlushersRef.current.set(cueId, flush);
+    return () => {
+      if (cueFlushersRef.current.get(cueId) === flush) cueFlushersRef.current.delete(cueId);
+      cueSaveStatesRef.current.delete(cueId);
+    };
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    flushPendingEdits: async () => {
+      for (const flush of [...cueFlushersRef.current.values()]) {
+        if (!await flush()) return false;
+      }
+      return true;
+    }
+  }), []);
 
   const load = (
     offset: number,
@@ -84,7 +141,14 @@ export function VietsubSubtitleEditor({
   };
 
   useEffect(() => {
-    if (!activeTrackId) return;
+    if (!activeTrackId) {
+      searchTrackRef.current = null;
+      return;
+    }
+    if (searchTrackRef.current !== activeTrackId) {
+      searchTrackRef.current = activeTrackId;
+      return;
+    }
     const timer = window.setTimeout(() => load(0, { search }), 350);
     return () => window.clearTimeout(timer);
     // Track and filter changes intentionally create a fresh paged query.
@@ -185,14 +249,17 @@ export function VietsubSubtitleEditor({
                 key={`${cue.cueId}-${page?.trackRevision ?? 0}`}
                 cue={cue}
                 busy={busy}
-                active={playheadMilliseconds >= cue.startMilliseconds && playheadMilliseconds < cue.endMilliseconds}
-                playheadMilliseconds={playheadMilliseconds}
+                active={activeCueId === cue.cueId}
+                selected={selectedCueId === cue.cueId}
+                getPlayheadMilliseconds={getPlayheadMilliseconds}
                 onUpdate={onUpdateCue}
-                onSeek={onSeek}
+                onSelect={onSelectCue}
                 onSplit={onSplitCue}
                 onAlign={onAlignCue}
                 onDuplicate={onDuplicateCue}
                 onDelete={onDeleteCue}
+                onRegisterFlusher={registerCueFlusher}
+                onSaveStateChange={(next) => reportCueSaveState(cue.cueId, next)}
               />
             ))}
             {page && page.cues.length === 0 && (
@@ -225,32 +292,40 @@ export function VietsubSubtitleEditor({
       )}
     </section>
   );
-}
+});
+
+export const VietsubSubtitleEditor = memo(VietsubSubtitleEditorComponent);
 
 type VietsubCueRowProps = {
   cue: VietsubSubtitleCue;
   busy: boolean;
   active: boolean;
-  playheadMilliseconds: number;
+  selected: boolean;
+  getPlayheadMilliseconds: () => number;
   onUpdate: VietsubSubtitleEditorProps['onUpdateCue'];
-  onSeek: VietsubSubtitleEditorProps['onSeek'];
+  onSelect: VietsubSubtitleEditorProps['onSelectCue'];
   onSplit: VietsubSubtitleEditorProps['onSplitCue'];
   onAlign: VietsubSubtitleEditorProps['onAlignCue'];
   onDuplicate: VietsubSubtitleEditorProps['onDuplicateCue'];
   onDelete: VietsubSubtitleEditorProps['onDeleteCue'];
+  onRegisterFlusher: (cueId: string, flush: () => Promise<boolean>) => () => void;
+  onSaveStateChange: (state: VietsubSaveState) => void;
 };
 
 function VietsubCueRow({
   cue,
   busy,
   active,
-  playheadMilliseconds,
+  selected,
+  getPlayheadMilliseconds,
   onUpdate,
-  onSeek,
+  onSelect,
   onSplit,
   onAlign,
   onDuplicate,
-  onDelete
+  onDelete,
+  onRegisterFlusher,
+  onSaveStateChange
 }: VietsubCueRowProps) {
   const [draft, setDraft] = useState({
     originalText: cue.originalText,
@@ -258,6 +333,7 @@ function VietsubCueRow({
     speaker: cue.speaker
   });
   const dirty = useRef(false);
+  const pendingFlush = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     setDraft({
@@ -268,33 +344,65 @@ function VietsubCueRow({
     dirty.current = false;
   }, [cue.cueId, cue.originalText, cue.translatedText, cue.speaker]);
 
-  useEffect(() => {
-    if (!dirty.current || busy) return;
-    const timer = window.setTimeout(() => {
-      const originalText = draft.originalText.trim();
-      const speaker = draft.speaker.trim();
-      if (!originalText || !speaker) return;
-      dirty.current = false;
-      onUpdate({
+  const flush = useCallback((): Promise<boolean> => {
+    if (pendingFlush.current) return pendingFlush.current;
+    if (!dirty.current) return Promise.resolve(true);
+    if (busy) return Promise.resolve(false);
+    const originalText = draft.originalText.trim();
+    const speaker = draft.speaker.trim();
+    if (!originalText || !speaker) {
+      onSaveStateChange('error');
+      return Promise.resolve(false);
+    }
+    onSaveStateChange('saving');
+    const operation = onUpdate({
         cueId: cue.cueId,
         originalText,
         translatedText: draft.translatedText.trim(),
         speaker
+      })
+      .then((saved) => {
+        if (saved) {
+          dirty.current = false;
+          onSaveStateChange('saved');
+          return true;
+        }
+        onSaveStateChange('error');
+        return false;
+      })
+      .finally(() => {
+        pendingFlush.current = null;
       });
+    pendingFlush.current = operation;
+    return operation;
+  }, [busy, cue.cueId, draft, onSaveStateChange, onUpdate]);
+
+  useEffect(
+    () => onRegisterFlusher(cue.cueId, flush),
+    [cue.cueId, flush, onRegisterFlusher]
+  );
+
+  useEffect(() => {
+    if (!dirty.current || busy) return;
+    const timer = window.setTimeout(() => {
+      void flush();
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [busy, cue.cueId, draft, onUpdate]);
+  }, [busy, draft, flush]);
 
   const updateDraft = (patch: Partial<typeof draft>) => {
     dirty.current = true;
+    onSaveStateChange('dirty');
     setDraft((current) => ({ ...current, ...patch }));
   };
-  const canSplit = playheadMilliseconds > cue.startMilliseconds + 100
-    && playheadMilliseconds < cue.endMilliseconds - 100;
-
   return (
-    <article className={`vietsub-cue-row ${active ? 'active' : ''}`}>
-      <button className="vietsub-cue-time" type="button" onClick={() => onSeek(cue.startMilliseconds)}>
+    <article className={`vietsub-cue-row ${active ? 'active' : ''} ${selected ? 'selected' : ''}`}>
+      <button
+        className="vietsub-cue-time"
+        type="button"
+        aria-pressed={selected}
+        onClick={() => onSelect(cue.cueId, cue.startMilliseconds)}
+      >
         <strong>#{cue.cueIndex + 1}</strong>
         <span>{formatCueTime(cue.startMilliseconds)}</span>
         <small>→ {formatCueTime(cue.endMilliseconds)}</small>
@@ -307,6 +415,7 @@ function VietsubCueRow({
             disabled={busy}
             aria-label={`Người nói cue ${cue.cueIndex + 1}`}
             onChange={(event) => updateDraft({ speaker: event.target.value })}
+            onBlur={() => { void flush(); }}
           />
           <span className={cue.translatedText ? 'translated' : 'pending'}>
             {cue.translatedText ? 'Đã dịch' : 'Chưa dịch'}
@@ -322,6 +431,7 @@ function VietsubCueRow({
             disabled={busy}
             rows={2}
             onChange={(event) => updateDraft({ originalText: event.target.value })}
+            onBlur={() => { void flush(); }}
           />
         </label>
         <label>
@@ -333,14 +443,33 @@ function VietsubCueRow({
             rows={2}
             placeholder="Nhập bản dịch tiếng Việt…"
             onChange={(event) => updateDraft({ translatedText: event.target.value })}
+            onBlur={() => { void flush(); }}
           />
         </label>
       </div>
       <div className="vietsub-cue-actions">
-        <button type="button" disabled={busy || !canSplit} title="Tách tại playhead" onClick={() => onSplit(cue.cueId, playheadMilliseconds)}>
+        <button
+          type="button"
+          disabled={busy}
+          title="Tách tại playhead"
+          onClick={() => {
+            const playhead = getPlayheadMilliseconds();
+            if (playhead > cue.startMilliseconds + 100 && playhead < cue.endMilliseconds - 100) {
+              onSplit(cue.cueId, playhead);
+            }
+          }}
+        >
           <Scissors size={15} />
         </button>
-        <button type="button" disabled={busy || playheadMilliseconds >= cue.endMilliseconds - 100} title="Căn bắt đầu vào playhead" onClick={() => onAlign(cue.cueId, playheadMilliseconds)}>
+        <button
+          type="button"
+          disabled={busy}
+          title="Căn bắt đầu vào playhead"
+          onClick={() => {
+            const playhead = getPlayheadMilliseconds();
+            if (playhead < cue.endMilliseconds - 100) onAlign(cue.cueId, playhead);
+          }}
+        >
           <AlignStartHorizontal size={15} />
         </button>
         <button type="button" disabled={busy} title="Nhân bản cue" onClick={() => onDuplicate(cue.cueId)}>

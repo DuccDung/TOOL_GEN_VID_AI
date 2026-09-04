@@ -135,9 +135,53 @@ public sealed class VietsubModuleShellTests
         Assert.Contains("feature: 'vietsubEnabled'", app);
         Assert.Contains("dashboard.features[feature]", app);
         Assert.Contains("page === 'vietsub'", app);
+        Assert.Contains("dashboard.selectedOrganizationId", app);
         Assert.Contains("postToHost('vietsub.state.get')", hook);
         Assert.Contains("_vietsubBridge.TryHandleAsync", form);
         Assert.DoesNotContain("case \"vietsub.", dashboardBridge, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Ui_SeparatesProjectLibraryFromTheActiveEditorWorkspace()
+    {
+        var page = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubPage.tsx");
+        var library = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubProjectLibrary.tsx");
+        var editor = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubEditorWorkspace.tsx");
+        var preview = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubPreviewPanel.tsx");
+        var timeline = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubTimeline.tsx");
+        var hook = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "useVietsubModule.ts");
+        var bridge = ReadRepositoryFile(
+            "TOOL-LOCAL", "Vietsub", "VietsubWebBridge.cs");
+        var package = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "package.json");
+
+        Assert.Contains("state.selectedProject ?", page);
+        Assert.Contains("<VietsubEditorWorkspace", page);
+        Assert.Contains("<VietsubProjectLibrary", page);
+        Assert.Contains("onCreateProject", library);
+        Assert.Contains("<VietsubSettingsPanel", editor);
+        Assert.Contains("<VietsubPreviewPanel", editor);
+        Assert.Contains("<VietsubTimeline", editor);
+        Assert.Contains("event.code === 'Space'", editor);
+        Assert.Contains("selectedCueId", editor);
+        Assert.Contains("onToggleSubtitles", preview);
+        Assert.Contains("playbackRate", preview);
+        Assert.Contains("onSelectCue", timeline);
+        Assert.Contains("expectedTrackRevision", timeline);
+        Assert.Contains("calculateViewportRange", timeline);
+        Assert.Contains("flushPendingEdits", editor);
+        Assert.Contains("onRegisterBeforeLeave", editor);
+        Assert.Contains("vietsub.timeline.window.get", hook);
+        Assert.Contains("vietsub.timeline.cue.update", bridge);
+        Assert.Contains("\"test\": \"vitest run\"", package);
+        Assert.Contains("keepsCurrentEditor", hook);
+        Assert.Contains("invalidatesEditor", hook);
     }
 
     private static JsonDocument ParseSingleResponse(IReadOnlyCollection<string> responses)

@@ -12,6 +12,7 @@ export type VietsubModuleState = {
   mediaImportProgress?: VietsubMediaImportProgress | null;
   subtitleWorkspace?: VietsubSubtitleWorkspace | null;
   subtitlePage?: VietsubSubtitlePage | null;
+  timelineWindow?: VietsubTimelineWindow | null;
   subtitleNotice?: string | null;
 };
 
@@ -110,3 +111,41 @@ export type VietsubSubtitlePageQuery = {
   status: VietsubSubtitleStatus;
   speaker: string;
 };
+
+export type VietsubTimelineCue = {
+  cueId: string;
+  cueIndex: number;
+  startMilliseconds: number;
+  endMilliseconds: number;
+  locked: boolean;
+  qualityStatus?: string | null;
+  hasWarnings: boolean;
+  hasTranslation: boolean;
+  previewText: string;
+};
+
+export type VietsubTimelineWindow = {
+  trackId: string;
+  trackRevision: number;
+  windowStartMilliseconds: number;
+  windowEndMilliseconds: number;
+  truncated: boolean;
+  cues: VietsubTimelineCue[];
+};
+
+export type VietsubTimelineWindowQuery = {
+  trackId: string;
+  windowStartMilliseconds: number;
+  windowEndMilliseconds: number;
+  maximumCues: number;
+};
+
+export type VietsubTimelineCueUpdate = {
+  trackId: string;
+  cueId: string;
+  expectedTrackRevision: number;
+  startMilliseconds: number;
+  endMilliseconds: number;
+};
+
+export type VietsubSaveState = 'saved' | 'dirty' | 'saving' | 'error';

@@ -40,6 +40,19 @@ internal sealed record UpdateVietsubSubtitleCueRequest(
 
 internal sealed record VietsubSubtitleCueTimelineRequest(Guid CueId, long PositionMilliseconds);
 
+internal sealed record GetVietsubTimelineWindowRequest(
+    Guid? TrackId,
+    long WindowStartMilliseconds,
+    long WindowEndMilliseconds,
+    int MaximumCues);
+
+internal sealed record UpdateVietsubTimelineCueRequest(
+    Guid TrackId,
+    Guid CueId,
+    int ExpectedTrackRevision,
+    long StartMilliseconds,
+    long EndMilliseconds);
+
 internal sealed record VietsubSubtitleCueRequest(Guid CueId);
 
 internal sealed record ExportVietsubSrtRequest(string Mode);
@@ -165,7 +178,8 @@ internal sealed class VietsubWebBridge : IDisposable
                     await RunProjectOperationAsync(
                         request.RequestId,
                         CloseCurrentSessionAsync,
-                        cancellationToken);
+                        cancellationToken,
+                        notifyCompletion: true);
                     break;
                 case "vietsub.media.import":
                     await RunProjectOperationAsync(
@@ -188,11 +202,22 @@ internal sealed class VietsubWebBridge : IDisposable
                 case "vietsub.subtitle.page.get":
                     await PostSubtitlePageAsync(request, request.RequestId, cancellationToken);
                     break;
+                case "vietsub.timeline.window.get":
+                    await PostTimelineWindowAsync(request, request.RequestId, cancellationToken);
+                    break;
+                case "vietsub.timeline.cue.update":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => UpdateTimelineCueAsync(request, request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
+                    break;
                 case "vietsub.subtitle.cue.update":
                     await RunProjectOperationAsync(
                         request.RequestId,
                         token => UpdateSubtitleCueAsync(request, request.RequestId, token),
-                        cancellationToken);
+                        cancellationToken,
+                        notifyCompletion: true);
                     break;
                 case "vietsub.subtitle.cue.split":
                     await RunProjectOperationAsync(
@@ -321,18 +346,28 @@ internal sealed class VietsubWebBridge : IDisposable
     private async Task RunProjectOperationAsync(
         string requestId,
         Func<CancellationToken, Task> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool notifyCompletion = false)
     {
         var operationToken = BeginOperation(requestId, cancellationToken);
         await PostStateAsync(requestId, cancellationToken);
+        var completed = false;
         try
         {
             await operation(operationToken);
+            completed = true;
         }
         finally
         {
             CompleteOperation(requestId);
             await PostStateAsync(requestId, cancellationToken);
+            if (completed && notifyCompletion)
+            {
+                Post(new WebMessageResponse(
+                    "vietsub.operation.completed",
+                    requestId,
+                    new { completed = true }));
+            }
         }
     }
 
@@ -586,6 +621,44 @@ internal sealed class VietsubWebBridge : IDisposable
         PostSubtitleChanged(requestId, resetPage: false);
     }
 
+    private async Task PostTimelineWindowAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var payload = request.Payload.Deserialize<GetVietsubTimelineWindowRequest>(_jsonOptions)
+            ?? throw new JsonException();
+        var window = await RequireSubtitleService().GetTimelineWindowAsync(
+            session.Manifest,
+            new VietsubTimelineWindowQuery(
+                payload.TrackId,
+                payload.WindowStartMilliseconds,
+                payload.WindowEndMilliseconds,
+                payload.MaximumCues),
+            cancellationToken);
+        Post(new WebMessageResponse("vietsub.timeline.window", requestId, window));
+    }
+
+    private async Task UpdateTimelineCueAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var payload = request.Payload.Deserialize<UpdateVietsubTimelineCueRequest>(_jsonOptions)
+            ?? throw new JsonException();
+        var revision = await RequireSubtitleService().UpdateCueTimingAsync(
+            session.Manifest,
+            payload.TrackId,
+            payload.CueId,
+            payload.ExpectedTrackRevision,
+            payload.StartMilliseconds,
+            payload.EndMilliseconds,
+            cancellationToken);
+        PostSubtitleChanged(requestId, resetPage: false, payload.TrackId, revision);
+    }
+
     private async Task SplitSubtitleCueAsync(
         WebMessageRequest request,
         string requestId,
@@ -688,11 +761,15 @@ internal sealed class VietsubWebBridge : IDisposable
             new { fileName, mode = translated ? "TRANSLATED" : "ORIGINAL" }));
     }
 
-    private void PostSubtitleChanged(string requestId, bool resetPage) =>
+    private void PostSubtitleChanged(
+        string requestId,
+        bool resetPage,
+        Guid? trackId = null,
+        int? trackRevision = null) =>
         Post(new WebMessageResponse(
             "vietsub.subtitle.changed",
             requestId,
-            new { resetPage }));
+            new { resetPage, trackId, trackRevision }));
 
     private async Task SelectProjectAsync(
         VietsubProjectManifest manifest,

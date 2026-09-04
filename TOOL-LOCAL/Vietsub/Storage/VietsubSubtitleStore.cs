@@ -4,6 +4,23 @@ using TOOL_LOCAL.Vietsub.Domain;
 
 namespace TOOL_LOCAL.Vietsub.Storage;
 
+internal sealed record VietsubTimelineCueRecord(
+    Guid CueId,
+    int CueIndex,
+    long StartMilliseconds,
+    long EndMilliseconds,
+    bool OriginalLocked,
+    bool TranslationLocked,
+    string? QualityStatus,
+    bool HasWarnings,
+    bool HasTranslation,
+    string PreviewText);
+
+internal sealed record VietsubTimelineWindowRecord(
+    int TrackRevision,
+    bool Truncated,
+    IReadOnlyList<VietsubTimelineCueRecord> Cues);
+
 internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
 {
     private const int SchemaVersion = 2;
@@ -321,6 +338,76 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         }
 
         return tracks;
+    }
+
+    public async Task<VietsubTimelineWindowRecord?> LoadTimelineWindowAsync(
+        Guid projectId,
+        Guid trackId,
+        long windowStartMilliseconds,
+        long windowEndMilliseconds,
+        int maximumCues,
+        CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(projectId, cancellationToken);
+        await using var connection = await OpenAsync(projectId, cancellationToken);
+        int? trackRevision;
+        await using (var revisionCommand = connection.CreateCommand())
+        {
+            revisionCommand.CommandText = "SELECT revision FROM subtitle_tracks WHERE track_id = $trackId;";
+            revisionCommand.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
+            var value = await revisionCommand.ExecuteScalarAsync(cancellationToken);
+            trackRevision = value is null or DBNull ? null : Convert.ToInt32(value);
+        }
+
+        if (!trackRevision.HasValue)
+        {
+            return null;
+        }
+
+        var cues = new List<VietsubTimelineCueRecord>(maximumCues + 1);
+        await using var cueCommand = connection.CreateCommand();
+        cueCommand.CommandText = """
+            SELECT cue_id, cue_index, start_ms, end_ms,
+                   original_locked, translation_locked, quality_status,
+                   CASE WHEN warning_json <> '[]' THEN 1 ELSE 0 END AS has_warnings,
+                   CASE WHEN length(trim(translated_text)) > 0 THEN 1 ELSE 0 END AS has_translation,
+                   CASE
+                       WHEN length(trim(translated_text)) > 0 THEN substr(translated_text, 1, 200)
+                       ELSE substr(original_text, 1, 200)
+                   END AS preview_text
+            FROM subtitle_cues
+            WHERE track_id = $trackId
+              AND start_ms < $windowEnd
+              AND end_ms > $windowStart
+            ORDER BY start_ms, cue_index
+            LIMIT $limit;
+            """;
+        cueCommand.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
+        cueCommand.Parameters.AddWithValue("$windowStart", windowStartMilliseconds);
+        cueCommand.Parameters.AddWithValue("$windowEnd", windowEndMilliseconds);
+        cueCommand.Parameters.AddWithValue("$limit", maximumCues + 1);
+        await using var cueReader = await cueCommand.ExecuteReaderAsync(cancellationToken);
+        while (await cueReader.ReadAsync(cancellationToken))
+        {
+            cues.Add(new VietsubTimelineCueRecord(
+                Guid.Parse(cueReader.GetString(0)),
+                cueReader.GetInt32(1),
+                cueReader.GetInt64(2),
+                cueReader.GetInt64(3),
+                cueReader.GetBoolean(4),
+                cueReader.GetBoolean(5),
+                cueReader.IsDBNull(6) ? null : cueReader.GetString(6),
+                cueReader.GetBoolean(7),
+                cueReader.GetBoolean(8),
+                cueReader.GetString(9)));
+        }
+
+        var truncated = cues.Count > maximumCues;
+        if (truncated)
+        {
+            cues.RemoveAt(cues.Count - 1);
+        }
+        return new VietsubTimelineWindowRecord(trackRevision.Value, truncated, cues);
     }
 
     private async Task<SqliteConnection> OpenAsync(Guid projectId, CancellationToken cancellationToken)

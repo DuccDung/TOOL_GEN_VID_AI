@@ -4,8 +4,14 @@ import type { HostMessage } from '../../types';
 import type {
   VietsubModuleState,
   VietsubSubtitleCue,
-  VietsubSubtitlePageQuery
+  VietsubSubtitlePageQuery,
+  VietsubTimelineCueUpdate,
+  VietsubTimelineWindowQuery
 } from './types';
+
+type PendingOperation = {
+  resolve: (completed: boolean) => void;
+};
 
 const defaultSubtitleQuery: VietsubSubtitlePageQuery = {
   trackId: null,
@@ -30,15 +36,23 @@ const disabledState: VietsubModuleState = {
   mediaImportProgress: null,
   subtitleWorkspace: null,
   subtitlePage: null,
+  timelineWindow: null,
   subtitleNotice: null
 };
 
-export function useVietsubModule(featureEnabled: boolean) {
+export function useVietsubModule(featureEnabled: boolean, organizationId: string) {
   const [state, setState] = useState<VietsubModuleState>(disabledState);
   const subtitleQueryRef = useRef<VietsubSubtitlePageQuery>(defaultSubtitleQuery);
+  const timelineQueryRef = useRef<VietsubTimelineWindowQuery | null>(null);
+  const timelineRequestIdRef = useRef<string | null>(null);
+  const pendingOperationsRef = useRef(new Map<string, PendingOperation>());
+  const beforeLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const busyRef = useRef(false);
+  const organizationIdRef = useRef(organizationId);
 
   const refresh = useCallback(() => {
     if (!featureEnabled) return;
+    busyRef.current = true;
     setState((current) => ({
       ...current,
       enabled: true,
@@ -64,6 +78,7 @@ export function useVietsubModule(featureEnabled: boolean) {
         mediaImportProgress: null,
         subtitleWorkspace: null,
         subtitlePage: null,
+        timelineWindow: null,
         subtitleNotice: null
       });
     }
@@ -86,22 +101,33 @@ export function useVietsubModule(featureEnabled: boolean) {
           selectedProject?: VietsubModuleState['selectedProject'];
           subtitleWorkspace?: VietsubModuleState['subtitleWorkspace'];
         };
-        setState((current) => ({
-          ...current,
-          enabled: payload.enabled ?? true,
-          initialized: true,
-          loading: false,
-          busy: payload.busy ?? false,
-          activeOperationRequestId: payload.activeOperationRequestId ?? null,
-          stage: payload.stage ?? 'shell_ready',
-          errorCode: null,
-          errorMessage: null,
-          projects: payload.projects ?? [],
-          selectedProject: payload.selectedProject ?? null,
-          mediaImportProgress: null,
-          subtitleWorkspace: payload.subtitleWorkspace ?? null,
-          subtitlePage: payload.selectedProject ? current.subtitlePage : null
-        }));
+        setState((current) => {
+          const selectedProject = payload.selectedProject ?? null;
+          const keepsCurrentEditor = Boolean(
+            selectedProject
+            && current.selectedProject?.projectId === selectedProject.projectId
+          );
+          busyRef.current = payload.busy ?? false;
+
+          return {
+            ...current,
+            enabled: payload.enabled ?? true,
+            initialized: true,
+            loading: false,
+            busy: payload.busy ?? false,
+            activeOperationRequestId: payload.activeOperationRequestId ?? null,
+            stage: payload.stage ?? 'shell_ready',
+            errorCode: null,
+            errorMessage: null,
+            projects: payload.projects ?? [],
+            selectedProject,
+            mediaImportProgress: null,
+            subtitleWorkspace: payload.subtitleWorkspace ?? null,
+            subtitlePage: keepsCurrentEditor ? current.subtitlePage : null,
+            timelineWindow: keepsCurrentEditor ? current.timelineWindow : null,
+            subtitleNotice: keepsCurrentEditor ? current.subtitleNotice : null
+          };
+        });
         return;
       }
 
@@ -114,6 +140,20 @@ export function useVietsubModule(featureEnabled: boolean) {
         return;
       }
 
+      if (message.type === 'vietsub.timeline.window' && message.payload) {
+        const window = message.payload as NonNullable<VietsubModuleState['timelineWindow']>;
+        const query = timelineQueryRef.current;
+        if (message.requestId === timelineRequestIdRef.current
+          && query
+          && query.trackId === window.trackId
+          && query.windowStartMilliseconds === window.windowStartMilliseconds
+          && query.windowEndMilliseconds === window.windowEndMilliseconds) {
+          timelineRequestIdRef.current = null;
+          setState((current) => ({ ...current, timelineWindow: window }));
+        }
+        return;
+      }
+
       if (message.type === 'vietsub.subtitle.changed') {
         const payload = message.payload as { resetPage?: boolean } | undefined;
         const query = {
@@ -122,6 +162,21 @@ export function useVietsubModule(featureEnabled: boolean) {
         };
         subtitleQueryRef.current = query;
         postToHost('vietsub.subtitle.page.get', query);
+        if (timelineQueryRef.current) {
+          timelineRequestIdRef.current = postToHost(
+            'vietsub.timeline.window.get',
+            timelineQueryRef.current
+          );
+        }
+        return;
+      }
+
+      if (message.type === 'vietsub.operation.completed' && message.requestId) {
+        const pending = pendingOperationsRef.current.get(message.requestId);
+        if (pending) {
+          pendingOperationsRef.current.delete(message.requestId);
+          pending.resolve(true);
+        }
         return;
       }
 
@@ -166,32 +221,89 @@ export function useVietsubModule(featureEnabled: boolean) {
       }
 
       if (message.type === 'vietsub.error') {
-        setState((current) => ({
-          ...current,
-          initialized: true,
-          loading: false,
-          busy: false,
-          activeOperationRequestId: null,
-          errorCode: message.error?.code ?? 'vietsub_operation_failed',
-          errorMessage: message.error?.message ?? 'Không thể tải không gian dịch phụ đề.'
-        }));
+        let failedPendingOperation = false;
+        if (message.requestId === timelineRequestIdRef.current) {
+          timelineRequestIdRef.current = null;
+          timelineQueryRef.current = null;
+        }
+        if (message.requestId) {
+          const pending = pendingOperationsRef.current.get(message.requestId);
+          if (pending) {
+            pendingOperationsRef.current.delete(message.requestId);
+            pending.resolve(false);
+            failedPendingOperation = true;
+          }
+        }
+        setState((current) => {
+          const errorCode = message.error?.code ?? 'vietsub_operation_failed';
+          const invalidatesEditor = errorCode === 'vietsub_project_not_found'
+            || errorCode === 'vietsub_access_denied';
+          const belongsToDifferentOperation = Boolean(
+            message.requestId
+            && current.activeOperationRequestId
+            && current.activeOperationRequestId !== message.requestId
+            && !failedPendingOperation
+          );
+          if (!belongsToDifferentOperation) busyRef.current = false;
+
+          return {
+            ...current,
+            initialized: true,
+            loading: belongsToDifferentOperation ? current.loading : false,
+            busy: belongsToDifferentOperation ? current.busy : false,
+            activeOperationRequestId: belongsToDifferentOperation
+              ? current.activeOperationRequestId
+              : null,
+            errorCode,
+            errorMessage: message.error?.message ?? 'Không thể tải không gian dịch phụ đề.',
+            selectedProject: invalidatesEditor ? null : current.selectedProject,
+            subtitleWorkspace: invalidatesEditor ? null : current.subtitleWorkspace,
+            subtitlePage: invalidatesEditor ? null : current.subtitlePage,
+            timelineWindow: invalidatesEditor ? null : current.timelineWindow,
+            subtitleNotice: invalidatesEditor ? null : current.subtitleNotice
+          };
+        });
       }
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      for (const pending of pendingOperationsRef.current.values()) pending.resolve(false);
+      pendingOperationsRef.current.clear();
+    };
   }, []);
 
   useEffect(() => {
     if (!featureEnabled) {
+      busyRef.current = false;
+      timelineQueryRef.current = null;
+      timelineRequestIdRef.current = null;
       setState(disabledState);
       return;
     }
 
+    if (organizationIdRef.current !== organizationId) {
+      organizationIdRef.current = organizationId;
+      subtitleQueryRef.current = defaultSubtitleQuery;
+      timelineQueryRef.current = null;
+      timelineRequestIdRef.current = null;
+      setState((current) => ({
+        ...current,
+        selectedProject: null,
+        mediaImportProgress: null,
+        subtitleWorkspace: null,
+        subtitlePage: null,
+        timelineWindow: null,
+        subtitleNotice: null
+      }));
+    }
+
     refresh();
-  }, [featureEnabled, refresh]);
+  }, [featureEnabled, organizationId, refresh]);
 
   const runProjectOperation = useCallback((type: string, payload?: unknown) => {
-    if (!featureEnabled || state.busy) return;
+    if (!featureEnabled || busyRef.current) return;
+    busyRef.current = true;
     setState((current) => ({
       ...current,
       loading: true,
@@ -201,7 +313,29 @@ export function useVietsubModule(featureEnabled: boolean) {
       subtitleNotice: null
     }));
     postToHost(type, payload);
-  }, [featureEnabled, state.busy]);
+  }, [featureEnabled]);
+
+  const runAwaitableOperation = useCallback((type: string, payload?: unknown): Promise<boolean> => {
+    if (!featureEnabled || busyRef.current) return Promise.resolve(false);
+    busyRef.current = true;
+    setState((current) => ({
+      ...current,
+      loading: true,
+      busy: true,
+      errorCode: null,
+      errorMessage: null,
+      subtitleNotice: null
+    }));
+    if (!isHosted) {
+      busyRef.current = false;
+      setState((current) => ({ ...current, loading: false, busy: false }));
+      return Promise.resolve(true);
+    }
+    const requestId = postToHost(type, payload);
+    return new Promise<boolean>((resolve) => {
+      pendingOperationsRef.current.set(requestId, { resolve });
+    });
+  }, [featureEnabled]);
 
   const createProject = useCallback((name: string) => {
     runProjectOperation('vietsub.project.create', { name });
@@ -215,9 +349,10 @@ export function useVietsubModule(featureEnabled: boolean) {
     runProjectOperation('vietsub.project.rename', { projectId, name });
   }, [runProjectOperation]);
 
-  const closeProject = useCallback(() => {
-    runProjectOperation('vietsub.project.close');
-  }, [runProjectOperation]);
+  const closeProject = useCallback(
+    () => runAwaitableOperation('vietsub.project.close'),
+    [runAwaitableOperation]
+  );
 
   const importMedia = useCallback((mode: 'COPY' | 'LINK') => {
     runProjectOperation('vietsub.media.import', { mode });
@@ -247,6 +382,12 @@ export function useVietsubModule(featureEnabled: boolean) {
     state.subtitlePage?.trackId
   ]);
 
+  useEffect(() => {
+    subtitleQueryRef.current = defaultSubtitleQuery;
+    timelineQueryRef.current = null;
+    timelineRequestIdRef.current = null;
+  }, [state.selectedProject?.projectId]);
+
   const importSrt = useCallback((languageCode: string) => {
     runProjectOperation('vietsub.subtitle.import', { languageCode });
   }, [runProjectOperation]);
@@ -258,9 +399,42 @@ export function useVietsubModule(featureEnabled: boolean) {
   const updateSubtitleCue = useCallback((cue: Pick<
     VietsubSubtitleCue,
     'cueId' | 'originalText' | 'translatedText' | 'speaker'
-  >) => {
-    runProjectOperation('vietsub.subtitle.cue.update', cue);
-  }, [runProjectOperation]);
+  >) => runAwaitableOperation('vietsub.subtitle.cue.update', cue), [runAwaitableOperation]);
+
+  const loadTimelineWindow = useCallback((query: VietsubTimelineWindowQuery) => {
+    if (!featureEnabled || !state.selectedProject) return;
+    const normalized = {
+      ...query,
+      windowStartMilliseconds: Math.max(0, Math.round(query.windowStartMilliseconds)),
+      windowEndMilliseconds: Math.max(1, Math.round(query.windowEndMilliseconds)),
+      maximumCues: Math.max(1, Math.min(500, Math.round(query.maximumCues)))
+    };
+    const previous = timelineQueryRef.current;
+    timelineQueryRef.current = normalized;
+    if (previous
+      && previous.trackId === normalized.trackId
+      && previous.windowStartMilliseconds === normalized.windowStartMilliseconds
+      && previous.windowEndMilliseconds === normalized.windowEndMilliseconds
+      && previous.maximumCues === normalized.maximumCues) return;
+    timelineRequestIdRef.current = postToHost('vietsub.timeline.window.get', normalized);
+  }, [featureEnabled, state.selectedProject]);
+
+  const updateTimelineCue = useCallback(
+    (update: VietsubTimelineCueUpdate) => runAwaitableOperation('vietsub.timeline.cue.update', update),
+    [runAwaitableOperation]
+  );
+
+  const registerBeforeLeave = useCallback((handler: () => Promise<boolean>) => {
+    beforeLeaveRef.current = handler;
+    return () => {
+      if (beforeLeaveRef.current === handler) beforeLeaveRef.current = null;
+    };
+  }, []);
+
+  const prepareToLeaveEditor = useCallback(
+    () => beforeLeaveRef.current?.() ?? Promise.resolve(true),
+    []
+  );
 
   const splitSubtitleCue = useCallback((cueId: string, positionMilliseconds: number) => {
     runProjectOperation('vietsub.subtitle.cue.split', { cueId, positionMilliseconds });
@@ -294,11 +468,15 @@ export function useVietsubModule(featureEnabled: boolean) {
     importSrt,
     activateSubtitleTrack,
     loadSubtitlePage,
+    loadTimelineWindow,
     updateSubtitleCue,
+    updateTimelineCue,
     splitSubtitleCue,
     alignSubtitleCue,
     duplicateSubtitleCue,
     deleteSubtitleCue,
-    exportSrt
+    exportSrt,
+    registerBeforeLeave,
+    prepareToLeaveEditor
   };
 }

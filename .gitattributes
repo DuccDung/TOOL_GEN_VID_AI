@@ -1,0 +1,5 @@
+# Preserve exact bytes for approved FFmpeg bundle artifacts.
+/third_party/ffmpeg/win-x64/*.exe binary
+/third_party/ffmpeg/win-x64/LICENSE.txt -text
+/third_party/ffmpeg/win-x64/checksums.sha256 text eol=lf
+/third_party/ffmpeg/win-x64/PROVENANCE.md text eol=lf

@@ -33,6 +33,8 @@ import {
   MapPin,
   Menu,
   Package,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Play,
   Plus,
@@ -214,6 +216,8 @@ const secondaryMenu: Array<{ label: string; icon: LucideIcon; page?: Page }> = [
   { label: 'Hướng dẫn', icon: CircleHelp }
 ];
 
+const sidebarCollapsedStorageKey = 'videomaker.sidebar.collapsed';
+
 const stageIcons: Record<string, LucideIcon> = {
   research: Search,
   script: FileText,
@@ -293,6 +297,14 @@ function App() {
   const [page, setPage] = useState<Page>('create');
   const [busy, setBusy] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem(sidebarCollapsedStorageKey) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [updateNotice, setUpdateNotice] = useState<DesktopUpdateNotice | null>(null);
   const [updateProgress, setUpdateProgress] = useState<DesktopUpdateProgress | null>(null);
@@ -306,7 +318,10 @@ function App() {
   const [sceneSaveState, setSceneSaveState] = useState<SceneSaveState | null>(null);
   const [shortVideoProjectId, setShortVideoProjectId] = useState<string | null>(null);
   const pendingSceneSaveRef = useRef<PendingSceneSave | null>(null);
-  const vietsub = useVietsubModule(dashboard.features.vietsubEnabled);
+  const vietsub = useVietsubModule(
+    dashboard.features.vietsubEnabled,
+    dashboard.selectedOrganizationId
+  );
 
   const notify = (message: string, error = false) => {
     const id = Date.now();
@@ -452,6 +467,14 @@ function App() {
       setPage('create');
     }
   }, [dashboard.features.vietsubEnabled, page]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(sidebarCollapsedStorageKey, String(sidebarCollapsed));
+    } catch {
+      // Sidebar preference is optional; continue normally when storage is unavailable.
+    }
+  }, [sidebarCollapsed]);
 
   const handleNavigation = (label: string, target?: Page) => {
     setSidebarOpen(false);
@@ -896,12 +919,14 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar
         dashboard={dashboard}
         page={page}
         open={sidebarOpen}
+        collapsed={sidebarCollapsed}
         onClose={() => setSidebarOpen(false)}
+        onToggle={() => setSidebarCollapsed((current) => !current)}
         onNavigate={handleNavigation}
         onLogout={() => postToHost('auth.logout')}
         onUnavailable={notify}
@@ -923,7 +948,13 @@ function App() {
             }
           }}
           onSelectProject={selectProject}
-          onSelectOrganization={(organizationId) => {
+          onSelectOrganization={async (organizationId) => {
+            if (page === 'vietsub' && vietsub.state.selectedProject) {
+              const flushed = await vietsub.prepareToLeaveEditor();
+              if (!flushed) return;
+              const closed = await vietsub.closeProject();
+              if (!closed) return;
+            }
             setShortVideoProjectId(null);
             setBusy(true);
             postToHost('organization.select', { organizationId });
@@ -943,12 +974,15 @@ function App() {
             onImportSrt={vietsub.importSrt}
             onActivateSubtitleTrack={vietsub.activateSubtitleTrack}
             onLoadSubtitlePage={vietsub.loadSubtitlePage}
+            onLoadTimelineWindow={vietsub.loadTimelineWindow}
             onUpdateSubtitleCue={vietsub.updateSubtitleCue}
+            onUpdateTimelineCue={vietsub.updateTimelineCue}
             onSplitSubtitleCue={vietsub.splitSubtitleCue}
             onAlignSubtitleCue={vietsub.alignSubtitleCue}
             onDuplicateSubtitleCue={vietsub.duplicateSubtitleCue}
             onDeleteSubtitleCue={vietsub.deleteSubtitleCue}
             onExportSrt={vietsub.exportSrt}
+            onRegisterBeforeLeave={vietsub.registerBeforeLeave}
           />
         ) : page === 'projects' ? (
           <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={() => setPage('longVideo')} />
@@ -1349,7 +1383,9 @@ function Sidebar({
   dashboard,
   page,
   open,
+  collapsed,
   onClose,
+  onToggle,
   onNavigate,
   onLogout,
   onUnavailable
@@ -1357,7 +1393,9 @@ function Sidebar({
   dashboard: DashboardState;
   page: Page;
   open: boolean;
+  collapsed: boolean;
   onClose: () => void;
+  onToggle: () => void;
   onNavigate: (label: string, page?: Page) => void;
   onLogout: () => void;
   onUnavailable: (message: string) => void;
@@ -1373,14 +1411,30 @@ function Sidebar({
   return (
     <>
       <button className={`sidebar-scrim ${open ? 'visible' : ''}`} onClick={onClose} aria-label="Đóng menu" />
-      <aside className={`sidebar ${open ? 'open' : ''}`}>
+      <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}>
         <div className="brand">
           <div className="brand-mark"><Clapperboard size={25} /></div>
-          <div><strong>VideoMaker</strong><span>Tự động tạo video</span></div>
+          <div className="brand-copy"><strong>VideoMaker</strong><span>Tự động tạo video</span></div>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Mở rộng thanh menu' : 'Thu gọn thanh menu'}
+            title={collapsed ? 'Mở rộng thanh menu' : 'Thu gọn thanh menu'}
+          >
+            {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
         </div>
 
-        <button className="new-video-button" onClick={() => onNavigate('Tạo Video Dài', 'longVideo')}>
-          <Plus size={18} /> Tạo video mới
+        <button
+          className="new-video-button"
+          type="button"
+          onClick={() => onNavigate('Tạo Video Dài', 'longVideo')}
+          aria-label="Tạo video mới"
+          title={collapsed ? 'Tạo video mới' : undefined}
+        >
+          <Plus size={18} /> <span className="new-video-label">Tạo video mới</span>
         </button>
 
         <nav className="sidebar-nav">
@@ -1391,13 +1445,21 @@ function Sidebar({
                 className={target === page ? 'active' : ''}
                 key={label}
                 onClick={() => onNavigate(label, target)}
+                aria-label={label}
+                title={collapsed ? label : undefined}
               >
                 <Icon size={18} /><span>{label}</span>
               </button>
             ))}
           <div className="nav-divider" />
           {secondaryMenu.map(({ label, icon: Icon, page: target }) => (
-            <button className={target === page ? 'active' : ''} key={label} onClick={() => onNavigate(label, target)}>
+            <button
+              className={target === page ? 'active' : ''}
+              key={label}
+              onClick={() => onNavigate(label, target)}
+              aria-label={label}
+              title={collapsed ? label : undefined}
+            >
               <Icon size={18} /><span>{label}</span>
             </button>
           ))}
@@ -1414,7 +1476,7 @@ function Sidebar({
         <div className="profile-card">
           <div className="avatar">{initials || <UserRound size={20} />}</div>
           <div className="profile-copy"><strong>{displayName}</strong><span>{profile.email}</span></div>
-          <button className="profile-action" onClick={onLogout} title="Đăng xuất"><LogOut size={17} /></button>
+          <button className="profile-action" onClick={onLogout} title="Đăng xuất" aria-label="Đăng xuất"><LogOut size={17} /></button>
         </div>
       </aside>
     </>

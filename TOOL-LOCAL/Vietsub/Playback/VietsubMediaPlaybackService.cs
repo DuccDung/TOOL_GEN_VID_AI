@@ -133,7 +133,20 @@ internal sealed class VietsubMediaPlaybackService(
         var status = mediaImportService.GetSourceStatus(projectId, media);
         if (!status.Available || status.Changed || string.IsNullOrWhiteSpace(status.EffectivePath))
         {
-            return null;
+            var issueCode = status.Changed
+                ? "vietsub_media_source_changed"
+                : status.IssueCode switch
+                {
+                    "vietsub_media_reference_invalid" => "vietsub_media_reference_invalid",
+                    "vietsub_media_source_missing" => "vietsub_media_source_missing",
+                    _ => "vietsub_media_source_unavailable"
+                };
+            return Error(
+                409,
+                "Media Source Unavailable",
+                "Cache-Control: no-store\r\n" +
+                $"X-Vietsub-Error-Code: {issueCode}\r\n" +
+                "X-Vietsub-Recovery-Action: relink-or-copy-source\r\n");
         }
 
         FileStream source;

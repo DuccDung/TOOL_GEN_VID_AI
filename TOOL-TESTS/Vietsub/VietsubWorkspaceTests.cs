@@ -86,14 +86,25 @@ public sealed class VietsubWorkspaceTests : IDisposable
             manifest,
             TimeSpan.FromMilliseconds(20));
         await firstSession.StartAsync();
+        Assert.False(VietsubProjectStore.ToSummary(firstSession.Manifest).NeedsRecovery);
 
         var competingManifest = await store.OpenAsync(created.ProjectId, organizationId, ownerUserId);
         await using var competingSession = new VietsubProjectSession(store, competingManifest);
         await Assert.ThrowsAsync<InvalidOperationException>(() => competingSession.StartAsync());
 
         await firstSession.UpdateAsync(project => project.Name = "Tên đã tự lưu");
-        await Task.Delay(100);
-        var autosaved = await store.OpenAsync(created.ProjectId, organizationId, ownerUserId);
+        VietsubProjectManifest? autosaved = null;
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            autosaved = await store.OpenAsync(created.ProjectId, organizationId, ownerUserId);
+            if (autosaved.Name == "Tên đã tự lưu")
+            {
+                break;
+            }
+            await Task.Delay(25);
+        }
+
+        Assert.NotNull(autosaved);
         Assert.Equal("Tên đã tự lưu", autosaved.Name);
         Assert.True(autosaved.RecoveryRequired);
 
@@ -122,6 +133,8 @@ public sealed class VietsubWorkspaceTests : IDisposable
 
         Assert.Equal(created.ProjectId, recovered.ProjectId);
         Assert.Equal("Bản đầu", recovered.Name);
+        Assert.True(recovered.RecoveryRequired);
+        Assert.True(VietsubProjectStore.ToSummary(recovered).NeedsRecovery);
         using var canonical = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
         Assert.Equal(created.ProjectId, canonical.RootElement.GetProperty("projectId").GetGuid());
     }

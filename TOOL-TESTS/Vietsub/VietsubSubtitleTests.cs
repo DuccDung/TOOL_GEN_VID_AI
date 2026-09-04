@@ -138,6 +138,156 @@ public sealed class VietsubSubtitleTests : IDisposable
     }
 
     [Fact]
+    public async Task TimelineWindow_IsBoundedAndTimingUpdateRejectsStaleRevision()
+    {
+        var (_, subtitleStore, projectStore, service) = CreateServices();
+        var project = await projectStore.CreateAsync(Guid.NewGuid(), "owner", "Windowed timeline");
+        project.SourceVideo = new VietsubMediaReference
+        {
+            Metadata = new VietsubMediaMetadata { DurationSeconds = 60 }
+        };
+        var track = new VietsubSubtitleTrack
+        {
+            DisplayName = "Window",
+            LanguageCode = "en",
+            Source = "IMPORTED_SRT",
+            Cues = Enumerable.Range(0, 10)
+                .Select(index => new VietsubSubtitleCue
+                {
+                    StartMilliseconds = index * 1_000,
+                    EndMilliseconds = index * 1_000 + 900,
+                    OriginalText = new string('x', 1_000),
+                    TranslatedText = index % 2 == 0 ? $"Bản dịch {index}" : string.Empty,
+                    Speaker = "speaker_1"
+                })
+                .ToList()
+        };
+        await subtitleStore.SaveTrackAsync(project.ProjectId, track);
+        project.ActiveSubtitleTrackId = track.TrackId;
+        await projectStore.SaveAsync(project);
+
+        var timeline = await service.GetTimelineWindowAsync(
+            project,
+            new VietsubTimelineWindowQuery(track.TrackId, 1_500, 7_500, 3));
+
+        Assert.Equal(track.Revision, timeline.TrackRevision);
+        Assert.True(timeline.Truncated);
+        Assert.Equal(3, timeline.Cues.Count);
+        Assert.All(timeline.Cues, cue =>
+        {
+            Assert.True(cue.StartMilliseconds < 7_500);
+            Assert.True(cue.EndMilliseconds > 1_500);
+            Assert.InRange(cue.PreviewText.Length, 1, 200);
+        });
+
+        var cueToMove = timeline.Cues[0];
+        var nextRevision = await service.UpdateCueTimingAsync(
+            project,
+            track.TrackId,
+            cueToMove.CueId,
+            timeline.TrackRevision,
+            2_050,
+            2_950);
+        Assert.Equal(timeline.TrackRevision + 1, nextRevision);
+        var saved = Assert.Single(await subtitleStore.LoadTracksAsync(project.ProjectId));
+        var moved = Assert.Single(saved.Cues, cue => cue.CueId == cueToMove.CueId);
+        Assert.Equal(2_050, moved.StartMilliseconds);
+        Assert.Equal(2_950, moved.EndMilliseconds);
+
+        var stale = await Assert.ThrowsAsync<VietsubSubtitleException>(() =>
+            service.UpdateCueTimingAsync(
+                project,
+                track.TrackId,
+                cueToMove.CueId,
+                timeline.TrackRevision,
+                2_100,
+                3_000));
+        Assert.Equal("vietsub_timeline_edit_conflict", stale.Code);
+    }
+
+    [Fact]
+    public async Task Bridge_TimelineWindowAndCueUpdate_UseRevisionSafeContracts()
+    {
+        var (_, subtitleStore, projectStore, service) = CreateServices();
+        var organizationId = Guid.NewGuid();
+        const string owner = "timeline-contract-owner";
+        var project = await projectStore.CreateAsync(organizationId, owner, "Timeline contract");
+        project.SourceVideo = new VietsubMediaReference
+        {
+            Metadata = new VietsubMediaMetadata { DurationSeconds = 10 }
+        };
+        var cue = new VietsubSubtitleCue
+        {
+            StartMilliseconds = 1_000,
+            EndMilliseconds = 2_000,
+            OriginalText = "Hello",
+            TranslatedText = "Xin chào"
+        };
+        var track = new VietsubSubtitleTrack
+        {
+            DisplayName = "English",
+            LanguageCode = "en",
+            Source = "IMPORTED_SRT",
+            Cues = [cue]
+        };
+        await subtitleStore.SaveTrackAsync(project.ProjectId, track);
+        project.ActiveSubtitleTrackId = track.TrackId;
+        await projectStore.SaveAsync(project);
+        var responses = new List<string>();
+        using var bridge = new VietsubWebBridge(
+            true,
+            responses.Add,
+            projectStore,
+            () => new VietsubUserContext(owner, organizationId),
+            subtitleService: service);
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.project.open",
+            requestId = "open-timeline-contract",
+            payload = new { projectId = project.ProjectId }
+        }));
+        responses.Clear();
+
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.timeline.window.get",
+            requestId = "timeline-window",
+            payload = new
+            {
+                trackId = track.TrackId,
+                windowStartMilliseconds = 0,
+                windowEndMilliseconds = 5_000,
+                maximumCues = 50
+            }
+        }));
+        var windowResponse = Assert.Single(responses);
+        using var windowJson = JsonDocument.Parse(windowResponse);
+        var windowPayload = windowJson.RootElement.GetProperty("payload");
+        Assert.Equal(track.Revision, windowPayload.GetProperty("trackRevision").GetInt32());
+        Assert.Single(windowPayload.GetProperty("cues").EnumerateArray());
+        Assert.DoesNotContain(_root, windowResponse, StringComparison.OrdinalIgnoreCase);
+        responses.Clear();
+
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.timeline.cue.update",
+            requestId = "timeline-update",
+            payload = new
+            {
+                trackId = track.TrackId,
+                cueId = cue.CueId,
+                expectedTrackRevision = track.Revision,
+                startMilliseconds = 1_250,
+                endMilliseconds = 2_250
+            }
+        }));
+
+        Assert.Contains(responses, response => response.Contains("vietsub.subtitle.changed", StringComparison.Ordinal));
+        Assert.Contains(responses, response => response.Contains("vietsub.operation.completed", StringComparison.Ordinal));
+        Assert.DoesNotContain(responses, response => response.Contains("vietsub.error", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task PageAndBridge_ClampLargeCuePayloadWithoutLeakingLocalPaths()
     {
         var (_, subtitleStore, projectStore, service) = CreateServices();
@@ -204,6 +354,27 @@ public sealed class VietsubSubtitleTests : IDisposable
         Assert.True(response.Length < 256 * 1024);
         Assert.DoesNotContain(_root, response, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("project.db", response, StringComparison.OrdinalIgnoreCase);
+        responses.Clear();
+
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.timeline.window.get",
+            requestId = "timeline-large",
+            payload = new
+            {
+                trackId = track.TrackId,
+                windowStartMilliseconds = 0,
+                windowEndMilliseconds = 2_000_000,
+                maximumCues = 10_000
+            }
+        }));
+        var timelineResponse = Assert.Single(responses);
+        using var timelineJson = JsonDocument.Parse(timelineResponse);
+        var timelinePayload = timelineJson.RootElement.GetProperty("payload");
+        Assert.True(timelinePayload.GetProperty("truncated").GetBoolean());
+        Assert.Equal(500, timelinePayload.GetProperty("cues").GetArrayLength());
+        Assert.True(timelineResponse.Length < 256 * 1024);
+        Assert.DoesNotContain(_root, timelineResponse, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -72,7 +72,7 @@ internal sealed class VietsubProjectStore
         var manifest = await LoadAsync(projectId, cancellationToken)
             ?? throw new FileNotFoundException("Không tìm thấy hoặc không thể phục hồi dự án Vietsub.");
         EnsureAccess(manifest, organizationId, ownerUserId);
-        manifest.RecoveryRequired = !manifest.LastCleanShutdown;
+        manifest.RecoveryRequired = manifest.RecoveryRequired || !manifest.LastCleanShutdown;
         return manifest;
     }
 
@@ -178,7 +178,7 @@ internal sealed class VietsubProjectStore
             manifest.SourceLanguageCode,
             manifest.TargetLanguageCode,
             manifest.UpdatedAtUtc,
-            manifest.RecoveryRequired || !manifest.LastCleanShutdown,
+            manifest.RecoveryRequired,
             manifest.ServerSynchronized,
             manifest.ServerSyncErrorCode);
 
@@ -231,8 +231,12 @@ internal sealed class VietsubProjectStore
                 }
 
                 ValidateManifest(manifest);
-                manifest.RecoveryRequired = !manifest.LastCleanShutdown;
-                if (!string.Equals(candidate, manifestPath, StringComparison.OrdinalIgnoreCase))
+                var recoveredFromAlternateManifest = !string.Equals(
+                    candidate,
+                    manifestPath,
+                    StringComparison.OrdinalIgnoreCase);
+                manifest.RecoveryRequired = !manifest.LastCleanShutdown || recoveredFromAlternateManifest;
+                if (recoveredFromAlternateManifest)
                 {
                     await SaveCoreAsync(manifest, cancellationToken);
                 }
