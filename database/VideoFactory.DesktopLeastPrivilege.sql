@@ -46,6 +46,15 @@ IF OBJECT_ID(N'[vf].[ProviderRequestAssetVersions]', N'U') IS NOT NULL
 DENY SELECT, INSERT, UPDATE, DELETE, EXECUTE ON SCHEMA::[ai] TO [VideoMakerDesktopRole];
 DENY SELECT, INSERT, UPDATE, DELETE, EXECUTE ON SCHEMA::[auth] TO [VideoMakerDesktopRole];
 DENY SELECT, INSERT, UPDATE, DELETE, EXECUTE ON SCHEMA::[dbo] TO [VideoMakerDesktopRole];
+
+IF OBJECT_ID(N'[ai].[OrganizationPools]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[ai].[OrganizationPools] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[ai].[OrganizationPoolOrganizations]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[ai].[OrganizationPoolOrganizations] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[ai].[LicensePlanOrganizationPools]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[ai].[LicensePlanOrganizationPools] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[ai].[OrganizationSeatAssignments]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[ai].[OrganizationSeatAssignments] TO [VideoMakerDesktopRole];
 GO
 
 PRINT N'VideoMakerDesktopRole is ready. Add only the dedicated Desktop database user to this role.';

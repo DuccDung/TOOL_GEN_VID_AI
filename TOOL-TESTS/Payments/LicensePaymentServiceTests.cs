@@ -260,6 +260,69 @@ public sealed class LicensePaymentServiceTests
     }
 
     [Fact]
+    public async Task Webhook_ReplayedTransferWithNewProviderId_DoesNotExtendFulfilledLicense()
+    {
+        await using var fixture = await PaymentFixture.CreateAsync();
+        var checkout = await fixture.CreatePaymentAsync();
+        var accepted = fixture.Webhook(checkout);
+
+        await fixture.Service.HandleWebhookAsync(accepted, CancellationToken.None);
+        var originalExpiry = (await fixture.Db.UserLicenses.SingleAsync()).ExpiresAtUtc;
+
+        await fixture.Service.HandleWebhookAsync(
+            accepted with
+            {
+                Id = accepted.Id + 1,
+                ReferenceCode = "REPLAY-WITH-NEW-ID"
+            },
+            CancellationToken.None);
+
+        var payment = await fixture.Db.LicensePayments.SingleAsync();
+        Assert.Equal(accepted.Id, payment.ProviderTransactionId);
+        Assert.Equal(originalExpiry, (await fixture.Db.UserLicenses.SingleAsync()).ExpiresAtUtc);
+        Assert.Equal(1, fixture.Telemetry.Fulfilled);
+        Assert.Contains(
+            LicensePaymentWebhookMismatchReason.PaymentNotFound,
+            fixture.Telemetry.UnmatchedReasons);
+    }
+
+    [Fact]
+    public async Task DisabledPaymentCreation_WithValidReceiverConfiguration_StillProcessesExistingWebhook()
+    {
+        await using var fixture = await PaymentFixture.CreateAsync();
+        var checkout = await fixture.CreatePaymentAsync();
+        var disabledOptions = new SepayPaymentOptions
+        {
+            Enabled = false,
+            QrBaseUrl = fixture.Options.QrBaseUrl,
+            ReceiverBankCode = fixture.Options.ReceiverBankCode,
+            ReceiverAccountNumber = fixture.Options.ReceiverAccountNumber,
+            ReceiverAccountName = fixture.Options.ReceiverAccountName,
+            TransferCodePrefix = fixture.Options.TransferCodePrefix,
+            PaymentExpireMinutes = fixture.Options.PaymentExpireMinutes
+        };
+        var disabledService = new LicensePaymentService(
+            fixture.Db,
+            Options.Create(disabledOptions),
+            fixture.Time,
+            fixture.Telemetry,
+            NullLogger<LicensePaymentService>.Instance);
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() =>
+            disabledService.CreateOrReuseAsync(
+                "user-1",
+                new CreateLicensePaymentRequest(Guid.NewGuid(), "disabled-payment-request"),
+                CancellationToken.None));
+        Assert.Equal(503, exception.StatusCode);
+        Assert.Equal("payments_unavailable", exception.Code);
+
+        await disabledService.HandleWebhookAsync(fixture.Webhook(checkout), CancellationToken.None);
+
+        Assert.Equal(LicensePaymentStatuses.Fulfilled, (await fixture.Db.LicensePayments.SingleAsync()).Status);
+        Assert.Single(await fixture.Db.UserLicenses.ToListAsync());
+    }
+
+    [Fact]
     public async Task Webhook_LateButMatchingPayment_IsStillFulfilled()
     {
         await using var fixture = await PaymentFixture.CreateAsync();

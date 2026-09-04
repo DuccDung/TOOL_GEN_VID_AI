@@ -94,6 +94,19 @@ Quy tắc bổ sung:
 - `Suspended`, `Revoked` và `DeviceLimit` không tự mở bán gói; UI giữ khóa và hướng dẫn liên hệ quản trị viên.
 - Thông tin tài khoản nhận chỉ ở server. Khi payment bị tắt, không nới lỏng license guard; webhook của payment đã tạo vẫn phải tiếp tục được xử lý trong thời gian đối soát.
 
+### 4.2. Tự động phân bổ người mua gói vào tổ chức
+
+- Một gói license công khai có thể được ánh xạ tới đúng một pool tổ chức đang hoạt động. Một tổ chức chỉ được tham gia một pool tự động đang hoạt động tại một thời điểm.
+- Global Admin chuẩn bị pool và sức chứa; tổ chức chỉ nhận người tự động khi đang `Active`, đã bật nhận người và được đánh dấu sẵn sàng sau khi credential, video policy cùng ngân sách đã được kiểm tra. Credential vẫn phải đi qua quyền Owner/OrganizationAdmin, test provider và mã hóa trên server.
+- Sức chứa thương mại chỉ tính assignment khách hàng ở trạng thái `Reserved`, `Scheduled` hoặc `Active`; Owner, OrganizationAdmin và membership vận hành thủ công không bị quy trình license tự động chiếm hoặc giải phóng seat.
+- Tạo payment phải giữ một seat trong transaction `Serializable` trước khi trả QR. Tổ chức được chọn theo priority, sau đó theo tỷ lệ sử dụng thấp nhất và khóa định danh ổn định để không vượt sức chứa khi nhiều người mua đồng thời.
+- Webhook hợp lệ chỉ chuyển payment sang `Fulfilled` sau khi license, seat assignment và membership `Member` đã cùng được cấp thành công. Idempotency phải ngăn webhook/request lặp gia hạn license hoặc chiếm seat lần hai.
+- Payment hết hạn giải phóng reservation. Nếu tiền đến muộn, server thử phân bổ lại; khi pool đã đầy, payment giữ trạng thái đã nhận tiền nhưng chờ provisioning, phát cảnh báo và cho phép retry thay vì báo hoàn tất giả.
+- Gia hạn cùng gói ưu tiên giữ nguyên tổ chức. Đổi gói tạo assignment theo pool mới vào đúng thời điểm license mới có hiệu lực; membership tự động cũ chỉ bị tạm ngưng/giải phóng theo vòng đời license và không làm mất dữ liệu dự án.
+- Membership tự động và membership thủ công phải có dấu vết riêng. Worker không được hạ vai trò, khóa hoặc xóa Owner/OrganizationAdmin hay membership do admin quản lý thủ công.
+- Sau fulfillment, desktop làm mới license và danh sách tổ chức rồi ưu tiên chọn tổ chức vừa được cấp. Người dùng vẫn phải thỏa license/device lease, membership, role, project ownership, budget và provider readiness ở từng request AI.
+- Gói không tự suy ra chi phí AI từ giá bán. Hạn mức AI của thành viên hoặc pool phải được Global Admin cấu hình rõ; thiếu rate/budget/credential vẫn fail closed trước outbound call.
+
 ## 5. Credential OpenAI/Kling/BytePlus/Fal
 
 ### Tạo hoặc rotate

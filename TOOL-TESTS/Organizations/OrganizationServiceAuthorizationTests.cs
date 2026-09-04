@@ -115,6 +115,33 @@ public sealed class OrganizationServiceAuthorizationTests
     }
 
     [Fact]
+    public async Task UpdateMember_ConvertsAutomaticMembershipToManualOwnership()
+    {
+        await using var fixture = await OrganizationFixture.CreateAsync();
+        fixture.AddMember("owner", OrganizationMemberRoles.Owner);
+        fixture.AddMember("buyer", OrganizationMemberRoles.Member);
+        var buyer = fixture.GovernanceDb.OrganizationMembers.Local.Single(x => x.UserId == "buyer");
+        buyer.IsProvisioningManaged = true;
+        await fixture.SaveAsync();
+
+        await fixture.Service.UpdateMemberAsync(
+            fixture.OrganizationId,
+            "buyer",
+            new UpdateOrganizationMemberRequest(
+                OrganizationMemberRoles.OrganizationAdmin,
+                OrganizationMemberStatuses.Suspended,
+                99m),
+            new OrganizationRequestContext("owner", null, null, "test-correlation"),
+            CancellationToken.None);
+
+        buyer = await fixture.GovernanceDb.OrganizationMembers.SingleAsync(x => x.UserId == "buyer");
+        Assert.False(buyer.IsProvisioningManaged);
+        Assert.Equal(OrganizationMemberRoles.OrganizationAdmin, buyer.Role);
+        Assert.Equal(OrganizationMemberStatuses.Suspended, buyer.Status);
+        Assert.Equal(99m, buyer.MonthlyBudgetLimit);
+    }
+
+    [Fact]
     public async Task RotateCredential_DisabledProvider_ReturnsStructuredConflictWithoutTestingCredential()
     {
         await using var fixture = await OrganizationFixture.CreateAsync();

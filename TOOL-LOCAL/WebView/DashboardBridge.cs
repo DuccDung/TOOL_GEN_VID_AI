@@ -327,6 +327,11 @@ internal sealed class DashboardBridge : IDisposable
             return;
         }
 
+        if (license.AssignedOrganizationId is { } assignedOrganizationId)
+        {
+            await _generationClient.SelectOrganizationAsync(assignedOrganizationId, cancellationToken);
+        }
+
         Post(new WebMessageResponse("license.activated", request.RequestId, license));
         await RefreshAsync(request.RequestId, cancellationToken, selectDefaultProject: false);
     }

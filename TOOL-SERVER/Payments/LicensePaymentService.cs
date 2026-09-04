@@ -11,6 +11,7 @@ using TOOL_SERVER.Authentication;
 using TOOL_SERVER.Configuration;
 using TOOL_SERVER.Data;
 using TOOL_SERVER.Domain.Accounts;
+using TOOL_SERVER.Organizations;
 using TOOL_SHARED.Contracts.Accounts;
 
 namespace TOOL_SERVER.Payments;
@@ -20,7 +21,8 @@ public sealed partial class LicensePaymentService(
     IOptions<SepayPaymentOptions> options,
     TimeProvider timeProvider,
     ILicensePaymentTelemetry telemetry,
-    ILogger<LicensePaymentService> logger) : ILicensePaymentService
+    ILogger<LicensePaymentService> logger,
+    IOrganizationSeatProvisioningService? seatProvisioningService = null) : ILicensePaymentService
 {
     private readonly SepayPaymentOptions _options = options.Value;
 
@@ -41,7 +43,15 @@ public sealed partial class LicensePaymentService(
             .ThenBy(x => x.Name)
             .ToListAsync(cancellationToken);
 
-        return plans.Select(x => new LicenseOfferResponse(
+        var availability = seatProvisioningService is null
+            ? new Dictionary<Guid, OrganizationSeatAvailability>()
+            : await seatProvisioningService.GetAvailabilityAsync(
+                plans.Select(x => x.LicensePlanId).ToArray(),
+                cancellationToken);
+        return plans.Select(x =>
+        {
+            availability.TryGetValue(x.LicensePlanId, out var seats);
+            return new LicenseOfferResponse(
                 x.LicensePlanId,
                 x.PlanCode,
                 x.Name,
@@ -50,11 +60,28 @@ public sealed partial class LicensePaymentService(
                 x.DefaultDurationDays!.Value,
                 x.MaxActivatedDevices,
                 ParseMarketingFeatures(x.MarketingFeaturesJson),
-                x.DisplayOrder))
+                x.DisplayOrder,
+                seats?.IsAvailable ?? false,
+                seats?.PoolName,
+                seats?.AvailableSeats);
+        })
             .ToArray();
     }
 
-    public async Task<LicensePaymentCheckoutResponse> CreateOrReuseAsync(
+    public Task<LicensePaymentCheckoutResponse> CreateOrReuseAsync(
+        string userId,
+        CreateLicensePaymentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var executionStrategy = dbContext.Database.CreateExecutionStrategy();
+        return executionStrategy.ExecuteAsync(async () =>
+        {
+            dbContext.ChangeTracker.Clear();
+            return await CreateOrReuseCoreAsync(userId, request, cancellationToken);
+        });
+    }
+
+    private async Task<LicensePaymentCheckoutResponse> CreateOrReuseCoreAsync(
         string userId,
         CreateLicensePaymentRequest request,
         CancellationToken cancellationToken)
@@ -94,7 +121,7 @@ public sealed partial class LicensePaymentService(
                 replay.LicensePaymentId,
                 replay.OrderCode,
                 replay.Status);
-            return BuildCheckoutResponse(replay, now, true);
+            return await BuildCheckoutResponseAsync(replay, now, true, cancellationToken);
         }
 
         var plan = await dbContext.LicensePlans.SingleOrDefaultAsync(
@@ -110,21 +137,27 @@ public sealed partial class LicensePaymentService(
         var existing = await dbContext.LicensePayments
             .Where(x => x.UserId == userId &&
                         x.LicensePlanId == plan.LicensePlanId &&
-                        x.Status == LicensePaymentStatuses.Pending &&
-                        x.ExpiresAtUtc > now)
+                        ((x.Status == LicensePaymentStatuses.Pending && x.ExpiresAtUtc > now) ||
+                         x.Status == LicensePaymentStatuses.Paid))
             .OrderByDescending(x => x.CreatedAtUtc)
             .FirstOrDefaultAsync(cancellationToken);
         if (existing is not null)
         {
+            if (seatProvisioningService is not null && existing.Status == LicensePaymentStatuses.Pending)
+            {
+                await seatProvisioningService.ReserveAsync(existing, now, cancellationToken);
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
             if (transaction is not null)
             {
                 await transaction.CommitAsync(cancellationToken);
             }
             logger.LogInformation(
-                "Reused pending license payment {LicensePaymentId} ({OrderCode}).",
+                "Reused open license payment {LicensePaymentId} ({OrderCode}) with status {PaymentStatus}.",
                 existing.LicensePaymentId,
-                existing.OrderCode);
-            return BuildCheckoutResponse(existing, now, true);
+                existing.OrderCode,
+                existing.Status);
+            return await BuildCheckoutResponseAsync(existing, now, true, cancellationToken);
         }
 
         var payment = new LicensePayment
@@ -151,6 +184,10 @@ public sealed partial class LicensePaymentService(
             ExpiresAtUtc = now.AddMinutes(_options.PaymentExpireMinutes)
         };
         dbContext.LicensePayments.Add(payment);
+        if (seatProvisioningService is not null)
+        {
+            await seatProvisioningService.ReserveAsync(payment, now, cancellationToken);
+        }
 
         try
         {
@@ -180,12 +217,16 @@ public sealed partial class LicensePaymentService(
                     cancellationToken);
             if (concurrentReplay is not null && concurrentReplay.LicensePlanId == request.LicensePlanId)
             {
-                return BuildCheckoutResponse(concurrentReplay, UtcNow(), true);
+                return await BuildCheckoutResponseAsync(
+                    concurrentReplay,
+                    UtcNow(),
+                    true,
+                    cancellationToken);
             }
             throw;
         }
 
-        return BuildCheckoutResponse(payment, now, false);
+        return await BuildCheckoutResponseAsync(payment, now, false, cancellationToken);
     }
 
     public async Task<LicensePaymentStatusResponse> GetStatusAsync(
@@ -204,7 +245,7 @@ public sealed partial class LicensePaymentService(
             ?? throw NotFound("license_payment_not_found", "Không tìm thấy giao dịch thanh toán.");
         var now = UtcNow();
         await MarkExpiredIfNeededAsync(payment, now, cancellationToken);
-        return BuildStatusResponse(payment, now);
+        return await BuildStatusResponseAsync(payment, now, cancellationToken);
     }
 
     public async Task<CurrentLicensePaymentResponse> GetCurrentAsync(
@@ -216,12 +257,13 @@ public sealed partial class LicensePaymentService(
         var payment = await dbContext.LicensePayments
             .AsNoTracking()
             .Where(x => x.UserId == userId &&
-                        x.Status == LicensePaymentStatuses.Pending &&
-                        x.ExpiresAtUtc > now)
+                        ((x.Status == LicensePaymentStatuses.Pending && x.ExpiresAtUtc > now) ||
+                         x.Status == LicensePaymentStatuses.Paid))
             .OrderByDescending(x => x.CreatedAtUtc)
             .FirstOrDefaultAsync(cancellationToken);
-        return new CurrentLicensePaymentResponse(
-            payment is null ? null : BuildCheckoutResponse(payment, now, true));
+        return new CurrentLicensePaymentResponse(payment is null
+            ? null
+            : await BuildCheckoutResponseAsync(payment, now, true, cancellationToken));
     }
 
     public async Task HandleWebhookAsync(
@@ -250,6 +292,7 @@ public sealed partial class LicensePaymentService(
         var executionStrategy = dbContext.Database.CreateExecutionStrategy();
         await executionStrategy.ExecuteAsync(async () =>
         {
+            dbContext.ChangeTracker.Clear();
             await using var transaction = dbContext.Database.IsRelational()
                 ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
                 : null;
@@ -259,6 +302,11 @@ public sealed partial class LicensePaymentService(
                 cancellationToken);
             if (duplicatePayment is not null)
             {
+                if (duplicatePayment.Status == LicensePaymentStatuses.Paid)
+                {
+                    await TryFulfillPaymentAsync(duplicatePayment, UtcNow(), cancellationToken);
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                }
                 logger.LogInformation(
                     "Ignored duplicate SePay transaction {ProviderTransactionId} for license payment {LicensePaymentId} ({OrderCode}) with status {PaymentStatus}.",
                     payload.Id,
@@ -310,77 +358,174 @@ public sealed partial class LicensePaymentService(
             payment.ProviderTransactionId = payload.Id;
             payment.ProviderReferenceCode = NormalizeOptional(payload.ReferenceCode, 100);
             payment.PaidAtUtc = now;
-
-            var activeLicense = await dbContext.UserLicenses
-                .Include(x => x.LicensePlan)
-                .Where(x => x.UserId == payment.UserId &&
-                            (x.Status == "Active" || x.Status == "Trial") &&
-                            x.StartsAtUtc <= now &&
-                            (x.ExpiresAtUtc == null || x.ExpiresAtUtc > now) &&
-                            x.LicensePlan.IsActive)
-                .OrderByDescending(x => x.ExpiresAtUtc)
-                .FirstOrDefaultAsync(cancellationToken);
-
-            UserLicense fulfilledLicense;
-            if (activeLicense is not null &&
-                activeLicense.LicensePlanId == payment.LicensePlanId &&
-                activeLicense.ExpiresAtUtc is { } currentExpiry)
-            {
-                activeLicense.ExpiresAtUtc = currentExpiry.AddDays(payment.DurationSnapshotDays);
-                activeLicense.EntitlementSnapshotJson = payment.EntitlementSnapshotJson;
-                activeLicense.UpdatedAtUtc = now;
-                fulfilledLicense = activeLicense;
-            }
-            else
-            {
-                var startsAt = activeLicense?.ExpiresAtUtc is { } activeExpiry && activeExpiry > now
-                    ? activeExpiry
-                    : now;
-                fulfilledLicense = new UserLicense
-                {
-                    UserLicenseId = Guid.NewGuid(),
-                    UserId = payment.UserId,
-                    LicensePlanId = payment.LicensePlanId,
-                    Status = "Active",
-                    StartsAtUtc = startsAt,
-                    ExpiresAtUtc = startsAt.AddDays(payment.DurationSnapshotDays),
-                    EntitlementSnapshotJson = payment.EntitlementSnapshotJson,
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
-                };
-                dbContext.UserLicenses.Add(fulfilledLicense);
-            }
-
-            payment.FulfilledUserLicenseId = fulfilledLicense.UserLicenseId;
-            payment.FulfilledAtUtc = now;
-            payment.Status = LicensePaymentStatuses.Fulfilled;
-            dbContext.AccountAuditLogs.Add(new AccountAuditLog
-            {
-                UserId = payment.UserId,
-                EventType = "LicensePaymentFulfilled",
-                Succeeded = true,
-                DetailsJson = JsonSerializer.Serialize(new
-                {
-                    payment.LicensePaymentId,
-                    payment.OrderCode,
-                    fulfilledLicense.UserLicenseId,
-                    payment.LicensePlanId
-                }),
-                OccurredAtUtc = now
-            });
+            await TryFulfillPaymentAsync(payment, now, cancellationToken);
 
             await dbContext.SaveChangesAsync(cancellationToken);
             if (transaction is not null)
             {
                 await transaction.CommitAsync(cancellationToken);
             }
-            logger.LogInformation(
-                "Fulfilled license payment {LicensePaymentId} ({OrderCode}) with status {PaymentStatus}.",
+            if (payment.Status == LicensePaymentStatuses.Fulfilled)
+            {
+                logger.LogInformation(
+                    "Fulfilled license payment {LicensePaymentId} ({OrderCode}) with status {PaymentStatus}.",
+                    payment.LicensePaymentId,
+                    payment.OrderCode,
+                    payment.Status);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "License payment {LicensePaymentId} ({OrderCode}) is paid but provisioning is pending with {FailureCode}.",
+                    payment.LicensePaymentId,
+                    payment.OrderCode,
+                    payment.FailureCode);
+            }
+        });
+    }
+
+    public async Task<bool> RetryProvisioningAsync(
+        Guid licensePaymentId,
+        CancellationToken cancellationToken)
+    {
+        var fulfilled = false;
+        var executionStrategy = dbContext.Database.CreateExecutionStrategy();
+        await executionStrategy.ExecuteAsync(async () =>
+        {
+            dbContext.ChangeTracker.Clear();
+            await using var transaction = dbContext.Database.IsRelational()
+                ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+                : null;
+            var payment = await dbContext.LicensePayments.SingleOrDefaultAsync(
+                x => x.LicensePaymentId == licensePaymentId,
+                cancellationToken)
+                ?? throw NotFound("license_payment_not_found", "Không tìm thấy giao dịch thanh toán.");
+            if (payment.Status == LicensePaymentStatuses.Fulfilled)
+            {
+                fulfilled = true;
+            }
+            else if (payment.Status == LicensePaymentStatuses.Paid)
+            {
+                fulfilled = await TryFulfillPaymentAsync(payment, UtcNow(), cancellationToken);
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            else
+            {
+                throw Conflict(
+                    "license_payment_not_paid",
+                    "Chỉ có thể cấp lại tổ chức cho giao dịch đã nhận tiền.");
+            }
+
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+        });
+        return fulfilled;
+    }
+
+    private async Task<bool> TryFulfillPaymentAsync(
+        LicensePayment payment,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (seatProvisioningService is not null)
+            {
+                await seatProvisioningService.ReserveAsync(payment, now, cancellationToken);
+            }
+        }
+        catch (AccountApiException exception) when (
+            exception.Code is "organization_capacity_unavailable" or "license_plan_pool_not_configured")
+        {
+            var shouldAudit = payment.FailureCode != exception.Code;
+            payment.Status = LicensePaymentStatuses.Paid;
+            payment.FailureCode = exception.Code;
+            if (shouldAudit)
+            {
+                dbContext.AccountAuditLogs.Add(new AccountAuditLog
+                {
+                    UserId = payment.UserId,
+                    EventType = "LicensePaymentProvisioningPending",
+                    Succeeded = false,
+                    DetailsJson = JsonSerializer.Serialize(new
+                    {
+                        payment.LicensePaymentId,
+                        payment.OrderCode,
+                        payment.LicensePlanId,
+                        exception.Code
+                    }),
+                    OccurredAtUtc = now
+                });
+            }
+            return false;
+        }
+
+        var activeLicense = await dbContext.UserLicenses
+            .Include(x => x.LicensePlan)
+            .Where(x => x.UserId == payment.UserId &&
+                        (x.Status == "Active" || x.Status == "Trial") &&
+                        x.StartsAtUtc <= now &&
+                        (x.ExpiresAtUtc == null || x.ExpiresAtUtc > now) &&
+                        x.LicensePlan.IsActive)
+            .OrderByDescending(x => x.ExpiresAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        UserLicense fulfilledLicense;
+        if (activeLicense is not null &&
+            activeLicense.LicensePlanId == payment.LicensePlanId &&
+            activeLicense.ExpiresAtUtc is { } currentExpiry)
+        {
+            activeLicense.ExpiresAtUtc = currentExpiry.AddDays(payment.DurationSnapshotDays);
+            activeLicense.EntitlementSnapshotJson = payment.EntitlementSnapshotJson;
+            activeLicense.UpdatedAtUtc = now;
+            fulfilledLicense = activeLicense;
+        }
+        else
+        {
+            var startsAt = activeLicense?.ExpiresAtUtc is { } activeExpiry && activeExpiry > now
+                ? activeExpiry
+                : now;
+            fulfilledLicense = new UserLicense
+            {
+                UserLicenseId = Guid.NewGuid(),
+                UserId = payment.UserId,
+                LicensePlanId = payment.LicensePlanId,
+                Status = "Active",
+                StartsAtUtc = startsAt,
+                ExpiresAtUtc = startsAt.AddDays(payment.DurationSnapshotDays),
+                EntitlementSnapshotJson = payment.EntitlementSnapshotJson,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            };
+            dbContext.UserLicenses.Add(fulfilledLicense);
+        }
+
+        if (seatProvisioningService is not null)
+        {
+            await seatProvisioningService.ActivateAsync(payment, fulfilledLicense, now, cancellationToken);
+        }
+        payment.FulfilledUserLicenseId = fulfilledLicense.UserLicenseId;
+        payment.FulfilledAtUtc = now;
+        payment.FailureCode = null;
+        payment.Status = LicensePaymentStatuses.Fulfilled;
+        dbContext.AccountAuditLogs.Add(new AccountAuditLog
+        {
+            UserId = payment.UserId,
+            EventType = "LicensePaymentFulfilled",
+            Succeeded = true,
+            DetailsJson = JsonSerializer.Serialize(new
+            {
                 payment.LicensePaymentId,
                 payment.OrderCode,
-                payment.Status);
-            telemetry.RecordFulfilled();
+                fulfilledLicense.UserLicenseId,
+                payment.LicensePlanId
+            }),
+            OccurredAtUtc = now
         });
+        telemetry.RecordFulfilled();
+        return true;
     }
 
     private async Task<LicensePayment?> FindWebhookPaymentAsync(
@@ -452,6 +597,14 @@ public sealed partial class LicensePaymentService(
         if (payment.Status == LicensePaymentStatuses.Pending && payment.ExpiresAtUtc <= now)
         {
             payment.Status = LicensePaymentStatuses.Expired;
+            if (seatProvisioningService is not null)
+            {
+                await seatProvisioningService.ReleaseReservationAsync(
+                    payment.LicensePaymentId,
+                    "payment_expired",
+                    now,
+                    cancellationToken);
+            }
             await dbContext.SaveChangesAsync(cancellationToken);
             logger.LogInformation(
                 "Expired license payment {LicensePaymentId} ({OrderCode}) with status {PaymentStatus}.",
@@ -462,11 +615,15 @@ public sealed partial class LicensePaymentService(
         }
     }
 
-    private LicensePaymentCheckoutResponse BuildCheckoutResponse(
+    private async Task<LicensePaymentCheckoutResponse> BuildCheckoutResponseAsync(
         LicensePayment payment,
         DateTime now,
-        bool reused)
+        bool reused,
+        CancellationToken cancellationToken)
     {
+        var assignment = seatProvisioningService is null
+            ? null
+            : await seatProvisioningService.GetSnapshotAsync(payment.LicensePaymentId, cancellationToken);
         var isExpired = payment.Status == LicensePaymentStatuses.Expired ||
                         (payment.Status == LicensePaymentStatuses.Pending && payment.ExpiresAtUtc <= now);
         return new LicensePaymentCheckoutResponse(
@@ -488,11 +645,20 @@ public sealed partial class LicensePaymentService(
             reused,
             payment.Status is LicensePaymentStatuses.Paid or LicensePaymentStatuses.Fulfilled,
             payment.Status == LicensePaymentStatuses.Fulfilled,
-            isExpired);
+            isExpired,
+            assignment?.OrganizationId,
+            assignment?.OrganizationName,
+            assignment?.Status);
     }
 
-    private static LicensePaymentStatusResponse BuildStatusResponse(LicensePayment payment, DateTime now)
+    private async Task<LicensePaymentStatusResponse> BuildStatusResponseAsync(
+        LicensePayment payment,
+        DateTime now,
+        CancellationToken cancellationToken)
     {
+        var assignment = seatProvisioningService is null
+            ? null
+            : await seatProvisioningService.GetSnapshotAsync(payment.LicensePaymentId, cancellationToken);
         var isExpired = payment.Status == LicensePaymentStatuses.Expired ||
                         (payment.Status == LicensePaymentStatuses.Pending && payment.ExpiresAtUtc <= now);
         var status = isExpired ? LicensePaymentStatuses.Expired : payment.Status;
@@ -515,7 +681,10 @@ public sealed partial class LicensePaymentService(
             payment.Status == LicensePaymentStatuses.Fulfilled,
             isExpired,
             payment.FailureCode,
-            message);
+            message,
+            assignment?.OrganizationId,
+            assignment?.OrganizationName,
+            assignment?.Status);
     }
 
     // SQL Server datetime2 does not persist DateTime.Kind. Values in these columns are UTC,

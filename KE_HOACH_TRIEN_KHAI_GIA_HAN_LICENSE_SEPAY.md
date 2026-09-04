@@ -458,6 +458,8 @@ Yêu cầu:
 
 Rollback đã được kiểm tra tự động bằng SQLite relational transaction. Trường hợp hai webhook đồng thời vẫn cần integration test trên SQL Server/staging để xác minh hành vi khóa `Serializable` và unique index trong provider thực tế.
 
+Đã bổ sung runner opt-in `scripts/Test-SepayOrganizationProvisioning.ps1` để gửi webhook sai, webhook hợp lệ đồng thời và replay qua đúng API trên môi trường local/staging. Runner không tự chạy trong test suite và không được xem là đã nghiệm thu SQL Server cho tới khi có kết quả thực thi được ghi nhận. Quy trình và tiêu chí pass/fail nằm trong `KIEM_THU_SEPAY_PHAN_BO_TO_CHUC_KHONG_GIAO_DICH_THAT.md`.
+
 ### TASK TEST-03 — Test desktop/bridge
 
 - [x] Missing/expired license không làm app thoát.

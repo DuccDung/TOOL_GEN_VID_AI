@@ -398,7 +398,11 @@ function App() {
         if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
         licenseStatusInFlightRef.current = false;
         setLicensePaymentBusy(false);
-        setDashboard((current) => ({ ...current, license: message.payload as DashboardState['license'] }));
+        const license = message.payload as DashboardState['license'];
+        setDashboard((current) => ({ ...current, license }));
+        notify(license?.assignedOrganizationName
+          ? `Gói và tổ chức ${license.assignedOrganizationName} đã sẵn sàng.`
+          : 'Gói sử dụng đã sẵn sàng.');
         return;
       }
 
@@ -1100,7 +1104,6 @@ function App() {
           <LongVideoPage
             project={dashboard.selectedProject ?? null}
             assetLibrary={dashboard.assetLibrary ?? null}
-            models={dashboard.models}
             providerStatus={dashboard.providerStatus}
             mediaTools={dashboard.mediaTools}
             busy={generationBusy}
@@ -1360,9 +1363,14 @@ function LicenseGateOverlay({
     ? Math.max(0, Math.floor((parseServerUtc(checkout.expiresAtUtc) - (nowMs + serverClockOffsetMs)) / 1000))
     : 0;
   const isExpired = Boolean(checkout &&
+    !(checkout.isPaid || paymentStatus?.isPaid) &&
     (checkout.isExpired || paymentStatus?.isExpired || remainingSeconds <= 0));
   const isFulfilled = Boolean(checkout &&
     (checkout.isFulfilled || paymentStatus?.isFulfilled));
+  const isPaid = Boolean(checkout &&
+    (checkout.isPaid || paymentStatus?.isPaid));
+  const assignedOrganizationName = paymentStatus?.assignedOrganizationName || checkout?.assignedOrganizationName;
+  const provisioningStatus = paymentStatus?.provisioningStatus || checkout?.provisioningStatus;
 
   const copyValue = async (field: string, value: string) => {
     try {
@@ -1428,7 +1436,12 @@ function LicenseGateOverlay({
                         <h2>{offer.name}</h2>
                         <p>{offer.description || `Quyền sử dụng VideoMaker trong ${offer.durationDays} ngày.`}</p>
                         <div className="license-plan-price"><strong>{formatVnd(offer.priceVnd)}</strong><span>cho {offer.durationDays} ngày</span></div>
-                        <button type="button" disabled={busy} onClick={() => onSelectPlan(offer.licensePlanId)}>
+                        <div className={`license-seat-availability ${offer.organizationSeatAvailable ? 'available' : 'unavailable'}`}>
+                          {offer.organizationSeatAvailable
+                            ? `${offer.organizationPoolName || 'Cụm tổ chức'} · còn ${offer.availableOrganizationSeats ?? 0} chỗ`
+                            : 'Tạm hết tổ chức sẵn sàng'}
+                        </div>
+                        <button type="button" disabled={busy || !offer.organizationSeatAvailable} onClick={() => onSelectPlan(offer.licensePlanId)}>
                           {busy ? <><LoaderCircle className="spin" size={17} />Đang tạo mã</> : <>Chọn gói này<ArrowRight size={17} /></>}
                         </button>
                         <ul>
@@ -1469,10 +1482,11 @@ function LicenseGateOverlay({
                 <span className={`license-payment-state ${isFulfilled ? 'success' : isExpired ? 'expired' : ''}`}>
                   {isFulfilled ? <><CircleCheck size={17} />Đã nhận thanh toán</> :
                     isExpired ? <><Clock3 size={17} />Mã đã hết hạn</> :
-                      busy ? <><LoaderCircle className="spin" size={17} />Đang kích hoạt gói</> :
+                      isPaid ? <><LoaderCircle className="spin" size={17} />Đang cấp tổ chức</> :
+                        busy ? <><LoaderCircle className="spin" size={17} />Đang kiểm tra</> :
                         <><RefreshCw size={17} />Đang chờ thanh toán</>}
                 </span>
-                {!isExpired && !isFulfilled && <strong className="license-countdown">{formatCountdown(remainingSeconds)}</strong>}
+                {!isPaid && !isExpired && !isFulfilled && <strong className="license-countdown">{formatCountdown(remainingSeconds)}</strong>}
               </div>
 
               <div className="license-transfer-panel">
@@ -1485,6 +1499,12 @@ function LicenseGateOverlay({
                 <TransferRow label="Nội dung chuyển khoản" value={checkout.transferContent} emphasis action={
                   <button type="button" onClick={() => copyValue('content', checkout.transferContent)}><Copy size={15} />{copiedField === 'content' ? 'Đã chép' : 'Sao chép'}</button>
                 } />
+                {assignedOrganizationName && (
+                  <TransferRow label="Tổ chức được cấp" value={assignedOrganizationName} />
+                )}
+                {provisioningStatus && (
+                  <TransferRow label="Trạng thái phân bổ" value={provisioningStatus} />
+                )}
                 <div className="license-transfer-warning"><TriangleAlert size={17} /><span>Chuyển đúng số tiền và nội dung để hệ thống tự động nhận diện giao dịch.</span></div>
                 {(paymentStatus?.message || error) && (
                   <div className={`license-status-message ${error ? 'error' : ''}`}>{error || paymentStatus?.message}</div>
@@ -1981,16 +2001,6 @@ function ShortVideoPage({
 
   return (
     <div className="page-shell short-video-page">
-      <section className="short-video-hero">
-        <div className="short-video-hero-icon"><Film size={28} /></div>
-        <div>
-          <span className="short-video-eyebrow">KLING QUICK CREATE</span>
-          <h2>Một nội dung, một clip ngắn theo ý bạn</h2>
-          <p>Nội dung được dùng trực tiếp làm prompt hình ảnh. VideoMaker không gọi OpenAI và không tự thêm lời thoại.</p>
-        </div>
-        <div className="short-video-fixed-badge"><Clock3 size={15} /> Chọn từ 5–15 giây</div>
-      </section>
-
       <div className="short-video-layout">
         <section className="card short-video-form-card">
           <div className="short-video-section-heading">
@@ -2285,7 +2295,6 @@ function DashboardPage({
 function LongVideoPage({
   project,
   assetLibrary,
-  models,
   providerStatus,
   mediaTools,
   busy,
@@ -2320,7 +2329,6 @@ function LongVideoPage({
 }: {
   project: ProjectDashboard | null;
   assetLibrary: ProjectAssetLibrary | null;
-  models: AiModel[];
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
   busy: boolean;
@@ -2360,9 +2368,10 @@ function LongVideoPage({
 
   useEffect(() => {
     setActiveStep(getSuggestedLongVideoStep(project));
-  }, [projectId]);
+  }, [projectId, suggestedStep]);
 
   const activeStepIndex = longVideoSteps.findIndex((step) => step.id === activeStep);
+  const projectStageIndex = longVideoSteps.findIndex((step) => step.id === suggestedStep);
   const activeStepDefinition = longVideoSteps[activeStepIndex] ?? longVideoSteps[0];
   const previousStep = activeStepIndex > 0 ? longVideoSteps[activeStepIndex - 1] : null;
   const nextStep = activeStepIndex < longVideoSteps.length - 1 ? longVideoSteps[activeStepIndex + 1] : null;
@@ -2379,7 +2388,6 @@ function LongVideoPage({
           </section>
         )}
         <CreateVideoCard busy={busy} onCreate={onCreate} />
-        <ModelsSection models={models} />
       </>;
     }
 
@@ -2472,35 +2480,34 @@ function LongVideoPage({
 
   return (
     <div className="page-shell long-video-page">
-      <section className="long-video-workspace-header">
-        <div className="long-video-workspace-copy">
-          <span className="long-video-eyebrow">LONG-FORM STUDIO</span>
-          <div><h2>{project?.project.name ?? 'Workspace video nhiều cảnh'}</h2>{project && <span className="long-video-project-status">{translateProjectStatus(project.project.status)}</span>}</div>
-          <p>{project ? project.project.topic : 'Bắt đầu từ chủ đề, phát triển kịch bản, chuẩn hóa nhân vật và dựng video theo từng cảnh.'}</p>
-        </div>
-        <div className="long-video-workspace-meta">
-          <span><strong>{project?.totalScenes ?? 0}</strong>Cảnh</span>
-          <span><strong>{project?.approvedScenes ?? 0}</strong>Đã duyệt</span>
-          <span><strong>{Math.round(project?.overallProgressPercent ?? 0)}%</strong>Tiến độ</span>
-        </div>
-      </section>
-
       <nav className="long-video-stepper" aria-label="Quy trình tạo video dài">
         {longVideoSteps.map((step, index) => {
           const Icon = step.icon;
           const available = isLongVideoStepAvailable(step.id, project);
-            const completed = isLongVideoStepCompleted(step.id, project);
+          const completed = isLongVideoStepCompleted(step.id, project);
+          const isProjectStage = index === projectStageIndex;
+          const isProgressed = index < projectStageIndex;
           return (
             <button
               key={step.id}
-              className={`${activeStep === step.id ? 'active' : ''} ${completed ? 'completed' : ''}`}
+              className={[
+                activeStep === step.id ? 'active' : '',
+                completed ? 'completed' : '',
+                isProjectStage ? 'project-current' : '',
+                isProgressed ? 'progressed' : ''
+              ].filter(Boolean).join(' ')}
               disabled={!available}
               onClick={() => setActiveStep(step.id)}
               aria-current={activeStep === step.id ? 'step' : undefined}
+              aria-label={`Bước ${index + 1}: ${step.label}${isProjectStage ? ' — Giai đoạn hiện tại của dự án' : ''}`}
             >
               <span className="long-video-step-number">{completed ? <Check size={15} strokeWidth={3} /> : <Icon size={16} />}</span>
               <span className="long-video-step-copy"><small>Bước {index + 1}</small><strong>{step.shortLabel}</strong></span>
-              {index < longVideoSteps.length - 1 && <span className="long-video-step-line" />}
+              {index < longVideoSteps.length - 1 && (
+                <span className={`long-video-step-line ${isProgressed ? 'progressed' : ''}`} aria-hidden="true">
+                  <span className="long-video-step-light" />
+                </span>
+              )}
             </button>
           );
         })}
@@ -2562,7 +2569,7 @@ function isLongVideoStepCompleted(
 ): boolean {
   if (!project) return false;
   if (step === 'setup') return true;
-  if (step === 'content') return project.totalScenes > 0;
+  if (step === 'content') return Boolean(project.content);
   if (step === 'assets') {
     return project.totalScenes > 0 && project.characters.every(
       (character) => character.status === 'Approved' && Boolean(character.primaryReference?.previewUrl)
@@ -2585,9 +2592,19 @@ function LongVideoContentSummary({
     return <section className="card long-video-blocked-step"><FileText size={30} /><h3>Chưa có dự án</h3><p>Quay lại bước Thiết lập và tạo project trước khi sinh nội dung.</p></section>;
   }
 
+  const content = project.content;
+  const hasSavedContent = Boolean(content?.scriptFullText.trim());
+  const contentFailed = !hasSavedContent && project.project.status === 'Failed';
+  const statusLabel = hasSavedContent
+    ? 'Đã lưu kịch bản'
+    : contentFailed
+      ? 'Sinh nội dung thất bại'
+      : 'Chưa có nội dung đã lưu';
+  const statusTone = hasSavedContent ? 'ready' : contentFailed ? 'error' : 'draft';
+
   return (
     <section className="card long-video-content-summary">
-      <div className="long-video-summary-heading"><div><span>NỘI DUNG HIỆN HÀNH</span><h3>{project.project.topic}</h3></div><strong className={project.totalScenes > 0 ? 'ready' : 'draft'}>{project.totalScenes > 0 ? 'Đã có scene plan' : 'Chờ sinh nội dung'}</strong></div>
+      <div className="long-video-summary-heading"><div><span>NỘI DUNG HIỆN HÀNH</span><h3>{content?.title ?? project.project.topic}</h3></div><strong className={statusTone}>{statusLabel}</strong></div>
       <div className="long-video-summary-grid">
         <div><small>Ngôn ngữ nội dung</small><strong>{project.effectiveGenerationLanguageCode?.toLowerCase().startsWith('vi') && ['kling', 'fal'].includes(project.videoProviderCode?.toLowerCase() ?? '')
           ? `Tiếng Việt (bắt buộc cho Video Dài dùng ${project.videoProviderCode?.toLowerCase() === 'fal' ? 'Veo' : 'Kling'})`
@@ -2596,6 +2613,34 @@ function LongVideoContentSummary({
         <div><small>Số cảnh</small><strong>{project.totalScenes}</strong></div>
         <div><small>OpenAI model</small><strong>{providerStatus.openAiModel ?? 'Chưa cấu hình'}</strong></div>
       </div>
+      {hasSavedContent && content ? (
+        <div className="long-video-saved-content">
+          <div className="long-video-content-metadata">
+            <div><small>Hook</small><p>{content.hook || 'Chưa có'}</p></div>
+            <div><small>Góc triển khai</small><p>{content.angle || 'Chưa có'}</p></div>
+            <div><small>Đối tượng người xem</small><p>{content.audience || 'Chưa có'}</p></div>
+            <div><small>Kêu gọi hành động</small><p>{content.callToAction || 'Chưa có'}</p></div>
+          </div>
+          <article className="long-video-script-content">
+            <header>
+              <div><span>KỊCH BẢN ĐÃ TẠO</span><h4>{content.title}</h4></div>
+              <strong>Phiên bản {content.scriptVersion}</strong>
+            </header>
+            <p>{content.scriptFullText}</p>
+          </article>
+          {project.totalScenes === 0 && (
+            <p className="long-video-scene-plan-warning">Kịch bản đã được lưu nhưng dự án chưa có scene plan để hiển thị.</p>
+          )}
+        </div>
+      ) : (
+        <div className={`long-video-content-empty${contentFailed ? ' error' : ''}`}>
+          <FileText size={24} />
+          <div>
+            <strong>{contentFailed ? 'Lần sinh trước thất bại, dự án chưa có content đã lưu' : 'Dự án chưa có content đã lưu'}</strong>
+            <p>{project.lastErrorMessage ?? 'Hãy tạo nội dung để lưu content plan và kịch bản cho dự án này.'}</p>
+          </div>
+        </div>
+      )}
       {project.requiresVietnameseContentRegeneration && (
         <p className="long-video-language-warning">Nội dung hiện tại còn tiếng Anh và sẽ bị chặn trước khi gọi provider video. Hãy dùng hành động “Sinh lại nội dung tiếng Việt”.</p>
       )}
@@ -3413,21 +3458,6 @@ function StoryboardSection({
           <p>
             {scenes.length} cảnh · {formatDuration(totalDurationSeconds)} · Đã hoàn thành {completedScenes}/{scenes.length} clip
           </p>
-        </div>
-        <div className="storyboard-provider-state">
-          <span className={providerStatus.openAiReady ? 'ready' : 'missing'}>
-            OpenAI · {providerStatus.openAiReady ? providerStatus.openAiModel : 'chưa sẵn sàng'}
-          </span>
-          <span className={providerStatus.videoReady ? 'ready' : 'missing'}>
-            Video · {providerStatus.videoReady ? `${providerStatus.videoProviderName ?? providerStatus.videoProviderCode} / ${providerStatus.videoModel}` : 'chưa sẵn sàng'}
-          </span>
-          <span className={providerStatus.videoReady ? 'ready' : 'missing'}>
-            Native Audio · {providerStatus.videoReady && providerStatus.videoNativeAudio ? 'bật theo policy server' : 'chưa sẵn sàng'}
-          </span>
-          <span className={mediaTools.ready ? 'ready' : 'missing'}>
-            Media · {mediaTools.ready ? 'FFmpeg sẵn sàng' : 'chưa cấu hình'}
-          </span>
-          <span className="ready">Âm thanh · nghe và duyệt từng cảnh</span>
         </div>
         <div className="storyboard-toolbar">
           <button

@@ -16,6 +16,9 @@
     longFormVideoPolicy: null,
     audit: null,
     pricing: null,
+    pools: null,
+    selectedPoolId: null,
+    poolDetail: null,
     memberSearch: '',
     usageFilters: { provider: '', model: '', kind: '' },
     requests: new Map(),
@@ -184,12 +187,190 @@
     });
     byId('organizationPricing').classList.toggle('hidden', scope !== 'pricing');
     byId('organizationCostGuide').classList.toggle('hidden', scope !== 'cost-guide');
+    byId('organizationPools').classList.toggle('hidden', scope !== 'pools');
     byId('organizationDirectory').classList.toggle('hidden', scope !== 'directory' || Boolean(organizationState.selectedOrganizationId));
     byId('organizationDetail').classList.toggle('hidden', scope !== 'directory' || !organizationState.selectedOrganizationId);
     byId('topAddOrganization').classList.toggle('hidden', scope !== 'directory');
     if (scope === 'pricing') return loadPricing().catch(() => {});
     if (scope === 'cost-guide') return loadCostGuide().catch(() => {});
+    if (scope === 'pools') return loadPools().catch(() => {});
     return loadOrganizations().catch(() => {});
+  }
+
+  async function loadPools(force = false) {
+    const root = byId('organizationPoolConsole');
+    if (organizationState.pools && !force) {
+      renderPools();
+      return organizationState.pools;
+    }
+    root.innerHTML = loading('Đang tải pool tổ chức...');
+    try {
+      organizationState.pools = await request('organization-pools', '/api/admin/organization-pools');
+      if (organizationState.selectedPoolId) {
+        organizationState.poolDetail = await request(
+          'organization-pool-detail',
+          `/api/admin/organization-pools/${organizationState.selectedPoolId}`);
+      }
+      renderPools();
+      return organizationState.pools;
+    } catch (error) {
+      if (error.name !== 'AbortError') root.innerHTML = errorState(error, 'pools');
+      throw error;
+    }
+  }
+
+  async function openPool(poolId) {
+    organizationState.selectedPoolId = poolId;
+    byId('organizationPoolConsole').innerHTML = loading('Đang tải cấu hình sức chứa...');
+    try {
+      organizationState.poolDetail = await request(
+        'organization-pool-detail',
+        `/api/admin/organization-pools/${poolId}`);
+      renderPools();
+    } catch (error) {
+      if (error.name !== 'AbortError') byId('organizationPoolConsole').innerHTML = errorState(error, 'pools');
+    }
+  }
+
+  function renderPools() {
+    const root = byId('organizationPoolConsole');
+    const pools = organizationState.pools || [];
+    const detail = organizationState.poolDetail;
+    const list = pools.length
+      ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Pool</th><th>Tổ chức / gói</th><th>Sức chứa</th><th>Đang dùng / giữ</th><th>Còn trống</th><th></th></tr></thead><tbody>${pools.map(pool => `<tr><td><strong>${escapeHtml(pool.name)}</strong><br><small>${escapeHtml(pool.code)} · ${escapeHtml(pool.status)}</small></td><td>${escapeHtml(pool.organizationCount)} tổ chức · ${escapeHtml(pool.licensePlanCount)} gói</td><td>${escapeHtml(pool.seatCapacity)}</td><td>${escapeHtml(pool.activeSeats)} / ${escapeHtml(pool.reservedSeats)}</td><td><strong>${escapeHtml(pool.availableSeats)}</strong></td><td><button type="button" class="ghost-button" data-open-pool="${escapeHtml(pool.organizationPoolId)}">Quản lý</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty-state"><strong>Chưa có pool</strong><p>Tạo pool, thêm tổ chức đã cấu hình AI rồi ánh xạ gói license.</p></div>';
+    if (!detail) {
+      root.innerHTML = list;
+      return;
+    }
+
+    const pool = detail.pool;
+    const organizations = detail.organizations || [];
+    const plans = detail.licensePlans || [];
+    const assignments = detail.recentAssignments || [];
+    root.innerHTML = `${list}<section class="pool-detail-panel">
+      <div class="section-heading"><div><span class="eyebrow">${escapeHtml(pool.code)}</span><h2>${escapeHtml(pool.name)}</h2><p>${escapeHtml(pool.status)} · ${escapeHtml(pool.allocationStrategy)}</p></div><div class="inline-actions"><button type="button" class="ghost-button" data-edit-pool="${escapeHtml(pool.organizationPoolId)}">Sửa pool</button><button type="button" class="primary-button" data-add-pool-organization>Thêm tổ chức</button><button type="button" class="primary-button" data-add-pool-plan>Gắn gói</button></div></div>
+      <div class="metric-grid pool-metrics"><article class="metric-card"><span>Sức chứa</span><strong>${escapeHtml(pool.seatCapacity)}</strong></article><article class="metric-card"><span>Đang dùng</span><strong>${escapeHtml(pool.activeSeats)}</strong></article><article class="metric-card"><span>Đang giữ</span><strong>${escapeHtml(pool.reservedSeats)}</strong></article><article class="metric-card"><span>Còn trống</span><strong>${escapeHtml(pool.availableSeats)}</strong></article></div>
+      <h3>Tổ chức trong pool</h3>${organizations.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Tổ chức</th><th>Sức chứa</th><th>Dùng / giữ / trống</th><th>Priority</th><th>Sẵn sàng</th><th></th></tr></thead><tbody>${organizations.map(item => `<tr><td><strong>${escapeHtml(item.organizationName)}</strong><br><small>${escapeHtml(item.organizationCode)} · ${escapeHtml(item.organizationStatus)}</small></td><td>${escapeHtml(item.seatCapacity)}</td><td>${escapeHtml(item.activeSeats)} / ${escapeHtml(item.reservedSeats)} / ${escapeHtml(item.availableSeats)}</td><td>${escapeHtml(item.priority)}</td><td>${item.isAutoAssignmentEnabled && item.isReady ? statusPill('Đang nhận người', 'ready') : statusPill(item.isReady ? 'Đã kiểm tra · đang tắt' : 'Chưa sẵn sàng', item.isReady ? 'warning' : 'blocked')}<br><small>${escapeHtml(item.readinessMessage || '')}</small></td><td><div class="inline-actions"><button type="button" class="ghost-button" data-edit-pool-organization="${escapeHtml(item.organizationId)}">Sửa</button><button type="button" class="ghost-button danger" data-remove-pool-organization="${escapeHtml(item.organizationId)}">Gỡ</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Chưa thêm tổ chức vào pool.</div>'}
+      <h3>Gói được phân bổ</h3>${plans.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Gói</th><th>Hạn mức thành viên</th><th>Trạng thái</th><th></th></tr></thead><tbody>${plans.map(item => `<tr><td><strong>${escapeHtml(item.planName)}</strong><br><small>${escapeHtml(item.planCode)}</small></td><td>${item.defaultMemberMonthlyBudgetLimit === null ? 'Theo tổ chức' : escapeHtml(formatMoney(item.defaultMemberMonthlyBudgetLimit))}</td><td>${statusPill(item.isActive ? 'Active' : 'Inactive', item.isActive ? 'ready' : 'warning')}</td><td><div class="inline-actions"><button type="button" class="ghost-button" data-edit-pool-plan="${escapeHtml(item.licensePlanId)}">Sửa</button><button type="button" class="ghost-button danger" data-remove-pool-plan="${escapeHtml(item.licensePlanId)}">Gỡ</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Chưa có gói nào ánh xạ vào pool.</div>'}
+      <h3>Assignment gần đây</h3>${assignments.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Người dùng</th><th>Gói / đơn</th><th>Tổ chức</th><th>Trạng thái</th><th>Hiệu lực</th><th></th></tr></thead><tbody>${assignments.map(item => `<tr><td>${escapeHtml(item.userEmail)}<br><small>${item.membershipManaged ? 'Membership tự động' : 'Membership thủ công'}</small></td><td><strong>${escapeHtml(item.planCode)}</strong><br><small>${escapeHtml(item.orderCode)}</small></td><td>${escapeHtml(item.organizationName)}</td><td>${statusPill(item.status, item.status === 'Active' ? 'ready' : item.status === 'Failed' ? 'blocked' : 'warning')}<br><small>${escapeHtml(item.failureCode || item.releaseReason || '')}</small></td><td><small>${escapeHtml(formatDate(item.startsAtUtc || item.reservedAtUtc))}<br>${escapeHtml(formatDate(item.endsAtUtc || item.reservationExpiresAtUtc))}</small></td><td>${item.failureCode || item.status === 'Failed' ? `<button type="button" class="ghost-button" data-retry-assignment="${escapeHtml(item.organizationSeatAssignmentId)}">Retry</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Chưa có assignment.</div>'}
+    </section>`;
+  }
+
+  function openPoolDialog(pool = null) {
+    const form = byId('organizationPoolForm');
+    form.reset();
+    form.querySelector('.form-message').textContent = '';
+    byId('organizationPoolId').value = pool?.organizationPoolId || '';
+    byId('organizationPoolCode').value = pool?.code || '';
+    byId('organizationPoolName').value = pool?.name || '';
+    byId('organizationPoolStatus').value = pool?.status || 'Active';
+    byId('organizationPoolDialogTitle').textContent = pool ? 'Cập nhật pool' : 'Tạo pool';
+    byId('organizationPoolDialog').showModal();
+  }
+
+  async function openPoolOrganizationDialog(organizationId = null) {
+    await loadOrganizations();
+    const detail = organizationState.poolDetail;
+    const current = detail?.organizations?.find(item => item.organizationId === organizationId) || null;
+    const available = [...(organizationState.organizations || [])];
+    if (current && !available.some(item => item.organizationId === current.organizationId)) available.push(current);
+    const select = byId('poolOrganizationId');
+    select.innerHTML = available.map(item => `<option value="${escapeHtml(item.organizationId)}">${escapeHtml(item.name || item.organizationName)} · ${escapeHtml(item.code || item.organizationCode)}</option>`).join('');
+    select.disabled = Boolean(current);
+    select.value = current?.organizationId || select.options[0]?.value || '';
+    byId('poolOrganizationPoolId').value = detail?.pool.organizationPoolId || '';
+    byId('poolOrganizationCapacity').value = current?.seatCapacity || 1;
+    byId('poolOrganizationPriority').value = current?.priority ?? 100;
+    byId('poolOrganizationAuto').checked = current?.isAutoAssignmentEnabled || false;
+    byId('poolOrganizationReady').checked = current?.isReady || false;
+    byId('organizationPoolOrganizationForm').querySelector('.form-message').textContent = '';
+    byId('organizationPoolOrganizationDialog').showModal();
+  }
+
+  function openPoolPlanDialog(planId = null) {
+    const detail = organizationState.poolDetail;
+    const current = detail?.licensePlans?.find(item => item.licensePlanId === planId) || null;
+    const plans = shell.state.plans || [];
+    const select = byId('poolPlanId');
+    select.innerHTML = plans.map(item => `<option value="${escapeHtml(item.licensePlanId)}">${escapeHtml(item.name)} · ${escapeHtml(item.planCode)}</option>`).join('');
+    select.value = current?.licensePlanId || select.options[0]?.value || '';
+    byId('poolPlanPoolId').value = detail?.pool.organizationPoolId || '';
+    byId('poolPlanMemberBudget').value = current?.defaultMemberMonthlyBudgetLimit ?? '';
+    byId('poolPlanActive').checked = current?.isActive ?? true;
+    byId('organizationPoolPlanForm').querySelector('.form-message').textContent = '';
+    byId('organizationPoolPlanDialog').showModal();
+  }
+
+  async function submitPool(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const id = byId('organizationPoolId').value;
+    setBusy(button, true, 'Đang lưu...');
+    try {
+      const saved = await api(id ? `/api/admin/organization-pools/${id}` : '/api/admin/organization-pools', {
+        method: id ? 'PUT' : 'POST',
+        body: JSON.stringify({ code: byId('organizationPoolCode').value.trim(), name: byId('organizationPoolName').value.trim(), status: byId('organizationPoolStatus').value })
+      });
+      byId('organizationPoolDialog').close();
+      organizationState.selectedPoolId = saved.organizationPoolId;
+      organizationState.poolDetail = null;
+      organizationState.pools = null;
+      toast('Đã lưu pool tổ chức.');
+      await loadPools(true);
+    } catch (error) {
+      form.querySelector('.form-message').textContent = friendlyError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function submitPoolOrganization(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const poolId = byId('poolOrganizationPoolId').value;
+    const organizationId = byId('poolOrganizationId').value;
+    setBusy(button, true, 'Đang kiểm tra...');
+    try {
+      await api(`/api/admin/organization-pools/${poolId}/organizations/${organizationId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ organizationId, seatCapacity: Number(byId('poolOrganizationCapacity').value), priority: Number(byId('poolOrganizationPriority').value), isAutoAssignmentEnabled: byId('poolOrganizationAuto').checked, isReady: byId('poolOrganizationReady').checked, readinessMessage: null })
+      });
+      byId('organizationPoolOrganizationDialog').close();
+      organizationState.pools = null;
+      toast('Đã lưu sức chứa và trạng thái sẵn sàng.');
+      await loadPools(true);
+    } catch (error) {
+      form.querySelector('.form-message').textContent = friendlyError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function submitPoolPlan(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const poolId = byId('poolPlanPoolId').value;
+    const planId = byId('poolPlanId').value;
+    const budgetText = byId('poolPlanMemberBudget').value;
+    setBusy(button, true, 'Đang lưu...');
+    try {
+      await api(`/api/admin/organization-pools/license-plans/${planId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ organizationPoolId: poolId, defaultMemberMonthlyBudgetLimit: budgetText === '' ? null : Number(budgetText), isActive: byId('poolPlanActive').checked })
+      });
+      byId('organizationPoolPlanDialog').close();
+      organizationState.pools = null;
+      toast('Đã gắn gói vào pool.');
+      await loadPools(true);
+    } catch (error) {
+      form.querySelector('.form-message').textContent = friendlyError(error);
+    } finally {
+      setBusy(button, false);
+    }
   }
 
   async function navigateToReadinessSetup(target, providerCode) {
@@ -320,7 +501,7 @@
     const members = (organizationState.members || []).filter(item => !search || `${item.email} ${item.displayName || ''} ${item.role} ${item.status}`.toLocaleLowerCase('vi').includes(search));
     root.innerHTML = `<div class="organization-tab-toolbar"><div class="search-form"><div>${icon('search')}<input id="organizationMemberSearch" type="search" value="${escapeHtml(organizationState.memberSearch)}" placeholder="Tìm email, tên, vai trò..." aria-label="Tìm thành viên" /></div></div>${canManage ? `<button type="button" class="primary-button" data-add-organization-member>${icon('plus')}<span>Thêm thành viên</span></button>` : ''}</div>${members.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Thành viên</th><th>Vai trò</th><th>Trạng thái</th><th>Hạn mức tháng</th><th>Ngày tham gia</th><th></th></tr></thead><tbody>${members.map(member => {
       const canEdit = canManage && (member.role !== 'Owner' || actorRole === 'Owner');
-      return `<tr><td><strong>${escapeHtml(member.displayName || 'Chưa đặt tên')}</strong><br><small>${escapeHtml(member.email)}</small></td><td>${escapeHtml(member.role)}</td><td>${statusPill(member.status, member.status === 'Active' ? 'ready' : 'blocked')}</td><td>${member.monthlyBudgetLimit === null ? 'Không đặt' : escapeHtml(formatMoney(member.monthlyBudgetLimit))}</td><td>${escapeHtml(formatDate(member.joinedAtUtc))}</td><td>${canEdit ? `<button type="button" class="ghost-button" data-edit-organization-member="${escapeHtml(member.userId)}">Cập nhật</button>` : ''}</td></tr>`;
+      return `<tr><td><strong>${escapeHtml(member.displayName || 'Chưa đặt tên')}</strong><br><small>${escapeHtml(member.email)} · ${member.isProvisioningManaged ? 'Tự động từ gói' : 'Quản lý thủ công'}</small></td><td>${escapeHtml(member.role)}</td><td>${statusPill(member.status, member.status === 'Active' ? 'ready' : 'blocked')}</td><td>${member.monthlyBudgetLimit === null ? 'Không đặt' : escapeHtml(formatMoney(member.monthlyBudgetLimit))}</td><td>${escapeHtml(formatDate(member.joinedAtUtc))}</td><td>${canEdit ? `<button type="button" class="ghost-button" data-edit-organization-member="${escapeHtml(member.userId)}">Cập nhật</button>` : ''}</td></tr>`;
     }).join('')}</tbody></table></div>` : '<div class="empty-state">Không tìm thấy thành viên phù hợp.</div>'}`;
     byId('organizationMemberSearch')?.addEventListener('input', event => {
       organizationState.memberSearch = event.target.value;
@@ -907,6 +1088,7 @@
   async function refresh() {
     if (organizationState.scope === 'pricing') return loadPricing(true).catch(() => {});
     if (organizationState.scope === 'cost-guide') return loadCostGuide(true).catch(() => {});
+    if (organizationState.scope === 'pools') return loadPools(true).catch(() => {});
     const selectedId = organizationState.selectedOrganizationId;
     await loadOrganizations(true).catch(() => {});
     if (!selectedId) return;
@@ -920,11 +1102,15 @@
   }
 
   byId('addOrganizationButton').addEventListener('click', openCreateOrganization);
+  byId('addOrganizationPoolButton').addEventListener('click', () => openPoolDialog());
   byId('backToOrganizations').addEventListener('click', closeOrganization);
   document.querySelectorAll('[data-organization-scope]').forEach(button => button.addEventListener('click', () => showScope(button.dataset.organizationScope)));
   document.querySelectorAll('[data-organization-tab]').forEach(button => button.addEventListener('click', () => selectTab(button.dataset.organizationTab)));
   byId('organizationForm').addEventListener('submit', submitOrganization);
   byId('organizationMemberForm').addEventListener('submit', submitMember);
+  byId('organizationPoolForm').addEventListener('submit', submitPool);
+  byId('organizationPoolOrganizationForm').addEventListener('submit', submitPoolOrganization);
+  byId('organizationPoolPlanForm').addEventListener('submit', submitPoolPlan);
   byId('organizationCredentialForm').addEventListener('submit', submitCredential);
   byId('aiRateForm').addEventListener('submit', submitRate);
   byId('aiRateUsageType').addEventListener('change', syncRateUnit);
@@ -938,6 +1124,53 @@
     if (event.target.closest('[data-open-pricing-from-guide]')) showScope('pricing');
     const retry = event.target.closest('[data-organization-retry]');
     if (retry) loadCostGuide(true).catch(() => {});
+  });
+  byId('organizationPoolConsole').addEventListener('click', async event => {
+    const open = event.target.closest('[data-open-pool]');
+    if (open) return openPool(open.dataset.openPool);
+    const edit = event.target.closest('[data-edit-pool]');
+    if (edit) {
+      const pool = organizationState.pools?.find(item => item.organizationPoolId === edit.dataset.editPool);
+      if (pool) openPoolDialog(pool);
+      return;
+    }
+    if (event.target.closest('[data-add-pool-organization]')) return openPoolOrganizationDialog();
+    const editOrganization = event.target.closest('[data-edit-pool-organization]');
+    if (editOrganization) return openPoolOrganizationDialog(editOrganization.dataset.editPoolOrganization);
+    if (event.target.closest('[data-add-pool-plan]')) return openPoolPlanDialog();
+    const editPlan = event.target.closest('[data-edit-pool-plan]');
+    if (editPlan) return openPoolPlanDialog(editPlan.dataset.editPoolPlan);
+    const removeOrganization = event.target.closest('[data-remove-pool-organization]');
+    if (removeOrganization) {
+      if (!confirm('Gỡ tổ chức khỏi pool? Chỉ thực hiện được khi không còn seat đang dùng hoặc giữ chỗ.')) return;
+      try {
+        await api(`/api/admin/organization-pools/${organizationState.selectedPoolId}/organizations/${removeOrganization.dataset.removePoolOrganization}`, { method: 'DELETE' });
+        organizationState.pools = null;
+        toast('Đã gỡ tổ chức khỏi pool.');
+        await loadPools(true);
+      } catch (error) { toast(friendlyError(error), true); }
+      return;
+    }
+    const removePlan = event.target.closest('[data-remove-pool-plan]');
+    if (removePlan) {
+      if (!confirm('Gỡ ánh xạ gói khỏi pool?')) return;
+      try {
+        await api(`/api/admin/organization-pools/license-plans/${removePlan.dataset.removePoolPlan}`, { method: 'DELETE' });
+        organizationState.pools = null;
+        toast('Đã gỡ gói khỏi pool.');
+        await loadPools(true);
+      } catch (error) { toast(friendlyError(error), true); }
+      return;
+    }
+    const retry = event.target.closest('[data-retry-assignment]');
+    if (retry) {
+      try {
+        const result = await api(`/api/admin/organization-pools/assignments/${retry.dataset.retryAssignment}/retry`, { method: 'POST' });
+        organizationState.pools = null;
+        toast(result.message, !result.assignment && result.paymentStatus !== 'Fulfilled');
+        await loadPools(true);
+      } catch (error) { toast(friendlyError(error), true); }
+    }
   });
 
   byId('organizationTable').addEventListener('click', event => {

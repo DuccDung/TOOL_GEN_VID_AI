@@ -50,7 +50,8 @@ public sealed record OrganizationMemberResponse(
     string Role,
     string Status,
     decimal? MonthlyBudgetLimit,
-    DateTime JoinedAtUtc);
+    DateTime JoinedAtUtc,
+    bool IsProvisioningManaged = false);
 
 public sealed record CreateOrganizationRequest(
     string Name,

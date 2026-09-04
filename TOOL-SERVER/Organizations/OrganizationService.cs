@@ -235,7 +235,8 @@ internal sealed partial class OrganizationService(
                 x.Role,
                 x.Status,
                 x.MonthlyBudgetLimit,
-                x.JoinedAtUtc);
+                x.JoinedAtUtc,
+                x.IsProvisioningManaged);
         }).ToArray();
     }
 
@@ -270,11 +271,12 @@ internal sealed partial class OrganizationService(
         }
         membership.Role = role;
         membership.Status = OrganizationMemberStatuses.Active;
+        membership.IsProvisioningManaged = false;
         membership.MonthlyBudgetLimit = request.MonthlyBudgetLimit;
         membership.UpdatedAtUtc = now;
         AddAudit(organizationId, context, "OrganizationMemberAdded", new { user.Id, user.Email, role, request.MonthlyBudgetLimit });
         await governanceDb.SaveChangesAsync(cancellationToken);
-        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, membership.Status, membership.MonthlyBudgetLimit, membership.JoinedAtUtc);
+        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, membership.Status, membership.MonthlyBudgetLimit, membership.JoinedAtUtc, membership.IsProvisioningManaged);
     }
 
     public async Task<OrganizationMemberResponse> UpdateMemberAsync(
@@ -316,12 +318,13 @@ internal sealed partial class OrganizationService(
         }
         member.Role = role;
         member.Status = status;
+        member.IsProvisioningManaged = false;
         member.MonthlyBudgetLimit = request.MonthlyBudgetLimit;
         member.UpdatedAtUtc = UtcNow();
         AddAudit(organizationId, context, "OrganizationMemberUpdated", new { memberUserId, role, status, request.MonthlyBudgetLimit });
         await governanceDb.SaveChangesAsync(cancellationToken);
         var user = await accountDb.Users.AsNoTracking().SingleAsync(x => x.Id == memberUserId, cancellationToken);
-        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, status, member.MonthlyBudgetLimit, member.JoinedAtUtc);
+        return new OrganizationMemberResponse(user.Id, user.Email!, user.DisplayName, role, status, member.MonthlyBudgetLimit, member.JoinedAtUtc, member.IsProvisioningManaged);
     }
 
     public async Task<OrganizationSummaryResponse> UpdateBudgetAsync(

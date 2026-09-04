@@ -75,7 +75,9 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
             }
         }
 
-        var query = dbContext.LicensePayments.AsNoTracking();
+        IQueryable<LicensePayment> query = dbContext.LicensePayments
+            .AsNoTracking()
+            .Include(x => x.User);
         if (term is not null)
         {
             var code = term.ToUpperInvariant();
@@ -94,11 +96,31 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
             query = query.Where(x => x.Status == normalizedStatus);
         }
 
-        return await query
+        var payments = await query
             .OrderByDescending(x => x.CreatedAtUtc)
             .ThenByDescending(x => x.LicensePaymentId)
             .Take(limit)
-            .Select(x => new AdminLicensePaymentResponse(
+            .ToListAsync(cancellationToken);
+        var paymentIds = payments.Select(x => x.LicensePaymentId).ToArray();
+        var assignments = await (
+                from assignment in dbContext.OrganizationSeatAssignments.AsNoTracking()
+                join organization in dbContext.Organizations.AsNoTracking()
+                    on assignment.OrganizationId equals organization.OrganizationId
+                where paymentIds.Contains(assignment.LicensePaymentId)
+                select new
+                {
+                    assignment.LicensePaymentId,
+                    assignment.OrganizationId,
+                    OrganizationName = organization.Name,
+                    assignment.Status,
+                    assignment.FailureCode
+                })
+            .ToDictionaryAsync(x => x.LicensePaymentId, cancellationToken);
+        return payments
+            .Select(x =>
+            {
+                assignments.TryGetValue(x.LicensePaymentId, out var assignment);
+                return new AdminLicensePaymentResponse(
                 x.LicensePaymentId,
                 x.UserId,
                 x.User.Email ?? string.Empty,
@@ -115,8 +137,13 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
                 x.ExpiresAtUtc,
                 x.PaidAtUtc,
                 x.FulfilledAtUtc,
-                x.FulfilledUserLicenseId))
-            .ToListAsync(cancellationToken);
+                x.FulfilledUserLicenseId,
+                assignment?.OrganizationId,
+                assignment?.OrganizationName,
+                assignment?.Status,
+                x.FailureCode ?? assignment?.FailureCode);
+            })
+            .ToArray();
     }
 
     public async Task<AdminLicensePlanResponse> CreatePlanAsync(

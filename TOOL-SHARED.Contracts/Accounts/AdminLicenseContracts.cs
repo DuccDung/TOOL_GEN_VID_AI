@@ -98,7 +98,11 @@ public sealed record AdminLicensePaymentResponse(
     DateTime ExpiresAtUtc,
     DateTime? PaidAtUtc,
     DateTime? FulfilledAtUtc,
-    Guid? FulfilledUserLicenseId);
+    Guid? FulfilledUserLicenseId,
+    Guid? AssignedOrganizationId = null,
+    string? AssignedOrganizationName = null,
+    string? ProvisioningStatus = null,
+    string? FailureCode = null);
 
 public sealed record GrantUserLicenseRequest(
     Guid LicensePlanId,

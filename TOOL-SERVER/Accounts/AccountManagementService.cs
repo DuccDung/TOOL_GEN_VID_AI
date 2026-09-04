@@ -287,6 +287,15 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
                  x.DeviceId == currentDeviceId &&
                  x.Status == "Active",
             cancellationToken);
+        var assignedOrganization = await (
+                from assignment in dbContext.OrganizationSeatAssignments.AsNoTracking()
+                join organization in dbContext.Organizations.AsNoTracking()
+                    on assignment.OrganizationId equals organization.OrganizationId
+                where assignment.UserLicenseId == license.UserLicenseId &&
+                      (assignment.Status == "Active" || assignment.Status == "Scheduled")
+                orderby assignment.Status == "Active" descending, assignment.UpdatedAtUtc descending
+                select new { organization.OrganizationId, organization.Name })
+            .FirstOrDefaultAsync(cancellationToken);
         var now = UtcNow();
         return new CurrentLicenseResponse(
             true,
@@ -306,7 +315,9 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
             LicensePolicy.DefaultHeartbeatIntervalSeconds,
             LicenseAccessStates.Active,
             null,
-            null);
+            null,
+            assignedOrganization?.OrganizationId,
+            assignedOrganization?.Name);
     }
 
     private static CurrentLicenseResponse BuildInactiveLicenseResponse(UserLicense license, DateTime now)

@@ -30,10 +30,11 @@ sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
+sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.DesktopLeastPrivilege.sql
 ```
 
-`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance/Fal, tự nhập giá hoặc tự bật thanh toán. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10 thêm gói bán công khai và bảng payment SePay. Phải chạy các migration trước script least privilege.
+`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance/Fal, tự nhập giá hoặc tự bật thanh toán. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10 thêm gói bán công khai và bảng payment SePay; 4.0.11 thêm pool tổ chức, sức chứa và seat reservation/assignment. Phải chạy các migration trước script least privilege.
 
 Luồng xác nhận tài sản trực tiếp trên card cảnh, endpoint `/confirm` và phép phân tích prompt bắt buộc sử dụng các bảng/cột của migration 4.0.7–4.0.8; không có file SQL mới riêng cho cải tiến UI này. Không chạy lại `VideoFactory.Initial.sql` trên database thật nếu chưa xác minh đúng quy trình nâng cấp, backup và khả năng restore.
 
@@ -57,7 +58,7 @@ SELECT [Code], [Name], [MonthlyBudgetLimit], [CurrencyCode]
 FROM [ai].[Organizations];
 ```
 
-Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.10-license-sepay-payments`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
+Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.11-organization-seat-provisioning`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
 
 ## 3. Cấu hình server
 
@@ -392,7 +393,7 @@ Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage
 ## 12. Checklist production
 
 - [ ] Backup và thử restore database.
-- [ ] Migration 4.0.0 đến 4.0.10 có trong `ai.SchemaVersions`; 4.0.4 đến 4.0.10 đã chạy idempotent trên database clone.
+- [ ] Migration 4.0.0 đến 4.0.11 có trong `ai.SchemaVersions`; 4.0.4 đến 4.0.11 đã chạy idempotent trên database clone.
 - [ ] Server/desktop dùng database user khác nhau.
 - [ ] HTTPS hợp lệ; không cho HTTP public.
 - [ ] JWT signing key nằm trong secret manager.

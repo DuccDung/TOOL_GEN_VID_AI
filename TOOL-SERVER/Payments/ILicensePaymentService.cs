@@ -23,4 +23,8 @@ public interface ILicensePaymentService
     Task HandleWebhookAsync(
         SepayWebhookPayload payload,
         CancellationToken cancellationToken);
+
+    Task<bool> RetryProvisioningAsync(
+        Guid licensePaymentId,
+        CancellationToken cancellationToken);
 }

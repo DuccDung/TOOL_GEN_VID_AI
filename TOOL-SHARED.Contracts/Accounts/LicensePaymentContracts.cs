@@ -9,7 +9,10 @@ public sealed record LicenseOfferResponse(
     int DurationDays,
     int MaxActivatedDevices,
     IReadOnlyList<string> MarketingFeatures,
-    int DisplayOrder);
+    int DisplayOrder,
+    bool OrganizationSeatAvailable = false,
+    string? OrganizationPoolName = null,
+    int? AvailableOrganizationSeats = null);
 
 public sealed record CreateLicensePaymentRequest(
     Guid LicensePlanId,
@@ -34,7 +37,10 @@ public sealed record LicensePaymentCheckoutResponse(
     bool ReusedExistingPayment,
     bool IsPaid,
     bool IsFulfilled,
-    bool IsExpired);
+    bool IsExpired,
+    Guid? AssignedOrganizationId = null,
+    string? AssignedOrganizationName = null,
+    string? ProvisioningStatus = null);
 
 public sealed record LicensePaymentStatusResponse(
     string OrderCode,
@@ -47,7 +53,10 @@ public sealed record LicensePaymentStatusResponse(
     bool IsFulfilled,
     bool IsExpired,
     string? FailureCode = null,
-    string? Message = null);
+    string? Message = null,
+    Guid? AssignedOrganizationId = null,
+    string? AssignedOrganizationName = null,
+    string? ProvisioningStatus = null);
 
 public sealed record CurrentLicensePaymentResponse(
     LicensePaymentCheckoutResponse? Payment);

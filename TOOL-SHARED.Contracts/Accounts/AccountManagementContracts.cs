@@ -29,7 +29,9 @@ public sealed record CurrentLicenseResponse(
     int HeartbeatIntervalSeconds = 300,
     string? AccessState = null,
     string? AccessReasonCode = null,
-    string? AccessMessage = null);
+    string? AccessMessage = null,
+    Guid? AssignedOrganizationId = null,
+    string? AssignedOrganizationName = null);
 
 public sealed record LicenseHeartbeatRequest(Guid SessionId);
 

@@ -170,6 +170,16 @@ export type MediaToolStatus = {
   checkedAtUtc: string;
 };
 
+export type ProjectContentSummary = {
+  scriptVersion: number;
+  title: string;
+  scriptFullText: string;
+  hook?: string | null;
+  angle?: string | null;
+  audience?: string | null;
+  callToAction?: string | null;
+};
+
 export type ProjectDashboard = {
   project: ProjectSummary;
   languageCode: string;
@@ -195,6 +205,7 @@ export type ProjectDashboard = {
   workflowStructureType?: string | null;
   effectiveGenerationLanguageCode?: string | null;
   requiresVietnameseContentRegeneration: boolean;
+  content?: ProjectContentSummary | null;
 };
 
 export type AiModel = {
@@ -238,6 +249,8 @@ export type CurrentLicense = {
   accessState?: 'Active' | 'Missing' | 'Expired' | 'Suspended' | 'Revoked' | 'DeviceLimit' | null;
   accessReasonCode?: string | null;
   accessMessage?: string | null;
+  assignedOrganizationId?: string | null;
+  assignedOrganizationName?: string | null;
 };
 
 export type LicenseOffer = {
@@ -250,6 +263,9 @@ export type LicenseOffer = {
   maxActivatedDevices: number;
   marketingFeatures: string[];
   displayOrder: number;
+  organizationSeatAvailable: boolean;
+  organizationPoolName?: string | null;
+  availableOrganizationSeats?: number | null;
 };
 
 export type LicensePaymentCheckout = {
@@ -272,6 +288,9 @@ export type LicensePaymentCheckout = {
   isPaid: boolean;
   isFulfilled: boolean;
   isExpired: boolean;
+  assignedOrganizationId?: string | null;
+  assignedOrganizationName?: string | null;
+  provisioningStatus?: string | null;
 };
 
 export type LicensePaymentStatus = {
@@ -286,6 +305,9 @@ export type LicensePaymentStatus = {
   isExpired: boolean;
   failureCode?: string | null;
   message?: string | null;
+  assignedOrganizationId?: string | null;
+  assignedOrganizationName?: string | null;
+  provisioningStatus?: string | null;
 };
 
 export type CurrentLicensePayment = {

@@ -95,6 +95,7 @@
             <section class="view-panel hidden" data-panel="organizations">
                 <div class="organization-scope-bar" role="tablist" aria-label="Phạm vi quản trị Tổ chức và AI">
                     <button type="button" class="scope-tab active" id="organizationScopeButton" data-organization-scope="directory" role="tab" aria-selected="true">Tổ chức</button>
+                    <button type="button" class="scope-tab" id="poolScopeButton" data-organization-scope="pools" role="tab" aria-selected="false">Phân bổ gói</button>
                     <button type="button" class="scope-tab" id="pricingScopeButton" data-organization-scope="pricing" role="tab" aria-selected="false">Bảng giá AI</button>
                     <button type="button" class="scope-tab" id="costGuideScopeButton" data-organization-scope="cost-guide" role="tab" aria-selected="false">Cách tính chi phí</button>
                 </div>
@@ -121,6 +122,14 @@
                             <button type="button" class="organization-tab" data-organization-tab="audit" role="tab" aria-selected="false">Nhật ký</button>
                         </div>
                         <div id="organizationTabContent" class="organization-tab-content" aria-live="polite"></div>
+                    </section>
+                </div>
+
+                <div id="organizationPools" class="hidden">
+                    <section class="panel management-panel">
+                        <div class="section-heading"><div><span class="eyebrow">LICENSE ORGANIZATION POOLS</span><h2>Pool và sức chứa tổ chức</h2></div><button class="primary-button" id="addOrganizationPoolButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo pool</span></button></div>
+                        <p class="form-hint">Payment chỉ được tạo sau khi server giữ được chỗ trong một tổ chức Active, đã bật nhận người và vượt qua kiểm tra sẵn sàng.</p>
+                        <div id="organizationPoolConsole" aria-live="polite"></div>
                     </section>
                 </div>
 
@@ -216,6 +225,24 @@
     <dialog id="organizationMemberDialog" class="admin-dialog small-dialog">
         <form id="organizationMemberForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">ORGANIZATION MEMBER</span><h2 id="organizationMemberDialogTitle">Thêm thành viên</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
             <input type="hidden" id="organizationMemberUserId" /><div class="form-grid"><label class="full" id="organizationMemberEmailLabel">Email tài khoản<input id="organizationMemberEmail" type="email" autocomplete="off" /></label><label>Vai trò<select id="organizationMemberRole"><option>Owner</option><option>OrganizationAdmin</option><option>BillingManager</option><option selected>Member</option><option>Viewer</option></select></label><label id="organizationMemberStatusLabel">Trạng thái<select id="organizationMemberStatus"><option>Active</option><option>Suspended</option><option>Removed</option></select></label><label class="full">Hạn mức tháng (USD, không bắt buộc)<input id="organizationMemberLimit" type="number" min="0" max="100000000" step="0.000001" /><small class="input-help">Đây là hạn mức nội bộ của thành viên, không phải số dư đã nạp.</small></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu thành viên</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationPoolDialog" class="admin-dialog small-dialog">
+        <form method="dialog" id="organizationPoolForm"><div class="dialog-heading"><div><span class="eyebrow">ORGANIZATION POOL</span><h2 id="organizationPoolDialogTitle">Tạo pool</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="organizationPoolId" /><div class="form-grid"><label>Mã pool<input id="organizationPoolCode" maxlength="50" required /></label><label>Tên pool<input id="organizationPoolName" maxlength="200" required /></label><label class="full">Trạng thái<select id="organizationPoolStatus"><option>Active</option><option>Inactive</option></select></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu pool</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationPoolOrganizationDialog" class="admin-dialog small-dialog">
+        <form method="dialog" id="organizationPoolOrganizationForm"><div class="dialog-heading"><div><span class="eyebrow">POOL CAPACITY</span><h2>Cấu hình tổ chức</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="poolOrganizationPoolId" /><div class="form-grid"><label class="full">Tổ chức<select id="poolOrganizationId" required></select></label><label>Sức chứa khách hàng<input id="poolOrganizationCapacity" type="number" min="1" max="100000" required /></label><label>Độ ưu tiên<input id="poolOrganizationPriority" type="number" min="0" max="100000" value="100" required /></label><label class="full checkbox-label"><input id="poolOrganizationAuto" type="checkbox" /> Bật nhận người tự động</label><label class="full checkbox-label"><input id="poolOrganizationReady" type="checkbox" /> Kiểm tra và đánh dấu sẵn sàng</label></div><p class="form-hint">Khi bật “sẵn sàng”, server kiểm tra budget, OpenAI, video policy, credential và rate hiện hành.</p><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu sức chứa</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="organizationPoolPlanDialog" class="admin-dialog small-dialog">
+        <form method="dialog" id="organizationPoolPlanForm"><div class="dialog-heading"><div><span class="eyebrow">PLAN MAPPING</span><h2>Gắn gói vào pool</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="poolPlanPoolId" /><div class="form-grid"><label class="full">Gói license<select id="poolPlanId" required></select></label><label class="full">Hạn mức AI thành viên/tháng (USD, không bắt buộc)<input id="poolPlanMemberBudget" type="number" min="0" max="100000000" step="0.000001" /></label><label class="full checkbox-label"><input id="poolPlanActive" type="checkbox" checked /> Mapping đang hoạt động</label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu mapping</button></div>
         </form>
     </dialog>
 

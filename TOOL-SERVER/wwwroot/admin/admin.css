@@ -269,6 +269,13 @@ input:focus, select:focus, textarea:focus { border-color: #86a0f5; box-shadow: 0
 .error-state { color: var(--danger); }
 
 /* Organization and AI administration */
+.pool-detail-panel { display: grid; gap: 14px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.pool-detail-panel > h3 { margin: 7px 0 0; color: #24324a; font-size: 12px; }
+.pool-metrics { margin: 0; }
+.inline-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.ghost-button.danger { color: #b42318; }
+.checkbox-label { display: flex !important; align-items: center; gap: 8px; }
+.checkbox-label input { width: auto !important; }
 .organization-scope-bar { display: inline-flex; gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .scope-tab, .organization-tab { min-height: 35px; padding: 0 13px; color: #66758e; border: 0; border-radius: 7px; background: transparent; font-size: 10px; font-weight: 800; }
 .scope-tab:hover, .organization-tab:hover { color: var(--primary); background: #f4f7ff; }

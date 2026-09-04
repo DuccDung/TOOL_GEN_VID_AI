@@ -26,6 +26,7 @@ Tài liệu chính, theo thứ tự sử dụng:
 - [Hướng dẫn triển khai AI Gateway](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md): runbook migration, credential, rate, budget, smoke test và rollback.
 - [Kế hoạch gia hạn license bằng SePay](KE_HOACH_TRIEN_KHAI_GIA_HAN_LICENSE_SEPAY.md): trạng thái source, kiểm thử và các bước vận hành còn mở.
 - [Hướng dẫn cấu hình SePay](HUONG_DAN_CAU_HINH_SEPAY_LICENSE.md): migration, tài khoản nhận, webhook, staging và rollback thanh toán.
+- [Kiểm thử SePay không dùng giao dịch thật](KIEM_THU_SEPAY_PHAN_BO_TO_CHUC_KHONG_GIAO_DICH_THAT.md): runner webhook mô phỏng, kiểm tra sau migration, concurrent SQL Server và checklist seat/membership/desktop.
 - [Sơ đồ hoạt động API AI](SO_DO_HOAT_DONG_API_AI.docx)
 - [Ngữ cảnh và quy tắc dành cho AI agent](AGENTS.md)
 
@@ -60,9 +61,10 @@ sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.7
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
+sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
 ```
 
-`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 mở rộng trạng thái scene; 4.0.6 hoàn thiện constraint cho cả scene và video generation với `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`; 4.0.7 thêm thư viện text bối cảnh/đạo cụ/item có version, gắn theo cảnh và snapshot version theo provider request; 4.0.8 thêm khóa tài sản ổn định và metadata truy vết tài sản do AI đề xuất; 4.0.9 tách policy `Default`/`LongForm` để Fal/Veo không ảnh hưởng video ngắn; 4.0.10 thêm catalog gói bán và giao dịch SePay. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
+`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 mở rộng trạng thái scene; 4.0.6 hoàn thiện constraint cho cả scene và video generation với `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`; 4.0.7 thêm thư viện continuity text-only và snapshot version; 4.0.8 thêm metadata truy vết tài sản AI; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10 thêm catalog gói bán và giao dịch SePay; 4.0.11 thêm pool tổ chức, sức chứa và reservation/assignment để tự cấp membership sau thanh toán. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
 
 Nếu desktop vẫn cần truy cập trực tiếp dữ liệu workflow trong giai đoạn chuyển tiếp, tạo user SQL riêng và chạy:
 
