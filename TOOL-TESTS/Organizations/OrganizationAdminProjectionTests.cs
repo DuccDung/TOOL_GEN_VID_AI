@@ -127,6 +127,18 @@ public sealed class OrganizationAdminProjectionTests
     }
 
     [Fact]
+    public void Readiness_MissingLongFormPolicy_ReportsOnlyPolicyBlocker()
+    {
+        var result = OrganizationReadinessEvaluator.MissingLongFormPolicy(25);
+
+        Assert.False(result.Ready);
+        Assert.Equal(OrganizationReadinessEvaluator.LongFormPolicyProviderCode, result.ProviderCode);
+        Assert.Equal(["video_policy_missing"], result.BlockingReasons);
+        Assert.DoesNotContain("credential_missing", result.BlockingReasons);
+        Assert.DoesNotContain("pricing_not_configured", result.BlockingReasons);
+    }
+
+    [Fact]
     public void AuditSanitizer_OnlyReturnsAllowlistedScalarData()
     {
         var data = OrganizationAuditDataSanitizer.Sanitize(

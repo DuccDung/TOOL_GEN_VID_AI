@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -12,12 +13,25 @@ internal sealed record OpenAiImageResult(
     long OutputTokens,
     string ProviderRequestId);
 
+internal sealed record OpenAiImageEditInput(
+    byte[] Bytes,
+    string MimeType,
+    string FileName);
+
 internal interface IOpenAiImageClient
 {
     Task<OpenAiImageResult> GenerateAsync(
         ProviderRuntimeConfiguration provider,
         string prompt,
         CancellationToken cancellationToken);
+
+    Task<OpenAiImageResult> GenerateSceneFirstFrameAsync(
+        ProviderRuntimeConfiguration provider,
+        string prompt,
+        string aspectRatio,
+        OpenAiImageEditInput? sourceImage,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Image client này chưa hỗ trợ scene first-frame.");
 }
 
 internal sealed class OpenAiImageClient(
@@ -55,8 +69,87 @@ internal sealed class OpenAiImageClient(
         {
             Content = JsonContent.Create(requestBody, options: JsonOptions)
         };
-        OpenAiContentClient.ApplyAuthentication(request, provider);
+        return await SendAsync(
+            request,
+            provider,
+            bytes => GeneratedImageValidator.ValidateCharacterReference(bytes, _options.MaximumBytes),
+            cancellationToken);
+    }
 
+    public async Task<OpenAiImageResult> GenerateSceneFirstFrameAsync(
+        ProviderRuntimeConfiguration provider,
+        string prompt,
+        string aspectRatio,
+        OpenAiImageEditInput? sourceImage,
+        CancellationToken cancellationToken)
+    {
+        ValidateRuntime(provider, prompt);
+        var size = aspectRatio switch
+        {
+            "16:9" => "1280x720",
+            "9:16" => "720x1280",
+            _ => throw new ArgumentException("Tỷ lệ first-frame không được hỗ trợ.", nameof(aspectRatio))
+        };
+
+        using var request = sourceImage is null
+            ? CreateGenerationRequest(provider, prompt, size)
+            : CreateEditRequest(provider, prompt, size, sourceImage);
+        return await SendAsync(
+            request,
+            provider,
+            bytes => GeneratedImageValidator.ValidateSceneFirstFrame(bytes, 8 * 1024 * 1024, aspectRatio),
+            cancellationToken);
+    }
+
+    private HttpRequestMessage CreateGenerationRequest(
+        ProviderRuntimeConfiguration provider,
+        string prompt,
+        string size)
+    {
+        var requestBody = new
+        {
+            model = "gpt-image-2",
+            prompt,
+            n = 1,
+            size,
+            quality = _options.Quality,
+            output_format = "png"
+        };
+        return new HttpRequestMessage(HttpMethod.Post, new Uri(provider.BaseUri, "images/generations"))
+        {
+            Content = JsonContent.Create(requestBody, options: JsonOptions)
+        };
+    }
+
+    private HttpRequestMessage CreateEditRequest(
+        ProviderRuntimeConfiguration provider,
+        string prompt,
+        string size,
+        OpenAiImageEditInput sourceImage)
+    {
+        var content = new MultipartFormDataContent();
+        content.Add(new StringContent("gpt-image-2"), "model");
+        content.Add(new StringContent(prompt), "prompt");
+        content.Add(new StringContent("1"), "n");
+        content.Add(new StringContent(size), "size");
+        content.Add(new StringContent(_options.Quality), "quality");
+        content.Add(new StringContent("png"), "output_format");
+        var imageContent = new ByteArrayContent(sourceImage.Bytes);
+        imageContent.Headers.ContentType = MediaTypeHeaderValue.Parse(sourceImage.MimeType);
+        content.Add(imageContent, "image[]", sourceImage.FileName);
+        return new HttpRequestMessage(HttpMethod.Post, new Uri(provider.BaseUri, "images/edits"))
+        {
+            Content = content
+        };
+    }
+
+    private async Task<OpenAiImageResult> SendAsync(
+        HttpRequestMessage request,
+        ProviderRuntimeConfiguration provider,
+        Func<byte[], ValidatedGeneratedImage> validate,
+        CancellationToken cancellationToken)
+    {
+        OpenAiContentClient.ApplyAuthentication(request, provider);
         using var response = await httpClientFactory.CreateClient("OpenAiRuntime")
             .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         var responseJson = await ReadLimitedTextAsync(response.Content, MaximumResponseBytes(), cancellationToken);
@@ -104,7 +197,7 @@ internal sealed class OpenAiImageClient(
                 ? values.FirstOrDefault() ?? string.Empty
                 : string.Empty;
             return new OpenAiImageResult(
-                GeneratedImageValidator.ValidatePng(bytes, _options.MaximumBytes),
+                validate(bytes),
                 ReadUsage(usage, "input_tokens"),
                 ReadUsage(usage, "output_tokens"),
                 requestId);
@@ -120,6 +213,19 @@ internal sealed class OpenAiImageClient(
                 "openai_image_invalid_response",
                 "OpenAI trả về dữ liệu tạo ảnh không hợp lệ.",
                 exception);
+        }
+    }
+
+    private static void ValidateRuntime(ProviderRuntimeConfiguration provider, string prompt)
+    {
+        if (!string.Equals(provider.ProviderCode, ProviderCodes.OpenAi, StringComparison.Ordinal) ||
+            !string.Equals(provider.ModelCode, "gpt-image-2", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Runtime tạo ảnh phải dùng đúng openai/gpt-image-2.");
+        }
+        if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > 8_000)
+        {
+            throw new ArgumentException("Prompt ảnh do server tạo không hợp lệ.", nameof(prompt));
         }
     }
 

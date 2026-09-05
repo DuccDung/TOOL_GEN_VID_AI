@@ -35,7 +35,8 @@ internal sealed record DashboardStateResponse(
     MediaToolStatusSummary MediaTools,
     CurrentLicenseResponse? License,
     bool GenerationRunning,
-    DashboardFeatureFlagsResponse Features);
+    DashboardFeatureFlagsResponse Features,
+    IReadOnlyList<SceneFirstFrameSummary> SceneFirstFrames);
 
 internal sealed record DashboardFeatureFlagsResponse(bool VietsubEnabled);
 
@@ -69,6 +70,12 @@ internal sealed record UpdateSceneWebRequest(
     string? SoundEffects = null);
 
 internal sealed record SceneActionWebRequest(Guid SceneId, bool PlaybackConfirmed = false);
+
+internal sealed record SceneFirstFrameActionWebRequest(
+    Guid SceneId,
+    int Attempt = 1,
+    Guid? FrameId = null,
+    string? RowVersion = null);
 
 internal sealed record CharacterActionWebRequest(Guid CharacterId);
 

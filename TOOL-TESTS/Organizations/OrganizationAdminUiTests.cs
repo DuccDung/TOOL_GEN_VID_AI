@@ -52,7 +52,7 @@ public sealed class OrganizationAdminUiTests
         var organizationScript = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
 
         Assert.DoesNotContain("api('/api/organizations')", shellScript, StringComparison.Ordinal);
-        Assert.Contains("activate: () => showScope", organizationScript);
+        Assert.Contains("activate: (scope) => showScope", organizationScript);
         Assert.Contains("new AbortController()", organizationScript);
     }
 
@@ -82,6 +82,19 @@ public sealed class OrganizationAdminUiTests
     }
 
     [Fact]
+    public void LongFormReadiness_UsesSelectedProviderAndDoesNotRequireKling()
+    {
+        var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
+
+        Assert.Contains("<th>Video dài</th>", script);
+        Assert.Contains("function longFormReadiness(organization)", script);
+        Assert.Contains("video_policy_missing: 'Chưa chọn provider cho Policy Video dài.'", script);
+        Assert.Contains("organizationState.longFormVideoPolicy?.providerId === provider.providerId", script);
+        Assert.Contains("Không thuộc Policy Video dài hiện tại nên không phải điều kiện chặn.", script);
+        Assert.DoesNotContain("<th>Kling</th>", script);
+    }
+
+    [Fact]
     public void CostGuide_ExplainsServerBillingAndUsesActiveRatesForExamples()
     {
         var page = ReadRepositoryFile("TOOL-SERVER", "Pages", "Admin", "Index.cshtml");
@@ -100,6 +113,68 @@ public sealed class OrganizationAdminUiTests
         Assert.Contains("metadata.resolution?.toLowerCase() === '720p'", script);
         Assert.Contains("metadata.nativeAudio === true", script);
         Assert.Contains("resolution: '720p', nativeAudio: true", script);
+    }
+
+    [Fact]
+    public void VideoPolicySelection_RequiresActiveCredentialBeforeSubmitting()
+    {
+        var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
+
+        Assert.Contains("const credential = selected &&", script);
+        Assert.Contains("credential.credentialStatus !== 'Active'", script);
+        Assert.Contains("Chưa thể lưu policy.", script);
+    }
+
+    [Fact]
+    public void AdminActions_PreserveCurrentPageScrollPositionWhenContentRerenders()
+    {
+        var shellScript = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.js");
+        var organizationScript = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
+
+        Assert.Contains("function capturePagePosition()", shellScript);
+        Assert.Contains("function restorePagePosition(position)", shellScript);
+        Assert.Contains("function preservePagePosition(action)", shellScript);
+        Assert.Contains("window.scrollTo({ left: position.left, top: position.top, behavior: 'auto' })", shellScript);
+        Assert.Contains("return preservePagePosition(async () =>", shellScript);
+        Assert.Contains("return preservePagePosition(async () =>", organizationScript);
+        Assert.Contains("loadUsage(true, 1, organizationState.usagePaging.pageSize)", organizationScript);
+    }
+
+    [Fact]
+    public void AdminLists_UseServerSidePaginationAndSharedControls()
+    {
+        var shellScript = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.js");
+        var organizationScript = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
+        var organizationsController = ReadRepositoryFile("TOOL-SERVER", "Controllers", "OrganizationsController.cs");
+
+        Assert.Contains("function paginationMarkup", shellScript);
+        Assert.Contains("/api/admin/licenses/users/page?", shellScript);
+        Assert.Contains("/api/organizations/${organizationState.selectedOrganizationId}/members/page?", organizationScript);
+        Assert.Contains("/usage/page?", organizationScript);
+        Assert.Contains("/audit/page?page=", organizationScript);
+        Assert.Contains("[HttpGet(\"{organizationId:guid}/members/page\")]", organizationsController);
+        Assert.Contains("[HttpGet(\"{organizationId:guid}/usage/page\")]", organizationsController);
+        Assert.Contains("[HttpGet(\"{organizationId:guid}/audit/page\")]", organizationsController);
+    }
+
+    [Fact]
+    public void OrganizationDetail_UsesSharedPageHeaderWithoutDuplicateIdentityBlock()
+    {
+        var page = ReadRepositoryFile("TOOL-SERVER", "Pages", "Admin", "Index.cshtml");
+        var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
+        var css = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.css");
+
+        Assert.Contains("role=\"region\" aria-labelledby=\"pageTitle\"", page);
+        Assert.Contains("class=\"text-button organization-back-button\"", page);
+        Assert.DoesNotContain("id=\"organizationDetailHeading\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("byId('organizationDetailHeading')", script, StringComparison.Ordinal);
+        Assert.Contains("shell.setPageMeta('ORGANIZATION SETUP'", script);
+        Assert.Contains(".organization-back-button { min-height: 28px;", css);
+        Assert.Contains(".organization-tab-content { min-height: 180px;", css);
+        Assert.Contains("id=\"organizationDetailRefreshButton\"", page);
+        Assert.Contains("function setTopbarVisible(visible)", ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.js"));
+        Assert.Contains("setTopbarVisible(false);", script);
+        Assert.Contains("byId('organizationDetailRefreshButton').addEventListener", script);
     }
 
     private static string ReadRepositoryFile(params string[] relativeParts)

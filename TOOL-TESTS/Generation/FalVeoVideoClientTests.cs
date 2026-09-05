@@ -61,8 +61,27 @@ public sealed class FalVeoVideoClientTests
         Assert.DoesNotContain("private_prompt", result.ResponseJson, StringComparison.OrdinalIgnoreCase);
         Assert.Collection(
             handler.Requests,
-            request => Assert.EndsWith("/requests/fal-request-2/status", request.Uri.AbsolutePath, StringComparison.Ordinal),
-            request => Assert.EndsWith("/requests/fal-request-2", request.Uri.AbsolutePath, StringComparison.Ordinal));
+            request => Assert.Equal("/fal-ai/veo3.1/requests/fal-request-2/status", request.Uri.AbsolutePath),
+            request => Assert.Equal("/fal-ai/veo3.1/requests/fal-request-2", request.Uri.AbsolutePath));
+    }
+
+    [Theory]
+    [InlineData(FalVeoPolicy.StandardEndpointId)]
+    [InlineData(FalVeoPolicy.FastEndpointId)]
+    public async Task GetStatusAsync_UsesCanonicalQueueRouteForApprovedSubmitEndpoints(string endpointId)
+    {
+        var handler = new SequenceHandler((HttpStatusCode.OK, """{ "status": "IN_QUEUE" }"""));
+        var client = new FalVeoVideoClient(new StubHttpClientFactory(handler));
+
+        var result = await client.GetStatusAsync(
+            CreateProvider(endpointId),
+            "request-with-model-route",
+            CancellationToken.None);
+
+        Assert.Equal("Queued", result.Status);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("/fal-ai/veo3.1/requests/request-with-model-route/status", request.Uri.AbsolutePath);
+        Assert.DoesNotContain("image-to-video", request.Uri.AbsolutePath, StringComparison.Ordinal);
     }
 
     [Theory]

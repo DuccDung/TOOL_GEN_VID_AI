@@ -81,7 +81,8 @@ internal sealed class GenerationService(
     IOptions<OpenAiSpeechOptions> speechOptions,
     IProjectVideoPolicyResolver? projectVideoPolicyResolver = null,
     IVideoProviderRouter? videoProviderRouter = null,
-    IVideoOutputStore? videoOutputStore = null) : IGenerationService
+    IVideoOutputStore? videoOutputStore = null,
+    ISceneFirstFrameService? sceneFirstFrameService = null) : IGenerationService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly OpenAiImageOptions _imageOptions = ValidatedImageOptions(imageOptions.Value);
@@ -1299,6 +1300,7 @@ internal sealed class GenerationService(
         }
         CharacterPromptSnapshot? character = null;
         VideoProviderReferenceImage? referenceImage = null;
+        Guid? inputSceneFirstFrameId = null;
         if (characterIds.Count == 1)
         {
             if (!snapshot.Capabilities.ReferenceImage)
@@ -1320,40 +1322,50 @@ internal sealed class GenerationService(
                     "byteplus_reference_not_approved",
                     "BytePlus chỉ nhận ảnh nhân vật do hệ thống tạo và đã duyệt; ảnh tải lên hoặc ảnh người thật chưa được phép trong workflow này.");
             }
-            var legacyReference = ValidateReferenceImage(
-                request.ReferenceImage is null
-                    ? null
-                    : new KlingReferenceImageInput(
-                        request.ReferenceImage.CharacterReferenceId,
-                        request.ReferenceImage.MimeType,
-                        request.ReferenceImage.Base64Data,
-                        request.ReferenceImage.Sha256),
-                character);
-            referenceImage = new VideoProviderReferenceImage(
-                legacyReference.CharacterReferenceId,
-                legacyReference.MimeType,
-                legacyReference.Base64Data,
-                legacyReference.Sha256);
+            if (snapshot.ProviderCode != ProviderCodes.Fal)
+            {
+                var legacyReference = ValidateReferenceImage(
+                    request.ReferenceImage is null
+                        ? null
+                        : new KlingReferenceImageInput(
+                            request.ReferenceImage.CharacterReferenceId,
+                            request.ReferenceImage.MimeType,
+                            request.ReferenceImage.Base64Data,
+                            request.ReferenceImage.Sha256),
+                    character);
+                referenceImage = new VideoProviderReferenceImage(
+                    legacyReference.CharacterReferenceId,
+                    legacyReference.MimeType,
+                    legacyReference.Base64Data,
+                    legacyReference.Sha256);
+            }
         }
-        else if (request.ReferenceImage is not null)
+        else if (request.ReferenceImage is not null && snapshot.ProviderCode != ProviderCodes.Fal)
         {
             throw new ArgumentException("Cảnh không gắn nhân vật nên không được gửi ảnh tham chiếu.");
         }
         if (snapshot.ProviderCode == ProviderCodes.Fal)
         {
-            if (referenceImage is null || character?.Reference is null)
-            {
-                throw new AccountApiException(
-                    StatusCodes.Status422UnprocessableEntity,
-                    "fal_first_frame_required",
-                    "Veo Image-to-Video cần first-frame đã duyệt. Bản đầu chưa hỗ trợ tự tạo first-frame cho cảnh B-roll.");
-            }
+            var firstFrameService = sceneFirstFrameService
+                ?? throw new InvalidOperationException("Scene first-frame service chưa được đăng ký.");
+            var firstFrame = await firstFrameService.ValidateForVideoAsync(
+                request.ProjectId,
+                request.SceneId,
+                project.AspectRatio,
+                request.FirstFrame,
+                cancellationToken);
+            inputSceneFirstFrameId = firstFrame.SceneFirstFrameId;
+            referenceImage = new VideoProviderReferenceImage(
+                firstFrame.SceneFirstFrameId,
+                firstFrame.MimeType,
+                firstFrame.Base64Data,
+                firstFrame.Sha256);
             try
             {
                 FalVeoPolicy.ValidateFirstFrame(
                     referenceImage,
-                    character.Reference.Width,
-                    character.Reference.Height,
+                    null,
+                    null,
                     project.AspectRatio);
             }
             catch (KlingPromptValidationException exception)
@@ -1363,6 +1375,10 @@ internal sealed class GenerationService(
                     exception.Code,
                     exception.Message);
             }
+        }
+        else if (request.FirstFrame is not null)
+        {
+            throw new ArgumentException("SceneFirstFrame chỉ được gửi cho project Fal/Veo.");
         }
         var projectAssets = await LoadSceneProjectAssetSnapshotsAsync(
             request.ProjectId,
@@ -1545,7 +1561,8 @@ internal sealed class GenerationService(
             snapshot.NativeAudio,
             CharacterId = character?.CharacterId,
             CharacterVersion = character?.Version,
-            CharacterReferenceId = referenceImage?.CharacterReferenceId,
+            CharacterReferenceId = snapshot.ProviderCode == ProviderCodes.Fal ? null : referenceImage?.CharacterReferenceId,
+            SceneFirstFrameId = inputSceneFirstFrameId,
             ReferenceSha256 = referenceImage?.Sha256,
             ProjectAssets = projectAssets.Select(asset => new
             {
@@ -1587,6 +1604,7 @@ internal sealed class GenerationService(
             requestHash,
             now);
         requestLog.EstimatedCost = quote.EstimatedCost;
+        requestLog.InputSceneFirstFrameId = inputSceneFirstFrameId;
         requestLog.RateSnapshotJson = quote.RateSnapshotJson;
         requestLog.OutputTokens = quote.EstimatedOutputTokens > 0 ? quote.EstimatedOutputTokens : null;
         requestLog.UsageJson = JsonSerializer.Serialize(new
@@ -3114,6 +3132,15 @@ internal sealed class GenerationService(
              reference.Sha256.Length != 64))
         {
             throw new ArgumentException("Ảnh tham chiếu nhân vật gửi tới provider video không hợp lệ.");
+        }
+        if (request.FirstFrame is { } firstFrame &&
+            (firstFrame.SceneFirstFrameId == Guid.Empty ||
+             firstFrame.MimeType is not ("image/jpeg" or "image/png") ||
+             string.IsNullOrWhiteSpace(firstFrame.Base64Data) ||
+             firstFrame.Base64Data.Length > 12_000_000 ||
+             firstFrame.Sha256.Length != 64))
+        {
+            throw new ArgumentException("First-frame gửi tới provider video không hợp lệ.");
         }
     }
 

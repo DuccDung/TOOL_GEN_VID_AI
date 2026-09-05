@@ -37,6 +37,7 @@ public partial class Form1 : Form
     private readonly CancellationTokenSource _shutdown = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 3000 };
     private readonly System.Windows.Forms.Timer _updateTimer = new();
+    private readonly BackgroundRefreshErrorTracker _backgroundRefreshErrors = new();
     private readonly DesktopUpdateApiClient? _updateApiClient;
     private readonly DesktopPackageUpdateService? _packageUpdateService;
     private readonly DesktopUpdateOptions? _updateOptions;
@@ -767,6 +768,7 @@ public partial class Form1 : Form
         try
         {
             await _bridge.RefreshInBackgroundAsync(_shutdown.Token);
+            _backgroundRefreshErrors.MarkSuccessful();
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
         {
@@ -781,7 +783,13 @@ public partial class Form1 : Form
         }
         catch (AccountClientException exception)
         {
-            PostHostMessage("operation.error", new { code = exception.Code, message = exception.Message });
+            var response = _backgroundRefreshErrors.TryCreateResponse(exception.Code, exception.Message);
+            if (response is not null)
+            {
+                PostJsonToWebView(JsonSerializer.Serialize(
+                    response,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            }
         }
         catch (HttpRequestException)
         {

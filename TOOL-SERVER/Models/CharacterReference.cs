@@ -30,4 +30,6 @@ public partial class CharacterReference
     public virtual Character Character { get; set; } = null!;
 
     public virtual MediaAsset MediaAsset { get; set; } = null!;
+
+    public virtual ICollection<SceneFirstFrame> SceneFirstFrames { get; set; } = new List<SceneFirstFrame>();
 }

@@ -147,7 +147,11 @@ public sealed record OrganizationUsageResponse(
     long? InputTokens = null,
     long? OutputTokens = null,
     decimal? VideoSeconds = null,
-    IReadOnlyList<OrganizationUsageGroupResponse>? Groups = null);
+    IReadOnlyList<OrganizationUsageGroupResponse>? Groups = null,
+    int ItemsPage = 1,
+    int ItemsPageSize = 100,
+    int ItemsTotalCount = 0,
+    int ItemsTotalPages = 0);
 
 public sealed record OrganizationAuditItemResponse(
     long AuditLogId,

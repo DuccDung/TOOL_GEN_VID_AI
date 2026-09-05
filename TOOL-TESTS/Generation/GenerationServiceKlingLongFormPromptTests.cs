@@ -162,6 +162,74 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         Assert.Equal(1, fixture.VideoClient.SubmitCount);
     }
 
+    [Fact]
+    public async Task FalLongForm_UsesValidatedSceneFirstFrameAndSnapshotsItsId()
+    {
+        await using var dbContext = CreateContext();
+        var seeded = SeedProject(
+            dbContext,
+            GenerationWorkflowTypes.OpenAiStructuredPlan,
+            "Khung cảnh thành phố Việt Nam yên tĩnh lúc bình minh.");
+        seeded.Scene.ContentDurationMs = 4000;
+        seeded.Scene.GenerationDurationMs = 4000;
+        seeded.Scene.TimelineEndMs = 4000;
+        await dbContext.SaveChangesAsync();
+        var frameId = Guid.NewGuid();
+        var bytes = CreatePngHeader(1280, 720);
+        var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var frameInput = new SceneFirstFrameInput(frameId, "image/png", Convert.ToBase64String(bytes), hash);
+        var frameService = new StubSceneFirstFrameService(new SceneFirstFrameVideoInputValidation(
+            frameId,
+            frameInput.MimeType,
+            frameInput.Base64Data,
+            frameInput.Sha256));
+        var fixture = CreateService(dbContext, seeded.Project, useFal: true, frameService);
+
+        var response = await fixture.Service.SubmitVideoAsync(
+            CreateRequest(seeded) with { FirstFrame = frameInput },
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal("Submitted", response.Status);
+        Assert.Equal(1, frameService.ValidateCount);
+        Assert.Equal(frameId, fixture.VideoClient.LastReferenceImage?.CharacterReferenceId);
+        var request = await dbContext.ProviderRequests.SingleAsync();
+        Assert.Equal(frameId, request.InputSceneFirstFrameId);
+        Assert.Contains($"\"sceneFirstFrameId\":\"{frameId:D}\"", request.RequestJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(frameInput.Base64Data, request.RequestJson, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("fal_first_frame_required")]
+    [InlineData("scene_first_frame_stale")]
+    public async Task FalLongForm_FirstFrameValidationFailureStopsBeforePaidVideoOutbound(string errorCode)
+    {
+        await using var dbContext = CreateContext();
+        var seeded = SeedProject(
+            dbContext,
+            GenerationWorkflowTypes.OpenAiStructuredPlan,
+            "Khung cảnh thành phố Việt Nam yên tĩnh lúc bình minh.");
+        seeded.Scene.ContentDurationMs = 4000;
+        seeded.Scene.GenerationDurationMs = 4000;
+        seeded.Scene.TimelineEndMs = 4000;
+        await dbContext.SaveChangesAsync();
+        var frameService = new StubSceneFirstFrameService(new AccountApiException(409, errorCode, "blocked"));
+        var fixture = CreateService(dbContext, seeded.Project, useFal: true, frameService);
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() => fixture.Service.SubmitVideoAsync(
+            CreateRequest(seeded),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None));
+
+        Assert.Equal(errorCode, exception.Code);
+        Assert.Equal(0, fixture.ProviderResolver.ResolveCount);
+        Assert.Equal(0, fixture.Budget.ReserveCount);
+        Assert.Equal(0, fixture.VideoClient.SubmitCount);
+        Assert.Empty(dbContext.ProviderRequests);
+    }
+
     private static SubmitVideoRequest CreateRequest(
         SeededProject seeded,
         VideoReferenceImageInput? referenceImage = null) =>
@@ -235,11 +303,15 @@ public sealed class GenerationServiceKlingLongFormPromptTests
             hash);
     }
 
-    private static Fixture CreateService(VideoFactoryDbContext dbContext, Project project)
+    private static Fixture CreateService(
+        VideoFactoryDbContext dbContext,
+        Project project,
+        bool useFal = false,
+        ISceneFirstFrameService? sceneFirstFrameService = null)
     {
-        var providerResolver = new StubProviderResolver();
+        var providerResolver = new StubProviderResolver(useFal);
         var budget = new StubBudgetService();
-        var videoClient = new StubVideoClient();
+        var videoClient = new StubVideoClient(useFal ? ProviderCodes.Fal : ProviderCodes.Kling);
         var service = new GenerationService(
             dbContext,
             providerResolver,
@@ -258,9 +330,10 @@ public sealed class GenerationServiceKlingLongFormPromptTests
             TimeProvider.System,
             Options.Create(new OpenAiImageOptions()),
             Options.Create(new OpenAiSpeechOptions()),
-            new StubVideoPolicyResolver(),
+            new StubVideoPolicyResolver(useFal),
             new StubVideoRouter(videoClient),
-            new StubVideoOutputStore());
+            new StubVideoOutputStore(),
+            sceneFirstFrameService);
         return new Fixture(service, providerResolver, budget, videoClient);
     }
 
@@ -377,36 +450,60 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         StubBudgetService Budget,
         StubVideoClient VideoClient);
 
-    private sealed class StubVideoPolicyResolver : IProjectVideoPolicyResolver
+    private sealed class StubVideoPolicyResolver(bool useFal) : IProjectVideoPolicyResolver
     {
         public Task<ProjectVideoSnapshot> ResolveAsync(
             Project project,
             Guid organizationId,
             string policyScope,
             CancellationToken cancellationToken) =>
-            Task.FromResult(new ProjectVideoSnapshot(
-                ProviderCodes.Kling,
-                "Kling",
-                "kling-3.0",
-                "Kling 3.0",
-                1,
-                "720p",
-                true,
-                VideoModelCapabilities.KlingDefault));
+            Task.FromResult(useFal
+                ? new ProjectVideoSnapshot(
+                    ProviderCodes.Fal,
+                    "Fal",
+                    FalVeoPolicy.StandardEndpointId,
+                    "Veo 3.1",
+                    1,
+                    FalVeoPolicy.Resolution,
+                    true,
+                    new VideoModelCapabilities(
+                        4,
+                        8,
+                        new HashSet<int>([4, 6, 8]),
+                        24,
+                        new HashSet<string>(["720p"], StringComparer.OrdinalIgnoreCase),
+                        new HashSet<string>(["16:9", "9:16"], StringComparer.OrdinalIgnoreCase),
+                        true,
+                        true))
+                : new ProjectVideoSnapshot(
+                    ProviderCodes.Kling,
+                    "Kling",
+                    "kling-3.0",
+                    "Kling 3.0",
+                    1,
+                    "720p",
+                    true,
+                    VideoModelCapabilities.KlingDefault));
     }
 
-    private sealed class StubProviderResolver : IProviderRuntimeResolver
+    private sealed class StubProviderResolver
+        : IProviderRuntimeResolver
     {
-        private readonly ProviderRuntimeConfiguration _provider = new(
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            ProviderCodes.Kling,
-            "kling-3.0",
-            new Uri("https://api-singapore.klingai.com/"),
-            "Bearer",
-            null,
-            "test-key");
+        private readonly ProviderRuntimeConfiguration _provider;
+
+        public StubProviderResolver(bool useFal = false)
+        {
+            _provider = new ProviderRuntimeConfiguration(
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                useFal ? ProviderCodes.Fal : ProviderCodes.Kling,
+                useFal ? FalVeoPolicy.StandardEndpointId : "kling-3.0",
+                new Uri(useFal ? "https://queue.fal.run/" : "https://api-singapore.klingai.com/"),
+                "Bearer",
+                null,
+                "test-key");
+        }
 
         public int ResolveCount { get; private set; }
 
@@ -424,11 +521,12 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         public IVideoProviderClient Resolve(string providerCode) => client;
     }
 
-    private sealed class StubVideoClient : IVideoProviderClient
+    private sealed class StubVideoClient(string providerCode = ProviderCodes.Kling) : IVideoProviderClient
     {
-        public string ProviderCode => ProviderCodes.Kling;
+        public string ProviderCode => providerCode;
         public int SubmitCount { get; private set; }
         public string LastPrompt { get; private set; } = string.Empty;
+        public VideoProviderReferenceImage? LastReferenceImage { get; private set; }
 
         public Task<VideoProviderTaskResult> SubmitAsync(
             ProviderRuntimeConfiguration provider,
@@ -443,6 +541,7 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         {
             SubmitCount++;
             LastPrompt = prompt;
+            LastReferenceImage = referenceImage;
             return Task.FromResult(new VideoProviderTaskResult(
                 "task-1",
                 "Submitted",
@@ -492,5 +591,58 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         public Task<AiCostQuote> QuoteOpenAiImageAsync(Guid providerModelId, int promptCharacters, long estimatedInputTokens, long estimatedOutputTokens, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<AiCostQuote> QuoteOpenAiVoiceAsync(Guid providerModelId, int narrationCharacters, decimal estimatedCharactersPerSecond, long estimatedOutputTokensPerSecond, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<decimal> CalculateOpenAiActualAsync(string rateSnapshotJson, long inputTokens, long outputTokens, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<AiCostQuote> QuoteVideoAsync(string providerCode, Guid providerModelId, int durationSeconds, string resolution, bool nativeAudio, int framesPerSecond, CancellationToken cancellationToken) =>
+            Task.FromResult(new AiCostQuote(0.5m, "USD", "[]"));
+        public Task<decimal> CalculateVideoActualAsync(string providerCode, string rateSnapshotJson, decimal estimatedCost, decimal? reportedBillingAmount, long? completionTokens, CancellationToken cancellationToken) =>
+            Task.FromResult(estimatedCost);
+    }
+
+    private sealed class StubSceneFirstFrameService : ISceneFirstFrameService
+    {
+        private readonly SceneFirstFrameVideoInputValidation? _validation;
+        private readonly AccountApiException? _exception;
+
+        public StubSceneFirstFrameService(SceneFirstFrameVideoInputValidation validation) => _validation = validation;
+        public StubSceneFirstFrameService(AccountApiException exception) => _exception = exception;
+
+        public int ValidateCount { get; private set; }
+
+        public Task<SceneFirstFrameVideoInputValidation> ValidateForVideoAsync(Guid projectId, Guid sceneId, string aspectRatio, SceneFirstFrameInput? input, CancellationToken cancellationToken)
+        {
+            ValidateCount++;
+            return _exception is null
+                ? Task.FromResult(_validation!)
+                : Task.FromException<SceneFirstFrameVideoInputValidation>(_exception);
+        }
+
+        public Task<SceneFirstFrameQuoteResponse> GetQuoteAsync(Guid projectId, Guid sceneId, Guid? organizationId, string userId, Guid deviceId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<GenerateSceneFirstFrameResponse> GenerateAsync(GenerateSceneFirstFrameRequest request, string userId, Guid deviceId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<SceneFirstFrameListResponse> ListAsync(Guid projectId, Guid sceneId, Guid? organizationId, string userId, Guid deviceId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ProjectSceneFirstFrameListResponse> ListProjectAsync(Guid projectId, Guid? organizationId, string userId, Guid deviceId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<SceneFirstFrameSummary> MaterializeAsync(Guid projectId, Guid sceneId, MaterializeSceneFirstFrameRequest request, string userId, Guid deviceId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<SceneFirstFrameSummary> ApproveAsync(Guid projectId, Guid sceneId, Guid frameId, ChangeSceneFirstFrameStatusRequest request, string userId, Guid deviceId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<SceneFirstFrameSummary> RejectAsync(Guid projectId, Guid sceneId, Guid frameId, ChangeSceneFirstFrameStatusRequest request, string userId, Guid deviceId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private static byte[] CreatePngHeader(int width, int height)
+    {
+        var bytes = new byte[24];
+        bytes[0] = 0x89;
+        bytes[1] = 0x50;
+        bytes[2] = 0x4E;
+        bytes[3] = 0x47;
+        bytes[4] = 0x0D;
+        bytes[5] = 0x0A;
+        bytes[6] = 0x1A;
+        bytes[7] = 0x0A;
+        bytes[16] = (byte)(width >> 24);
+        bytes[17] = (byte)(width >> 16);
+        bytes[18] = (byte)(width >> 8);
+        bytes[19] = (byte)width;
+        bytes[20] = (byte)(height >> 24);
+        bytes[21] = (byte)(height >> 16);
+        bytes[22] = (byte)(height >> 8);
+        bytes[23] = (byte)height;
+        return bytes;
     }
 }

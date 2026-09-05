@@ -4,6 +4,7 @@ namespace TOOL_SERVER.Generation;
 
 internal static class FalVeoPolicy
 {
+    public const string QueueEndpointId = "fal-ai/veo3.1";
     public const string StandardEndpointId = "fal-ai/veo3.1/image-to-video";
     public const string FastEndpointId = "fal-ai/veo3.1/fast/image-to-video";
     public const string Resolution = "720p";

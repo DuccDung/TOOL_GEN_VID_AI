@@ -46,9 +46,28 @@ public sealed class ProjectDashboardContentTests
         Assert.Equal("Toàn bộ kịch bản đã được lưu.", dashboard.Content.ScriptFullText);
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_ProjectsCompletedVideoRequestAsReadyForLocalDownload()
+    {
+        await using var fixture = await CreateFixtureAsync(currentScriptVersion: 1, includeRecoveredVideoScene: true);
+
+        var dashboard = await fixture.Service.GetDashboardAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        Assert.NotNull(dashboard);
+        var scene = Assert.Single(dashboard.Scenes);
+        Assert.Equal("Generated", scene.Status);
+        Assert.Null(scene.LastErrorCode);
+        Assert.Null(scene.LastErrorMessage);
+        Assert.True(scene.CanGenerate);
+    }
+
     private static async Task<Fixture> CreateFixtureAsync(
         int? currentScriptVersion,
-        bool includeNewerSupersededScript = false)
+        bool includeNewerSupersededScript = false,
+        bool includeRecoveredVideoScene = false)
     {
         var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
             .UseInMemoryDatabase($"project-dashboard-content-{Guid.NewGuid():N}")
@@ -56,6 +75,7 @@ public sealed class ProjectDashboardContentTests
         var factory = new TestDbContextFactory(options);
         var projectId = Guid.NewGuid();
         var conceptId = Guid.NewGuid();
+        var scriptId = Guid.NewGuid();
         var now = DateTime.UtcNow;
         const string userId = "content-owner";
 
@@ -77,6 +97,7 @@ public sealed class ProjectDashboardContentTests
                 Status = "ScenePlanning",
                 CurrentConceptVersion = 1,
                 CurrentScriptVersion = currentScriptVersion,
+                CurrentScenePlanVersion = includeRecoveredVideoScene ? 1 : null,
                 RequireContentApproval = true,
                 RequireStoryboardApproval = true,
                 CurrencyCode = "USD",
@@ -102,7 +123,7 @@ public sealed class ProjectDashboardContentTests
             });
             dbContext.Scripts.Add(new Script
             {
-                ScriptId = Guid.NewGuid(),
+                ScriptId = scriptId,
                 ProjectId = projectId,
                 ConceptId = conceptId,
                 Version = 1,
@@ -115,6 +136,69 @@ public sealed class ProjectDashboardContentTests
                 ApprovedAtUtc = now,
                 RowVersion = new byte[8]
             });
+
+            if (includeRecoveredVideoScene)
+            {
+                var sceneId = Guid.NewGuid();
+                var scenePromptId = Guid.NewGuid();
+                dbContext.Scenes.Add(new Scene
+                {
+                    SceneId = sceneId,
+                    ProjectId = projectId,
+                    ScriptId = scriptId,
+                    StyleProfileId = Guid.NewGuid(),
+                    ScenePlanVersion = 1,
+                    SequenceNumber = 1,
+                    StoryPurpose = "Cảnh đang chờ kết quả provider",
+                    Narration = "Nội dung lời thoại",
+                    VisualDescription = "Mô tả hình ảnh",
+                    ContentDurationMs = 8_000,
+                    GenerationDurationMs = 8_000,
+                    TimelineStartMs = 0,
+                    TimelineEndMs = 8_000,
+                    EntryStateJson = "{}",
+                    ExitStateJson = "{}",
+                    Status = "WaitingProvider",
+                    LastErrorCode = "provider_status_check_failed",
+                    LastErrorMessage = "Chưa thể kiểm tra trạng thái video từ provider; hệ thống sẽ thử lại.",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                    RowVersion = new byte[8]
+                });
+                dbContext.ScenePrompts.Add(new ScenePrompt
+                {
+                    ScenePromptId = scenePromptId,
+                    SceneId = sceneId,
+                    Version = 1,
+                    PromptTemplateName = "test",
+                    PromptTemplateVersion = "1",
+                    CanonicalInputJson = "{}",
+                    FinalPrompt = "Prompt video đã duyệt",
+                    PromptHash = new string('a', 64),
+                    Status = "Approved",
+                    CreatedAtUtc = now,
+                    RowVersion = new byte[8]
+                });
+                dbContext.ProviderRequests.Add(new ProviderRequest
+                {
+                    ProviderRequestId = Guid.NewGuid(),
+                    ProjectId = projectId,
+                    SceneId = sceneId,
+                    RequestKind = "Video",
+                    ProviderCode = "fal",
+                    ModelCode = "fal-ai/veo3.1/fast/image-to-video",
+                    ExternalRequestId = "existing-fal-request",
+                    IdempotencyKey = "video-existing",
+                    Status = "Completed",
+                    RequestJson = "{}",
+                    ResponseJson = "{}",
+                    CurrencyCode = "USD",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                    CompletedAtUtc = now,
+                    RowVersion = new byte[8]
+                });
+            }
 
             if (includeNewerSupersededScript)
             {
@@ -163,6 +247,9 @@ public sealed class ProjectDashboardContentTests
             modelBuilder.Entity<Project>().Property(x => x.RowVersion).ValueGeneratedNever();
             modelBuilder.Entity<Concept>().Property(x => x.RowVersion).ValueGeneratedNever();
             modelBuilder.Entity<Script>().Property(x => x.RowVersion).ValueGeneratedNever();
+            modelBuilder.Entity<Scene>().Property(x => x.RowVersion).ValueGeneratedNever();
+            modelBuilder.Entity<ScenePrompt>().Property(x => x.RowVersion).ValueGeneratedNever();
+            modelBuilder.Entity<ProviderRequest>().Property(x => x.RowVersion).ValueGeneratedNever();
         }
     }
 

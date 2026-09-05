@@ -21,6 +21,8 @@ public partial class ProviderRequest
 
     public Guid? SceneId { get; set; }
 
+    public Guid? InputSceneFirstFrameId { get; set; }
+
     public Guid? JobId { get; set; }
 
     public Guid? ProviderId { get; set; }
@@ -88,6 +90,10 @@ public partial class ProviderRequest
     public virtual GeneratedVoiceOutput? GeneratedVoiceOutput { get; set; }
 
     public virtual GeneratedVideoOutput? GeneratedVideoOutput { get; set; }
+
+    public virtual SceneFirstFrame? GeneratedSceneFirstFrame { get; set; }
+
+    public virtual SceneFirstFrame? InputSceneFirstFrame { get; set; }
 
     public virtual Project Project { get; set; } = null!;
 

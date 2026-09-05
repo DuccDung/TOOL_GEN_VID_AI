@@ -13,7 +13,11 @@ public sealed record OrganizationPoolSummaryResponse(
     int ReservedSeats,
     int AvailableSeats,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    int AllocatableOrganizationCount = 0,
+    int ActiveLicensePlanCount = 0,
+    int AllocatableSeatCapacity = 0,
+    int AllocatableAvailableSeats = 0);
 
 public sealed record SaveOrganizationPoolRequest(
     string Code,
@@ -34,7 +38,9 @@ public sealed record OrganizationPoolOrganizationResponse(
     bool IsAutoAssignmentEnabled,
     bool IsReady,
     string? ReadinessMessage,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    bool CanReceiveCustomers = false,
+    int AllocatableAvailableSeats = 0);
 
 public sealed record SaveOrganizationPoolOrganizationRequest(
     Guid OrganizationId,
@@ -53,7 +59,10 @@ public sealed record LicensePlanOrganizationPoolResponse(
     string OrganizationPoolName,
     decimal? DefaultMemberMonthlyBudgetLimit,
     bool IsActive,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    bool PlanIsActive = false,
+    bool PlanIsPublic = false,
+    bool IsSellable = false);
 
 public sealed record SaveLicensePlanOrganizationPoolRequest(
     Guid OrganizationPoolId,
@@ -85,7 +94,8 @@ public sealed record OrganizationSeatAssignmentResponse(
     DateTime? ReleasedAtUtc,
     string? ReleaseReason,
     string? FailureCode,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    string? PaymentStatus = null);
 
 public sealed record OrganizationPoolDetailResponse(
     OrganizationPoolSummaryResponse Pool,

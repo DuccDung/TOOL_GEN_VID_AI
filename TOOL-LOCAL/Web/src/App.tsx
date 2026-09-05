@@ -90,6 +90,8 @@ import type {
   ProjectAssetType,
   ProjectSummary,
   ProviderSettings,
+  SceneFirstFrameQuote,
+  SceneFirstFrameSummary,
   SceneSummary,
   UpdateScenePayload,
   UpdateCharacterPayload,
@@ -201,7 +203,19 @@ const emptyState: DashboardState = {
   generationRunning: false,
   features: {
     vietsubEnabled: false
-  }
+  },
+  sceneFirstFrames: []
+};
+type PendingFirstFrameQuote = {
+  scene: SceneSummary;
+  attempt: number;
+  regenerate: boolean;
+};
+
+type SceneFirstFrameOperation = {
+  sceneId: string;
+  status: 'generating' | 'failed';
+  message?: string;
 };
 
 const primaryMenu: Array<{
@@ -335,7 +349,11 @@ function App() {
   const [licensePaymentStatus, setLicensePaymentStatus] = useState<LicensePaymentStatus | null>(null);
   const [licensePaymentBusy, setLicensePaymentBusy] = useState(false);
   const [licensePaymentError, setLicensePaymentError] = useState<string | null>(null);
+  const [firstFramePreview, setFirstFramePreview] = useState<SceneFirstFrameSummary | null>(null);
+  const [firstFrameOperation, setFirstFrameOperation] = useState<SceneFirstFrameOperation | null>(null);
   const pendingSceneSaveRef = useRef<PendingSceneSave | null>(null);
+  const pendingFirstFrameQuoteRef = useRef(new Map<string, PendingFirstFrameQuote>());
+  const pendingFirstFrameOperationRef = useRef(new Map<string, string>());
   const vietsub = useVietsubModule(
     dashboard.features.vietsubEnabled,
     dashboard.selectedOrganizationId
@@ -371,7 +389,8 @@ function App() {
         const nextDashboard = message.payload as DashboardState;
         setDashboard({
           ...nextDashboard,
-          features: nextDashboard.features ?? { vietsubEnabled: false }
+          features: nextDashboard.features ?? { vietsubEnabled: false },
+          sceneFirstFrames: nextDashboard.sceneFirstFrames ?? []
         });
         if (!nextDashboard.generationRunning) setCharacterImageBusyId(null);
         setAssetConfirmBusyId(null);
@@ -441,7 +460,44 @@ function App() {
         return;
       }
 
+      if (message.type === 'scene.first-frame.quote' && message.payload && message.requestId) {
+        const pending = pendingFirstFrameQuoteRef.current.get(message.requestId);
+        pendingFirstFrameQuoteRef.current.delete(message.requestId);
+        setBusy(false);
+        if (!pending) return;
+        const quote = message.payload as SceneFirstFrameQuote;
+        setConfirmation({
+          eyebrow: pending.regenerate ? 'XÁC NHẬN SINH LẠI FIRST-FRAME' : 'XÁC NHẬN TẠO FIRST-FRAME',
+          title: `${pending.regenerate ? 'Sinh lại' : 'Tạo'} first-frame cho cảnh ${pending.scene.sequenceNumber}?`,
+          description: `${quote.providerCode}/${quote.modelCode} sẽ tạo ảnh ${quote.width}×${quote.height} (${quote.aspectRatio}) cho cảnh ${pending.scene.sequenceNumber}.${quote.sourceCharacterName ? ` Nguồn nhận diện: ${quote.sourceCharacterName}.` : ' Đây là cảnh B-roll không dùng ảnh nhân vật.'}`,
+          note: `Đây là request AI có phí. Server sẽ giữ khoảng ${formatMoney(quote.estimatedCost, quote.currencyCode)} theo rate Active trước khi gọi OpenAI.`,
+          confirmLabel: pending.regenerate ? 'Sinh lại first-frame' : 'Tạo first-frame bằng AI',
+          onConfirm: () => {
+            setBusy(true);
+            setFirstFrameOperation({ sceneId: pending.scene.sceneId, status: 'generating' });
+            const operationRequestId = postToHost('scene.first-frame.generate', {
+              sceneId: pending.scene.sceneId,
+              attempt: pending.attempt
+            });
+            pendingFirstFrameOperationRef.current.set(operationRequestId, pending.scene.sceneId);
+          }
+        });
+        return;
+      }
+
       if (message.type === 'operation.error') {
+        if (message.requestId) pendingFirstFrameQuoteRef.current.delete(message.requestId);
+        const failedFirstFrameSceneId = message.requestId
+          ? pendingFirstFrameOperationRef.current.get(message.requestId)
+          : undefined;
+        if (failedFirstFrameSceneId) {
+          pendingFirstFrameOperationRef.current.delete(message.requestId!);
+          setFirstFrameOperation({
+            sceneId: failedFirstFrameSceneId,
+            status: 'failed',
+            message: message.error?.message ?? 'Không thể tạo first-frame.'
+          });
+        }
         if (isSelectedProjectResponse(selectedProjectRequestRef.current, message.requestId)) {
           selectedProjectRequestRef.current = null;
         }
@@ -482,6 +538,13 @@ function App() {
       }
 
       if (message.type === 'operation.notice') {
+        const completedFirstFrameSceneId = message.requestId
+          ? pendingFirstFrameOperationRef.current.get(message.requestId)
+          : undefined;
+        if (completedFirstFrameSceneId) {
+          pendingFirstFrameOperationRef.current.delete(message.requestId!);
+          setFirstFrameOperation((current) => current?.sceneId === completedFirstFrameSceneId ? null : current);
+        }
         const pendingSceneSave = pendingSceneSaveRef.current;
         if (pendingSceneSave && pendingSceneSave.requestId === message.requestId) {
           pendingSceneSaveRef.current = null;
@@ -763,16 +826,12 @@ function App() {
     const resumableScenes = selectedScenes.filter(sceneNeedsLocalCompletion);
     const newRequestScenes = selectedScenes.filter((scene) => !sceneNeedsLocalCompletion(scene));
     if (longFormProviderCode === 'fal') {
-      const approvedCharacterFrameIds = new Set(project.characters
-        .filter((character) => character.status === 'Approved' &&
-          character.primaryReference?.isPrimary === true &&
-          character.primaryReference.approvalStatus === 'Approved')
-        .map((character) => character.characterId));
-      const scenesWithoutApprovedCharacterFrame = newRequestScenes.filter((scene) =>
-        scene.characters.length !== 1 || !approvedCharacterFrameIds.has(scene.characters[0].characterId));
-      if (scenesWithoutApprovedCharacterFrame.length > 0) {
+      const scenesWithoutApprovedFirstFrame = newRequestScenes.filter((scene) =>
+        !dashboard.sceneFirstFrames.some((frame) =>
+          frame.sceneId === scene.sceneId && frame.status === 'Approved' && frame.isCurrent && Boolean(frame.previewUrl)));
+      if (scenesWithoutApprovedFirstFrame.length > 0) {
         notify(
-          `Cảnh ${scenesWithoutApprovedCharacterFrame.map((scene) => scene.sequenceNumber).join(', ')} chưa có first-frame nhân vật đã duyệt. Bản Veo đầu tiên chưa tự tạo first-frame cho B-roll.`,
+          `Cảnh ${scenesWithoutApprovedFirstFrame.map((scene) => scene.sequenceNumber).join(', ')} chưa có first-frame đúng tỷ lệ đã duyệt và còn tồn tại trên máy. Hãy tạo, xem và duyệt first-frame trước khi gửi sang Veo.`,
           true
         );
         return;
@@ -1070,6 +1129,54 @@ function App() {
     postToHost('character.approve', { characterId });
   };
 
+  const requestSceneFirstFrame = (scene: SceneSummary, regenerate: boolean) => {
+    const project = dashboard.selectedProject;
+    if (!project || dashboard.generationRunning || busy) return;
+    if (project.videoProviderCode?.toLowerCase() !== 'fal') {
+      notify('First-frame riêng chỉ áp dụng cho dự án đang dùng Fal/Veo.', true);
+      return;
+    }
+    if (!dashboard.providerStatus.openAiImageReady) {
+      notify(dashboard.providerStatus.openAiImageUnavailableMessage ?? 'GPT-Image-2 chưa sẵn sàng.', true);
+      return;
+    }
+    const frames = dashboard.sceneFirstFrames.filter((frame) => frame.sceneId === scene.sceneId);
+    const attempt = regenerate ? Math.max(0, ...frames.map((frame) => frame.version)) + 1 : 1;
+    setFirstFrameOperation((current) => current?.sceneId === scene.sceneId ? null : current);
+    setBusy(true);
+    const requestId = postToHost('scene.first-frame.quote', { sceneId: scene.sceneId });
+    pendingFirstFrameQuoteRef.current.set(requestId, { scene, attempt, regenerate });
+  };
+
+  const approveSceneFirstFrame = (frame: SceneFirstFrameSummary) => {
+    if (dashboard.generationRunning || busy) return;
+    setBusy(true);
+    postToHost('scene.first-frame.approve', {
+      sceneId: frame.sceneId,
+      frameId: frame.sceneFirstFrameId,
+      rowVersion: frame.rowVersion
+    });
+  };
+
+  const rejectSceneFirstFrame = (frame: SceneFirstFrameSummary) => {
+    if (dashboard.generationRunning || busy) return;
+    setBusy(true);
+    postToHost('scene.first-frame.reject', {
+      sceneId: frame.sceneId,
+      frameId: frame.sceneFirstFrameId,
+      rowVersion: frame.rowVersion
+    });
+  };
+
+  const retrySceneFirstFrameDownload = (frame: SceneFirstFrameSummary) => {
+    if (dashboard.generationRunning || busy) return;
+    setBusy(true);
+    postToHost('scene.first-frame.download', {
+      sceneId: frame.sceneId,
+      frameId: frame.sceneFirstFrameId
+    });
+  };
+
   const generationBusy = busy || dashboard.generationRunning;
   const pageBusy = page === 'vietsub'
     ? vietsub.state.loading || vietsub.state.busy
@@ -1200,6 +1307,8 @@ function App() {
           <LongVideoPage
             project={dashboard.selectedProject ?? null}
             assetLibrary={dashboard.assetLibrary ?? null}
+            sceneFirstFrames={dashboard.sceneFirstFrames}
+            firstFrameOperation={firstFrameOperation}
             providerStatus={dashboard.providerStatus}
             mediaTools={dashboard.mediaTools}
             busy={generationBusy}
@@ -1207,6 +1316,11 @@ function App() {
             onGenerateContent={generateContent}
             onRegenerateContent={requestContentRegeneration}
             onGenerateVideo={generateVideos}
+            onRequestSceneFirstFrame={requestSceneFirstFrame}
+            onApproveSceneFirstFrame={approveSceneFirstFrame}
+            onRejectSceneFirstFrame={rejectSceneFirstFrame}
+            onRetrySceneFirstFrameDownload={retrySceneFirstFrameDownload}
+            onPreviewSceneFirstFrame={setFirstFramePreview}
             onRenderFinalVideo={renderFinalVideo}
             onApproveSceneNativeAudio={approveSceneNativeAudio}
             onInstallMediaTools={requestMediaToolInstall}
@@ -1277,6 +1391,16 @@ function App() {
             action();
           }}
         />
+      )}
+
+      {firstFramePreview?.previewUrl && (
+        <div className="first-frame-lightbox" role="dialog" aria-modal="true" aria-label="Xem first-frame Veo" onClick={() => setFirstFramePreview(null)}>
+          <div onClick={(event) => event.stopPropagation()}>
+            <button type="button" aria-label="Đóng" onClick={() => setFirstFramePreview(null)}><X size={18} /></button>
+            <img src={firstFramePreview.previewUrl} alt="First-frame Veo" />
+            <span>{firstFramePreview.width}×{firstFramePreview.height} · {firstFramePreview.aspectRatio} · bản {firstFramePreview.version}</span>
+          </div>
+        </div>
       )}
 
       {serviceError && (
@@ -2421,6 +2545,8 @@ function DashboardPage({
 function LongVideoPage({
   project,
   assetLibrary,
+  sceneFirstFrames,
+  firstFrameOperation,
   providerStatus,
   mediaTools,
   busy,
@@ -2428,6 +2554,11 @@ function LongVideoPage({
   onGenerateContent,
   onRegenerateContent,
   onGenerateVideo,
+  onRequestSceneFirstFrame,
+  onApproveSceneFirstFrame,
+  onRejectSceneFirstFrame,
+  onRetrySceneFirstFrameDownload,
+  onPreviewSceneFirstFrame,
   onRenderFinalVideo,
   onApproveSceneNativeAudio,
   onInstallMediaTools,
@@ -2455,6 +2586,8 @@ function LongVideoPage({
 }: {
   project: ProjectDashboard | null;
   assetLibrary: ProjectAssetLibrary | null;
+  sceneFirstFrames: SceneFirstFrameSummary[];
+  firstFrameOperation: SceneFirstFrameOperation | null;
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
   busy: boolean;
@@ -2462,6 +2595,11 @@ function LongVideoPage({
   onGenerateContent: () => void;
   onRegenerateContent: () => void;
   onGenerateVideo: (sceneIds: string[]) => void;
+  onRequestSceneFirstFrame: (scene: SceneSummary, regenerate: boolean) => void;
+  onApproveSceneFirstFrame: (frame: SceneFirstFrameSummary) => void;
+  onRejectSceneFirstFrame: (frame: SceneFirstFrameSummary) => void;
+  onRetrySceneFirstFrameDownload: (frame: SceneFirstFrameSummary) => void;
+  onPreviewSceneFirstFrame: (frame: SceneFirstFrameSummary) => void;
   onRenderFinalVideo: () => void;
   onApproveSceneNativeAudio: (sceneId: string, playbackConfirmed: boolean) => void;
   onInstallMediaTools: () => void;
@@ -2576,10 +2714,17 @@ function LongVideoPage({
       return <StoryboardSection
         project={project}
         assetLibrary={assetLibrary}
+        sceneFirstFrames={sceneFirstFrames}
+        firstFrameOperation={firstFrameOperation}
         providerStatus={providerStatus}
         mediaTools={mediaTools}
         busy={busy}
         onGenerateVideo={onGenerateVideo}
+        onRequestSceneFirstFrame={onRequestSceneFirstFrame}
+        onApproveSceneFirstFrame={onApproveSceneFirstFrame}
+        onRejectSceneFirstFrame={onRejectSceneFirstFrame}
+        onRetrySceneFirstFrameDownload={onRetrySceneFirstFrameDownload}
+        onPreviewSceneFirstFrame={onPreviewSceneFirstFrame}
         onApproveNativeAudio={onApproveSceneNativeAudio}
         onInstallMediaTools={onInstallMediaTools}
         onCheckMediaTools={onCheckMediaTools}
@@ -3476,10 +3621,17 @@ function countAssets(library: ProjectAssetLibrary | null, assetType: ProjectAsse
 function StoryboardSection({
   project,
   assetLibrary,
+  sceneFirstFrames = [],
+  firstFrameOperation = null,
   providerStatus,
   mediaTools,
   busy,
   onGenerateVideo,
+  onRequestSceneFirstFrame = () => undefined,
+  onApproveSceneFirstFrame = () => undefined,
+  onRejectSceneFirstFrame = () => undefined,
+  onRetrySceneFirstFrameDownload = () => undefined,
+  onPreviewSceneFirstFrame = () => undefined,
   onApproveNativeAudio,
   onInstallMediaTools,
   onCheckMediaTools,
@@ -3492,10 +3644,17 @@ function StoryboardSection({
 }: {
   project: ProjectDashboard | null;
   assetLibrary: ProjectAssetLibrary | null;
+  sceneFirstFrames?: SceneFirstFrameSummary[];
+  firstFrameOperation?: SceneFirstFrameOperation | null;
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
   busy: boolean;
   onGenerateVideo: (sceneIds: string[]) => void;
+  onRequestSceneFirstFrame?: (scene: SceneSummary, regenerate: boolean) => void;
+  onApproveSceneFirstFrame?: (frame: SceneFirstFrameSummary) => void;
+  onRejectSceneFirstFrame?: (frame: SceneFirstFrameSummary) => void;
+  onRetrySceneFirstFrameDownload?: (frame: SceneFirstFrameSummary) => void;
+  onPreviewSceneFirstFrame?: (frame: SceneFirstFrameSummary) => void;
   onApproveNativeAudio: (sceneId: string, playbackConfirmed: boolean) => void;
   onInstallMediaTools: () => void;
   onCheckMediaTools: () => void;
@@ -3510,14 +3669,19 @@ function StoryboardSection({
   const [filter, setFilter] = useState<StoryboardFilter>('all');
   const selectionProjectId = useRef('');
   const scenes = project?.scenes ?? [];
+  const isVeo = project?.videoProviderCode?.toLowerCase() === 'fal';
+  const hasReadyFirstFrame = (sceneId: string) => !isVeo || sceneFirstFrames.some((frame) =>
+    frame.sceneId === sceneId && frame.status === 'Approved' && frame.isCurrent && Boolean(frame.previewUrl));
   const filteredScenes = scenes.filter((scene) => matchesStoryboardFilter(scene, filter));
   const selectableScenes = scenes.filter(
-    (scene) => canQueueScene(scene) && (sceneNeedsLocalCompletion(scene) || areSceneAssetsReady(scene.sceneId, assetLibrary))
+    (scene) => canQueueScene(scene) && hasReadyFirstFrame(scene.sceneId) &&
+      (sceneNeedsLocalCompletion(scene) || areSceneAssetsReady(scene.sceneId, assetLibrary))
   );
   const visibleSelectableScenes = filteredScenes.filter(
-    (scene) => canQueueScene(scene) && (sceneNeedsLocalCompletion(scene) || areSceneAssetsReady(scene.sceneId, assetLibrary))
+    (scene) => canQueueScene(scene) && hasReadyFirstFrame(scene.sceneId) &&
+      (sceneNeedsLocalCompletion(scene) || areSceneAssetsReady(scene.sceneId, assetLibrary))
   );
-  const selectableKey = selectableScenes.map((scene) => `${scene.sceneId}:${scene.status}`).join('|');
+  const selectableKey = selectableScenes.map((scene) => `${scene.sceneId}:${scene.status}:${hasReadyFirstFrame(scene.sceneId)}`).join('|');
   const enforceKlingLongFormSpeechPolicy = project?.workflowStructureType === 'OpenAiStructuredPlan' &&
     ['kling', 'fal'].includes(project?.videoProviderCode?.toLowerCase() ?? '');
 
@@ -3561,7 +3725,7 @@ function StoryboardSection({
   const selectFilter = (nextFilter: StoryboardFilter) => {
     setFilter(nextFilter);
     const nextVisibleIds = scenes
-      .filter((scene) => matchesStoryboardFilter(scene, nextFilter) && canQueueScene(scene))
+      .filter((scene) => matchesStoryboardFilter(scene, nextFilter) && canQueueScene(scene) && hasReadyFirstFrame(scene.sceneId))
       .map((scene) => scene.sceneId);
     setSelectedSceneIds(new Set(nextVisibleIds));
   };
@@ -3661,6 +3825,9 @@ function StoryboardSection({
             key={scene.sceneId}
             scene={scene}
             assetLibrary={assetLibrary}
+            firstFrames={sceneFirstFrames.filter((frame) => frame.sceneId === scene.sceneId)}
+            firstFrameOperation={firstFrameOperation?.sceneId === scene.sceneId ? firstFrameOperation : null}
+            isVeo={isVeo}
             selected={selectedSceneIds.has(scene.sceneId)}
             busy={busy}
             videoReady={providerStatus.videoReady}
@@ -3668,6 +3835,11 @@ function StoryboardSection({
             enforceKlingLongFormSpeechPolicy={enforceKlingLongFormSpeechPolicy}
             onToggle={() => toggleScene(scene.sceneId)}
             onGenerate={() => onGenerateVideo([scene.sceneId])}
+            onRequestFirstFrame={(regenerate) => onRequestSceneFirstFrame(scene, regenerate)}
+            onApproveFirstFrame={onApproveSceneFirstFrame}
+            onRejectFirstFrame={onRejectSceneFirstFrame}
+            onRetryFirstFrameDownload={onRetrySceneFirstFrameDownload}
+            onPreviewFirstFrame={onPreviewSceneFirstFrame}
             onApproveNativeAudio={(playbackConfirmed) => onApproveNativeAudio(scene.sceneId, playbackConfirmed)}
             onUpdate={onUpdateScene}
             saveState={sceneSaveState?.sceneId === scene.sceneId ? sceneSaveState : null}
@@ -3686,6 +3858,9 @@ function StoryboardSection({
 function SceneCard({
   scene,
   assetLibrary,
+  firstFrames,
+  firstFrameOperation,
+  isVeo,
   selected,
   busy,
   videoReady,
@@ -3693,6 +3868,11 @@ function SceneCard({
   enforceKlingLongFormSpeechPolicy,
   onToggle,
   onGenerate,
+  onRequestFirstFrame,
+  onApproveFirstFrame,
+  onRejectFirstFrame,
+  onRetryFirstFrameDownload,
+  onPreviewFirstFrame,
   onApproveNativeAudio,
   onUpdate,
   saveState,
@@ -3703,6 +3883,9 @@ function SceneCard({
 }: {
   scene: SceneSummary;
   assetLibrary: ProjectAssetLibrary | null;
+  firstFrames: SceneFirstFrameSummary[];
+  firstFrameOperation: SceneFirstFrameOperation | null;
+  isVeo: boolean;
   selected: boolean;
   busy: boolean;
   videoReady: boolean;
@@ -3710,6 +3893,11 @@ function SceneCard({
   enforceKlingLongFormSpeechPolicy: boolean;
   onToggle: () => void;
   onGenerate: () => void;
+  onRequestFirstFrame: (regenerate: boolean) => void;
+  onApproveFirstFrame: (frame: SceneFirstFrameSummary) => void;
+  onRejectFirstFrame: (frame: SceneFirstFrameSummary) => void;
+  onRetryFirstFrameDownload: (frame: SceneFirstFrameSummary) => void;
+  onPreviewFirstFrame: (frame: SceneFirstFrameSummary) => void;
   onApproveNativeAudio: (playbackConfirmed: boolean) => void;
   onUpdate: (payload: UpdateScenePayload) => void;
   saveState: SceneSaveState | null;
@@ -3749,7 +3937,10 @@ function SceneCard({
   const draftAssetsValid = draftAssetIds.size === 0 || draftBackgroundCount === 1;
   const assetsChanged = assignedAssetIds.length !== draftAssetIds.size || assignedAssetIds.some((id) => !draftAssetIds.has(id));
   const status = sceneStatus(scene);
-  const selectable = canQueueScene(scene) && (sceneNeedsLocalCompletion(scene) || assignedAssetsReady);
+  const latestFirstFrame = [...firstFrames].sort((left, right) => right.version - left.version)[0] ?? null;
+  const approvedFirstFrame = firstFrames.find((frame) => frame.status === 'Approved' && frame.isCurrent) ?? null;
+  const firstFrameReady = !isVeo || Boolean(approvedFirstFrame?.previewUrl);
+  const selectable = canQueueScene(scene) && firstFrameReady && (sceneNeedsLocalCompletion(scene) || assignedAssetsReady);
   const validSpeech = speechMode === 'None'
     ? narration.trim().length === 0
     : narration.trim().length > 0 &&
@@ -3885,6 +4076,55 @@ function SceneCard({
               </span>
             ))}
           </div>
+          {isVeo && (
+            <div className={`scene-first-frame ${latestFirstFrame?.status.toLowerCase() ?? 'missing'}`}>
+              <div className="scene-first-frame-copy">
+                <span>FIRST-FRAME VEO</span>
+                <strong>
+                  {firstFrameOperation?.status === 'generating'
+                    ? 'Đang tạo'
+                    : firstFrameOperation?.status === 'failed'
+                      ? 'Tạo thất bại'
+                      : latestFirstFrame
+                        ? firstFrameStatusLabel(latestFirstFrame)
+                        : 'Chưa tạo'}
+                </strong>
+                <small>
+                  {latestFirstFrame
+                    ? `${latestFirstFrame.width}×${latestFirstFrame.height} · ${latestFirstFrame.aspectRatio} · bản ${latestFirstFrame.version}`
+                    : 'Cần ảnh 720p đúng tỷ lệ dự án trước khi tạo clip.'}
+                </small>
+                {latestFirstFrame?.staleReason && <em><TriangleAlert size={12} /> {latestFirstFrame.staleReason}</em>}
+                {latestFirstFrame && !latestFirstFrame.previewUrl && <em><TriangleAlert size={12} /> Đã tạo trên server nhưng file local chưa sẵn sàng.</em>}
+                {firstFrameOperation?.status === 'failed' && <em><TriangleAlert size={12} /> {firstFrameOperation.message}</em>}
+              </div>
+              {latestFirstFrame?.previewUrl && (
+                <button type="button" className="scene-first-frame-preview" onClick={() => onPreviewFirstFrame(latestFirstFrame)}>
+                  <img src={latestFirstFrame.previewUrl} alt={`First-frame cảnh ${scene.sequenceNumber}`} />
+                  <span>Xem ảnh lớn</span>
+                </button>
+              )}
+              <div className="scene-first-frame-actions">
+                <button type="button" disabled={busy} onClick={() => onRequestFirstFrame(Boolean(latestFirstFrame))}>
+                  {busy ? <LoaderCircle className="spin" size={13} /> : <WandSparkles size={13} />}
+                  {firstFrameOperation?.status === 'generating'
+                    ? 'Đang tạo...'
+                    : latestFirstFrame
+                      ? 'Sinh lại'
+                      : 'Tạo first-frame bằng AI'}
+                </button>
+                {latestFirstFrame && !latestFirstFrame.previewUrl && (
+                  <button type="button" disabled={busy} onClick={() => onRetryFirstFrameDownload(latestFirstFrame)}><Download size={13} /> Tải lại output</button>
+                )}
+                {latestFirstFrame?.status === 'PendingReview' && latestFirstFrame.previewUrl && latestFirstFrame.isCurrent && (
+                  <>
+                    <button type="button" className="approve" disabled={busy} onClick={() => onApproveFirstFrame(latestFirstFrame)}><ShieldCheck size={13} /> Duyệt</button>
+                    <button type="button" className="reject" disabled={busy} onClick={() => onRejectFirstFrame(latestFirstFrame)}><X size={13} /> Từ chối</button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           <div className={`scene-assets-strip ${assetUiState}`}>
             <div className="scene-assets-strip-heading">
               <span><Link2 size={13} /> Tài sản của cảnh</span>
@@ -4157,6 +4397,14 @@ function ExpandableSceneText({ text, collapseAt }: { text: string; collapseAt: n
       )}
     </div>
   );
+}
+
+function firstFrameStatusLabel(frame: SceneFirstFrameSummary): string {
+  if (!frame.isCurrent || frame.status === 'Invalidated') return 'Đã lỗi thời';
+  if (frame.status === 'PendingReview') return frame.previewUrl ? 'Chờ duyệt' : 'Chưa tải xong';
+  if (frame.status === 'Approved') return 'Đã duyệt';
+  if (frame.status === 'Rejected') return 'Đã từ chối';
+  return 'Đã được thay thế';
 }
 
 function canQueueScene(scene: SceneSummary): boolean {

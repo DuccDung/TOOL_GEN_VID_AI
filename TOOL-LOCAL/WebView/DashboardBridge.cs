@@ -145,6 +145,21 @@ internal sealed class DashboardBridge : IDisposable
                 case "generation.video":
                     await GenerateVideosAsync(request, cancellationToken);
                     break;
+                case "scene.first-frame.quote":
+                    await GetSceneFirstFrameQuoteAsync(request, cancellationToken);
+                    break;
+                case "scene.first-frame.generate":
+                    await GenerateSceneFirstFrameAsync(request, cancellationToken);
+                    break;
+                case "scene.first-frame.approve":
+                    await ChangeSceneFirstFrameStatusAsync(request, approve: true, cancellationToken);
+                    break;
+                case "scene.first-frame.reject":
+                    await ChangeSceneFirstFrameStatusAsync(request, approve: false, cancellationToken);
+                    break;
+                case "scene.first-frame.download":
+                    await RetrySceneFirstFrameDownloadAsync(request, cancellationToken);
+                    break;
                 case "render.final":
                     await RenderFinalVideoAsync(request.RequestId, cancellationToken);
                     break;
@@ -766,6 +781,95 @@ internal sealed class DashboardBridge : IDisposable
             cancellationToken);
     }
 
+    private async Task GetSceneFirstFrameQuoteAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<SceneFirstFrameActionWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Cảnh cần tạo first-frame không hợp lệ.");
+        var (projectId, _) = CurrentProjectOwner();
+        var quote = await _generationService.GetSceneFirstFrameQuoteAsync(projectId, payload.SceneId, cancellationToken);
+        Post(new WebMessageResponse("scene.first-frame.quote", request.RequestId, quote));
+    }
+
+    private Task GenerateSceneFirstFrameAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<SceneFirstFrameActionWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Cảnh cần tạo first-frame không hợp lệ.");
+        return RunGenerationAsync(
+            request.RequestId,
+            async (projectId, userId, token) =>
+            {
+                var frame = await _generationService.GenerateSceneFirstFrameAsync(
+                    projectId,
+                    userId,
+                    payload.SceneId,
+                    payload.Attempt,
+                    token);
+                Post(new WebMessageResponse(
+                    "operation.notice",
+                    request.RequestId,
+                    new { message = $"Đã tạo first-frame bản {frame.Version}. Hãy xem ảnh và duyệt trước khi tạo video Veo." }));
+            },
+            cancellationToken);
+    }
+
+    private async Task ChangeSceneFirstFrameStatusAsync(
+        WebMessageRequest request,
+        bool approve,
+        CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<SceneFirstFrameActionWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("First-frame cần cập nhật không hợp lệ.");
+        if (payload.FrameId is null || string.IsNullOrWhiteSpace(payload.RowVersion))
+        {
+            throw new ArgumentException("First-frame hoặc RowVersion không hợp lệ.");
+        }
+        var (projectId, _) = CurrentProjectOwner();
+        if (approve)
+        {
+            await _generationService.ApproveSceneFirstFrameAsync(
+                projectId,
+                payload.SceneId,
+                payload.FrameId.Value,
+                payload.RowVersion,
+                cancellationToken);
+        }
+        else
+        {
+            await _generationService.RejectSceneFirstFrameAsync(
+                projectId,
+                payload.SceneId,
+                payload.FrameId.Value,
+                payload.RowVersion,
+                cancellationToken);
+        }
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new { message = approve ? "Đã duyệt first-frame cho cảnh." : "Đã từ chối first-frame." }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task RetrySceneFirstFrameDownloadAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<SceneFirstFrameActionWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("First-frame cần tải lại không hợp lệ.");
+        if (payload.FrameId is null)
+        {
+            throw new ArgumentException("First-frame cần tải lại không hợp lệ.");
+        }
+        var (projectId, _) = CurrentProjectOwner();
+        await _generationService.RetrySceneFirstFrameDownloadAsync(
+            projectId,
+            payload.SceneId,
+            payload.FrameId.Value,
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "operation.notice",
+            request.RequestId,
+            new { message = "Đã tải lại first-frame từ output hiện có; không tạo request AI mới." }));
+        await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
     private async Task ApproveCharacterAsync(WebMessageRequest request, CancellationToken cancellationToken)
     {
         EnsureCharacterOperationAllowed();
@@ -1073,7 +1177,8 @@ internal sealed class DashboardBridge : IDisposable
                             DateTime.UtcNow),
                         _licenseManager.Current,
                         false,
-                        new DashboardFeatureFlagsResponse(_vietsubEnabled))));
+                        new DashboardFeatureFlagsResponse(_vietsubEnabled),
+                        [])));
                 return;
             }
             var organizations = await _generationClient.GetOrganizationsAsync(cancellationToken);
@@ -1107,11 +1212,18 @@ internal sealed class DashboardBridge : IDisposable
                     cancellationToken)
                 : null;
             ProjectAssetLibraryResponse? assetLibrary = null;
+            IReadOnlyList<SceneFirstFrameSummary> sceneFirstFrames = [];
             if (selectedProject is not null)
             {
                 assetLibrary = await _generationClient.GetProjectAssetLibraryAsync(
                     selectedProject.Project.ProjectId,
                     cancellationToken);
+                if (string.Equals(selectedProject.VideoProviderCode, "fal", StringComparison.OrdinalIgnoreCase))
+                {
+                    sceneFirstFrames = (await _generationService.GetProjectSceneFirstFramesAsync(
+                        selectedProject.Project.ProjectId,
+                        cancellationToken)).Frames;
+                }
             }
             var models = await _projectService.ListAvailableModelsAsync(cancellationToken);
             GenerationProviderStatusResponse providerStatus;
@@ -1139,7 +1251,8 @@ internal sealed class DashboardBridge : IDisposable
                     mediaToolStatus,
                     _licenseManager.Current,
                     _generationRunning,
-                    new DashboardFeatureFlagsResponse(_vietsubEnabled))));
+                    new DashboardFeatureFlagsResponse(_vietsubEnabled),
+                    sceneFirstFrames)));
         }
         finally
         {

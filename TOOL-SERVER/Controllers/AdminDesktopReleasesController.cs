@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TOOL_SERVER.Updates;
+using TOOL_SHARED.Contracts.Common;
+using TOOL_SHARED.Contracts.Updates;
 
 namespace TOOL_SERVER.Controllers;
 
@@ -12,6 +14,13 @@ public sealed class AdminDesktopReleasesController(IDesktopReleaseService releas
     [HttpGet]
     public Task<IReadOnlyList<AdminDesktopReleaseResponse>> List(CancellationToken cancellationToken) =>
         releaseService.GetAdminReleasesAsync(cancellationToken);
+
+    [HttpGet("page")]
+    public Task<PagedResponse<AdminDesktopReleaseResponse>> ListPage(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default) =>
+        releaseService.GetAdminReleasesPageAsync(page, pageSize, cancellationToken);
 
     [HttpPost]
     public async Task<ActionResult<AdminDesktopReleaseResponse>> Create(

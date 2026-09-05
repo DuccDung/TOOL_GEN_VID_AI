@@ -13,6 +13,13 @@ internal interface IGenerationClient
     Task<GenerationProviderStatusResponse> GetProviderStatusAsync(CancellationToken cancellationToken);
     Task<GeneratedContentResponse> GenerateContentAsync(GenerateContentRequest request, CancellationToken cancellationToken);
     Task<GenerateCharacterReferenceImageResponse> GenerateCharacterReferenceImageAsync(GenerateCharacterReferenceImageRequest request, CancellationToken cancellationToken);
+    Task<SceneFirstFrameQuoteResponse> GetSceneFirstFrameQuoteAsync(Guid projectId, Guid sceneId, CancellationToken cancellationToken);
+    Task<GenerateSceneFirstFrameResponse> GenerateSceneFirstFrameAsync(GenerateSceneFirstFrameRequest request, CancellationToken cancellationToken);
+    Task<SceneFirstFrameListResponse> GetSceneFirstFramesAsync(Guid projectId, Guid sceneId, CancellationToken cancellationToken);
+    Task<ProjectSceneFirstFrameListResponse> GetProjectSceneFirstFramesAsync(Guid projectId, CancellationToken cancellationToken);
+    Task<SceneFirstFrameSummary> MaterializeSceneFirstFrameAsync(Guid projectId, Guid sceneId, MaterializeSceneFirstFrameRequest request, CancellationToken cancellationToken);
+    Task<SceneFirstFrameSummary> ApproveSceneFirstFrameAsync(Guid projectId, Guid sceneId, Guid frameId, ChangeSceneFirstFrameStatusRequest request, CancellationToken cancellationToken);
+    Task<SceneFirstFrameSummary> RejectSceneFirstFrameAsync(Guid projectId, Guid sceneId, Guid frameId, ChangeSceneFirstFrameStatusRequest request, CancellationToken cancellationToken);
     Task<SceneVoiceGenerationResponse> GenerateSceneVoiceAsync(GenerateSceneVoiceRequest request, CancellationToken cancellationToken);
     Task<VideoTaskResponse> SubmitVideoAsync(SubmitVideoRequest request, CancellationToken cancellationToken);
     Task<VideoTaskResponse> GetVideoStatusAsync(Guid providerRequestId, CancellationToken cancellationToken);
@@ -28,6 +35,7 @@ internal interface IGenerationClient
     Task<ConfirmSceneProjectAssetsResponse> ConfirmSceneProjectAssetsAsync(Guid projectId, Guid sceneId, ConfirmSceneProjectAssetsRequest request, CancellationToken cancellationToken);
     Task DownloadVideoAsync(string outputUrl, string destinationPath, CancellationToken cancellationToken);
     Task DownloadCharacterImageAsync(GenerateCharacterReferenceImageResponse response, string destinationPath, CancellationToken cancellationToken);
+    Task DownloadSceneFirstFrameAsync(GenerateSceneFirstFrameResponse response, string destinationPath, CancellationToken cancellationToken);
     Task DownloadSceneVoiceAsync(SceneVoiceGenerationResponse response, string destinationPath, CancellationToken cancellationToken);
     Task<ProviderSettingsResponse> GetSettingsAsync(CancellationToken cancellationToken);
     Task TestProviderAsync(string providerCode, CancellationToken cancellationToken);

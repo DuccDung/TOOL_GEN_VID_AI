@@ -1,4 +1,5 @@
 using TOOL_SHARED.Contracts.Accounts;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Accounts;
 
@@ -10,6 +11,7 @@ public interface IAdminLicenseService
     Task<AdminLicensePlanResponse> CreatePlanAsync(SaveLicensePlanRequest request, string adminUserId, CancellationToken cancellationToken);
     Task<AdminLicensePlanResponse> UpdatePlanAsync(Guid planId, SaveLicensePlanRequest request, string adminUserId, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminUserSummaryResponse>> GetUsersAsync(string? search, CancellationToken cancellationToken);
+    Task<PagedResponse<AdminUserSummaryResponse>> GetUsersPageAsync(string? search, int page, int pageSize, CancellationToken cancellationToken);
     Task<AdminUserDetailResponse> GetUserAsync(string userId, CancellationToken cancellationToken);
     Task<AdminUserLicenseResponse> GrantLicenseAsync(string userId, GrantUserLicenseRequest request, string adminUserId, CancellationToken cancellationToken);
     Task<AdminUserLicenseResponse> ExtendLicenseAsync(Guid licenseId, ExtendUserLicenseRequest request, string adminUserId, CancellationToken cancellationToken);

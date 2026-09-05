@@ -88,6 +88,8 @@ public partial class VideoFactoryDbContext : DbContext
 
     public virtual DbSet<Scene> Scenes { get; set; }
 
+    public virtual DbSet<SceneFirstFrame> SceneFirstFrames { get; set; }
+
     public virtual DbSet<SceneAssetAssignment> SceneAssetAssignments { get; set; }
 
     public virtual DbSet<ScenePrompt> ScenePrompts { get; set; }
@@ -986,6 +988,9 @@ public partial class VideoFactoryDbContext : DbContext
                 .IsDescending(false, true)
                 .HasFilter("([CharacterId] IS NOT NULL)");
 
+            entity.HasIndex(e => e.InputSceneFirstFrameId, "IX_ProviderRequests_InputSceneFirstFrame")
+                .HasFilter("([InputSceneFirstFrameId] IS NOT NULL)");
+
             entity.HasIndex(e => new { e.ProviderCode, e.ExternalRequestId }, "UX_ProviderRequests_ExternalRequest")
                 .IsUnique()
                 .HasFilter("([ExternalRequestId] IS NOT NULL)");
@@ -1058,6 +1063,11 @@ public partial class VideoFactoryDbContext : DbContext
             entity.HasOne(d => d.Scene).WithMany(p => p.ProviderRequests)
                 .HasForeignKey(d => d.SceneId)
                 .HasConstraintName("FK_ProviderRequests_Scenes");
+
+            entity.HasOne(d => d.InputSceneFirstFrame).WithMany(p => p.InputProviderRequests)
+                .HasForeignKey(d => d.InputSceneFirstFrameId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_ProviderRequests_InputSceneFirstFrames");
         });
 
         modelBuilder.Entity<RefreshToken>(entity =>
@@ -1400,6 +1410,73 @@ public partial class VideoFactoryDbContext : DbContext
                 .HasForeignKey(d => d.SceneId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_ScenePrompts_Scenes");
+        });
+
+        modelBuilder.Entity<SceneFirstFrame>(entity =>
+        {
+            entity.ToTable("SceneFirstFrames", "vf");
+
+            entity.HasIndex(e => new { e.SceneId, e.Version }, "UQ_SceneFirstFrames_Scene_Version").IsUnique();
+
+            entity.HasIndex(e => e.MediaAssetId, "UQ_SceneFirstFrames_MediaAsset").IsUnique();
+
+            entity.HasIndex(e => e.GeneratedByProviderRequestId, "UX_SceneFirstFrames_GeneratedProviderRequest")
+                .IsUnique()
+                .HasFilter("([GeneratedByProviderRequestId] IS NOT NULL)");
+
+            entity.HasIndex(e => new { e.SceneId, e.Status, e.Version }, "IX_SceneFirstFrames_Scene_Status_Version")
+                .IsDescending(false, false, true);
+
+            entity.HasIndex(e => e.SceneId, "UX_SceneFirstFrames_ActiveApproved")
+                .IsUnique()
+                .HasFilter("([Status]='Approved')");
+
+            entity.Property(e => e.SceneFirstFrameId).HasDefaultValueSql("(newsequentialid())", "DF_SceneFirstFrames_Id");
+            entity.Property(e => e.Status)
+                .HasMaxLength(20)
+                .IsUnicode(false)
+                .HasDefaultValue("PendingReview", "DF_SceneFirstFrames_Status");
+            entity.Property(e => e.AspectRatio)
+                .HasMaxLength(10)
+                .IsUnicode(false);
+            entity.Property(e => e.PromptTemplateVersion)
+                .HasMaxLength(80)
+                .IsUnicode(false);
+            entity.Property(e => e.CreatedByUserId).HasMaxLength(450);
+            entity.Property(e => e.ApprovedByUserId).HasMaxLength(450);
+            entity.Property(e => e.CreatedAtUtc)
+                .HasPrecision(3)
+                .HasDefaultValueSql("(sysutcdatetime())", "DF_SceneFirstFrames_CreatedAtUtc");
+            entity.Property(e => e.ApprovedAtUtc).HasPrecision(3);
+            entity.Property(e => e.InvalidatedAtUtc).HasPrecision(3);
+            entity.Property(e => e.RowVersion)
+                .IsRowVersion()
+                .IsConcurrencyToken();
+
+            entity.HasOne(d => d.Scene).WithMany(p => p.SceneFirstFrames)
+                .HasForeignKey(d => d.SceneId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_SceneFirstFrames_Scenes");
+
+            entity.HasOne(d => d.MediaAsset).WithOne(p => p.SceneFirstFrame)
+                .HasForeignKey<SceneFirstFrame>(d => d.MediaAssetId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_SceneFirstFrames_MediaAssets");
+
+            entity.HasOne(d => d.SourceCharacterReference).WithMany(p => p.SceneFirstFrames)
+                .HasForeignKey(d => d.SourceCharacterReferenceId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_SceneFirstFrames_CharacterReferences");
+
+            entity.HasOne(d => d.GeneratedByProviderRequest).WithOne(p => p.GeneratedSceneFirstFrame)
+                .HasForeignKey<SceneFirstFrame>(d => d.GeneratedByProviderRequestId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_SceneFirstFrames_GeneratedProviderRequests");
+
+            entity.HasOne(d => d.ScenePrompt).WithMany(p => p.SceneFirstFrames)
+                .HasForeignKey(d => d.ScenePromptId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_SceneFirstFrames_ScenePrompts");
         });
 
         modelBuilder.Entity<SchemaVersion>(entity =>

@@ -101,6 +101,31 @@ public sealed class GeneratedImageContentServiceTests
         Assert.Equal("generated_image_expired", exception.Code);
     }
 
+    [Fact]
+    public async Task GetAsync_DoesNotServeCharacterImageFromSceneFirstFrameScope()
+    {
+        await using var dbContext = CreateContext();
+        var seeded = Seed(dbContext, DateTime.UtcNow.AddHours(1));
+        var service = new GeneratedImageContentService(
+            dbContext,
+            new StubAccessService(new GenerationAccessContext(
+                seeded.Project.OrganizationId!.Value,
+                "Test organization",
+                "Member",
+                seeded.Project)),
+            TimeProvider.System);
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() => service.GetAsync(
+            seeded.Request.ProviderRequestId,
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None,
+            GeneratedImageContentKind.SceneFirstFrame));
+
+        Assert.Equal(404, exception.StatusCode);
+        Assert.Equal("generated_image_not_found", exception.Code);
+    }
+
     private static VideoFactoryDbContext CreateContext() =>
         new(new DbContextOptionsBuilder<VideoFactoryDbContext>()
             .UseInMemoryDatabase($"generated-image-content-{Guid.NewGuid():N}")

@@ -2,7 +2,7 @@
 
 > Trạng thái hiện tại: AI Gateway tập trung theo tổ chức. Tài liệu BYOK 3.0 đã hết hiệu lực. Source hỗ trợ policy video bất biến theo project, Kling, BytePlus Seedance và Fal/Veo dưới cùng gateway; BytePlus/Seedance và Fal/Veo được seed disabled và chỉ được bật theo tổ chức sau migration, credential, rate và smoke test có phí. Policy `Default` và `LongForm` đã tách riêng; Fal/Veo bản đầu chỉ được chọn cho `LongForm`. Luồng mặc định hiện vẫn là **Kling Native Audio 720p** cho tới khi quản trị viên chủ động chọn policy khác. Desktop bắt buộc preview/nghe/duyệt từng clip, chỉ render `SceneVideo` của đúng `ApprovedGenerationId`; TTS/WAV được giữ tương thích nhưng không fallback ngầm.
 
-> Cập nhật ngữ cảnh: 2026-09-01. Đây là nguồn sự thật nghiệp vụ toàn hệ thống. Source đã có thư viện tính nhất quán **text-only** cho bối cảnh/đạo cụ/item theo project, materialize đề xuất AI và xác nhận trực tiếp theo từng cảnh; ảnh tham chiếu của các loại tài sản này chưa thuộc phạm vi hiện tại. `NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md` và `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md` chỉ bổ sung chi tiết cho từng luồng; khi có khác biệt, tài liệu này được ưu tiên. Source code và migration vẫn là nguồn sự thật kỹ thuật.
+> Cập nhật ngữ cảnh: 2026-09-05. Đây là nguồn sự thật nghiệp vụ toàn hệ thống. Source đã có thư viện tính nhất quán **text-only** cho bối cảnh/đạo cụ/item theo project, materialize đề xuất AI và xác nhận trực tiếp theo từng cảnh; ảnh tham chiếu của các loại tài sản này chưa thuộc phạm vi hiện tại. Riêng Fal/Veo đã có `SceneFirstFrame` AI theo scene, tách khỏi ảnh identity nhân vật. `NGHIEP_VU_SINH_VIDEO_VA_DONG_BO_NHAN_VAT.md` và `NGHIEP_VU_TAO_VIDEO_NGAN_KLING.md` chỉ bổ sung chi tiết cho từng luồng; khi có khác biệt, tài liệu này được ưu tiên. Source code và migration vẫn là nguồn sự thật kỹ thuật.
 
 > Cập nhật license 2026-09-03: source đã có migration 4.0.10 và luồng gia hạn bằng chuyển khoản SePay. Thanh toán mặc định tắt và chưa được coi là rollout production nếu chưa rehearsal migration, cấu hình tài khoản nhận, webhook staging, đối soát và nghiệm thu UI thủ công.
 
@@ -214,9 +214,19 @@ Giai đoạn hiện tại chỉ quản lý text, không tải lên hoặc sinh �
 8. Desktop nhận URL tương đối trung lập provider của server: `/api/generation/videos/{providerRequestId}/content`. Endpoint Kling cũ chỉ được giữ cho tương thích, không phải đường gọi mặc định của desktop.
 9. Proxy xác thực lại user/license/tổ chức, chỉ cho HTTPS và host thuộc allowlist của provider, kiểm tra DNS chống SSRF, giới hạn redirect, MIME, dung lượng file và tổng dung lượng cache theo cấu hình.
 10. Clip tải xong được hiển thị ngay tại card của cảnh qua virtual media host cục bộ; cảnh chưa có clip dùng placeholder theo theme và không tự gọi thêm provider ảnh.
-11. Trước resolver/rate/budget/outbound, video dài Kling/Fal chặn voice-over còn gắn nhân vật, on-camera thiếu speaker/reference, speech mode không khớp `Dialogue`/`Narration`, Native Audio không phù hợp snapshot và prompt hình ảnh yêu cầu im lặng/khép miệng/lời dẫn ngoài khung hình. Riêng Fal/Veo bản đầu còn yêu cầu first-frame PNG/JPEG đã duyệt, tối đa 8 MB, tối thiểu 720p và đúng 16:9/9:16; B-roll chưa có first-frame bị chặn, không fallback Text-to-Video.
+11. Trước resolver/rate/budget/outbound, video dài Kling/Fal chặn voice-over còn gắn nhân vật, on-camera thiếu speaker/reference, speech mode không khớp `Dialogue`/`Narration`, Native Audio không phù hợp snapshot và prompt hình ảnh yêu cầu im lặng/khép miệng/lời dẫn ngoài khung hình. Riêng Fal/Veo yêu cầu `SceneFirstFrame` PNG/JPEG đã duyệt, tối đa 8 MB, đúng `1280x720` hoặc `720x1280`; B-roll chưa có first-frame bị chặn và không fallback Text-to-Video.
 
-### 8.2. Nghiệp vụ âm thanh của clip và video cuối
+### 8.2. Scene first-frame riêng cho Fal/Veo
+
+1. `CharacterReference` tiếp tục là ảnh identity trung tính `1024x1024`; không crop, kéo giãn, ghi đè hoặc gửi trực tiếp ảnh vuông này sang Fal/Veo.
+2. Scene on-camera dùng primary reference đã duyệt làm image input cho GPT-Image-2 editing; scene B-roll dùng GPT-Image-2 generation và không được thêm người. Prompt first-frame đọc scene prompt, visual/camera/lighting/motion/emotion, lời đã duyệt và đúng version `Background`/`Prop`/`Item` đã khóa.
+3. Server quyết định provider/model/size/prompt/rate; desktop không gửi key, model tùy ý, full prompt, giá hoặc URL provider. Request log chỉ giữ ID/version/hash/template và thông số output an toàn.
+4. Output tạm được tải qua proxy có xác thực vào file `.part`, kiểm tra signature, MIME, SHA-256, kích thước và giới hạn 8 MB rồi mới rename atomically. API materialize tạo `MediaAsset` và `SceneFirstFrame(PendingReview)`; retry download dùng output cũ trong retention, không reserve chi phí lần nữa.
+5. Người dùng phải preview và duyệt thủ công. Sinh lại tạo version/request/reservation mới nhưng bản Approved cũ vẫn có hiệu lực đến khi bản mới được duyệt; duyệt bản mới chuyển bản cũ sang `Superseded`.
+6. Thay scene plan/prompt hoặc nội dung hình ảnh, nhân vật/primary reference, asset assignment/version hay aspect ratio làm frame `Invalidated`. Server luôn so snapshot động lần cuối trước submit Veo dù một event invalidation bị bỏ sót.
+7. Fal/Veo chỉ nhận `SceneFirstFrameInput` Approved/current và `ProviderRequest.InputSceneFirstFrameId` phải ghi đúng frame trước outbound. Kling, BytePlus và video ngắn giữ đường `ReferenceImage` hiện hữu; không fallback giữa hai loại ảnh.
+
+### 8.3. Nghiệp vụ âm thanh của clip và video cuối
 
 Luồng sản phẩm hiện tại chỉ dùng Native Audio do provider video đã snapshot cho project sinh trực tiếp cùng clip. Kling 3.0 là policy mặc định; BytePlus và Fal/Veo chỉ đi vào luồng này sau rollout có kiểm soát:
 
@@ -232,17 +242,17 @@ Luồng sản phẩm hiện tại chỉ dùng Native Audio do provider video đ�
 10. Chỉ khi duyệt, scene mới có `ApprovedGenerationId` và trạng thái `Approved`; project chỉ `ReadyToRender` khi toàn bộ scene đã duyệt.
 11. Workflow mặc định không gọi OpenAI Speech, không tải WAV, không tạo `SceneVoice`, không chạy `SceneAudioMixer` và không tạo `SceneVideoNarrated`. Không fallback ngầm sang TTS khi provider trả âm thanh sai hoặc im lặng.
 
-### 8.3. Trạng thái triển khai và điều kiện vận hành hiện tại
+### 8.4. Trạng thái triển khai và điều kiện vận hành hiện tại
 
 Source hiện hành đã có contract speech intent, OpenAI structured output, policy tiếng Việt cho video dài Kling/Fal, template riêng `kling-native-audio-v4-vietnamese-speech-first` và `veo-native-audio-v1-vietnamese-speech-first`, recovery profile riêng, rate policy theo capability, kiểm tra audio sau tải, trạng thái `NativeAudioInvalid`/`AudioReviewRequired`, checklist duyệt scene và UI phân biệt lời nhân vật với native voice-over.
 
-Source cũng đã có migration 4.0.4–4.0.9, admin policy `Default`/`LongForm`, generic contract/service/bridge, Seedance và Fal Queue client/prompt composer, worker đa provider, cache/proxy/cleanup, pricing theo provider, thư viện tài sản text và xác nhận tài sản theo scene. Trạng thái source không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus/Fal đã hoàn tất trên một môi trường triển khai.
+Source cũng đã có migration 4.0.4–4.0.11 và 4.1.1, admin policy `Default`/`LongForm`, generic contract/service/bridge, Seedance và Fal Queue client/prompt composer, scene first-frame GPT-Image-2, worker đa provider, cache/proxy/cleanup, pricing theo provider, thư viện tài sản text và xác nhận tài sản theo scene. Trạng thái source không đồng nghĩa migration thật, credential/rate thật hoặc smoke test BytePlus/Fal đã hoàn tất trên một môi trường triển khai.
 
 Để chạy được trong một môi trường, vẫn phải thỏa đồng thời:
 
 - tổ chức có credential Active, model video Active và policy Active cho provider được chọn; mặc định là Kling;
 - model có đủ rate Active đúng usage type/capability; Kling cần metadata `{"resolution":"720p","nativeAudio":true}`;
-- nếu dùng Fal/Veo, policy phải là `LongForm`, endpoint thuộc allowlist Standard/Fast, aspect ratio là 16:9/9:16 và mọi scene cần first-frame hợp lệ;
+- nếu dùng Fal/Veo, policy phải là `LongForm`, endpoint thuộc allowlist Standard/Fast, aspect ratio là 16:9/9:16 và mọi scene cần `SceneFirstFrame` Approved/current có file local đúng hash;
 - budget tổ chức và hạn mức thành viên còn đủ;
 - nhân vật của cảnh đã khóa và có ảnh reference primary nếu cảnh dùng nhân vật;
 - nếu cảnh có gắn tài sản text thì assignment hợp lệ, có đúng một `Background` và mọi tài sản đang gắn đã được xác nhận/khóa;

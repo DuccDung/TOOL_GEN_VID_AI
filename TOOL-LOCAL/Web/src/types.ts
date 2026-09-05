@@ -123,6 +123,51 @@ export type SceneSummary = {
   soundEffects?: string | null;
 };
 
+export type SceneFirstFrameStatus = 'PendingReview' | 'Approved' | 'Rejected' | 'Superseded' | 'Invalidated';
+
+export type SceneFirstFrameSummary = {
+  sceneFirstFrameId: string;
+  sceneId: string;
+  mediaAssetId: string;
+  providerRequestId: string;
+  version: number;
+  status: SceneFirstFrameStatus;
+  sourceCharacterReferenceId?: string | null;
+  scenePlanVersion: number;
+  scenePromptId: string;
+  scenePromptVersion: number;
+  aspectRatio: string;
+  promptTemplateVersion: string;
+  relativePath: string;
+  mimeType: string;
+  sha256: string;
+  sizeBytes: number;
+  width: number;
+  height: number;
+  isCurrent: boolean;
+  staleReason?: string | null;
+  rowVersion: string;
+  createdAtUtc: string;
+  approvedAtUtc?: string | null;
+  invalidatedAtUtc?: string | null;
+  previewUrl?: string | null;
+};
+
+export type SceneFirstFrameQuote = {
+  providerCode: string;
+  modelCode: string;
+  aspectRatio: string;
+  width: number;
+  height: number;
+  estimatedCost: number;
+  currencyCode: string;
+  sourceCharacterReferenceId?: string | null;
+  sourceCharacterName?: string | null;
+  scenePlanVersion: number;
+  scenePromptId: string;
+  scenePromptVersion: number;
+};
+
 export type ProjectAssetType = 'Background' | 'Prop' | 'Item';
 
 export type ProjectAssetSummary = {
@@ -230,6 +275,7 @@ export type DashboardState = {
   license?: CurrentLicense | null;
   generationRunning: boolean;
   features: DashboardFeatures;
+  sceneFirstFrames: SceneFirstFrameSummary[];
 };
 
 export type DashboardFeatures = {

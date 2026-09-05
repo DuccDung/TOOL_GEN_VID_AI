@@ -7,13 +7,21 @@ namespace TOOL_SERVER.Generation;
 
 public sealed record GeneratedImageContent(byte[] Payload, string MimeType, string Sha256, long SizeBytes);
 
+public enum GeneratedImageContentKind
+{
+    Any,
+    CharacterReference,
+    SceneFirstFrame
+}
+
 public interface IGeneratedImageContentService
 {
     Task<GeneratedImageContent> GetAsync(
         Guid providerRequestId,
         string userId,
         Guid deviceId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        GeneratedImageContentKind kind = GeneratedImageContentKind.Any);
 }
 
 internal sealed class GeneratedImageContentService(
@@ -25,14 +33,18 @@ internal sealed class GeneratedImageContentService(
         Guid providerRequestId,
         string userId,
         Guid deviceId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        GeneratedImageContentKind kind = GeneratedImageContentKind.Any)
     {
         var request = await dbContext.ProviderRequests
             .Include(x => x.GeneratedImageOutput)
             .SingleOrDefaultAsync(
                 x => x.ProviderRequestId == providerRequestId &&
                      x.RequestKind == "Image" &&
-                     x.ProviderCode == ProviderCodes.OpenAi,
+                     x.ProviderCode == ProviderCodes.OpenAi &&
+                     (kind == GeneratedImageContentKind.Any ||
+                      kind == GeneratedImageContentKind.CharacterReference && x.CharacterId != null && x.SceneId == null ||
+                      kind == GeneratedImageContentKind.SceneFirstFrame && x.SceneId != null),
                 cancellationToken)
             ?? throw NotFound();
 
@@ -42,13 +54,18 @@ internal sealed class GeneratedImageContentService(
             request.OrganizationId,
             request.ProjectId,
             cancellationToken);
+        var ownsCharacter = request.CharacterId is { } characterId &&
+            await dbContext.Characters.AsNoTracking().AnyAsync(
+                x => x.CharacterId == characterId && x.ProjectId == request.ProjectId,
+                cancellationToken);
+        var ownsScene = request.SceneId is { } sceneId &&
+            await dbContext.Scenes.AsNoTracking().AnyAsync(
+                x => x.SceneId == sceneId && x.ProjectId == request.ProjectId,
+                cancellationToken);
         if (request.OrganizationId != access.OrganizationId ||
             request.RequestedByUserId != userId ||
-            request.CharacterId is null ||
             access.Project?.RemoteUserId != userId ||
-            !await dbContext.Characters.AsNoTracking().AnyAsync(
-                x => x.CharacterId == request.CharacterId && x.ProjectId == request.ProjectId,
-                cancellationToken))
+            (!ownsCharacter && !ownsScene))
         {
             throw NotFound();
         }
@@ -59,9 +76,10 @@ internal sealed class GeneratedImageContentService(
             throw new AccountApiException(
                 StatusCodes.Status410Gone,
                 "generated_image_expired",
-                "Ảnh tạm trên server đã hết hạn. Hãy tạo lại ảnh nhân vật.");
+                "Ảnh tạm trên server đã hết hạn. Hãy tạo lại ảnh.");
         }
-        if (output.Payload.LongLength != output.SizeBytes || output.Payload.LongLength > 10 * 1024 * 1024)
+        var maximumBytes = request.SceneId is null ? 10L * 1024 * 1024 : 8L * 1024 * 1024;
+        if (output.Payload.LongLength != output.SizeBytes || output.Payload.LongLength > maximumBytes)
         {
             throw new AccountApiException(
                 StatusCodes.Status502BadGateway,
@@ -75,7 +93,7 @@ internal sealed class GeneratedImageContentService(
     }
 
     private static AccountApiException NotFound() =>
-        new(StatusCodes.Status404NotFound, "generated_image_not_found", "Không tìm thấy ảnh nhân vật.");
+        new(StatusCodes.Status404NotFound, "generated_image_not_found", "Không tìm thấy ảnh đã sinh.");
 
     private DateTime UtcNow() => timeProvider.GetUtcNow().UtcDateTime;
 }

@@ -65,6 +65,8 @@ public partial class MediaAsset
 
     public virtual Scene? Scene { get; set; }
 
+    public virtual SceneFirstFrame? SceneFirstFrame { get; set; }
+
     public virtual ICollection<SoundEffect> SoundEffects { get; set; } = new List<SoundEffect>();
 
     public virtual ICollection<Subtitle> Subtitles { get; set; } = new List<Subtitle>();

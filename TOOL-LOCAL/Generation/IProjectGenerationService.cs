@@ -23,6 +23,47 @@ internal interface IProjectGenerationService
         Guid characterId,
         CancellationToken cancellationToken);
 
+    Task<SceneFirstFrameQuoteResponse> GetSceneFirstFrameQuoteAsync(
+        Guid projectId,
+        Guid sceneId,
+        CancellationToken cancellationToken);
+
+    Task<SceneFirstFrameListResponse> GetSceneFirstFramesAsync(
+        Guid projectId,
+        Guid sceneId,
+        CancellationToken cancellationToken);
+
+    Task<ProjectSceneFirstFrameListResponse> GetProjectSceneFirstFramesAsync(
+        Guid projectId,
+        CancellationToken cancellationToken);
+
+    Task<SceneFirstFrameSummary> GenerateSceneFirstFrameAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid sceneId,
+        int attempt,
+        CancellationToken cancellationToken);
+
+    Task<SceneFirstFrameSummary> ApproveSceneFirstFrameAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        string rowVersion,
+        CancellationToken cancellationToken);
+
+    Task<SceneFirstFrameSummary> RejectSceneFirstFrameAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        string rowVersion,
+        CancellationToken cancellationToken);
+
+    Task<SceneFirstFrameSummary> RetrySceneFirstFrameDownloadAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        CancellationToken cancellationToken);
+
     Task<int> GenerateVideosAsync(
         Guid projectId,
         string remoteUserId,

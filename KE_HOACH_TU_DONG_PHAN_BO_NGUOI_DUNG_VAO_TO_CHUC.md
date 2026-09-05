@@ -5,7 +5,7 @@
 **Ngày cập nhật source:** 2026-09-04  
 **Phạm vi:** License, thanh toán SePay, tổ chức, thành viên, quản trị và desktop
 
-Các task source từ `TASK-01` đến `TASK-10` đã hoàn tất và được kiểm tra bằng build/test trong repository. `TASK-11` là công việc vận hành riêng, chỉ thực hiện sau khi xác minh đúng instance/database, backup và khả năng restore. Migration 4.0.11 có trong source không đồng nghĩa đã được áp dụng trên database thật.
+Các task source từ `TASK-01` đến `TASK-10A` đã hoàn tất và được kiểm tra bằng build/test trong repository. `TASK-11` là công việc vận hành riêng, chỉ thực hiện sau khi xác minh đúng instance/database, backup và khả năng restore. Migration 4.0.11 có trong source không đồng nghĩa đã được áp dụng trên database thật.
 
 ## 1. Mục tiêu
 
@@ -303,6 +303,19 @@ Phải có test cho:
 - migration chạy lần hai không thay đổi sai dữ liệu;
 - desktop không được sửa bảng phân bổ;
 - API và log không lộ credential.
+
+### [x] TASK-10A - Hoàn thiện nghiệp vụ UI/UX Admin sau review
+
+- [x] Tách tổng sức chứa cấu hình khỏi số chỗ thực sự có thể phân bổ; chỉ coi tổ chức `Active`, bật tự động và vượt qua readiness hiện hành là còn chỗ bán.
+- [x] Hiển thị trạng thái thanh toán và trạng thái phân bổ bằng nhãn nghiệp vụ tiếng Việt; làm nổi bật trường hợp đã nhận tiền nhưng chưa cấp được tổ chức.
+- [x] Sửa thông báo retry để không báo thành công khi payment vẫn chưa `Fulfilled`.
+- [x] Làm mới đầy đủ dữ liệu của Trung tâm thiết lập.
+- [x] Nối đầy đủ hành động Trung tâm thiết lập, quay lại danh sách pool và kiểm tra readiness.
+- [x] Chặn ngõ cụt khi chưa có tổ chức/gói; cảnh báo tác động khi đổi trạng thái pool, tắt phân bổ hoặc chuyển gói sang pool khác.
+- [x] Hiển thị sức chứa tối thiểu được phép nhập dựa trên số seat đang dùng và đang giữ.
+- [x] Bổ sung regression test và chạy toàn bộ kiểm tra bắt buộc.
+
+Mốc xác minh ngày 2026-09-04: restore thành công; Release build `0 warning / 0 error`; test đạt `605/605`.
 
 ### [ ] TASK-11 - Rehearsal và rollout
 

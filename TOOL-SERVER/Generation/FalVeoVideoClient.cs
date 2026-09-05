@@ -35,7 +35,7 @@ internal sealed class FalVeoVideoClient(IHttpClientFactory httpClientFactory) : 
         };
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            EndpointUri(provider, string.Empty))
+            SubmitEndpointUri(provider))
         {
             Content = JsonContent.Create(body, options: JsonOptions)
         };
@@ -77,7 +77,7 @@ internal sealed class FalVeoVideoClient(IHttpClientFactory httpClientFactory) : 
 
         using var statusRequest = new HttpRequestMessage(
             HttpMethod.Get,
-            EndpointUri(provider, $"requests/{Uri.EscapeDataString(externalRequestId)}/status"));
+            QueueRequestUri(provider, externalRequestId, includeStatusSuffix: true));
         ApplyHeaders(statusRequest, provider);
         using var statusResponse = await httpClientFactory.CreateClient("FalRuntime")
             .SendAsync(statusRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -107,7 +107,7 @@ internal sealed class FalVeoVideoClient(IHttpClientFactory httpClientFactory) : 
 
         using var resultRequest = new HttpRequestMessage(
             HttpMethod.Get,
-            EndpointUri(provider, $"requests/{Uri.EscapeDataString(externalRequestId)}"));
+            QueueRequestUri(provider, externalRequestId, includeStatusSuffix: false));
         ApplyHeaders(resultRequest, provider);
         using var resultResponse = await httpClientFactory.CreateClient("FalRuntime")
             .SendAsync(resultRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -193,11 +193,16 @@ internal sealed class FalVeoVideoClient(IHttpClientFactory httpClientFactory) : 
         }
     }
 
-    private static Uri EndpointUri(ProviderRuntimeConfiguration provider, string suffix)
+    private static Uri SubmitEndpointUri(ProviderRuntimeConfiguration provider) =>
+        new(provider.BaseUri, provider.ModelCode.Trim('/'));
+
+    private static Uri QueueRequestUri(
+        ProviderRuntimeConfiguration provider,
+        string externalRequestId,
+        bool includeStatusSuffix)
     {
-        var endpoint = provider.ModelCode.Trim('/');
-        var path = suffix.Length == 0 ? endpoint : $"{endpoint}/{suffix.TrimStart('/')}";
-        return new Uri(provider.BaseUri, path);
+        var requestPath = $"{FalVeoPolicy.QueueEndpointId}/requests/{Uri.EscapeDataString(externalRequestId)}";
+        return new Uri(provider.BaseUri, includeStatusSuffix ? $"{requestPath}/status" : requestPath);
     }
 
     private static void ApplyHeaders(HttpRequestMessage request, ProviderRuntimeConfiguration provider)
