@@ -14,12 +14,14 @@ namespace TOOL_SERVER.Controllers;
 [Route("api/generation")]
 public sealed class GenerationController(
     IGenerationService generationService,
+    ISceneFirstFrameService sceneFirstFrameService,
     IKlingOutputProxyService outputProxy,
     IVideoOutputStore videoOutputStore,
     IGeneratedImageContentService generatedImageContentService,
     IGeneratedVoiceContentService generatedVoiceContentService) : ControllerBase
 {
     [HttpGet("providers/status")]
+    [EnableRateLimiting("ai-status")]
     [ProducesResponseType<GenerationProviderStatusResponse>(StatusCodes.Status200OK)]
     public Task<GenerationProviderStatusResponse> GetProviderStatus(
         [FromQuery] Guid? organizationId,
@@ -51,6 +53,36 @@ public sealed class GenerationController(
             cancellationToken);
     }
 
+    [HttpPost("images/scene-first-frames")]
+    [ProducesResponseType<GenerateSceneFirstFrameResponse>(StatusCodes.Status200OK)]
+    public Task<GenerateSceneFirstFrameResponse> GenerateSceneFirstFrame(
+        [FromBody] GenerateSceneFirstFrameRequest request,
+        CancellationToken cancellationToken) =>
+        sceneFirstFrameService.GenerateAsync(
+            request,
+            RequireUserId(),
+            RequireDeviceId(),
+            cancellationToken);
+
+    [HttpGet("images/scene-first-frames/{providerRequestId:guid}/content")]
+    [Produces("image/png", "image/jpeg")]
+    public async Task<IActionResult> DownloadSceneFirstFrame(
+        Guid providerRequestId,
+        CancellationToken cancellationToken)
+    {
+        var content = await generatedImageContentService.GetAsync(
+            providerRequestId,
+            RequireUserId(),
+            RequireDeviceId(),
+            cancellationToken,
+            GeneratedImageContentKind.SceneFirstFrame);
+        Response.Headers.CacheControl = "private, no-store";
+        Response.Headers.XContentTypeOptions = "nosniff";
+        Response.ContentLength = content.SizeBytes;
+        Response.Headers.ETag = $"\"{content.Sha256}\"";
+        return File(content.Payload, content.MimeType, enableRangeProcessing: false);
+    }
+
     [HttpGet("character-images/{providerRequestId:guid}/content")]
     [Produces("image/png", "image/jpeg")]
     public async Task<IActionResult> DownloadCharacterImage(
@@ -61,7 +93,8 @@ public sealed class GenerationController(
             providerRequestId,
             RequireUserId(),
             RequireDeviceId(),
-            cancellationToken);
+            cancellationToken,
+            GeneratedImageContentKind.CharacterReference);
         Response.Headers.CacheControl = "private, no-store";
         Response.Headers.XContentTypeOptions = "nosniff";
         Response.ContentLength = content.SizeBytes;

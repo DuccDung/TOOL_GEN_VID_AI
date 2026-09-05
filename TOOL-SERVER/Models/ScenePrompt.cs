@@ -41,5 +41,7 @@ public partial class ScenePrompt
 
     public virtual Scene Scene { get; set; } = null!;
 
+    public virtual ICollection<SceneFirstFrame> SceneFirstFrames { get; set; } = new List<SceneFirstFrame>();
+
     public virtual ICollection<VideoGeneration> VideoGenerations { get; set; } = new List<VideoGeneration>();
 }

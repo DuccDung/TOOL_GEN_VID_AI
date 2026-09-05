@@ -1,6 +1,7 @@
 @page "/admin"
 @{
     Layout = null;
+    const string AdminUiBuildMarker = "admin-setup-center-20260904.1";
 }
 <!doctype html>
 <html lang="vi">
@@ -8,10 +9,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
+    <meta name="videomaker-admin-ui-build" content="@AdminUiBuildMarker" />
     <title>VideoMaker License Admin</title>
     <link rel="stylesheet" href="~/admin/admin.css" asp-append-version="true" />
 </head>
-<body>
+<body data-admin-ui-build="@AdminUiBuildMarker">
     <svg class="icon-sprite" aria-hidden="true">
         <symbol id="icon-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
         <symbol id="icon-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z" /><path d="m9 12 2 2 4-4" /></symbol>
@@ -22,6 +24,7 @@
         <symbol id="icon-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9m-4 4 3 3m-6 0 3 3" /></symbol>
         <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6" /></symbol>
         <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5m6 6-6-6 6-6" /></symbol>
+        <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol>
         <symbol id="icon-id-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2" /><circle cx="8" cy="12" r="2" /><path d="M14 10h4M14 14h4M5 17c.7-1.4 1.7-2 3-2s2.3.6 3 2" /></symbol>
         <symbol id="icon-package-up" viewBox="0 0 24 24"><path d="m16.5 9.4-9-5.2M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l4.5 2.6M3.3 7 12 12l8.7-5M12 22V12m5 10v-6m-3 3 3-3 3 3" /></symbol>
         <symbol id="icon-log-out" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /></symbol>
@@ -55,14 +58,24 @@
     <div class="admin-shell hidden" id="adminShell">
         <aside class="sidebar">
             <div class="brand-lockup sidebar-brand"><span class="brand-mark">V</span><div><strong>VideoMaker</strong><small>Admin Console</small></div></div>
-            <nav>
+            <nav aria-label="Menu quản trị">
                 <button class="nav-item active" data-view="overview"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-layout-dashboard"></use></svg></span><span>Tổng quan</span></button>
                 <button class="nav-item" data-view="users"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-users"></use></svg></span><span>Người dùng</span></button>
-                <button class="nav-item" data-view="organizations"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-building"></use></svg></span><span>Tổ chức &amp; AI</span></button>
+                <div class="nav-group" data-organization-menu>
+                    <button class="nav-item nav-parent" type="button" data-view="organizations" data-nav-parent="organizations" aria-haspopup="true" aria-expanded="false" aria-controls="organizationSubmenu"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-building"></use></svg></span><span>Tổ chức &amp; AI</span><svg class="ui-icon nav-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
+                    <div class="nav-submenu hidden" id="organizationSubmenu" role="group" aria-label="Các mục Tổ chức và AI">
+                        <button type="button" class="nav-subitem active" id="organizationSetupScopeItem" data-organization-scope="setup" aria-current="page">Trung tâm thiết lập</button>
+                        <button type="button" class="nav-subitem" id="organizationDirectoryScopeItem" data-organization-scope="directory">Tổ chức</button>
+                        <button type="button" class="nav-subitem" id="organizationPoolsScopeItem" data-organization-scope="pools">Phân bổ khách hàng</button>
+                        <button type="button" class="nav-subitem" id="organizationPricingScopeItem" data-organization-scope="pricing">Bảng giá AI</button>
+                        <button type="button" class="nav-subitem" id="organizationCostGuideScopeItem" data-organization-scope="cost-guide">Cách tính chi phí</button>
+                    </div>
+                </div>
                 <button class="nav-item" data-view="plans"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-id-card"></use></svg></span><span>Gói sử dụng</span></button>
                 <button class="nav-item" data-view="releases"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-package-up"></use></svg></span><span>Desktop Releases</span></button>
             </nav>
-            <div class="sidebar-status"><span class="pulse-dot"></span><div><strong>License server</strong><small>Đang hoạt động</small></div></div>
+            <div class="admin-build-marker" id="adminUiBuildMarker" title="Dấu nhận diện giao diện đang được server phục vụ"><span>UI BUILD</span><code>@AdminUiBuildMarker</code></div>
+            <div class="sidebar-status"><span class="pulse-dot"></span><div><strong>Dữ liệu quản trị</strong><small id="adminLastRefresh">Chưa làm mới</small></div></div>
             <div class="admin-profile"><div class="avatar" id="adminAvatar">A</div><div><strong id="adminName">Administrator</strong><small id="adminEmail"></small></div><button id="logoutButton" title="Đăng xuất"><svg class="ui-icon"><use href="#icon-log-out"></use></svg></button></div>
         </aside>
 
@@ -70,10 +83,8 @@
             <header class="topbar">
                 <div><span class="eyebrow" id="pageEyebrow">LICENSE CONTROL</span><h1 id="pageTitle">Tổng quan hệ thống</h1><p id="pageSubtitle">Theo dõi tài khoản, license và phiên sử dụng theo thời gian thực.</p></div>
                 <div class="top-actions">
+                    <button class="text-button hidden" id="returnToSetupButton" type="button"><svg class="ui-icon"><use href="#icon-arrow-left"></use></svg><span>Quay lại thiết lập</span></button>
                     <button class="ghost-button" id="refreshButton"><svg class="ui-icon"><use href="#icon-refresh-cw"></use></svg><span>Làm mới</span></button>
-                    <button class="primary-button hidden" id="topAddOrganization"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo tổ chức</span></button>
-                    <button class="primary-button hidden" id="topAddPlan"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo gói</span></button>
-                    <button class="primary-button hidden" id="topAddRelease"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo release</span></button>
                 </div>
             </header>
 
@@ -93,14 +104,15 @@
             </section>
 
             <section class="view-panel hidden" data-panel="organizations">
-                <div class="organization-scope-bar" role="tablist" aria-label="Phạm vi quản trị Tổ chức và AI">
-                    <button type="button" class="scope-tab active" id="organizationScopeButton" data-organization-scope="directory" role="tab" aria-selected="true">Tổ chức</button>
-                    <button type="button" class="scope-tab" id="poolScopeButton" data-organization-scope="pools" role="tab" aria-selected="false">Phân bổ gói</button>
-                    <button type="button" class="scope-tab" id="pricingScopeButton" data-organization-scope="pricing" role="tab" aria-selected="false">Bảng giá AI</button>
-                    <button type="button" class="scope-tab" id="costGuideScopeButton" data-organization-scope="cost-guide" role="tab" aria-selected="false">Cách tính chi phí</button>
+                <div id="organizationSetup" role="region" aria-labelledby="organizationSetupScopeItem">
+                    <section class="panel setup-center-panel">
+                        <div class="section-heading"><div><span class="eyebrow">ADMIN SETUP CENTER</span><h2>Đưa VideoMaker vào trạng thái sẵn sàng</h2></div></div>
+                        <p class="setup-center-intro">Đi theo đúng thứ tự để vận hành Video dài bằng OpenAI và Fal/Veo. Hệ thống sẽ chỉ ra điều kiện còn thiếu và hành động tiếp theo.</p>
+                        <div id="adminSetupCenter" aria-live="polite"></div>
+                    </section>
                 </div>
 
-                <div id="organizationDirectory">
+                <div id="organizationDirectory" class="hidden" role="region" aria-labelledby="organizationDirectoryScopeItem">
                     <section class="panel management-panel">
                         <div class="section-heading"><div><span class="eyebrow">ORGANIZATION GOVERNANCE</span><h2>Danh sách tổ chức của tôi</h2></div><button class="primary-button" id="addOrganizationButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo tổ chức</span></button></div>
                         <p class="form-hint">Global Admin chỉ thao tác credential và dữ liệu nội bộ khi đồng thời có membership phù hợp trong tổ chức.</p>
@@ -108,11 +120,14 @@
                     </section>
                 </div>
 
-                <div id="organizationDetail" class="hidden">
+                <div id="organizationDetail" class="hidden" role="region" aria-labelledby="pageTitle">
                     <section class="panel organization-detail-shell">
                         <div class="organization-detail-header">
-                            <button type="button" class="ghost-button" id="backToOrganizations"><svg class="ui-icon"><use href="#icon-arrow-left"></use></svg><span>Danh sách</span></button>
-                            <div id="organizationDetailHeading"></div>
+                            <button type="button" class="text-button organization-back-button" id="backToOrganizations" aria-label="Quay lại danh sách tổ chức"><svg class="ui-icon"><use href="#icon-arrow-left"></use></svg><span>Danh sách</span></button>
+                            <div class="organization-detail-actions">
+                                <button class="text-button hidden" id="organizationDetailSetupButton" type="button"><svg class="ui-icon"><use href="#icon-arrow-left"></use></svg><span>Quay lại thiết lập</span></button>
+                                <button class="ghost-button organization-detail-refresh-button" id="organizationDetailRefreshButton" type="button"><svg class="ui-icon"><use href="#icon-refresh-cw"></use></svg><span>Làm mới</span></button>
+                            </div>
                         </div>
                         <div class="organization-tabs" role="tablist" aria-label="Chi tiết tổ chức">
                             <button type="button" class="organization-tab active" data-organization-tab="overview" role="tab" aria-selected="true">Tổng quan</button>
@@ -125,15 +140,15 @@
                     </section>
                 </div>
 
-                <div id="organizationPools" class="hidden">
+                <div id="organizationPools" class="hidden" role="region" aria-labelledby="organizationPoolsScopeItem">
                     <section class="panel management-panel">
-                        <div class="section-heading"><div><span class="eyebrow">LICENSE ORGANIZATION POOLS</span><h2>Pool và sức chứa tổ chức</h2></div><button class="primary-button" id="addOrganizationPoolButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo pool</span></button></div>
-                        <p class="form-hint">Payment chỉ được tạo sau khi server giữ được chỗ trong một tổ chức Active, đã bật nhận người và vượt qua kiểm tra sẵn sàng.</p>
+                        <div class="section-heading"><div><span class="eyebrow">PHÂN BỔ KHÁCH HÀNG</span><h2>Gói và nhóm phân bổ</h2></div><div class="inline-actions"><button class="ghost-button" id="manageLicensePlansButton" type="button">Quản lý gói</button><button class="primary-button" id="addOrganizationPoolButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo nhóm phân bổ</span></button></div></div>
+                        <p class="form-hint">Khách chỉ được phân bổ khi nhóm đang hoạt động, có gói hợp lệ và còn chỗ trong ít nhất một tổ chức đã vượt qua kiểm tra sẵn sàng.</p>
                         <div id="organizationPoolConsole" aria-live="polite"></div>
                     </section>
                 </div>
 
-                <div id="organizationPricing" class="hidden">
+                <div id="organizationPricing" class="hidden" role="region" aria-labelledby="organizationPricingScopeItem">
                     <section class="panel management-panel">
                         <div class="section-heading"><div><span class="eyebrow">GLOBAL AI PRICING</span><h2>Bảng giá AI</h2></div></div>
                         <p class="form-hint">Chỉ tạo rate mới hoặc ngừng rate hiện hành. Không chỉnh sửa lịch sử và không tự đoán giá provider.</p>
@@ -141,7 +156,7 @@
                     </section>
                 </div>
 
-                <div id="organizationCostGuide" class="hidden">
+                <div id="organizationCostGuide" class="hidden" role="region" aria-labelledby="organizationCostGuideScopeItem">
                     <article class="panel cost-guide-page">
                         <header class="cost-guide-hero">
                             <div><span class="eyebrow">ADMIN COST HANDBOOK</span><h2>Cơ chế tính chi phí AI</h2><p>Giúp Admin hiểu rate, token, giây video và cách Budget được giữ rồi quyết toán trong VideoMaker.</p></div>
@@ -229,19 +244,19 @@
     </dialog>
 
     <dialog id="organizationPoolDialog" class="admin-dialog small-dialog">
-        <form method="dialog" id="organizationPoolForm"><div class="dialog-heading"><div><span class="eyebrow">ORGANIZATION POOL</span><h2 id="organizationPoolDialogTitle">Tạo pool</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
-            <input type="hidden" id="organizationPoolId" /><div class="form-grid"><label>Mã pool<input id="organizationPoolCode" maxlength="50" required /></label><label>Tên pool<input id="organizationPoolName" maxlength="200" required /></label><label class="full">Trạng thái<select id="organizationPoolStatus"><option>Active</option><option>Inactive</option></select></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu pool</button></div>
+        <form method="dialog" id="organizationPoolForm"><div class="dialog-heading"><div><span class="eyebrow">PHÂN BỔ KHÁCH HÀNG</span><h2 id="organizationPoolDialogTitle">Tạo nhóm phân bổ</h2><p class="dialog-intro">Nhóm phân bổ kết nối gói license với các tổ chức có thể tự nhận khách mua gói.</p></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="organizationPoolId" /><div class="pool-setup-steps" aria-label="Quy trình hoàn tất nhóm phân bổ"><span><b>1</b> Tạo nhóm nháp</span><span><b>2</b> Thêm tổ chức</span><span><b>3</b> Kiểm tra</span><span><b>4</b> Gắn gói</span><span><b>5</b> Kích hoạt</span></div><div class="form-grid"><label class="full">Tên nhóm phân bổ<input id="organizationPoolName" maxlength="200" required placeholder="Ví dụ: Veo Production" /><small class="input-help">Tên hiển thị cho nhóm tổ chức cùng nhận khách mua gói.</small></label><label class="full">Mã nội bộ<input id="organizationPoolCode" maxlength="50" pattern="[a-z0-9-]*" required placeholder="Tự tạo từ tên, ví dụ: veo-production" /><small class="input-help">Dùng để nhận diện trong hệ thống. Chỉ gồm chữ thường, số và dấu gạch ngang.</small></label><label class="full">Trạng thái nhóm<select id="organizationPoolStatus"><option value="Inactive">Nháp — chưa nhận khách tự động</option><option value="Active">Hoạt động</option></select><small class="input-help warning-text">Giữ ở trạng thái Nháp cho tới khi tổ chức đã sẵn sàng và gói license đã được gắn.</small></label></div><p class="pool-next-step"><strong>Bước tiếp theo:</strong> Thêm tổ chức, chạy kiểm tra sẵn sàng, gắn gói rồi mới kích hoạt nhận khách.</p><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" id="organizationPoolSubmit" type="submit">Tạo nhóm</button></div>
         </form>
     </dialog>
 
     <dialog id="organizationPoolOrganizationDialog" class="admin-dialog small-dialog">
-        <form method="dialog" id="organizationPoolOrganizationForm"><div class="dialog-heading"><div><span class="eyebrow">POOL CAPACITY</span><h2>Cấu hình tổ chức</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
-            <input type="hidden" id="poolOrganizationPoolId" /><div class="form-grid"><label class="full">Tổ chức<select id="poolOrganizationId" required></select></label><label>Sức chứa khách hàng<input id="poolOrganizationCapacity" type="number" min="1" max="100000" required /></label><label>Độ ưu tiên<input id="poolOrganizationPriority" type="number" min="0" max="100000" value="100" required /></label><label class="full checkbox-label"><input id="poolOrganizationAuto" type="checkbox" /> Bật nhận người tự động</label><label class="full checkbox-label"><input id="poolOrganizationReady" type="checkbox" /> Kiểm tra và đánh dấu sẵn sàng</label></div><p class="form-hint">Khi bật “sẵn sàng”, server kiểm tra budget, OpenAI, video policy, credential và rate hiện hành.</p><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu sức chứa</button></div>
+        <form method="dialog" id="organizationPoolOrganizationForm"><div class="dialog-heading"><div><span class="eyebrow">POOL CAPACITY</span><h2>Cấu hình tổ chức</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+            <input type="hidden" id="poolOrganizationPoolId" /><div class="form-grid"><label class="full">Tổ chức<select id="poolOrganizationId" required></select></label><label>Sức chứa khách hàng<input id="poolOrganizationCapacity" type="number" min="1" max="100000" required /><small class="input-help" id="poolOrganizationCapacityMinimum">Số khách tối đa có thể được phân bổ vào tổ chức này.</small></label><label>Ưu tiên phân bổ<input id="poolOrganizationPriority" type="number" min="0" max="100000" value="100" required /><small class="input-help">Số nhỏ hơn được ưu tiên trước khi cân bằng sức chứa.</small></label><label class="full checkbox-label"><input id="poolOrganizationAuto" type="checkbox" /> Cho phép hệ thống tự động phân bổ khách vào tổ chức này</label></div><div class="readiness-explanation"><strong>Sẵn sàng là kết quả kiểm tra của hệ thống</strong><span>Sau khi lưu, hãy bấm “Kiểm tra sẵn sàng” tại danh sách tổ chức. Server sẽ kiểm tra budget, OpenAI, Policy Video dài, credential và bảng giá.</span></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu cấu hình</button></div>
         </form>
     </dialog>
 
     <dialog id="organizationPoolPlanDialog" class="admin-dialog small-dialog">
-        <form method="dialog" id="organizationPoolPlanForm"><div class="dialog-heading"><div><span class="eyebrow">PLAN MAPPING</span><h2>Gắn gói vào pool</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
+        <form method="dialog" id="organizationPoolPlanForm"><div class="dialog-heading"><div><span class="eyebrow">PLAN MAPPING</span><h2>Gắn gói vào pool</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
             <input type="hidden" id="poolPlanPoolId" /><div class="form-grid"><label class="full">Gói license<select id="poolPlanId" required></select></label><label class="full">Hạn mức AI thành viên/tháng (USD, không bắt buộc)<input id="poolPlanMemberBudget" type="number" min="0" max="100000000" step="0.000001" /></label><label class="full checkbox-label"><input id="poolPlanActive" type="checkbox" checked /> Mapping đang hoạt động</label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu mapping</button></div>
         </form>
     </dialog>
@@ -260,7 +275,7 @@
 
     <dialog id="aiRateDialog" class="admin-dialog small-dialog">
         <form id="aiRateForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">AI COST RATE</span><h2 id="aiRateDialogTitle">Tạo đơn giá</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
-            <input type="hidden" id="aiRateModelId" /><input type="hidden" id="aiRateProviderCode" /><div class="form-grid"><label>Loại sử dụng<select id="aiRateUsageType"><option>InputToken</option><option>OutputToken</option><option>VideoSecond</option></select></label><label>Đơn vị<select id="aiRateUnit"><option>MillionTokens</option><option>1KTokens</option><option>Token</option><option>Second</option></select></label><label>Đơn giá USD<input id="aiRatePrice" type="number" min="0.000001" max="1000000" step="0.000001" required /></label><label>Tiền tệ<select id="aiRateCurrency"><option value="USD">USD</option></select></label><label class="full">Nguồn giá / ghi chú<input id="aiRateSource" maxlength="200" placeholder="provider-contract" /></label><p id="aiRateVariantHint" class="form-hint full hidden">Rate video áp dụng riêng cho đúng model/endpoint 720p có Native Audio; nhập USD/giây từ hợp đồng hoặc dashboard provider, không nhập số credit.</p></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Tạo rate mới</button></div>
+            <input type="hidden" id="aiRateModelId" /><input type="hidden" id="aiRateProviderCode" /><div class="form-grid"><label>Loại chi phí<select id="aiRateUsageType"><option>InputToken</option><option>OutputToken</option><option>VideoSecond</option></select></label><label>Đơn vị tính<select id="aiRateUnit"><option>MillionTokens</option><option>1KTokens</option><option>Token</option><option>Second</option></select></label><label>Đơn giá USD<input id="aiRatePrice" type="number" min="0.000001" max="1000000" step="0.000001" required /></label><label>Tiền tệ<select id="aiRateCurrency"><option value="USD">USD</option></select></label><label class="full">Nguồn giá<input id="aiRateSource" maxlength="200" placeholder="Ví dụ: Fal dashboard 2026-09-04" required /><small class="input-help">Ghi nguồn từ hợp đồng hoặc dashboard của chính tài khoản provider đang dùng.</small></label><p id="aiRateVariantHint" class="form-hint full hidden">Đơn giá video áp dụng riêng cho đúng model/endpoint 720p có Native Audio; nhập USD/giây, không nhập số credit.</p><div id="aiRatePreview" class="rate-preview full" aria-live="polite"></div></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Tạo đơn giá</button></div>
         </form>
     </dialog>
 

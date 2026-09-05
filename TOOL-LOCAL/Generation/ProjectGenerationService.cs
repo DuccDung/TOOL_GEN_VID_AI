@@ -301,6 +301,387 @@ internal sealed class ProjectGenerationService(
         }
     }
 
+    public Task<SceneFirstFrameQuoteResponse> GetSceneFirstFrameQuoteAsync(
+        Guid projectId,
+        Guid sceneId,
+        CancellationToken cancellationToken) =>
+        apiClient.GetSceneFirstFrameQuoteAsync(projectId, sceneId, cancellationToken);
+
+    public async Task<SceneFirstFrameListResponse> GetSceneFirstFramesAsync(
+        Guid projectId,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        var response = await apiClient.GetSceneFirstFramesAsync(projectId, sceneId, cancellationToken);
+        return response with
+        {
+            Frames = response.Frames.Select(frame => frame with
+            {
+                PreviewUrl = CreateFirstFramePreviewUrl(frame.RelativePath)
+            }).ToArray()
+        };
+    }
+
+    public async Task<ProjectSceneFirstFrameListResponse> GetProjectSceneFirstFramesAsync(
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var response = await apiClient.GetProjectSceneFirstFramesAsync(projectId, cancellationToken);
+        return response with
+        {
+            Frames = response.Frames.Select(frame => frame with
+            {
+                PreviewUrl = CreateFirstFramePreviewUrl(frame.RelativePath)
+            }).ToArray()
+        };
+    }
+
+    public async Task<SceneFirstFrameSummary> GenerateSceneFirstFrameAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid sceneId,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        if (sceneId == Guid.Empty || attempt <= 0)
+        {
+            throw new ArgumentException("Scene hoặc attempt tạo first-frame không hợp lệ.");
+        }
+
+        string projectWorkspace;
+        string aspectRatio;
+        int scenePlanVersion;
+        PromptWorkItem prompt;
+        ReferenceWorkItem? reference = null;
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+            var scene = await dbContext.Scenes.AsNoTracking()
+                .Where(x => x.SceneId == sceneId && x.ProjectId == projectId)
+                .Select(x => new
+                {
+                    x.ScenePlanVersion,
+                    x.CharacterIdsJson,
+                    Prompt = x.ScenePrompts
+                        .Where(p => p.Status == "Approved" || p.Status == "Ready")
+                        .OrderByDescending(p => p.Version)
+                        .Select(p => new PromptWorkItem(p.ScenePromptId, p.Version, p.FinalPrompt, p.NegativePrompt))
+                        .FirstOrDefault()
+                })
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new ArgumentException("Không tìm thấy cảnh trong dự án.");
+            prompt = scene.Prompt ?? throw new ArgumentException("Cảnh chưa có prompt được duyệt.");
+            scenePlanVersion = project.CurrentScenePlanVersion is { } current && current == scene.ScenePlanVersion
+                ? current
+                : throw new ArgumentException("Kế hoạch cảnh đã thay đổi. Hãy tải lại dự án.");
+            var characterIds = ParseGuidList(scene.CharacterIdsJson);
+            if (characterIds.Count > 1)
+            {
+                throw new ArgumentException("Cảnh first-frame chỉ hỗ trợ tối đa một nhân vật.");
+            }
+            if (characterIds.Count == 1)
+            {
+                var character = await dbContext.Characters.AsNoTracking()
+                    .Where(x => x.CharacterId == characterIds[0] && x.ProjectId == projectId)
+                    .Select(x => new
+                    {
+                        x.Status,
+                        Reference = x.CharacterReferences
+                            .Where(r => r.IsPrimary && r.ApprovalStatus == "Approved" &&
+                                        r.MediaAsset.Status == "Ready" && r.MediaAsset.DeletedAtUtc == null)
+                            .OrderByDescending(r => r.CreatedAtUtc)
+                            .Select(r => new ReferenceWorkItem(
+                                r.CharacterReferenceId,
+                                r.MediaAsset.RelativePath,
+                                r.MediaAsset.MimeType,
+                                r.MediaAsset.Sha256,
+                                r.MediaAsset.SizeBytes))
+                            .FirstOrDefault()
+                    })
+                    .SingleOrDefaultAsync(cancellationToken);
+                if (character is null || character.Status != "Approved" || character.Reference is null)
+                {
+                    throw new ArgumentException("Hãy khóa nhân vật và duyệt ảnh primary trước khi tạo first-frame.");
+                }
+                reference = character.Reference;
+            }
+            projectWorkspace = project.WorkspaceRelativePath;
+            aspectRatio = project.AspectRatio;
+        }
+
+        var assetLibrary = await apiClient.GetProjectAssetLibraryAsync(projectId, cancellationToken);
+        var assignment = assetLibrary.SceneAssignments.SingleOrDefault(x => x.SceneId == sceneId);
+        var assignedIds = assignment?.ProjectAssetIds ?? [];
+        var assetVersions = assetLibrary.Assets
+            .Where(x => assignedIds.Contains(x.ProjectAssetId))
+            .OrderBy(x => x.ProjectAssetId)
+            .Select(x => $"{x.ProjectAssetId:N}:{x.CurrentVersion}");
+        var assetVersionHash = Sha256Hex(string.Join('|', assetVersions));
+        SceneFirstFrameCharacterInput? characterInput = null;
+        if (reference is not null)
+        {
+            var loaded = await LoadReferenceImageAsync(projectWorkspace, reference, cancellationToken);
+            characterInput = new SceneFirstFrameCharacterInput(
+                loaded.CharacterReferenceId,
+                loaded.MimeType,
+                loaded.Base64Data,
+                loaded.Sha256);
+        }
+        var idempotencyKey =
+            $"scene-first-frame:{prompt.ScenePromptId:N}:{prompt.Version}:{reference?.CharacterReferenceId.ToString("N") ?? "none"}:{assetVersionHash}:{aspectRatio}:{attempt}";
+        var response = await apiClient.GenerateSceneFirstFrameAsync(
+            new GenerateSceneFirstFrameRequest(
+                projectId,
+                sceneId,
+                scenePlanVersion,
+                prompt.Version,
+                idempotencyKey,
+                CharacterReference: characterInput,
+                Attempt: attempt),
+            cancellationToken);
+        ValidateSceneFirstFrameMetadata(response, aspectRatio);
+
+        var existing = (await apiClient.GetSceneFirstFramesAsync(projectId, sceneId, cancellationToken)).Frames
+            .SingleOrDefault(x => x.ProviderRequestId == response.ProviderRequestId);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var extension = response.MimeType == "image/png" ? ".png" : ".jpg";
+        var fileName = $"first-frame-{response.ProviderRequestId:N}{extension}";
+        var workspaceRelativePath = Path.Combine(
+            projectWorkspace,
+            "scenes",
+            sceneId.ToString("N"),
+            "first-frames",
+            fileName);
+        var normalizedRelativePath = workspaceRelativePath.Replace(Path.DirectorySeparatorChar, '/');
+        var finalPath = workspaceService.Resolve(workspaceRelativePath);
+        var partialPath = $"{finalPath}.part";
+        Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+        if (File.Exists(partialPath))
+        {
+            File.Delete(partialPath);
+        }
+
+        if (File.Exists(finalPath))
+        {
+            await ValidateDownloadedSceneFirstFrameAsync(finalPath, response, cancellationToken);
+        }
+        else
+        {
+            try
+            {
+                await apiClient.DownloadSceneFirstFrameAsync(response, partialPath, cancellationToken);
+                await ValidateDownloadedSceneFirstFrameAsync(partialPath, response, cancellationToken);
+                File.Move(partialPath, finalPath, false);
+            }
+            finally
+            {
+                if (File.Exists(partialPath))
+                {
+                    File.Delete(partialPath);
+                }
+            }
+        }
+
+        return await apiClient.MaterializeSceneFirstFrameAsync(
+            projectId,
+            sceneId,
+            new MaterializeSceneFirstFrameRequest(
+                response.ProviderRequestId,
+                normalizedRelativePath,
+                response.MimeType,
+                response.Sha256,
+                response.SizeBytes,
+                response.Width,
+                response.Height),
+            cancellationToken);
+    }
+
+    public Task<SceneFirstFrameSummary> ApproveSceneFirstFrameAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        string rowVersion,
+        CancellationToken cancellationToken) =>
+        apiClient.ApproveSceneFirstFrameAsync(
+            projectId,
+            sceneId,
+            frameId,
+            new ChangeSceneFirstFrameStatusRequest(rowVersion),
+            cancellationToken);
+
+    public Task<SceneFirstFrameSummary> RejectSceneFirstFrameAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        string rowVersion,
+        CancellationToken cancellationToken) =>
+        apiClient.RejectSceneFirstFrameAsync(
+            projectId,
+            sceneId,
+            frameId,
+            new ChangeSceneFirstFrameStatusRequest(rowVersion),
+            cancellationToken);
+
+    public async Task<SceneFirstFrameSummary> RetrySceneFirstFrameDownloadAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        CancellationToken cancellationToken)
+    {
+        var frame = (await apiClient.GetSceneFirstFramesAsync(projectId, sceneId, cancellationToken)).Frames
+            .SingleOrDefault(x => x.SceneFirstFrameId == frameId)
+            ?? throw new ArgumentException("Không tìm thấy first-frame cần tải lại.");
+        var response = new GenerateSceneFirstFrameResponse(
+            frame.ProviderRequestId,
+            "openai",
+            "gpt-image-2",
+            $"/api/generation/images/scene-first-frames/{frame.ProviderRequestId:D}/content",
+            frame.MimeType,
+            frame.Sha256,
+            frame.Width,
+            frame.Height,
+            frame.SizeBytes,
+            0,
+            0,
+            0,
+            "USD",
+            DateTime.MaxValue);
+        var finalPath = workspaceService.Resolve(frame.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var partialPath = $"{finalPath}.part";
+        Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+        if (File.Exists(finalPath))
+        {
+            await ValidateDownloadedSceneFirstFrameAsync(finalPath, response, cancellationToken);
+            return frame with { PreviewUrl = CreateFirstFramePreviewUrl(frame.RelativePath) };
+        }
+        if (File.Exists(partialPath))
+        {
+            File.Delete(partialPath);
+        }
+        try
+        {
+            await apiClient.DownloadSceneFirstFrameAsync(response, partialPath, cancellationToken);
+            await ValidateDownloadedSceneFirstFrameAsync(partialPath, response, cancellationToken);
+            File.Move(partialPath, finalPath, false);
+        }
+        finally
+        {
+            if (File.Exists(partialPath))
+            {
+                File.Delete(partialPath);
+            }
+        }
+        return frame with { PreviewUrl = CreateFirstFramePreviewUrl(frame.RelativePath) };
+    }
+
+    private static void ValidateSceneFirstFrameMetadata(GenerateSceneFirstFrameResponse response, string aspectRatio)
+    {
+        var expected = aspectRatio == "9:16" ? (Width: 720, Height: 1280) : (Width: 1280, Height: 720);
+        if (response.ProviderRequestId == Guid.Empty || response.ProviderCode != "openai" ||
+            response.ModelCode != "gpt-image-2" || response.MimeType is not ("image/png" or "image/jpeg") ||
+            response.Width != expected.Width || response.Height != expected.Height ||
+            response.SizeBytes is <= 0 or > 8L * 1024 * 1024 || response.Sha256.Length != 64 ||
+            response.Sha256.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw new InvalidDataException("Metadata first-frame GPT-Image-2 không hợp lệ.");
+        }
+    }
+
+    private static async Task ValidateDownloadedSceneFirstFrameAsync(
+        string path,
+        GenerateSceneFirstFrameResponse response,
+        CancellationToken cancellationToken)
+    {
+        var fileInfo = new FileInfo(path);
+        if (!fileInfo.Exists || fileInfo.Length != response.SizeBytes || fileInfo.Length > 8L * 1024 * 1024)
+        {
+            throw new InvalidDataException("First-frame tải về không đúng dung lượng.");
+        }
+        var bytes = new byte[fileInfo.Length];
+        await using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+        {
+            await stream.ReadExactlyAsync(bytes, cancellationToken);
+        }
+        var (mimeType, width, height) = ReadImageInfo(bytes);
+        var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        if (mimeType != response.MimeType || width != response.Width || height != response.Height ||
+            !string.Equals(sha256, response.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("MIME, kích thước hoặc SHA-256 của first-frame không hợp lệ.");
+        }
+    }
+
+    private static (string MimeType, int Width, int Height) ReadImageInfo(ReadOnlySpan<byte> bytes)
+    {
+        ReadOnlySpan<byte> pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        if (bytes.Length >= 24 && bytes[..8].SequenceEqual(pngSignature))
+        {
+            return ("image/png", BinaryPrimitives.ReadInt32BigEndian(bytes.Slice(16, 4)), BinaryPrimitives.ReadInt32BigEndian(bytes.Slice(20, 4)));
+        }
+        if (bytes.Length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8)
+        {
+            var offset = 2;
+            while (offset + 4 <= bytes.Length)
+            {
+                if (bytes[offset++] != 0xFF)
+                {
+                    continue;
+                }
+                var marker = bytes[offset++];
+                if (marker is 0xD8 or 0xD9)
+                {
+                    continue;
+                }
+                if (offset + 2 > bytes.Length)
+                {
+                    break;
+                }
+                var length = BinaryPrimitives.ReadUInt16BigEndian(bytes.Slice(offset, 2));
+                if (length < 2 || offset + length > bytes.Length)
+                {
+                    break;
+                }
+                if (marker is 0xC0 or 0xC1 or 0xC2 or 0xC3 or 0xC5 or 0xC6 or 0xC7 or 0xC9 or 0xCA or 0xCB or 0xCD or 0xCE or 0xCF)
+                {
+                    return (
+                        "image/jpeg",
+                        BinaryPrimitives.ReadUInt16BigEndian(bytes.Slice(offset + 5, 2)),
+                        BinaryPrimitives.ReadUInt16BigEndian(bytes.Slice(offset + 3, 2)));
+                }
+                offset += length;
+            }
+        }
+        throw new InvalidDataException("First-frame không phải PNG/JPEG hợp lệ.");
+    }
+
+    private string? CreateFirstFramePreviewUrl(string relativePath)
+    {
+        try
+        {
+            var normalized = relativePath.Replace('/', Path.DirectorySeparatorChar);
+            var resolved = workspaceService.Resolve(normalized);
+            if (!File.Exists(resolved))
+            {
+                return null;
+            }
+            var urlPath = string.Join(
+                '/',
+                normalized.Split(
+                    [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                    StringSplitOptions.RemoveEmptyEntries)
+                    .Select(Uri.EscapeDataString));
+            return $"https://media.app.local/{urlPath}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
     public async Task<int> GenerateVideosAsync(
         Guid projectId,
         string remoteUserId,
@@ -767,12 +1148,23 @@ internal sealed class ProjectGenerationService(
             }
             else
             {
-                var referenceImage = scene.Character?.Reference is null
-                    ? null
-                    : await LoadReferenceImageAsync(
+                VideoReferenceImageInput? referenceImage = null;
+                SceneFirstFrameInput? firstFrame = null;
+                if (string.Equals(project.VideoProviderCode, "fal", StringComparison.OrdinalIgnoreCase))
+                {
+                    var approved = (await apiClient.GetSceneFirstFramesAsync(projectId, scene.SceneId, cancellationToken)).Frames
+                        .SingleOrDefault(x => x.Status == SceneFirstFrameStatuses.Approved && x.IsCurrent)
+                        ?? throw new InvalidDataException(
+                            "Cảnh này chưa có first-frame đúng tỷ lệ đã duyệt. Hãy tạo và duyệt first-frame trước khi gửi sang Veo.");
+                    firstFrame = await LoadSceneFirstFrameInputAsync(approved, cancellationToken);
+                }
+                else if (scene.Character?.Reference is not null)
+                {
+                    referenceImage = await LoadReferenceImageAsync(
                         project.WorkspaceRelativePath,
                         scene.Character.Reference,
                         cancellationToken);
+                }
                 var attempt = await dbContext.ProviderRequests.CountAsync(
                     x => x.ProjectId == projectId && x.SceneId == scene.SceneId && x.RequestKind == "Video",
                     cancellationToken) + 1;
@@ -780,10 +1172,11 @@ internal sealed class ProjectGenerationService(
                     new SubmitVideoRequest(
                         projectId,
                         scene.SceneId,
-                        $"video:{prompt.ScenePromptId:N}:ref:{referenceImage?.CharacterReferenceId.ToString("N") ?? "none"}:attempt:{attempt}",
+                        $"video:{prompt.ScenePromptId:N}:input:{firstFrame?.SceneFirstFrameId.ToString("N") ?? referenceImage?.CharacterReferenceId.ToString("N") ?? "none"}:attempt:{attempt}",
                         ReferenceImage: referenceImage,
                         ScenePlanVersion: scene.ScenePlanVersion,
-                        ScenePromptVersion: prompt.Version),
+                        ScenePromptVersion: prompt.Version,
+                        FirstFrame: firstFrame),
                     cancellationToken);
             }
         }
@@ -864,6 +1257,39 @@ internal sealed class ProjectGenerationService(
             reference.MimeType,
             Convert.ToBase64String(bytes),
             hash);
+    }
+
+    private async Task<SceneFirstFrameInput> LoadSceneFirstFrameInputAsync(
+        SceneFirstFrameSummary frame,
+        CancellationToken cancellationToken)
+    {
+        if (frame.Status != SceneFirstFrameStatuses.Approved || !frame.IsCurrent ||
+            frame.SizeBytes is <= 0 or > 8L * 1024 * 1024 || frame.MimeType is not ("image/png" or "image/jpeg"))
+        {
+            throw new InvalidDataException("First-frame chưa được duyệt hoặc đã lỗi thời.");
+        }
+        var path = workspaceService.Resolve(frame.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException("Không tìm thấy file first-frame đã duyệt trong workspace.");
+        }
+        var bytes = new byte[new FileInfo(path).Length];
+        await using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+        {
+            if (stream.Length != frame.SizeBytes || stream.Length > 8L * 1024 * 1024)
+            {
+                throw new InvalidDataException("File first-frame đã thay đổi sau khi được duyệt.");
+            }
+            await stream.ReadExactlyAsync(bytes, cancellationToken);
+        }
+        var info = ReadImageInfo(bytes);
+        var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        if (info.MimeType != frame.MimeType || info.Width != frame.Width || info.Height != frame.Height ||
+            !string.Equals(hash, frame.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("File first-frame không khớp bản đã duyệt.");
+        }
+        return new SceneFirstFrameInput(frame.SceneFirstFrameId, frame.MimeType, Convert.ToBase64String(bytes), hash);
     }
 
     private async Task<Guid> EnsureVideoGenerationAsync(

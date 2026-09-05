@@ -82,6 +82,9 @@ public sealed class DesktopUpdatesControllerTests
         public Task<IReadOnlyList<AdminDesktopReleaseResponse>> GetAdminReleasesAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<TOOL_SHARED.Contracts.Common.PagedResponse<AdminDesktopReleaseResponse>> GetAdminReleasesPageAsync(int page, int pageSize, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<AdminDesktopReleaseResponse> CreateAsync(AdminDesktopReleaseRequest request, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

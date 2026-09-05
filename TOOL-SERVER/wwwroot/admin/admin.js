@@ -4,8 +4,11 @@ const state = {
   user: readJson(sessionStorage.getItem('vmAdminUser')),
   overview: null,
   users: [],
+  usersPaging: { page: 1, pageSize: 20, totalCount: 0, totalPages: 0, hasPrevious: false, hasNext: false },
+  userSearch: '',
   plans: [],
   releases: [],
+  releasesPaging: { page: 1, pageSize: 20, totalCount: 0, totalPages: 0, hasPrevious: false, hasNext: false },
   selectedUser: null,
   currentView: 'overview',
   refreshing: null
@@ -15,7 +18,7 @@ const loginScreen = document.getElementById('loginScreen');
 const adminShell = document.getElementById('adminShell');
 const panels = [...document.querySelectorAll('[data-panel]')];
 const pageMeta = {
-  overview: ['LICENSE CONTROL', 'Tổng quan hệ thống', 'Theo dõi tài khoản, license và phiên sử dụng theo thời gian thực.'],
+  overview: ['LICENSE CONTROL', 'Tổng quan hệ thống', 'Theo dõi tài khoản, license và phiên sử dụng từ dữ liệu hiện tại trên server.'],
   users: ['ACCOUNTS & ACCESS', 'Người dùng', 'Cấp, gia hạn hoặc thu hồi quyền sử dụng theo từng tài khoản.'],
   organizations: ['ORGANIZATION & AI', 'Tổ chức & AI', 'Quản lý thành viên, ngân sách, credential, usage và bảng giá AI.'],
   plans: ['LICENSE POLICY', 'Gói sử dụng', 'Thiết lập thời hạn, số thiết bị và số phiên chạy đồng thời.'],
@@ -168,8 +171,57 @@ function setBusy(button, busy, text) {
   else button.innerHTML = button.dataset.idleHtml;
 }
 
+// Dynamic admin panels briefly replace their content with a loading state; keep the viewport stable.
+function capturePagePosition() {
+  const scrollingElement = document.scrollingElement || document.documentElement;
+  return {
+    left: window.scrollX || scrollingElement.scrollLeft || 0,
+    top: window.scrollY || scrollingElement.scrollTop || 0
+  };
+}
+
+function restorePagePosition(position) {
+  if (!position) return;
+  const scrollingElement = document.scrollingElement || document.documentElement;
+  scrollingElement.scrollLeft = position.left;
+  scrollingElement.scrollTop = position.top;
+  if (typeof window.scrollTo === 'function') window.scrollTo({ left: position.left, top: position.top, behavior: 'auto' });
+}
+
+function preservePagePosition(action) {
+  const position = capturePagePosition();
+  let result;
+  try {
+    result = action();
+  } catch (error) {
+    restorePagePosition(position);
+    throw error;
+  }
+  if (result && typeof result.then === 'function') return result.finally(() => restorePagePosition(position));
+  restorePagePosition(position);
+  return result;
+}
+
+function paginationMarkup(pagination, key, label) {
+  if (!pagination || pagination.totalPages <= 1) return '';
+  const page = Number(pagination.page || 1);
+  const totalPages = Number(pagination.totalPages || 0);
+  const pageSize = Number(pagination.pageSize || 20);
+  const totalCount = Number(pagination.totalCount || 0);
+  const first = (page - 1) * pageSize + 1;
+  const last = Math.min(page * pageSize, totalCount);
+  const start = Math.max(1, Math.min(page - 2, totalPages - 4));
+  const end = Math.min(totalPages, start + 4);
+  const buttons = [];
+  for (let value = start; value <= end; value += 1) {
+    buttons.push(`<button type="button" class="pagination-page${value === page ? ' active' : ''}" data-page="${value}" aria-current="${value === page ? 'page' : 'false'}">${value}</button>`);
+  }
+  return `<nav class="admin-pagination" data-pagination="${escapeHtml(key)}" aria-label="Phân trang ${escapeHtml(label)}"><span class="pagination-summary">${first}–${last} trên ${totalCount}</span><div class="pagination-controls"><button type="button" class="pagination-page pagination-edge" data-page="1" ${pagination.hasPrevious ? '' : 'disabled'} aria-label="Trang đầu">«</button><button type="button" class="pagination-page pagination-edge" data-page="${Math.max(1, page - 1)}" ${pagination.hasPrevious ? '' : 'disabled'} aria-label="Trang trước">‹</button>${buttons.join('')}<button type="button" class="pagination-page pagination-edge" data-page="${Math.min(totalPages, page + 1)}" ${pagination.hasNext ? '' : 'disabled'} aria-label="Trang sau">›</button><button type="button" class="pagination-page pagination-edge" data-page="${totalPages}" ${pagination.hasNext ? '' : 'disabled'} aria-label="Trang cuối">»</button></div><label class="pagination-size">Hiển thị<select data-page-size><option value="10" ${pageSize === 10 ? 'selected' : ''}>10</option><option value="20" ${pageSize === 20 ? 'selected' : ''}>20</option><option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option><option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option></select></label></nav>`;
+}
+
 function showLogin(message = '') {
   clearSession();
+  setTopbarVisible(true);
   loginScreen.classList.remove('hidden');
   adminShell.classList.add('hidden');
   document.getElementById('loginMessage').textContent = message;
@@ -178,6 +230,7 @@ function showLogin(message = '') {
 function showAdmin() {
   loginScreen.classList.add('hidden');
   adminShell.classList.remove('hidden');
+  setTopbarVisible(true);
   const displayName = state.user?.displayName || state.user?.email || 'Administrator';
   document.getElementById('adminName').textContent = displayName;
   document.getElementById('adminEmail').textContent = state.user?.email || '';
@@ -185,23 +238,38 @@ function showAdmin() {
 }
 
 async function loadAll() {
-  try {
-    const [overview, plans, users, releases] = await Promise.all([
-      api('/api/admin/licenses/overview'),
-      api('/api/admin/licenses/plans'),
-      api('/api/admin/licenses/users'),
-      api('/api/admin/desktop-releases')
-    ]);
-    state.overview = overview;
-    state.plans = plans;
-    state.users = users;
-    state.releases = releases;
-    renderAll();
-  } catch (error) {
-    if (error.status === 401) return showLogin('Phiên đăng nhập đã hết hạn.');
-    if (error.status === 403) return showLogin('Tài khoản này chưa có quyền Admin.');
-    toast(error.message, true);
-  }
+  return preservePagePosition(async () => {
+  const requests = [
+    ['overview', api('/api/admin/licenses/overview')],
+    ['plans', api('/api/admin/licenses/plans')],
+    ['users', api('/api/admin/licenses/users/page?page=1&pageSize=20')],
+    ['releases', api('/api/admin/desktop-releases/page?page=1&pageSize=20')]
+  ];
+  const results = await Promise.allSettled(requests.map(([, request]) => request));
+  const failures = [];
+  results.forEach((result, index) => {
+    const key = requests[index][0];
+    if (result.status === 'fulfilled') {
+      if (key === 'users' && result.value && !Array.isArray(result.value)) {
+        state.users = result.value.items || [];
+        state.usersPaging = result.value;
+      } else if (key === 'releases' && result.value && !Array.isArray(result.value)) {
+        state.releases = result.value.items || [];
+        state.releasesPaging = result.value;
+      } else {
+        state[key] = result.value;
+      }
+    }
+    else failures.push(result.reason);
+  });
+  const authenticationError = failures.find(error => error?.status === 401 || error?.status === 403);
+  if (authenticationError?.status === 401) return showLogin('Phiên đăng nhập đã hết hạn.');
+  if (authenticationError?.status === 403) return showLogin('Tài khoản này chưa có quyền Admin.');
+  renderAll();
+  const refreshLabel = document.getElementById('adminLastRefresh');
+  if (refreshLabel) refreshLabel.textContent = `Cập nhật ${new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(new Date())}`;
+  if (failures.length) toast(`Có ${failures.length} khu vực chưa tải được. Bạn có thể thử làm mới lại.`, true);
+  });
 }
 
 function renderAll() {
@@ -209,7 +277,12 @@ function renderAll() {
   renderUsers();
   renderPlans();
   renderReleases();
+  appendReleasePagination();
   renderGrantPlans();
+}
+
+function appendReleasePagination() {
+  if (state.releases.length) document.getElementById('releaseTable').insertAdjacentHTML('beforeend', paginationMarkup(state.releasesPaging, 'releases', 'desktop release'));
 }
 
 function renderOverview() {
@@ -254,7 +327,26 @@ function renderUsers() {
       <td><span class="status-pill ${visual.css}">${escapeHtml(visual.label)}</span></td>
       <td><div class="row-actions"><button class="ghost-button" data-user-id="${escapeHtml(user.userId)}">Chi tiết</button><button class="primary-button" data-grant-user="${escapeHtml(user.userId)}">${license ? 'Đổi gói' : 'Cấp gói'}</button></div></td>
     </tr>`;
-  }).join('')}</tbody></table></div>`;
+  }).join('')}</tbody></table></div>${paginationMarkup(state.usersPaging, 'users', 'người dùng')}`;
+}
+
+async function loadUsersPage(page = state.usersPaging.page, pageSize = state.usersPaging.pageSize) {
+  return preservePagePosition(async () => {
+    const root = document.getElementById('userTable');
+    root.innerHTML = '<div class="organization-loading empty-state">Đang tải danh sách người dùng...</div>';
+    const search = state.userSearch.trim();
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (search) query.set('search', search);
+    try {
+      const data = await api(`/api/admin/licenses/users/page?${query.toString()}`);
+      state.users = data.items || [];
+      state.usersPaging = data;
+      renderUsers();
+    } catch (error) {
+      root.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+      throw error;
+    }
+  });
 }
 
 function renderPlans() {
@@ -282,23 +374,64 @@ function renderReleases() {
     <tr><td><strong>${escapeHtml(item.version)} (${item.buildNumber})</strong><br />${escapeHtml(item.platform)}</td><td><span class="status-pill ${item.isActive ? 'status-healthy' : ''}">${escapeHtml(item.channel)} · ${item.isActive ? 'Active' : 'Inactive'}</span></td><td>${escapeHtml(formatDate(item.publishedAtUtc))}</td><td><div class="artifact-list">${item.artifacts.map(artifact => `<span class="artifact-chip" title="SHA-256: ${escapeHtml(artifact.sha256)}">${escapeHtml(artifact.kind)} · ${escapeHtml(formatBytes(artifact.sizeBytes))}</span>`).join('') || '—'}</div></td><td>${item.isMandatory ? '<span class="status-pill status-failed">Bắt buộc</span>' : '<span class="status-pill">Tùy chọn</span>'}</td><td><div class="release-actions"><button class="ghost-button" data-edit-release="${item.releaseId}">${icon('pencil')}<span>Sửa</span></button><button class="danger-button" data-delete-release="${item.releaseId}">${icon('trash-2')}<span>Xóa</span></button></div></td></tr>`).join('')}</tbody></table></div>`;
 }
 
+async function loadReleasesPage(page = state.releasesPaging.page, pageSize = state.releasesPaging.pageSize) {
+  return preservePagePosition(async () => {
+    const root = document.getElementById('releaseTable');
+    root.innerHTML = '<div class="organization-loading empty-state">Đang tải desktop release...</div>';
+    try {
+      const data = await api(`/api/admin/desktop-releases/page?page=${page}&pageSize=${pageSize}`);
+      state.releases = data.items || [];
+      state.releasesPaging = data;
+      renderReleases();
+      appendReleasePagination();
+    } catch (error) {
+      root.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+      throw error;
+    }
+  });
+}
+
 function renderGrantPlans() {
   document.getElementById('grantPlan').innerHTML = state.plans.filter(x => x.isActive).map(plan => `<option value="${plan.licensePlanId}" data-days="${plan.defaultDurationDays || 30}">${escapeHtml(plan.name)}${plan.defaultDurationDays ? ` · ${plan.defaultDurationDays} ngày` : ''}</option>`).join('');
 }
 
-function navigate(view) {
-  if (!pageMeta[view]) return;
-  state.currentView = view;
-  document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view));
-  panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.panel !== view));
-  const [eyebrow, title, subtitle] = pageMeta[view];
+function setPageMeta(eyebrow, title, subtitle) {
   document.getElementById('pageEyebrow').textContent = eyebrow;
   document.getElementById('pageTitle').textContent = title;
   document.getElementById('pageSubtitle').textContent = subtitle;
-  document.getElementById('topAddPlan').classList.toggle('hidden', view !== 'plans');
-  document.getElementById('topAddRelease').classList.toggle('hidden', view !== 'releases');
-  document.getElementById('topAddOrganization').classList.toggle('hidden', view !== 'organizations');
-  if (view === 'organizations') window.videoMakerOrganizationAdmin?.activate();
+}
+
+function setSetupReturn(visible) {
+  document.getElementById('returnToSetupButton').classList.toggle('hidden', !visible);
+}
+
+function setTopbarVisible(visible) {
+  document.querySelector('.topbar')?.classList.toggle('hidden', !visible);
+}
+
+function setOrganizationMenuExpanded(expanded) {
+  const parent = document.querySelector('[data-nav-parent="organizations"]');
+  const submenu = document.getElementById('organizationSubmenu');
+  if (!parent || !submenu) return;
+  parent.setAttribute('aria-expanded', String(expanded));
+  submenu.classList.toggle('hidden', !expanded);
+}
+
+function navigate(view, options = {}) {
+  if (!pageMeta[view]) return;
+  state.currentView = view;
+  setTopbarVisible(true);
+  if (!options.keepSetupReturn) setSetupReturn(false);
+  document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view));
+  panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.panel !== view));
+  const [eyebrow, title, subtitle] = pageMeta[view];
+  setPageMeta(eyebrow, title, subtitle);
+  if (view === 'organizations') {
+    setOrganizationMenuExpanded(options.organizationMenuExpanded ?? true);
+    window.videoMakerOrganizationAdmin?.activate(options.organizationScope);
+  } else {
+    setOrganizationMenuExpanded(false);
+  }
 }
 
 function toLocalDateTime(value) {
@@ -427,18 +560,26 @@ document.getElementById('loginForm').addEventListener('submit', async event => {
   finally { setBusy(button, false); }
 });
 
-document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => navigate(button.dataset.view)));
+document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => {
+  if (button.dataset.navParent) {
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    navigate(button.dataset.view, { organizationMenuExpanded: expanded });
+    return;
+  }
+  navigate(button.dataset.view);
+}));
 document.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => navigate(button.dataset.go)));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
 document.getElementById('refreshButton').addEventListener('click', () => state.currentView === 'organizations'
   ? window.videoMakerOrganizationAdmin?.refresh()
   : loadAll());
-document.getElementById('topAddOrganization').addEventListener('click', () => window.videoMakerOrganizationAdmin?.openCreateOrganization());
-document.getElementById('topAddPlan').addEventListener('click', () => openPlanDialog());
 document.getElementById('addPlanButton').addEventListener('click', () => openPlanDialog());
-document.getElementById('topAddRelease').addEventListener('click', () => openReleaseDialog());
 document.getElementById('addReleaseButton').addEventListener('click', () => openReleaseDialog());
 document.getElementById('grantPlan').addEventListener('change', syncGrantDuration);
+document.getElementById('returnToSetupButton').addEventListener('click', () => {
+  navigate('organizations', { keepSetupReturn: true });
+  window.videoMakerOrganizationAdmin?.showSetup();
+});
 
 document.getElementById('logoutButton').addEventListener('click', async () => {
   try { await api('/api/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken: state.refreshToken }) }); } catch { /* local logout must complete */ }
@@ -447,11 +588,26 @@ document.getElementById('logoutButton').addEventListener('click', async () => {
 
 document.getElementById('userSearchForm').addEventListener('submit', async event => {
   event.preventDefault();
-  try {
-    const search = document.getElementById('userSearch').value.trim();
-    state.users = await api(`/api/admin/licenses/users${search ? `?search=${encodeURIComponent(search)}` : ''}`);
-    renderUsers();
-  } catch (error) { toast(error.message, true); }
+  state.userSearch = document.getElementById('userSearch').value.trim();
+  loadUsersPage(1, state.usersPaging.pageSize).catch(error => toast(error.message, true));
+});
+
+document.addEventListener('click', event => {
+  const pageButton = event.target.closest('[data-pagination="users"] [data-page]');
+  if (pageButton && !pageButton.disabled) {
+    loadUsersPage(Number(pageButton.dataset.page), state.usersPaging.pageSize).catch(error => toast(error.message, true));
+  }
+  const releasePageButton = event.target.closest('[data-pagination="releases"] [data-page]');
+  if (releasePageButton && !releasePageButton.disabled) {
+    loadReleasesPage(Number(releasePageButton.dataset.page), state.releasesPaging.pageSize).catch(error => toast(error.message, true));
+  }
+});
+
+document.addEventListener('change', event => {
+  const pageSize = event.target.closest('[data-pagination="users"] [data-page-size]');
+  if (pageSize) loadUsersPage(1, Number(pageSize.value)).catch(error => toast(error.message, true));
+  const releasePageSize = event.target.closest('[data-pagination="releases"] [data-page-size]');
+  if (releasePageSize) loadReleasesPage(1, Number(releasePageSize.value)).catch(error => toast(error.message, true));
 });
 
 document.addEventListener('click', event => {
@@ -559,7 +715,13 @@ window.videoMakerAdminShell = Object.freeze({
   escapeHtml,
   formatDate,
   icon,
+  paginationMarkup,
+  preservePagePosition,
   setBusy,
+  navigate,
+  setPageMeta,
+  setSetupReturn,
+  setTopbarVisible,
   showLogin,
   statusClass,
   toast

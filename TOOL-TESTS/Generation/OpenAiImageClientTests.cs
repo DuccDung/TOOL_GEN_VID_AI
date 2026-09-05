@@ -53,6 +53,103 @@ public sealed class OpenAiImageClientTests
         Assert.Equal("openai_image_base64_invalid", exception.Code);
     }
 
+    [Theory]
+    [InlineData("16:9", 1280, 720, "image/png")]
+    [InlineData("9:16", 720, 1280, "image/jpeg")]
+    public void SceneFirstFrameValidator_AcceptsOnlyExactProjectFrame(
+        string aspectRatio,
+        int width,
+        int height,
+        string mimeType)
+    {
+        var bytes = mimeType == "image/png"
+            ? CreatePngHeader(width, height)
+            : CreateJpegHeader(width, height);
+
+        var result = GeneratedImageValidator.ValidateSceneFirstFrame(bytes, 8 * 1024 * 1024, aspectRatio);
+
+        Assert.Equal(mimeType, result.MimeType);
+        Assert.Equal(width, result.Width);
+        Assert.Equal(height, result.Height);
+    }
+
+    [Theory]
+    [InlineData("16:9", 1024, 1024)]
+    [InlineData("16:9", 1920, 1080)]
+    [InlineData("9:16", 1280, 720)]
+    public void SceneFirstFrameValidator_RejectsSquareWrongRatioAndNonCanonicalSize(
+        string aspectRatio,
+        int width,
+        int height)
+    {
+        var exception = Assert.Throws<ProviderHttpException>(() =>
+            GeneratedImageValidator.ValidateSceneFirstFrame(
+                CreatePngHeader(width, height),
+                8 * 1024 * 1024,
+                aspectRatio));
+
+        Assert.Equal("scene_first_frame_dimensions_invalid", exception.Code);
+    }
+
+    [Fact]
+    public void SceneFirstFrameValidator_RejectsOversizedAndForgedPayloads()
+    {
+        var oversized = new byte[(8 * 1024 * 1024) + 1];
+        var forged = new byte[24];
+
+        var sizeException = Assert.Throws<ProviderHttpException>(() =>
+            GeneratedImageValidator.ValidateSceneFirstFrame(oversized, 8 * 1024 * 1024, "16:9"));
+        var formatException = Assert.Throws<ProviderHttpException>(() =>
+            GeneratedImageValidator.ValidateSceneFirstFrame(forged, 8 * 1024 * 1024, "16:9"));
+
+        Assert.Equal("scene_first_frame_size_invalid", sizeException.Code);
+        Assert.Equal("openai_image_signature_invalid", formatException.Code);
+    }
+
+    [Fact]
+    public async Task GenerateSceneFirstFrameAsync_UsesGenerationForBrollAndExactLandscapeSize()
+    {
+        var png = CreatePngHeader(1280, 720);
+        var handler = SuccessfulHandler(png);
+        var client = CreateClient(handler);
+
+        var result = await client.GenerateSceneFirstFrameAsync(
+            CreateProvider(),
+            "b-roll scene",
+            "16:9",
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(1280, result.Image.Width);
+        Assert.Equal(720, result.Image.Height);
+        Assert.Equal("/v1/images/generations", handler.RequestUri?.AbsolutePath);
+        using var body = JsonDocument.Parse(handler.RequestBody!);
+        Assert.Equal("1280x720", body.RootElement.GetProperty("size").GetString());
+    }
+
+    [Fact]
+    public async Task GenerateSceneFirstFrameAsync_UsesMultipartEditForOnCameraWithoutInputFidelityOverride()
+    {
+        var png = CreatePngHeader(720, 1280);
+        var handler = SuccessfulHandler(png);
+        var client = CreateClient(handler);
+
+        var result = await client.GenerateSceneFirstFrameAsync(
+            CreateProvider(),
+            "single on-camera character",
+            "9:16",
+            new OpenAiImageEditInput(CreatePngHeader(1024, 1024), "image/png", "reference.png"),
+            CancellationToken.None);
+
+        Assert.Equal(720, result.Image.Width);
+        Assert.Equal(1280, result.Image.Height);
+        Assert.Equal("/v1/images/edits", handler.RequestUri?.AbsolutePath);
+        Assert.Contains("name=\"image[]\"", handler.RequestBody, StringComparison.Ordinal);
+        Assert.Contains("720x1280", handler.RequestBody, StringComparison.Ordinal);
+        Assert.Contains("reference.png", handler.RequestBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("input_fidelity", handler.RequestBody, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Validator_RejectsWrongDimensionsAndUnexpectedJpeg()
     {
@@ -113,6 +210,15 @@ public sealed class OpenAiImageClientTests
         new(
             new StubHttpClientFactory(handler),
             Options.Create(new OpenAiImageOptions()));
+
+    private static StubHandler SuccessfulHandler(byte[] bytes) =>
+        new(
+            HttpStatusCode.OK,
+            JsonSerializer.Serialize(new
+            {
+                data = new[] { new { b64_json = Convert.ToBase64String(bytes) } },
+                usage = new { input_tokens = 100, output_tokens = 200 }
+            }));
 
     private static ProviderRuntimeConfiguration CreateProvider() =>
         new(

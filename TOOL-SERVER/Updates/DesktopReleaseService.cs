@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using TOOL_SHARED.Distribution;
 using TOOL_SHARED.Contracts.Updates;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Updates;
 
@@ -20,6 +21,7 @@ public interface IDesktopReleaseService
     Task<DesktopReleasePackage?> GetLatestArtifactAsync(string platform, string channel, string kind, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<AdminDesktopReleaseResponse>> GetAdminReleasesAsync(CancellationToken cancellationToken);
+    Task<PagedResponse<AdminDesktopReleaseResponse>> GetAdminReleasesPageAsync(int page, int pageSize, CancellationToken cancellationToken);
 
     Task<AdminDesktopReleaseResponse> CreateAsync(AdminDesktopReleaseRequest request, CancellationToken cancellationToken);
 
@@ -121,6 +123,28 @@ public sealed class DesktopReleaseService(
             .ThenByDescending(x => x.PublishedAtUtc)
             .ToListAsync(cancellationToken);
         return releases.Select(MapAdmin).ToArray();
+    }
+
+    public async Task<PagedResponse<AdminDesktopReleaseResponse>> GetAdminReleasesPageAsync(
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (page < 1) throw Validation("invalid_page", "Số trang phải lớn hơn hoặc bằng 1.");
+        if (pageSize is < 1 or > 100) throw Validation("invalid_page_size", "Số bản ghi mỗi trang phải từ 1 đến 100.");
+        var query = dbContext.AppReleases.AsNoTracking();
+        var totalCount = await query.CountAsync(cancellationToken);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var effectivePage = totalPages == 0 ? 1 : Math.Min(page, totalPages);
+        var releases = await query
+            .Include(x => x.Artifacts)
+            .OrderByDescending(x => x.BuildNumber)
+            .ThenByDescending(x => x.PublishedAtUtc)
+            .ThenByDescending(x => x.AppReleaseId)
+            .Skip((effectivePage - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+        return new PagedResponse<AdminDesktopReleaseResponse>(releases.Select(MapAdmin).ToArray(), effectivePage, pageSize, totalCount);
     }
 
     public async Task<AdminDesktopReleaseResponse> CreateAsync(

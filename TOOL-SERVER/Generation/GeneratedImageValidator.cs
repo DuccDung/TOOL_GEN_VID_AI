@@ -15,6 +15,9 @@ internal static class GeneratedImageValidator
     private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     public static ValidatedGeneratedImage ValidatePng(byte[] bytes, int maximumBytes)
+        => ValidateCharacterReference(bytes, maximumBytes);
+
+    public static ValidatedGeneratedImage ValidateCharacterReference(byte[] bytes, int maximumBytes)
     {
         if (bytes.Length is <= 0 || bytes.Length > maximumBytes)
         {
@@ -29,6 +32,43 @@ internal static class GeneratedImageValidator
         if (width != 1024 || height != 1024)
         {
             throw Invalid("openai_image_dimensions_invalid", "OpenAI không trả về ảnh đúng kích thước 1024x1024.");
+        }
+
+        return new ValidatedGeneratedImage(
+            bytes,
+            mimeType,
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            width,
+            height);
+    }
+
+    public static ValidatedGeneratedImage ValidateSceneFirstFrame(
+        byte[] bytes,
+        int maximumBytes,
+        string aspectRatio)
+    {
+        if (bytes.Length is <= 0 || bytes.Length > maximumBytes)
+        {
+            throw Invalid("scene_first_frame_size_invalid", "Ảnh first-frame vượt quá giới hạn dung lượng 8 MB.");
+        }
+
+        var (mimeType, width, height) = ReadImageInfo(bytes);
+        if (mimeType is not ("image/png" or "image/jpeg"))
+        {
+            throw Invalid("scene_first_frame_format_invalid", "First-frame phải là ảnh PNG hoặc JPEG hợp lệ.");
+        }
+
+        var expected = aspectRatio switch
+        {
+            "16:9" => (Width: 1280, Height: 720),
+            "9:16" => (Width: 720, Height: 1280),
+            _ => throw Invalid("scene_first_frame_aspect_ratio_invalid", "Tỷ lệ first-frame không được hỗ trợ.")
+        };
+        if (width != expected.Width || height != expected.Height)
+        {
+            throw Invalid(
+                "scene_first_frame_dimensions_invalid",
+                $"First-frame phải có kích thước chính xác {expected.Width}x{expected.Height} cho tỷ lệ {aspectRatio}.");
         }
 
         return new ValidatedGeneratedImage(

@@ -93,6 +93,100 @@ internal sealed class ServerGenerationClient(
         CancellationToken cancellationToken) =>
         SendCharacterImageAsync(request, cancellationToken);
 
+    public async Task<SceneFirstFrameQuoteResponse> GetSceneFirstFrameQuoteAsync(
+        Guid projectId,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneFirstFrameQuoteResponse>(
+            HttpMethod.Get,
+            $"api/projects/{projectId:D}/scenes/{sceneId:D}/first-frames/quote?organizationId={organizationId:D}",
+            null,
+            cancellationToken);
+    }
+
+    public async Task<GenerateSceneFirstFrameResponse> GenerateSceneFirstFrameAsync(
+        GenerateSceneFirstFrameRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<GenerateSceneFirstFrameResponse>(
+            HttpMethod.Post,
+            "api/generation/images/scene-first-frames",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<SceneFirstFrameListResponse> GetSceneFirstFramesAsync(
+        Guid projectId,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneFirstFrameListResponse>(
+            HttpMethod.Get,
+            $"api/projects/{projectId:D}/scenes/{sceneId:D}/first-frames?organizationId={organizationId:D}",
+            null,
+            cancellationToken);
+    }
+
+    public async Task<ProjectSceneFirstFrameListResponse> GetProjectSceneFirstFramesAsync(
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ProjectSceneFirstFrameListResponse>(
+            HttpMethod.Get,
+            $"api/projects/{projectId:D}/scene-first-frames?organizationId={organizationId:D}",
+            null,
+            cancellationToken);
+    }
+
+    public async Task<SceneFirstFrameSummary> MaterializeSceneFirstFrameAsync(
+        Guid projectId,
+        Guid sceneId,
+        MaterializeSceneFirstFrameRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneFirstFrameSummary>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/scenes/{sceneId:D}/first-frames/materialize",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<SceneFirstFrameSummary> ApproveSceneFirstFrameAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        ChangeSceneFirstFrameStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneFirstFrameSummary>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/scenes/{sceneId:D}/first-frames/{frameId:D}/approve",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<SceneFirstFrameSummary> RejectSceneFirstFrameAsync(
+        Guid projectId,
+        Guid sceneId,
+        Guid frameId,
+        ChangeSceneFirstFrameStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneFirstFrameSummary>(
+            HttpMethod.Post,
+            $"api/projects/{projectId:D}/scenes/{sceneId:D}/first-frames/{frameId:D}/reject",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
     public Task<SceneVoiceGenerationResponse> GenerateSceneVoiceAsync(
         GenerateSceneVoiceRequest request,
         CancellationToken cancellationToken) =>
@@ -353,6 +447,72 @@ internal sealed class ServerGenerationClient(
         if (total != image.SizeBytes || !string.Equals(sha256, image.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Ảnh nhân vật tải về không khớp SHA-256 hoặc dung lượng đã xác nhận.");
+        }
+    }
+
+    public async Task DownloadSceneFirstFrameAsync(
+        GenerateSceneFirstFrameResponse image,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        await licenseManager.EnsureAccessAsync(cancellationToken);
+        var expectedPath = $"/api/generation/images/scene-first-frames/{image.ProviderRequestId:D}/content";
+        if (!Uri.TryCreate(image.ContentUrl, UriKind.RelativeOrAbsolute, out var uri) ||
+            uri.IsAbsoluteUri ||
+            !string.Equals(image.ContentUrl, expectedPath, StringComparison.OrdinalIgnoreCase) ||
+            image.SizeBytes is <= 0 or > 8L * 1024 * 1024 ||
+            image.MimeType is not ("image/png" or "image/jpeg") ||
+            image.Sha256.Length != 64 ||
+            (image.Width, image.Height) is not ((1280, 720) or (720, 1280)))
+        {
+            throw new InvalidDataException("Server trả về metadata first-frame không hợp lệ.");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            await sessionManager.GetValidAccessTokenAsync(cancellationToken));
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var mimeType = response.Content.Headers.ContentType?.MediaType;
+        if (!string.Equals(mimeType, image.MimeType, StringComparison.OrdinalIgnoreCase) ||
+            response.Content.Headers.ContentLength is > 8L * 1024 * 1024 ||
+            response.Content.Headers.ContentLength is { } contentLength && contentLength != image.SizeBytes)
+        {
+            throw new InvalidDataException("Nội dung first-frame tải về không khớp metadata server.");
+        }
+
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using var destination = new FileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[64 * 1024];
+        long total = 0;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+            total += read;
+            if (total > 8L * 1024 * 1024 || total > image.SizeBytes)
+            {
+                throw new InvalidDataException("First-frame vượt quá dung lượng đã xác nhận.");
+            }
+            hash.AppendData(buffer, 0, read);
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+        await destination.FlushAsync(cancellationToken);
+        var sha256 = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        if (total != image.SizeBytes || !string.Equals(sha256, image.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("First-frame tải về không khớp SHA-256 hoặc dung lượng.");
         }
     }
 

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TOOL_SERVER.Organizations;
 using TOOL_SHARED.Contracts.Organizations;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Controllers;
 
@@ -15,6 +16,13 @@ public sealed class AdminOrganizationPoolsController(
     [HttpGet]
     public Task<IReadOnlyList<OrganizationPoolSummaryResponse>> GetPools(CancellationToken cancellationToken) =>
         provisioningService.GetPoolsAsync(cancellationToken);
+
+    [HttpGet("page")]
+    public Task<PagedResponse<OrganizationPoolSummaryResponse>> GetPoolsPage(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default) =>
+        provisioningService.GetPoolsPageAsync(page, pageSize, cancellationToken);
 
     [HttpGet("{poolId:guid}")]
     public Task<OrganizationPoolDetailResponse> GetPool(Guid poolId, CancellationToken cancellationToken) =>

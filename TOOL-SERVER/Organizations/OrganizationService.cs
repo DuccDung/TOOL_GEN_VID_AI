@@ -5,8 +5,10 @@ using Microsoft.EntityFrameworkCore;
 using TOOL_SERVER.Authentication;
 using TOOL_SERVER.Data;
 using TOOL_SERVER.Domain.Organizations;
+using TOOL_SERVER.Domain.Providers;
 using TOOL_SERVER.Generation;
 using TOOL_SERVER.Providers;
+using TOOL_SHARED.Contracts.Common;
 using TOOL_SHARED.Contracts.Organizations;
 
 namespace TOOL_SERVER.Organizations;
@@ -46,8 +48,10 @@ public sealed class OrganizationProviderCredentialRotationResult
 public interface IOrganizationService
 {
     Task<IReadOnlyList<OrganizationSummaryResponse>> GetMineAsync(string userId, CancellationToken cancellationToken);
+    Task<PagedResponse<OrganizationSummaryResponse>> GetMinePageAsync(string userId, int page, int pageSize, CancellationToken cancellationToken);
     Task<OrganizationSummaryResponse> CreateAsync(CreateOrganizationRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrganizationMemberResponse>> GetMembersAsync(Guid organizationId, string userId, CancellationToken cancellationToken);
+    Task<PagedResponse<OrganizationMemberResponse>> GetMembersPageAsync(Guid organizationId, string userId, int page, int pageSize, string? search, CancellationToken cancellationToken);
     Task<OrganizationMemberResponse> AddMemberAsync(Guid organizationId, AddOrganizationMemberRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
     Task<OrganizationMemberResponse> UpdateMemberAsync(Guid organizationId, string memberUserId, UpdateOrganizationMemberRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
     Task<OrganizationSummaryResponse> UpdateBudgetAsync(Guid organizationId, UpdateOrganizationBudgetRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
@@ -56,7 +60,9 @@ public interface IOrganizationService
     Task<OrganizationVideoPolicyResponse?> GetVideoPolicyAsync(Guid organizationId, string userId, string scope, CancellationToken cancellationToken);
     Task<OrganizationVideoPolicyResponse> UpdateVideoPolicyAsync(Guid organizationId, UpdateOrganizationVideoPolicyRequest request, OrganizationRequestContext context, CancellationToken cancellationToken);
     Task<OrganizationUsageResponse> GetUsageAsync(Guid organizationId, string userId, int take, CancellationToken cancellationToken);
+    Task<OrganizationUsageResponse> GetUsagePageAsync(Guid organizationId, string userId, int page, int pageSize, string? provider, string? model, string? kind, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrganizationAuditItemResponse>> GetAuditAsync(Guid organizationId, string userId, int take, CancellationToken cancellationToken);
+    Task<PagedResponse<OrganizationAuditItemResponse>> GetAuditPageAsync(Guid organizationId, string userId, int page, int pageSize, CancellationToken cancellationToken);
 }
 
 internal sealed partial class OrganizationService(
@@ -74,14 +80,53 @@ internal sealed partial class OrganizationService(
         string userId,
         CancellationToken cancellationToken)
     {
-        var memberships = await governanceDb.OrganizationMembers
+        var memberships = await ActiveMembershipQuery(userId)
+            .OrderBy(x => x.Organization.Name)
+            .ThenBy(x => x.OrganizationId)
+            .ToListAsync(cancellationToken);
+        return await BuildMineSummariesAsync(memberships, cancellationToken);
+    }
+
+    public async Task<PagedResponse<OrganizationSummaryResponse>> GetMinePageAsync(
+        string userId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (page < 1)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page", "Số trang phải lớn hơn hoặc bằng 1.");
+        }
+        if (pageSize is < 1 or > 100)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page_size", "Số bản ghi mỗi trang phải từ 1 đến 100.");
+        }
+
+        var query = ActiveMembershipQuery(userId);
+        var totalCount = await query.CountAsync(cancellationToken);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var effectivePage = totalPages == 0 ? 1 : Math.Min(page, totalPages);
+        var memberships = await query
+            .OrderBy(x => x.Organization.Name)
+            .ThenBy(x => x.OrganizationId)
+            .Skip((effectivePage - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+        var summaries = await BuildMineSummariesAsync(memberships, cancellationToken);
+        return new PagedResponse<OrganizationSummaryResponse>(summaries, effectivePage, pageSize, totalCount);
+    }
+
+    private IQueryable<OrganizationMember> ActiveMembershipQuery(string userId) => governanceDb.OrganizationMembers
             .AsNoTracking()
             .Include(x => x.Organization)
             .Where(x => x.UserId == userId &&
                         x.Status == OrganizationMemberStatuses.Active &&
-                        x.Organization.Status == OrganizationStatuses.Active)
-            .OrderBy(x => x.Organization.Name)
-            .ToListAsync(cancellationToken);
+                        x.Organization.Status == OrganizationStatuses.Active);
+
+    private async Task<IReadOnlyList<OrganizationSummaryResponse>> BuildMineSummariesAsync(
+        IReadOnlyList<OrganizationMember> memberships,
+        CancellationToken cancellationToken)
+    {
         if (memberships.Count == 0)
         {
             return [];
@@ -108,6 +153,12 @@ internal sealed partial class OrganizationService(
             .ToListAsync(cancellationToken))
             .Select(x => (x.OrganizationId, x.ProviderId))
             .ToHashSet();
+        var longFormPolicies = await governanceDb.OrganizationVideoPolicies
+            .AsNoTracking()
+            .Where(x => organizationIds.Contains(x.OrganizationId) &&
+                        x.PolicyScope == OrganizationVideoPolicyScopes.LongForm &&
+                        x.IsActive)
+            .ToDictionaryAsync(x => x.OrganizationId, cancellationToken);
         var providers = await providerDb.Providers
             .AsNoTracking()
             .Include(x => x.Models)
@@ -123,43 +174,105 @@ internal sealed partial class OrganizationService(
         {
             var budget = await budgetService.GetSnapshotAsync(membership.OrganizationId, cancellationToken);
             memberCounts.TryGetValue(membership.OrganizationId, out var counts);
-            var readiness = providers.Select(provider =>
+            var readiness = new List<OrganizationAiReadinessResponse>(2);
+            var openAi = providers.SingleOrDefault(provider =>
+                provider.ProviderCode == ProviderCodes.OpenAi);
+            var openAiModel = openAi?.Models
+                .Where(model => model.Modality == "Text")
+                .OrderByDescending(model => model.IsEnabled && model.IsDefault)
+                .ThenByDescending(model => model.IsEnabled)
+                .ThenByDescending(model => model.UpdatedAtUtc)
+                .FirstOrDefault();
+            readiness.Add(OrganizationReadinessEvaluator.Evaluate(
+                ProviderCodes.OpenAi,
+                openAiModel?.ModelCode,
+                openAi?.IsEnabled == true,
+                openAiModel?.IsEnabled == true,
+                openAi is not null && activeCredentials.Contains((membership.OrganizationId, openAi.ProviderId)),
+                budget.HardLimit,
+                ActiveUsageTypes(openAi, openAiModel, now)));
+
+            if (!longFormPolicies.TryGetValue(membership.OrganizationId, out var longFormPolicy))
             {
-                var model = provider.Models
-                    .OrderByDescending(x => x.IsEnabled && x.IsDefault)
-                    .ThenByDescending(x => x.IsEnabled)
-                    .ThenByDescending(x => x.UpdatedAtUtc)
-                    .FirstOrDefault();
-                var usageTypes = model?.CostRates
-                    .Where(x => x.IsActive &&
-                                x.EffectiveFromUtc <= now &&
-                                (x.EffectiveToUtc == null || x.EffectiveToUtc > now) &&
-                                (x.UsageType != "VideoSecond" ||
-                                 provider.ProviderCode switch
-                                 {
-                                     ProviderCodes.Kling => KlingNativeAudioPolicy.MatchesRateMetadata(x.MetadataJson),
-                                     ProviderCodes.Fal when model is not null => FalVeoPolicy.MatchesRateMetadata(x.MetadataJson, model.ModelCode),
-                                     _ => true
-                                 }))
-                    .Select(x => x.UsageType) ?? [];
-                return OrganizationReadinessEvaluator.Evaluate(
-                    provider.ProviderCode,
-                    model?.ModelCode,
-                    provider.IsEnabled,
-                    model?.IsEnabled == true,
-                    activeCredentials.Contains((membership.OrganizationId, provider.ProviderId)),
+                readiness.Add(OrganizationReadinessEvaluator.MissingLongFormPolicy(budget.HardLimit));
+            }
+            else
+            {
+                var videoProvider = providers.SingleOrDefault(provider =>
+                    provider.ProviderId == longFormPolicy.ProviderId);
+                var videoModel = videoProvider?.Models.SingleOrDefault(model =>
+                    model.ProviderModelId == longFormPolicy.ProviderModelId &&
+                    model.Modality == "Video");
+                var policyValid = IsValidLongFormPolicy(longFormPolicy, videoProvider, videoModel);
+                readiness.Add(OrganizationReadinessEvaluator.Evaluate(
+                    videoProvider?.ProviderCode ?? OrganizationReadinessEvaluator.LongFormPolicyProviderCode,
+                    videoModel?.ModelCode,
+                    videoProvider?.IsEnabled == true,
+                    videoModel?.IsEnabled == true,
+                    videoProvider is not null && activeCredentials.Contains((membership.OrganizationId, videoProvider.ProviderId)),
                     budget.HardLimit,
-                    usageTypes);
-            }).ToArray();
+                    ActiveUsageTypes(videoProvider, videoModel, now),
+                    policyValid ? null : ["video_policy_invalid"]));
+            }
             result.Add(ToSummary(
                 membership.Organization,
                 membership.Role,
                 budget,
                 counts?.Total ?? 0,
                 counts?.Active ?? 0,
-                readiness));
+                readiness.ToArray()));
         }
         return result;
+    }
+
+    private static IEnumerable<string> ActiveUsageTypes(
+        AiProvider? provider,
+        AiProviderModel? model,
+        DateTime now)
+    {
+        if (provider is null || model is null)
+        {
+            return [];
+        }
+
+        return model.CostRates
+            .Where(rate => rate.IsActive &&
+                           rate.EffectiveFromUtc <= now &&
+                           (rate.EffectiveToUtc == null || rate.EffectiveToUtc > now) &&
+                           (rate.UsageType != "VideoSecond" ||
+                            provider.ProviderCode switch
+                            {
+                                ProviderCodes.Kling => KlingNativeAudioPolicy.MatchesRateMetadata(rate.MetadataJson),
+                                ProviderCodes.Fal => FalVeoPolicy.MatchesRateMetadata(rate.MetadataJson, model.ModelCode),
+                                _ => true
+                            }))
+            .Select(rate => rate.UsageType);
+    }
+
+    private static bool IsValidLongFormPolicy(
+        OrganizationVideoPolicy policy,
+        AiProvider? provider,
+        AiProviderModel? model)
+    {
+        if (provider is null || model is null ||
+            policy.ProviderId != provider.ProviderId ||
+            policy.ProviderModelId != model.ProviderModelId)
+        {
+            return false;
+        }
+
+        return provider.ProviderCode switch
+        {
+            ProviderCodes.Kling =>
+                KlingNativeAudioPolicy.IsRequiredRequestVariant(policy.Resolution, policy.NativeAudio),
+            ProviderCodes.Fal =>
+                policy.NativeAudio &&
+                policy.Resolution.Equals(FalVeoPolicy.Resolution, StringComparison.OrdinalIgnoreCase) &&
+                FalVeoPolicy.IsApprovedEndpoint(model.ModelCode),
+            ProviderCodes.BytePlus =>
+                policy.NativeAudio && policy.Resolution.Equals("720p", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
     }
 
     public async Task<OrganizationSummaryResponse> CreateAsync(
@@ -238,6 +351,71 @@ internal sealed partial class OrganizationService(
                 x.JoinedAtUtc,
                 x.IsProvisioningManaged);
         }).ToArray();
+    }
+
+    public async Task<PagedResponse<OrganizationMemberResponse>> GetMembersPageAsync(
+        Guid organizationId,
+        string userId,
+        int page,
+        int pageSize,
+        string? search,
+        CancellationToken cancellationToken)
+    {
+        await RequireMembershipAsync(organizationId, userId, cancellationToken);
+        if (page < 1)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page", "Số trang phải lớn hơn hoặc bằng 1.");
+        }
+        if (pageSize is < 1 or > 100)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page_size", "Số bản ghi mỗi trang phải từ 1 đến 100.");
+        }
+
+        var query = governanceDb.OrganizationMembers
+            .AsNoTracking()
+            .Where(x => x.OrganizationId == organizationId && x.Status != OrganizationMemberStatuses.Removed);
+        var term = search?.Trim();
+        if (!string.IsNullOrWhiteSpace(term))
+        {
+            var matchingUserIds = await accountDb.Users
+                .AsNoTracking()
+                .Where(x => (x.Email != null && x.Email.Contains(term)) ||
+                            (x.DisplayName != null && x.DisplayName.Contains(term)))
+                .Select(x => x.Id)
+                .ToArrayAsync(cancellationToken);
+            query = query.Where(x => matchingUserIds.Contains(x.UserId) ||
+                                     x.Role.Contains(term) ||
+                                     x.Status.Contains(term));
+        }
+        var totalCount = await query.CountAsync(cancellationToken);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var effectivePage = totalPages == 0 ? 1 : Math.Min(page, totalPages);
+        var members = await query
+            .OrderBy(x => x.Role)
+            .ThenBy(x => x.JoinedAtUtc)
+            .ThenBy(x => x.UserId)
+            .Skip((effectivePage - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+        var userIds = members.Select(x => x.UserId).ToArray();
+        var users = await accountDb.Users
+            .AsNoTracking()
+            .Where(x => userIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, cancellationToken);
+        var items = members.Select(x =>
+        {
+            users.TryGetValue(x.UserId, out var user);
+            return new OrganizationMemberResponse(
+                x.UserId,
+                user?.Email ?? string.Empty,
+                user?.DisplayName,
+                x.Role,
+                x.Status,
+                x.MonthlyBudgetLimit,
+                x.JoinedAtUtc,
+                x.IsProvisioningManaged);
+        }).ToArray();
+        return new PagedResponse<OrganizationMemberResponse>(items, effectivePage, pageSize, totalCount);
     }
 
     public async Task<OrganizationMemberResponse> AddMemberAsync(
@@ -710,6 +888,103 @@ internal sealed partial class OrganizationService(
             groups);
     }
 
+    public async Task<OrganizationUsageResponse> GetUsagePageAsync(
+        Guid organizationId,
+        string userId,
+        int page,
+        int pageSize,
+        string? provider,
+        string? model,
+        string? kind,
+        CancellationToken cancellationToken)
+    {
+        await RequireManagementRoleAsync(organizationId, userId, true, cancellationToken);
+        if (page < 1)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page", "Số trang phải lớn hơn hoặc bằng 1.");
+        }
+        if (pageSize is < 1 or > 100)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page_size", "Số bản ghi mỗi trang phải từ 1 đến 100.");
+        }
+
+        var budget = await budgetService.GetSnapshotAsync(organizationId, cancellationToken);
+        var query = governanceDb.AiUsageLedger
+            .AsNoTracking()
+            .Where(x => x.OrganizationId == organizationId &&
+                        x.OccurredAtUtc >= budget.StartsAtUtc &&
+                        x.OccurredAtUtc < budget.EndsAtUtc);
+        if (!string.IsNullOrWhiteSpace(provider)) query = query.Where(x => x.ProviderCode == provider);
+        if (!string.IsNullOrWhiteSpace(model)) query = query.Where(x => x.ModelCode == model);
+        if (!string.IsNullOrWhiteSpace(kind)) query = query.Where(x => x.EntryKind == kind);
+        var totalCount = await query.CountAsync(cancellationToken);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var effectivePage = totalPages == 0 ? 1 : Math.Min(page, totalPages);
+        var itemRows = await query
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .ThenByDescending(x => x.AiUsageLedgerEntryId)
+            .Skip((effectivePage - 1) * pageSize)
+            .Take(pageSize)
+            .Select(x => new UsageLedgerProjection(
+                x.AiUsageLedgerEntryId,
+                x.UserId,
+                x.ProjectId,
+                x.ProviderRequestId,
+                x.ProviderCode,
+                x.ModelCode,
+                x.EntryKind,
+                x.Amount,
+                x.CurrencyCode,
+                x.UsageJson,
+                x.OccurredAtUtc))
+            .ToListAsync(cancellationToken);
+        var actualRows = await governanceDb.AiUsageLedger
+            .AsNoTracking()
+            .Where(x => x.OrganizationId == organizationId &&
+                        x.EntryKind == UsageLedgerEntryKinds.Actual &&
+                        x.OccurredAtUtc >= budget.StartsAtUtc &&
+                        x.OccurredAtUtc < budget.EndsAtUtc)
+            .Select(x => new UsageAggregateProjection(x.UserId, x.ProviderCode, x.ModelCode, x.Amount, x.UsageJson))
+            .ToListAsync(cancellationToken);
+        var items = itemRows.Select(row =>
+        {
+            var metrics = OrganizationUsageMetricsParser.Parse(row.UsageJson);
+            return new OrganizationUsageItemResponse(row.LedgerEntryId, row.UserId, row.ProjectId, row.ProviderRequestId, row.ProviderCode, row.ModelCode, row.EntryKind, row.Amount, row.CurrencyCode, row.OccurredAtUtc, metrics.InputTokens, metrics.OutputTokens, metrics.VideoSeconds);
+        }).ToArray();
+        var parsedActualRows = actualRows.Select(row => new ParsedUsageAggregateProjection(row.UserId, row.ProviderCode, row.ModelCode, row.Amount, OrganizationUsageMetricsParser.Parse(row.UsageJson))).ToArray();
+        var totalMetrics = OrganizationUsageMetricsParser.Sum(parsedActualRows.Select(x => x.Metrics));
+        var groups = parsedActualRows
+            .GroupBy(x => new { x.ProviderCode, x.ModelCode, x.UserId })
+            .Select(group =>
+            {
+                var metrics = OrganizationUsageMetricsParser.Sum(group.Select(x => x.Metrics));
+                return new OrganizationUsageGroupResponse(group.Key.ProviderCode, group.Key.ModelCode, group.Key.UserId, group.Sum(x => x.Amount), metrics.InputTokens, metrics.OutputTokens, metrics.VideoSeconds);
+            })
+            .OrderByDescending(x => x.ActualCost)
+            .ThenBy(x => x.ProviderCode)
+            .ThenBy(x => x.ModelCode)
+            .ThenBy(x => x.UserId)
+            .ToArray();
+        return new OrganizationUsageResponse(
+            organizationId,
+            budget.StartsAtUtc,
+            budget.EndsAtUtc,
+            budget.HardLimit,
+            budget.ReservedCost,
+            budget.ActualCost,
+            budget.RemainingBudget,
+            budget.CurrencyCode,
+            items,
+            totalMetrics.InputTokens,
+            totalMetrics.OutputTokens,
+            totalMetrics.VideoSeconds,
+            groups,
+            effectivePage,
+            pageSize,
+            totalCount,
+            totalPages);
+    }
+
     public async Task<IReadOnlyList<OrganizationAuditItemResponse>> GetAuditAsync(
         Guid organizationId,
         string userId,
@@ -762,6 +1037,71 @@ internal sealed partial class OrganizationService(
                 row.CorrelationId,
                 row.OccurredAtUtc);
         }).ToArray();
+    }
+
+    public async Task<PagedResponse<OrganizationAuditItemResponse>> GetAuditPageAsync(
+        Guid organizationId,
+        string userId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        await RequireManagementRoleAsync(organizationId, userId, false, cancellationToken);
+        if (page < 1)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page", "Số trang phải lớn hơn hoặc bằng 1.");
+        }
+        if (pageSize is < 1 or > 100)
+        {
+            throw new AccountApiException(StatusCodes.Status400BadRequest, "invalid_page_size", "Số bản ghi mỗi trang phải từ 1 đến 100.");
+        }
+
+        var query = governanceDb.OrganizationAuditLogs
+            .AsNoTracking()
+            .Where(x => x.OrganizationId == organizationId);
+        var totalCount = await query.CountAsync(cancellationToken);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var effectivePage = totalPages == 0 ? 1 : Math.Min(page, totalPages);
+        var rows = await query
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .ThenByDescending(x => x.OrganizationAuditLogId)
+            .Skip((effectivePage - 1) * pageSize)
+            .Take(pageSize)
+            .Select(x => new AuditProjection(
+                x.OrganizationAuditLogId,
+                x.ActorUserId,
+                x.EventType,
+                x.DataJson,
+                x.CorrelationId,
+                x.OccurredAtUtc))
+            .ToListAsync(cancellationToken);
+        var actorIds = rows
+            .Where(x => !string.IsNullOrWhiteSpace(x.ActorUserId))
+            .Select(x => x.ActorUserId!)
+            .Distinct()
+            .ToArray();
+        var actors = actorIds.Length == 0
+            ? []
+            : await accountDb.Users
+                .AsNoTracking()
+                .Where(x => actorIds.Contains(x.Id))
+                .Select(x => new AuditActorProjection(x.Id, x.Email, x.DisplayName))
+                .ToDictionaryAsync(x => x.UserId, cancellationToken);
+        var items = rows.Select(row =>
+        {
+            AuditActorProjection? actor = null;
+            if (row.ActorUserId is not null) actors.TryGetValue(row.ActorUserId, out actor);
+            return new OrganizationAuditItemResponse(
+                row.AuditLogId,
+                row.ActorUserId,
+                actor?.Email,
+                actor?.DisplayName,
+                row.EventType,
+                OrganizationAuditDataSanitizer.Sanitize(row.DataJson),
+                row.CorrelationId,
+                row.OccurredAtUtc);
+        }).ToArray();
+        return new PagedResponse<OrganizationAuditItemResponse>(items, effectivePage, pageSize, totalCount);
     }
 
     private async Task<OrganizationMember> RequireMembershipAsync(Guid organizationId, string userId, CancellationToken cancellationToken) =>

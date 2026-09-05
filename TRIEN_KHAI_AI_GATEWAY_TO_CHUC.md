@@ -1,6 +1,6 @@
 # Triển khai AI Gateway theo tổ chức
 
-> Cập nhật ngữ cảnh: 2026-09-01. Đây là runbook vận hành hiện hành cho VideoMaker 4.0. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; trạng thái source và việc còn mở nằm tại `KE_HOACH_SERVER_AI_GATEWAY.md`.
+> Cập nhật ngữ cảnh: 2026-09-05. Đây là runbook vận hành hiện hành cho VideoMaker 4.x. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; trạng thái source và việc còn mở nằm tại `KE_HOACH_SERVER_AI_GATEWAY.md`.
 
 Các lệnh thay đổi database phải được chạy trong cửa sổ bảo trì và sau khi đã có backup kiểm tra phục hồi được. Có migration trong repository không đồng nghĩa migration đã chạy trên database của bất kỳ môi trường nào.
 
@@ -31,10 +31,11 @@ sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
+sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.1.SceneFirstFrames.sql
 sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.DesktopLeastPrivilege.sql
 ```
 
-`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script 4.0.x là idempotent và không tự bật Seedance/Fal, tự nhập giá hoặc tự bật thanh toán. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid` mà workflow desktop đang ghi; 4.0.7 thêm thư viện continuity text-only và snapshot version được dùng trong request video; 4.0.8 thêm `AssetKey` ổn định cùng nguồn/version/provider request của tài sản AI; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10 thêm gói bán công khai và bảng payment SePay; 4.0.11 thêm pool tổ chức, sức chứa và seat reservation/assignment. Phải chạy các migration trước script least privilege.
+`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script là idempotent và không tự bật Seedance/Fal, tự nhập giá hoặc tự bật thanh toán. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`; 4.0.7–4.0.8 thêm thư viện continuity và snapshot version; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10–4.0.11 thêm payment SePay và seat provisioning; 4.1.1 thêm `vf.SceneFirstFrames` cùng `ProviderRequests.InputSceneFirstFrameId` và không backfill ảnh identity vuông cũ. Phải chạy các migration trước script least privilege.
 
 Luồng xác nhận tài sản trực tiếp trên card cảnh, endpoint `/confirm` và phép phân tích prompt bắt buộc sử dụng các bảng/cột của migration 4.0.7–4.0.8; không có file SQL mới riêng cho cải tiến UI này. Không chạy lại `VideoFactory.Initial.sql` trên database thật nếu chưa xác minh đúng quy trình nâng cấp, backup và khả năng restore.
 
@@ -58,7 +59,7 @@ SELECT [Code], [Name], [MonthlyBudgetLimit], [CurrencyCode]
 FROM [ai].[Organizations];
 ```
 
-Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.11-organization-seat-provisioning`. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
+Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.11-organization-seat-provisioning`, cùng `4.1.1-scene-first-frames`. Xác minh `vf.SceneFirstFrames` rỗng ngay sau migration nếu hệ thống chỉ có dữ liệu ảnh nhân vật cũ, desktop role bị deny và chạy lại 4.1.1 không thêm schema version lần hai. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
 
 ## 3. Cấu hình server
 
@@ -373,6 +374,15 @@ Thực hiện bằng một tài khoản Member có license và device lease hợ
 20. Tạo một on-camera clip và đối chiếu safe `RequestJson`: có `kling-native-audio-v4-vietnamese-speech-first`, language/speech policy version và speech hash nhưng không có full speech. Nghe đủ câu tiếng Việt, xác nhận đúng nhân vật nói và khẩu hình rồi mới duyệt.
 21. Nếu có `NativeAudioInvalid`, bấm **Tạo lại với prompt ưu tiên lời thoại**, xác nhận hộp thoại nêu thời lượng/chi phí request mới, rồi kiểm tra request mới có `speech-recovery-v1`, đúng một reservation/submit và không auto retry. Không cố tình tạo request Kling chỉ để ép lỗi audio nếu chưa được phê duyệt thêm chi phí.
 
+Với rollout Fal/Veo, chỉ thực hiện sau khi migration 4.1.1, credential/rate/budget staging và hạn mức chi phí đã được phê duyệt:
+
+1. Tạo scene on-camera một nhân vật đã khóa; tạo first-frame và xác nhận OpenAI dùng editing từ primary reference nhưng request log chỉ có ID/version/hash, không có prompt đầy đủ hoặc Base64.
+2. Tạo scene B-roll không nhân vật; xác nhận generation không gửi ảnh giả và output không có người. Cả hai ảnh phải đúng `1280x720` hoặc `720x1280`, không quá 8 MB.
+3. Kiểm tra quote provider/model/kích thước/chi phí trước khi xác nhận; replay cùng idempotency key không tạo reservation mới, còn **Sinh lại** tạo attempt và chi phí mới.
+4. Ngắt download một lần rồi bấm **Tải lại output** trong retention; xác nhận dùng cùng `ProviderRequestId`, không tạo image request hoặc usage thứ hai.
+5. Preview, từ chối một bản và duyệt bản khác; sửa prompt/nhân vật/primary reference/asset/aspect ratio rồi xác nhận frame chuyển **Đã lỗi thời** và Veo bị chặn trước resolver/budget/outbound.
+6. Chỉ sau các bước trên mới xin phép chạy một Veo Fast 4 giây. Đối chiếu `InputSceneFirstFrameId`, rate snapshot, reservation/settlement, audio tiếng Việt và proxy output; không dùng key hoặc dữ liệu production cho smoke test nếu chưa có phê duyệt riêng.
+
 Với rollout Seedance, tạo một tổ chức thử nghiệm riêng và thực hiện thêm: chọn policy Seedance, tạo clip ngắn nhất được model hỗ trợ ở 720p/Native Audio, đóng desktop khi task chạy, mở lại và tải từ `/api/generation/videos/{providerRequestId}/content`. Xác minh `ProviderRequests.ResponseJson` không chứa signed URL, `GeneratedVideoOutputs` có hash/MIME/size, audio nghe được, actual `completion_tokens` được quyết toán theo rate snapshot và cleanup xóa output sau retention. Đây là smoke test có phí, chỉ chạy khi đã được phê duyệt.
 
 Theo dõi usage:
@@ -393,7 +403,7 @@ Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage
 ## 12. Checklist production
 
 - [ ] Backup và thử restore database.
-- [ ] Migration 4.0.0 đến 4.0.11 có trong `ai.SchemaVersions`; 4.0.4 đến 4.0.11 đã chạy idempotent trên database clone.
+- [ ] Migration 4.0.0 đến 4.0.11 và 4.1.1 có trong `ai.SchemaVersions`; các migration đã chạy idempotent trên database clone.
 - [ ] Server/desktop dùng database user khác nhau.
 - [ ] HTTPS hợp lệ; không cho HTTP public.
 - [ ] JWT signing key nằm trong secret manager.
@@ -414,4 +424,5 @@ Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage
 - [ ] Video dài Kling có content/prompt/speech/character/asset tiếng Việt và metadata `vi-VN`; video ngắn direct prompt cùng BytePlus vẫn giữ hành vi riêng.
 - [ ] Video dài Kling dùng policy on-camera/B-roll đúng quan hệ nhân vật; template speech-first và recovery profile chỉ xuất hiện trong safe snapshot, không log full speech.
 - [ ] `NativeAudioInvalid` không tự retry; UI nêu rõ chi phí attempt mới và checklist duyệt yêu cầu đủ câu/đúng người nói/khẩu hình.
+- [ ] Fal/Veo chỉ nhận `SceneFirstFrame` Approved/current đúng tỷ lệ; ảnh identity vuông không bị gửi trực tiếp, frame stale bị chặn và retry download không tăng chi phí.
 - [ ] Build Release và toàn bộ test đạt trước khi publish.

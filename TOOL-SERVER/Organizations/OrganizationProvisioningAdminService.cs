@@ -8,12 +8,14 @@ using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Domain.Providers;
 using TOOL_SERVER.Payments;
 using TOOL_SHARED.Contracts.Organizations;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Organizations;
 
 public interface IOrganizationProvisioningAdminService
 {
     Task<IReadOnlyList<OrganizationPoolSummaryResponse>> GetPoolsAsync(CancellationToken cancellationToken);
+    Task<PagedResponse<OrganizationPoolSummaryResponse>> GetPoolsPageAsync(int page, int pageSize, CancellationToken cancellationToken);
     Task<OrganizationPoolDetailResponse> GetPoolAsync(Guid poolId, CancellationToken cancellationToken);
     Task<OrganizationPoolSummaryResponse> CreatePoolAsync(SaveOrganizationPoolRequest request, string adminUserId, CancellationToken cancellationToken);
     Task<OrganizationPoolSummaryResponse> UpdatePoolAsync(Guid poolId, SaveOrganizationPoolRequest request, string adminUserId, CancellationToken cancellationToken);
@@ -38,7 +40,57 @@ internal sealed partial class OrganizationProvisioningAdminService(
         var pools = await accountDb.OrganizationPools.AsNoTracking().OrderBy(x => x.Name).ToListAsync(cancellationToken);
         var organizations = await accountDb.OrganizationPoolOrganizations.AsNoTracking().ToListAsync(cancellationToken);
         var plans = await accountDb.LicensePlanOrganizationPools.AsNoTracking().ToListAsync(cancellationToken);
-        return pools.Select(pool => ToSummary(pool, organizations, plans)).ToArray();
+        var organizationIds = organizations.Select(x => x.OrganizationId).Distinct().ToArray();
+        var organizationDirectory = await accountDb.Organizations.AsNoTracking()
+            .Where(x => organizationIds.Contains(x.OrganizationId))
+            .ToDictionaryAsync(x => x.OrganizationId, cancellationToken);
+        var planIds = plans.Select(x => x.LicensePlanId).Distinct().ToArray();
+        var planDirectory = await accountDb.LicensePlans.AsNoTracking()
+            .Where(x => planIds.Contains(x.LicensePlanId))
+            .ToDictionaryAsync(x => x.LicensePlanId, cancellationToken);
+        var runtimeReadiness = await EvaluateRuntimeReadinessAsync(
+            organizations.Where(x => x.IsAutoAssignmentEnabled && x.IsReady),
+            cancellationToken);
+        return pools.Select(pool => ToSummary(
+            pool,
+            organizations,
+            plans,
+            organizationDirectory,
+            planDirectory,
+            runtimeReadiness)).ToArray();
+    }
+
+    public async Task<PagedResponse<OrganizationPoolSummaryResponse>> GetPoolsPageAsync(
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (page < 1) throw Validation("invalid_page", "Số trang phải lớn hơn hoặc bằng 1.");
+        if (pageSize is < 1 or > 100) throw Validation("invalid_page_size", "Số bản ghi mỗi trang phải từ 1 đến 100.");
+        var query = accountDb.OrganizationPools.AsNoTracking();
+        var totalCount = await query.CountAsync(cancellationToken);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var effectivePage = totalPages == 0 ? 1 : Math.Min(page, totalPages);
+        var pools = await query
+            .OrderBy(x => x.Name)
+            .ThenBy(x => x.OrganizationPoolId)
+            .Skip((effectivePage - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+        var organizations = await accountDb.OrganizationPoolOrganizations.AsNoTracking().ToListAsync(cancellationToken);
+        var plans = await accountDb.LicensePlanOrganizationPools.AsNoTracking().ToListAsync(cancellationToken);
+        var organizationIds = organizations.Select(x => x.OrganizationId).Distinct().ToArray();
+        var organizationDirectory = await accountDb.Organizations.AsNoTracking()
+            .Where(x => organizationIds.Contains(x.OrganizationId))
+            .ToDictionaryAsync(x => x.OrganizationId, cancellationToken);
+        var planIds = plans.Select(x => x.LicensePlanId).Distinct().ToArray();
+        var planDirectory = await accountDb.LicensePlans.AsNoTracking()
+            .Where(x => planIds.Contains(x.LicensePlanId))
+            .ToDictionaryAsync(x => x.LicensePlanId, cancellationToken);
+        var runtimeReadiness = await EvaluateRuntimeReadinessAsync(
+            organizations.Where(x => x.IsAutoAssignmentEnabled && x.IsReady), cancellationToken);
+        var items = pools.Select(pool => ToSummary(pool, organizations, plans, organizationDirectory, planDirectory, runtimeReadiness)).ToArray();
+        return new PagedResponse<OrganizationPoolSummaryResponse>(items, effectivePage, pageSize, totalCount);
     }
 
     public async Task<OrganizationPoolDetailResponse> GetPoolAsync(Guid poolId, CancellationToken cancellationToken)
@@ -66,24 +118,30 @@ internal sealed partial class OrganizationProvisioningAdminService(
             .OrderByDescending(x => x.UpdatedAtUtc)
             .Take(100)
             .ToListAsync(cancellationToken);
-        var allOrganizationLinks = await accountDb.OrganizationPoolOrganizations.AsNoTracking().ToListAsync(cancellationToken);
         var allPlanLinks = await accountDb.LicensePlanOrganizationPools.AsNoTracking().ToListAsync(cancellationToken);
 
+        var runtimeReadiness = await EvaluateRuntimeReadinessAsync(
+            organizationLinks.Where(x => x.IsReady),
+            cancellationToken);
         foreach (var link in organizationLinks.Where(x => x.IsReady))
         {
-            var currentReadiness = await runtimeReadinessEvaluator.EvaluateAsync(
-                link.OrganizationId,
-                cancellationToken);
+            var currentReadiness = runtimeReadiness[link.OrganizationId];
+            link.ReadinessMessage = currentReadiness.Message;
             if (!currentReadiness.Ready)
             {
                 link.IsReady = false;
-                link.ReadinessMessage = currentReadiness.Message;
             }
         }
 
         return new OrganizationPoolDetailResponse(
-            ToSummary(pool, allOrganizationLinks, allPlanLinks),
-            organizationLinks.Select(link => ToOrganizationResponse(link, organizations[link.OrganizationId])).ToArray(),
+            ToSummary(pool, organizationLinks, allPlanLinks, organizations, plans, runtimeReadiness),
+            organizationLinks.Select(link => ToOrganizationResponse(
+                link,
+                organizations[link.OrganizationId],
+                pool.Status == OrganizationPoolStatuses.Active && planLinks.Any(x =>
+                    x.IsActive &&
+                    plans.TryGetValue(x.LicensePlanId, out var plan) &&
+                    IsSellable(plan)))).ToArray(),
             planLinks.Select(link => ToPlanResponse(link, plans[link.LicensePlanId], pool)).ToArray(),
             await MapAssignmentsAsync(recentAssignments, cancellationToken));
     }
@@ -113,7 +171,13 @@ internal sealed partial class OrganizationProvisioningAdminService(
         accountDb.OrganizationPools.Add(pool);
         AddAudit(adminUserId, "OrganizationPoolCreated", new { pool.OrganizationPoolId, pool.Code, pool.Name, pool.Status }, now);
         await accountDb.SaveChangesAsync(cancellationToken);
-        return ToSummary(pool, [], []);
+        return ToSummary(
+            pool,
+            [],
+            [],
+            new Dictionary<Guid, Organization>(),
+            new Dictionary<Guid, LicensePlan>(),
+            new Dictionary<Guid, OrganizationProvisioningReadiness>());
     }
 
     public async Task<OrganizationPoolSummaryResponse> UpdatePoolAsync(
@@ -137,7 +201,18 @@ internal sealed partial class OrganizationProvisioningAdminService(
         await accountDb.SaveChangesAsync(cancellationToken);
         var organizationLinks = await accountDb.OrganizationPoolOrganizations.AsNoTracking().ToListAsync(cancellationToken);
         var planLinks = await accountDb.LicensePlanOrganizationPools.AsNoTracking().ToListAsync(cancellationToken);
-        return ToSummary(pool, organizationLinks, planLinks);
+        var organizationIds = organizationLinks.Select(x => x.OrganizationId).Distinct().ToArray();
+        var organizationDirectory = await accountDb.Organizations.AsNoTracking()
+            .Where(x => organizationIds.Contains(x.OrganizationId))
+            .ToDictionaryAsync(x => x.OrganizationId, cancellationToken);
+        var planIds = planLinks.Select(x => x.LicensePlanId).Distinct().ToArray();
+        var planDirectory = await accountDb.LicensePlans.AsNoTracking()
+            .Where(x => planIds.Contains(x.LicensePlanId))
+            .ToDictionaryAsync(x => x.LicensePlanId, cancellationToken);
+        var runtimeReadiness = await EvaluateRuntimeReadinessAsync(
+            organizationLinks.Where(x => x.IsAutoAssignmentEnabled && x.IsReady),
+            cancellationToken);
+        return ToSummary(pool, organizationLinks, planLinks, organizationDirectory, planDirectory, runtimeReadiness);
     }
 
     public async Task<OrganizationPoolOrganizationResponse> UpsertOrganizationAsync(
@@ -146,7 +221,7 @@ internal sealed partial class OrganizationProvisioningAdminService(
         string adminUserId,
         CancellationToken cancellationToken)
     {
-        _ = await RequirePoolAsync(poolId, cancellationToken);
+        var pool = await RequirePoolAsync(poolId, cancellationToken);
         if (request.SeatCapacity is < 1 or > 100000)
         {
             throw Validation("invalid_seat_capacity", "Sức chứa khách hàng phải từ 1 đến 100.000.");
@@ -213,7 +288,21 @@ internal sealed partial class OrganizationProvisioningAdminService(
             request.IsReady
         }, now);
         await accountDb.SaveChangesAsync(cancellationToken);
-        return ToOrganizationResponse(link, organization);
+        var poolCanAllocate = pool.Status == OrganizationPoolStatuses.Active &&
+                              await (
+                                  from mapping in accountDb.LicensePlanOrganizationPools.AsNoTracking()
+                                  join plan in accountDb.LicensePlans.AsNoTracking()
+                                      on mapping.LicensePlanId equals plan.LicensePlanId
+                                  where mapping.OrganizationPoolId == poolId &&
+                                        mapping.IsActive &&
+                                        plan.IsActive &&
+                                        plan.IsPublic &&
+                                        plan.SalePriceVnd > 0 &&
+                                        plan.DefaultDurationDays > 0 &&
+                                        plan.DefaultDurationDays <= 3650
+                                  select mapping.LicensePlanId)
+                              .AnyAsync(cancellationToken);
+        return ToOrganizationResponse(link, organization, poolCanAllocate);
     }
 
     public async Task RemoveOrganizationAsync(
@@ -414,7 +503,24 @@ internal sealed partial class OrganizationProvisioningAdminService(
             row.FailureCode ?? (payments.TryGetValue(row.LicensePaymentId, out var failedPayment)
                 ? failedPayment.FailureCode
                 : null),
-            row.UpdatedAtUtc)).ToArray();
+            row.UpdatedAtUtc,
+            payments.TryGetValue(row.LicensePaymentId, out var currentPayment)
+                ? currentPayment.Status
+                : null)).ToArray();
+    }
+
+    private async Task<IReadOnlyDictionary<Guid, OrganizationProvisioningReadiness>> EvaluateRuntimeReadinessAsync(
+        IEnumerable<OrganizationPoolOrganization> links,
+        CancellationToken cancellationToken)
+    {
+        var results = new Dictionary<Guid, OrganizationProvisioningReadiness>();
+        foreach (var organizationId in links.Select(x => x.OrganizationId).Distinct())
+        {
+            results[organizationId] = await runtimeReadinessEvaluator.EvaluateAsync(
+                organizationId,
+                cancellationToken);
+        }
+        return results;
     }
 
     private async Task<ProvisioningReadiness> EvaluateReadinessAsync(Guid organizationId, CancellationToken cancellationToken)
@@ -495,12 +601,33 @@ internal sealed partial class OrganizationProvisioningAdminService(
     private static OrganizationPoolSummaryResponse ToSummary(
         OrganizationPool pool,
         IReadOnlyCollection<OrganizationPoolOrganization> organizations,
-        IReadOnlyCollection<LicensePlanOrganizationPool> plans)
+        IReadOnlyCollection<LicensePlanOrganizationPool> plans,
+        IReadOnlyDictionary<Guid, Organization> organizationDirectory,
+        IReadOnlyDictionary<Guid, LicensePlan> planDirectory,
+        IReadOnlyDictionary<Guid, OrganizationProvisioningReadiness> runtimeReadiness)
     {
         var rows = organizations.Where(x => x.OrganizationPoolId == pool.OrganizationPoolId).ToArray();
+        var allocatableRows = rows.Where(x =>
+                x.IsAutoAssignmentEnabled &&
+                x.IsReady &&
+                organizationDirectory.TryGetValue(x.OrganizationId, out var organization) &&
+                organization.Status == OrganizationStatuses.Active &&
+                runtimeReadiness.TryGetValue(x.OrganizationId, out var readiness) &&
+                readiness.Ready)
+            .ToArray();
+        var planRows = plans.Where(x => x.OrganizationPoolId == pool.OrganizationPoolId).ToArray();
         var capacity = rows.Sum(x => x.SeatCapacity);
         var active = rows.Sum(x => x.ActiveSeatCount);
         var reserved = rows.Sum(x => x.ReservedSeatCount);
+        var activePlanCount = planRows.Count(x =>
+            x.IsActive &&
+            planDirectory.TryGetValue(x.LicensePlanId, out var plan) &&
+            IsSellable(plan));
+        var poolCanAllocate = pool.Status == OrganizationPoolStatuses.Active && activePlanCount > 0;
+        var allocatableCapacity = poolCanAllocate ? allocatableRows.Sum(x => x.SeatCapacity) : 0;
+        var allocatableAvailable = poolCanAllocate
+            ? allocatableRows.Sum(x => Math.Max(0, x.SeatCapacity - x.ActiveSeatCount - x.ReservedSeatCount))
+            : 0;
         return new OrganizationPoolSummaryResponse(
             pool.OrganizationPoolId,
             pool.Code,
@@ -508,18 +635,23 @@ internal sealed partial class OrganizationProvisioningAdminService(
             pool.AllocationStrategy,
             pool.Status,
             rows.Length,
-            plans.Count(x => x.OrganizationPoolId == pool.OrganizationPoolId),
+            planRows.Length,
             capacity,
             active,
             reserved,
             Math.Max(0, capacity - active - reserved),
             pool.CreatedAtUtc,
-            pool.UpdatedAtUtc);
+            pool.UpdatedAtUtc,
+            allocatableRows.Length,
+            activePlanCount,
+            allocatableCapacity,
+            allocatableAvailable);
     }
 
     private static OrganizationPoolOrganizationResponse ToOrganizationResponse(
         OrganizationPoolOrganization link,
-        Organization organization) =>
+        Organization organization,
+        bool poolCanAllocate) =>
         new(
             link.OrganizationPoolId,
             organization.OrganizationId,
@@ -534,7 +666,17 @@ internal sealed partial class OrganizationProvisioningAdminService(
             link.IsAutoAssignmentEnabled,
             link.IsReady,
             link.ReadinessMessage,
-            link.UpdatedAtUtc);
+            link.UpdatedAtUtc,
+            poolCanAllocate &&
+            link.IsAutoAssignmentEnabled &&
+            link.IsReady &&
+            organization.Status == OrganizationStatuses.Active,
+            poolCanAllocate &&
+            link.IsAutoAssignmentEnabled &&
+            link.IsReady &&
+            organization.Status == OrganizationStatuses.Active
+                ? Math.Max(0, link.SeatCapacity - link.ActiveSeatCount - link.ReservedSeatCount)
+                : 0);
 
     private static LicensePlanOrganizationPoolResponse ToPlanResponse(
         LicensePlanOrganizationPool link,
@@ -549,7 +691,16 @@ internal sealed partial class OrganizationProvisioningAdminService(
             pool.Name,
             link.DefaultMemberMonthlyBudgetLimit,
             link.IsActive,
-            link.UpdatedAtUtc);
+            link.UpdatedAtUtc,
+            plan.IsActive,
+            plan.IsPublic,
+            IsSellable(plan));
+
+    private static bool IsSellable(LicensePlan plan) =>
+        plan.IsActive &&
+        plan.IsPublic &&
+        plan.SalePriceVnd > 0 &&
+        plan.DefaultDurationDays is > 0 and <= 3650;
 
     private void AddAudit(string userId, string eventType, object data, DateTime now) =>
         accountDb.AccountAuditLogs.Add(new AccountAuditLog

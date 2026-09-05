@@ -55,6 +55,16 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+    options.AddPolicy("ai-status", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"ai-status:{httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous"}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
     options.AddPolicy("password-reset-request", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             $"password-reset-request:{httpContext.Connection.RemoteIpAddress}",
@@ -265,6 +275,7 @@ builder.Services.AddScoped<IVideoProviderClient, BytePlusVideoClient>();
 builder.Services.AddScoped<IVideoProviderClient, FalVeoVideoClient>();
 builder.Services.AddScoped<IVideoProviderRouter, VideoProviderRouter>();
 builder.Services.AddScoped<IGenerationService, GenerationService>();
+builder.Services.AddScoped<ISceneFirstFrameService, SceneFirstFrameService>();
 builder.Services.AddScoped<IGeneratedImageContentService, GeneratedImageContentService>();
 builder.Services.AddScoped<IGeneratedVoiceContentService, GeneratedVoiceContentService>();
 builder.Services.AddScoped<KlingOutputProxyService>();

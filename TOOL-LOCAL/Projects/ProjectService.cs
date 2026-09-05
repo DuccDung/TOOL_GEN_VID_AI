@@ -236,7 +236,13 @@ public sealed class ProjectService(
                         .OrderByDescending(prompt => prompt.Version)
                         .Select(prompt => prompt.NegativePrompt)
                         .FirstOrDefault(),
+                    LatestVideoRequestStatus = x.ProviderRequests
+                        .Where(request => request.RequestKind == "Video")
+                        .OrderByDescending(request => request.CreatedAtUtc)
+                        .Select(request => request.Status)
+                        .FirstOrDefault(),
                     HasActiveProviderRequest = x.ProviderRequests.Any(request =>
+                        request.RequestKind == "Video" &&
                         request.Status != "Completed" &&
                         request.Status != "Failed" &&
                         request.Status != "Cancelled" &&
@@ -352,6 +358,10 @@ public sealed class ProjectService(
                 var speakerCharacterName = speechMode == KlingSpeechModes.OnCameraDialogue
                     ? sceneCharacters.SingleOrDefault()?.Name
                     : null;
+                var providerVideoCompleted =
+                    scene.Status == "WaitingProvider" &&
+                    scene.LatestVideoRequestStatus == "Completed";
+                var dashboardSceneStatus = providerVideoCompleted ? "Generated" : scene.Status;
                 return new SceneDashboardSummary(
                     scene.SceneId,
                     scene.SequenceNumber,
@@ -363,7 +373,7 @@ public sealed class ProjectService(
                     spokenText,
                     scene.VisualDescription,
                     scene.Prompt ?? string.Empty,
-                    scene.Status,
+                    dashboardSceneStatus,
                     scene.ApprovedGenerationId is null &&
                         !scene.HasActiveProviderRequest &&
                         scene.Status != "AudioReviewRequired",
@@ -378,14 +388,14 @@ public sealed class ProjectService(
                         : CreatePreview(
                             project.WorkspaceRelativePath,
                             new PreviewAsset(null, asset.RelativePath, asset.DurationMs, asset.MimeType)),
-                    string.IsNullOrWhiteSpace(scene.LastErrorMessage)
+                    providerVideoCompleted || string.IsNullOrWhiteSpace(scene.LastErrorMessage)
                         ? null
                         : IsMediaToolError(scene.LastErrorCode) ||
                           IsNativeAudioError(scene.LastErrorCode) ||
                           IsVideoProviderRetryError(scene.LastErrorCode)
                             ? scene.LastErrorMessage
                             : "Không thể hoàn tất clip cho cảnh này. Hãy kiểm tra prompt và thử lại.",
-                    scene.LastErrorCode,
+                    providerVideoCompleted ? null : scene.LastErrorCode,
                     false,
                     speechMode,
                     nativeAudioPresent,

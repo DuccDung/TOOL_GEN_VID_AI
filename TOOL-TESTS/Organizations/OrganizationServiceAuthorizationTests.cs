@@ -8,6 +8,7 @@ using TOOL_SERVER.Data;
 using TOOL_SERVER.Domain.Accounts;
 using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Domain.Providers;
+using TOOL_SERVER.Generation;
 using TOOL_SERVER.Organizations;
 using TOOL_SERVER.Providers;
 using TOOL_SHARED.Contracts.Common;
@@ -139,6 +140,62 @@ public sealed class OrganizationServiceAuthorizationTests
         Assert.Equal(OrganizationMemberRoles.OrganizationAdmin, buyer.Role);
         Assert.Equal(OrganizationMemberStatuses.Suspended, buyer.Status);
         Assert.Equal(99m, buyer.MonthlyBudgetLimit);
+    }
+
+    [Fact]
+    public async Task GetMine_LongFormFalIsReadyWithoutKlingCredentialOrRate()
+    {
+        await using var fixture = await OrganizationFixture.CreateAsync();
+        fixture.AddMember("owner", OrganizationMemberRoles.Owner);
+        var (_, openAiModel) = fixture.AddProviderWithModel(
+            ProviderCodes.OpenAi,
+            "OpenAI",
+            "gpt-5.6-luna",
+            "Text",
+            isEnabled: true);
+        var (falProvider, falModel) = fixture.AddProviderWithModel(
+            ProviderCodes.Fal,
+            "Fal",
+            FalVeoPolicy.StandardEndpointId,
+            "Video",
+            isEnabled: true);
+        fixture.AddProviderWithModel(
+            ProviderCodes.Kling,
+            "Kling",
+            "kling-3.0",
+            "Video",
+            isEnabled: true);
+        fixture.AddActiveCredential(openAiModel.ProviderId);
+        fixture.AddActiveCredential(falProvider.ProviderId);
+        fixture.AddRate(openAiModel, "InputToken");
+        fixture.AddRate(openAiModel, "OutputToken");
+        fixture.AddRate(
+            falModel,
+            "VideoSecond",
+            $$"""{"resolution":"720p","nativeAudio":true,"endpointId":"{{FalVeoPolicy.StandardEndpointId}}"}""");
+        fixture.GovernanceDb.OrganizationVideoPolicies.Add(new OrganizationVideoPolicy
+        {
+            OrganizationId = fixture.OrganizationId,
+            PolicyScope = OrganizationVideoPolicyScopes.LongForm,
+            ProviderId = falProvider.ProviderId,
+            ProviderModelId = falModel.ProviderModelId,
+            PolicyVersion = 1,
+            Resolution = FalVeoPolicy.Resolution,
+            NativeAudio = true,
+            IsActive = true,
+            UpdatedByUserId = "owner",
+            CreatedAtUtc = fixture.NowUtc,
+            UpdatedAtUtc = fixture.NowUtc
+        });
+        await fixture.SaveAsync();
+
+        var organization = Assert.Single(await fixture.Service.GetMineAsync("owner", CancellationToken.None));
+        var readiness = Assert.IsAssignableFrom<IReadOnlyList<OrganizationAiReadinessResponse>>(organization.AiReadiness);
+
+        Assert.Equal(2, readiness.Count);
+        Assert.True(Assert.Single(readiness, item => item.ProviderCode == ProviderCodes.OpenAi).Ready);
+        Assert.True(Assert.Single(readiness, item => item.ProviderCode == ProviderCodes.Fal).Ready);
+        Assert.DoesNotContain(readiness, item => item.ProviderCode == ProviderCodes.Kling);
     }
 
     [Fact]
@@ -298,6 +355,73 @@ public sealed class OrganizationServiceAuthorizationTests
                 UpdatedAtUtc = NowUtc
             });
         }
+
+        public (AiProvider Provider, AiProviderModel Model) AddProviderWithModel(
+            string providerCode,
+            string displayName,
+            string modelCode,
+            string modality,
+            bool isEnabled)
+        {
+            var provider = new AiProvider
+            {
+                ProviderId = Guid.NewGuid(),
+                ProviderCode = providerCode,
+                DisplayName = displayName,
+                BaseUrl = "https://provider.example.test/",
+                IsEnabled = isEnabled,
+                CreatedAtUtc = NowUtc,
+                UpdatedAtUtc = NowUtc
+            };
+            var model = new AiProviderModel
+            {
+                ProviderModelId = Guid.NewGuid(),
+                ProviderId = provider.ProviderId,
+                Provider = provider,
+                ModelCode = modelCode,
+                DisplayName = modelCode,
+                Modality = modality,
+                IsEnabled = isEnabled,
+                IsDefault = true,
+                CreatedAtUtc = NowUtc,
+                UpdatedAtUtc = NowUtc
+            };
+            provider.Models.Add(model);
+            ProviderDb.Providers.Add(provider);
+            return (provider, model);
+        }
+
+        public void AddActiveCredential(Guid providerId) =>
+            GovernanceDb.OrganizationProviderCredentials.Add(new OrganizationProviderCredential
+            {
+                OrganizationProviderCredentialId = Guid.NewGuid(),
+                OrganizationId = OrganizationId,
+                ProviderId = providerId,
+                Version = 1,
+                Name = "Test credential",
+                EncryptedPayload = "encrypted-test-key",
+                SecretHint = "••••test",
+                Status = ProviderCredentialStatuses.Active,
+                CreatedByUserId = "owner",
+                CreatedAtUtc = NowUtc,
+                UpdatedAtUtc = NowUtc
+            });
+
+        public void AddRate(AiProviderModel model, string usageType, string? metadataJson = null) =>
+            model.CostRates.Add(new AiCostRate
+            {
+                CostRateId = Guid.NewGuid(),
+                ProviderModelId = model.ProviderModelId,
+                ProviderModel = model,
+                UsageType = usageType,
+                Unit = usageType == "VideoSecond" ? "Second" : "MillionTokens",
+                UnitPrice = 1,
+                CurrencyCode = "USD",
+                EffectiveFromUtc = NowUtc.AddDays(-1),
+                IsActive = true,
+                MetadataJson = metadataJson,
+                CreatedAtUtc = NowUtc
+            });
 
         public async Task SaveAsync()
         {

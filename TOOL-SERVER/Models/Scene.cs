@@ -107,6 +107,8 @@ public partial class Scene
 
     public virtual ICollection<ScenePrompt> ScenePrompts { get; set; } = new List<ScenePrompt>();
 
+    public virtual ICollection<SceneFirstFrame> SceneFirstFrames { get; set; } = new List<SceneFirstFrame>();
+
     public virtual Script Script { get; set; } = null!;
 
     public virtual ICollection<SoundEffect> SoundEffects { get; set; } = new List<SoundEffect>();

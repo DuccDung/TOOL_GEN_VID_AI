@@ -16,6 +16,14 @@ public sealed class OrganizationsController(IOrganizationService organizationSer
     public Task<IReadOnlyList<OrganizationSummaryResponse>> GetMine(CancellationToken cancellationToken) =>
         organizationService.GetMineAsync(UserId(), cancellationToken);
 
+    [HttpGet("page")]
+    [Authorize(Roles = "Admin")]
+    public Task<PagedResponse<OrganizationSummaryResponse>> GetMinePage(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default) =>
+        organizationService.GetMinePageAsync(UserId(), page, pageSize, cancellationToken);
+
     [HttpPost]
     [Authorize(Roles = "Admin")]
     [ProducesResponseType<OrganizationSummaryResponse>(StatusCodes.Status201Created)]
@@ -32,6 +40,15 @@ public sealed class OrganizationsController(IOrganizationService organizationSer
         Guid organizationId,
         CancellationToken cancellationToken) =>
         organizationService.GetMembersAsync(organizationId, UserId(), cancellationToken);
+
+    [HttpGet("{organizationId:guid}/members/page")]
+    public Task<PagedResponse<OrganizationMemberResponse>> GetMembersPage(
+        Guid organizationId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? search = null,
+        CancellationToken cancellationToken = default) =>
+        organizationService.GetMembersPageAsync(organizationId, UserId(), page, pageSize, search, cancellationToken);
 
     [HttpPost("{organizationId:guid}/members")]
     [ProducesResponseType<OrganizationMemberResponse>(StatusCodes.Status201Created)]
@@ -118,12 +135,31 @@ public sealed class OrganizationsController(IOrganizationService organizationSer
         CancellationToken cancellationToken = default) =>
         organizationService.GetUsageAsync(organizationId, UserId(), take, cancellationToken);
 
+    [HttpGet("{organizationId:guid}/usage/page")]
+    public Task<OrganizationUsageResponse> GetUsagePage(
+        Guid organizationId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? provider = null,
+        [FromQuery] string? model = null,
+        [FromQuery] string? kind = null,
+        CancellationToken cancellationToken = default) =>
+        organizationService.GetUsagePageAsync(organizationId, UserId(), page, pageSize, provider, model, kind, cancellationToken);
+
     [HttpGet("{organizationId:guid}/audit")]
     public Task<IReadOnlyList<OrganizationAuditItemResponse>> GetAudit(
         Guid organizationId,
         [FromQuery] int take = 100,
         CancellationToken cancellationToken = default) =>
         organizationService.GetAuditAsync(organizationId, UserId(), take, cancellationToken);
+
+    [HttpGet("{organizationId:guid}/audit/page")]
+    public Task<PagedResponse<OrganizationAuditItemResponse>> GetAuditPage(
+        Guid organizationId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default) =>
+        organizationService.GetAuditPageAsync(organizationId, UserId(), page, pageSize, cancellationToken);
 
     private string UserId() => User.FindFirstValue(ClaimTypes.NameIdentifier)!;
 

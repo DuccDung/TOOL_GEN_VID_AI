@@ -12,6 +12,8 @@ Cùng phạm vi video dài Kling, speech intent được khóa theo quan hệ sc
 
 Content plan nhiều cảnh đồng thời có thể đề xuất thư viện text `Background`/`Prop`/`Item` và gắn đúng `asset_key` vào từng scene. Storyboard hiển thị trực tiếp các tài sản đã chọn bằng ba trạng thái dễ hiểu: **Chờ xác nhận**, **Cần chỉnh sửa** và **Đã sẵn sàng**. Người dùng có thể bấm **Xác nhận tài sản cảnh** ngay trên card; server kiểm tra lại lựa chọn rồi khóa nguyên tử các tài sản nháp đang gắn với cảnh. Thao tác này không gọi provider, không tạo usage và không phát sinh chi phí AI.
 
+Với project video dài đã snapshot Fal/Veo, ảnh nhận diện nhân vật `1024x1024` chỉ còn là nguồn giữ identity. Mỗi scene phải có `SceneFirstFrame` riêng `1280x720` hoặc `720x1280`: cảnh on-camera dùng GPT-Image-2 editing với primary reference đã duyệt, B-roll dùng image generation không có nhân vật. Desktop tải ảnh qua proxy tương đối, xác minh file `.part`, materialize thành version `PendingReview`; người dùng preview rồi duyệt trước khi Veo được phép nhận đúng frame đó. Thay scene prompt, nhân vật/primary reference, asset version hoặc aspect ratio làm frame lỗi thời và chặn submit động trên server.
+
 Khi toàn bộ scene đã được nghe và duyệt, desktop cho phép dựng video cuối bằng FFmpeg. Luồng này chỉ nối các `SceneVideo` thuộc đúng `ApprovedGenerationId`, giữ nguyên Native Audio và kiểm tra lại hình, audio stream, mức âm lượng cùng thời lượng trước khi ghi nhận `FinalVideo`; dựng lại video không gọi provider AI.
 
 Tài liệu chính, theo thứ tự sử dụng:
@@ -22,6 +24,7 @@ Tài liệu chính, theo thứ tự sử dụng:
 - [Hồ sơ triển khai nội dung tiếng Việt cho Video Dài Kling](KE_HOACH_KLING_NOI_DUNG_TIENG_VIET.md): quyết định phạm vi, chốt chặn ngôn ngữ và kết quả xác minh.
 - [Hồ sơ triển khai nhân vật nói trực tiếp trong video dài Kling](KE_HOACH_KLING_NHAN_VAT_NOI_TRUC_TIEP_VIDEO_DAI.md): policy speech intent, template speech-first, retry phục hồi lời nói và phạm vi smoke test còn mở.
 - [Hồ sơ tích hợp Fal/Veo cho Video Dài](KE_HOACH_TICH_HOP_FAL_VEO_VIDEO_DAI.md): policy `LongForm`, exact duration, first-frame, Queue API, privacy/cache, Admin/Desktop và các bước rollout còn mở.
+- [Task Scene First-Frame AI cho Veo](TASK_HOAN_THIEN_SCENE_FIRST_FRAME_AI_CHO_VEO.md): thiết kế, trạng thái triển khai source, kiểm thử và các bước rollout còn mở.
 - [Kế hoạch và trạng thái Server AI Gateway](KE_HOACH_SERVER_AI_GATEWAY.md): phần source đã có, việc vận hành còn phải thực hiện và phạm vi mở rộng.
 - [Hướng dẫn triển khai AI Gateway](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md): runbook migration, credential, rate, budget, smoke test và rollback.
 - [Kế hoạch gia hạn license bằng SePay](KE_HOACH_TRIEN_KHAI_GIA_HAN_LICENSE_SEPAY.md): trạng thái source, kiểm thử và các bước vận hành còn mở.
@@ -34,8 +37,8 @@ Khi tài liệu diễn giải khác source hoặc migration, source/migration l�
 
 ## Kiến trúc hiện tại
 
-- `TOOL-SERVER`: tài khoản, JWT, license/lease thiết bị, offer/payment/webhook SePay, tổ chức và thành viên, credential OpenAI/Kling/BytePlus/Fal, ngân sách, usage ledger, AI Gateway, tạo ảnh nhân vật GPT-Image-2, polling video đa provider, cache output có hạn dùng và API tải output có xác thực.
-- `TOOL-LOCAL`: giao diện WinForms/WebView2, trạng thái khóa/gia hạn license, dữ liệu dự án và workspace. Người dùng có thể tạo/sinh lại ảnh chuẩn nhân vật, xem trước rồi khóa nhân vật; xem tài sản text do AI đề xuất, xác nhận ngay trên card cảnh hoặc thay đổi lựa chọn bằng trình chọn nâng cao; storyboard hiển thị lời đọc, mô tả, prompt và preview từng cảnh. Mọi request AI đều có JWT, device claim và `organizationId`, sau đó đi qua `TOOL-SERVER`.
+- `TOOL-SERVER`: tài khoản, JWT, license/lease thiết bị, offer/payment/webhook SePay, tổ chức và thành viên, credential OpenAI/Kling/BytePlus/Fal, ngân sách, usage ledger, AI Gateway, tạo ảnh nhân vật và scene first-frame bằng GPT-Image-2, polling video đa provider, cache output có hạn dùng và API tải output có xác thực.
+- `TOOL-LOCAL`: giao diện WinForms/WebView2, trạng thái khóa/gia hạn license, dữ liệu dự án và workspace. Người dùng có thể tạo/sinh lại ảnh chuẩn nhân vật, tạo/preview/từ chối/duyệt first-frame Veo theo scene, xem tài sản text do AI đề xuất, xác nhận ngay trên card cảnh hoặc thay đổi lựa chọn bằng trình chọn nâng cao; storyboard hiển thị lời đọc, mô tả, prompt và preview từng cảnh. Mọi request AI đều có JWT, device claim và `organizationId`, sau đó đi qua `TOOL-SERVER`.
 - `TOOL-SHARED.Contracts`: hợp đồng request/response dùng chung.
 - `TOOL-DISTRIBUTION`: quy tắc dùng chung để xác minh hồ sơ và SHA-256 của bundle FFmpeg trong desktop/setup/updater.
 - `TOOL-TESTS`: kiểm thử quyền, gateway, định giá, SSRF, cập nhật desktop và các nghiệp vụ nền.
@@ -62,9 +65,10 @@ sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
 sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
+sqlcmd -S <server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.1.SceneFirstFrames.sql
 ```
 
-`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 mở rộng trạng thái scene; 4.0.6 hoàn thiện constraint cho cả scene và video generation với `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`; 4.0.7 thêm thư viện continuity text-only và snapshot version; 4.0.8 thêm metadata truy vết tài sản AI; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10 thêm catalog gói bán và giao dịch SePay; 4.0.11 thêm pool tổ chức, sức chứa và reservation/assignment để tự cấp membership sau thanh toán. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
+`-f 65001` buộc `sqlcmd` đọc các file nguồn bằng UTF-8. Migration 4.0.1 sửa seed text bị sai mã hóa; 4.0.2 thêm output ảnh nhân vật có hạn dùng; 4.0.3 bổ sung nền tảng TTS tương thích; 4.0.4 thêm policy video theo tổ chức, snapshot provider/model bất biến trên project, catalog Seedance bị tắt mặc định và metadata cache video an toàn; 4.0.5 mở rộng trạng thái scene; 4.0.6 hoàn thiện constraint cho cả scene và video generation với `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`; 4.0.7 thêm thư viện continuity text-only và snapshot version; 4.0.8 thêm metadata truy vết tài sản AI; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10 thêm catalog gói bán và giao dịch SePay; 4.0.11 thêm pool tổ chức, sức chứa và reservation/assignment; 4.1.1 thêm `SceneFirstFrames` cùng snapshot frame dùng cho request Veo. Chạy `VideoFactory.DesktopLeastPrivilege.sql` sau cùng để áp lại quyền deny cho các bảng mới.
 
 Nếu desktop vẫn cần truy cập trực tiếp dữ liệu workflow trong giai đoạn chuyển tiếp, tạo user SQL riêng và chạy:
 
@@ -111,7 +115,7 @@ Tài khoản Gmail phải bật xác minh hai bước và dùng App Password, kh
 4. Global Admin cấu hình đơn giá model.
 5. Owner hoặc OrganizationAdmin lưu/rotate credential OpenAI và provider video được tổ chức sử dụng.
 6. Người dùng đăng nhập desktop, chọn tổ chức và tạo dự án.
-7. Desktop gọi AI Gateway; server kiểm tra session, license, membership, vai trò, budget và idempotency trước khi gọi provider. Ảnh GPT-Image-2 được tải qua URL tương đối có xác thực, kiểm tra SHA-256 rồi lưu vào workspace; desktop không nhận URL OpenAI.
+7. Desktop gọi AI Gateway; server kiểm tra session, license, membership, vai trò, budget và idempotency trước khi gọi provider. Ảnh GPT-Image-2 được tải qua URL tương đối có xác thực, kiểm tra SHA-256 rồi lưu vào workspace; với Fal/Veo, scene first-frame phải được duyệt trước video request. Desktop không nhận URL OpenAI.
 8. Chi phí được quyết toán vào usage ledger theo từng thành viên. Worker đa provider tiếp tục polling và cache video trên server ngay cả khi desktop đã đóng.
 
 ## Công cụ media cục bộ
@@ -144,7 +148,7 @@ dotnet build TOOL_GEN_POST_VIDEO.slnx -c Release --no-restore
 dotnet test TOOL-TESTS\TOOL-TESTS.csproj -c Release --no-build
 ```
 
-Mốc xác minh source gần nhất ngày 2026-09-03: restore thành công, Release build không có warning/error và 510/510 test đạt. Tích hợp Fal/Veo cần migration 4.0.9 và thanh toán SePay cần migration 4.0.10, nhưng các migration này chưa được chạy trên database thật. Fal và SePay vẫn Disabled; chưa nhập key/rate provider production, chưa gọi provider hoặc webhook thật và chưa phát sinh chi phí. Smoke test thật chưa được chạy vì cần chỉ định môi trường staging cùng phê duyệt tác động/chi phí phù hợp.
+Mốc xác minh source gần nhất ngày 2026-09-05: restore thành công, Release build không có warning/error và 649/649 test đạt. Tích hợp Fal/Veo cần migration 4.0.9 và 4.1.1; thanh toán SePay cần migration 4.0.10–4.0.11, nhưng các migration này chưa được chạy trên database thật. Fal và SePay vẫn Disabled; chưa nhập key/rate provider production, chưa gọi provider hoặc webhook thật và chưa phát sinh chi phí. Smoke test thật chưa được chạy vì cần chỉ định môi trường staging cùng phê duyệt tác động/chi phí phù hợp.
 
 ## Cập nhật desktop
 

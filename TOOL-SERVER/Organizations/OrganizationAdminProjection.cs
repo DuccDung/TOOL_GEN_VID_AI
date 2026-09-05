@@ -115,6 +115,8 @@ internal static class OrganizationUsageMetricsParser
 
 internal static class OrganizationReadinessEvaluator
 {
+    public const string LongFormPolicyProviderCode = "video-long-form";
+
     public static OrganizationAiReadinessResponse Evaluate(
         string providerCode,
         string? modelCode,
@@ -122,7 +124,8 @@ internal static class OrganizationReadinessEvaluator
         bool modelEnabled,
         bool credentialActive,
         decimal budgetLimit,
-        IEnumerable<string> activeUsageTypes)
+        IEnumerable<string> activeUsageTypes,
+        IEnumerable<string>? additionalBlockingReasons = null)
     {
         var requiredUsageTypes = providerCode.Equals("openai", StringComparison.OrdinalIgnoreCase)
             ? new[] { "InputToken", "OutputToken" }
@@ -158,6 +161,10 @@ internal static class OrganizationReadinessEvaluator
         {
             reasons.Add("pricing_not_configured");
         }
+        if (additionalBlockingReasons is not null)
+        {
+            reasons.AddRange(additionalBlockingReasons.Where(reason => !reasons.Contains(reason, StringComparer.Ordinal)));
+        }
 
         return new OrganizationAiReadinessResponse(
             providerCode,
@@ -170,6 +177,18 @@ internal static class OrganizationReadinessEvaluator
             missingUsageTypes,
             reasons);
     }
+
+    public static OrganizationAiReadinessResponse MissingLongFormPolicy(decimal budgetLimit) =>
+        new(
+            LongFormPolicyProviderCode,
+            null,
+            true,
+            false,
+            false,
+            budgetLimit > 0,
+            false,
+            [],
+            ["video_policy_missing"]);
 }
 
 internal static class OrganizationAuditDataSanitizer

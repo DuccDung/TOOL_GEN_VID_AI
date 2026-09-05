@@ -1,6 +1,6 @@
 # Kế hoạch và trạng thái triển khai Server AI Gateway
 
-> Cập nhật ngữ cảnh: 2026-09-03. Kiến trúc AI Gateway theo tổ chức, GPT-Image-2, Kling Native Audio 720p, gateway video đa provider Kling/BytePlus/Fal, thư viện continuity text-only theo scene và luồng gia hạn license SePay đã được triển khai trong source. Video dài Kling/Fal dùng content/prompt tiếng Việt cùng policy speech-first riêng theo provider; Fal/Veo chỉ chạy qua policy `LongForm`, Queue API, I2V 720p/Native Audio 4/6/8 giây và first-frame đã duyệt. BytePlus/Seedance, Fal/Veo và thanh toán SePay đều chưa được coi là đã rollout nếu thiếu migration, credential/cấu hình, rate hoặc kiểm thử staging tương ứng. Gateway kiểm tra scene-plan/prompt/asset version, dùng snapshot idempotency theo tổ chức và không lưu raw provider payload, full continuity text/spoken text trong request log hoặc signed output URL. Migration chưa được tự động chạy trên database đang sử dụng.
+> Cập nhật ngữ cảnh: 2026-09-05. Kiến trúc AI Gateway theo tổ chức, GPT-Image-2, Kling Native Audio 720p, gateway video đa provider Kling/BytePlus/Fal, thư viện continuity text-only theo scene, Scene First-Frame cho Veo và luồng gia hạn license SePay đã được triển khai trong source. Video dài Kling/Fal dùng content/prompt tiếng Việt cùng policy speech-first riêng theo provider; Fal/Veo chỉ chạy qua policy `LongForm`, Queue API, I2V 720p/Native Audio 4/6/8 giây và `SceneFirstFrame` đã duyệt. BytePlus/Seedance, Fal/Veo và thanh toán SePay đều chưa được coi là đã rollout nếu thiếu migration, credential/cấu hình, rate hoặc kiểm thử staging tương ứng. Gateway kiểm tra scene-plan/prompt/character/asset version, dùng snapshot idempotency theo tổ chức và không lưu raw provider payload, full prompt/Base64 hoặc signed output URL. Migration chưa được tự động chạy trên database đang sử dụng.
 
 Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; lệnh triển khai nằm tại `TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md`.
 
@@ -27,6 +27,7 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 - [x] Contract/API video trung lập provider; desktop không gửi provider/model/prompt/thời lượng/độ phân giải làm nguồn sự thật.
 - [x] BytePlus Seedance client, prompt composer, policy resolver, worker đa provider, pricing theo `completion_tokens` và output cache/proxy dùng chung.
 - [x] Fal/Veo Standard/Fast catalog disabled, credential `Key`, policy `LongForm`, exact duration allocator, first-frame preflight, speech-first composer, Queue submit/status/result, worker/cache/proxy và pricing `VideoSecond` theo endpoint.
+- [x] Migration 4.1.1, entity/API/state machine `SceneFirstFrame`, GPT-Image-2 generation/editing, proxy/materialize `.part`, preview/approve/reject/regenerate/download retry và invalidation động theo scene/prompt/character/asset/aspect ratio đã có trong source; Fal ghi đúng `InputSceneFirstFrameId` trước outbound.
 - [x] Catalog Seedance 2.0/2.5 được seed disabled; không tự bật provider, model, rate, credential hoặc policy tổ chức.
 - [x] Output proxy có authorization, DNS/IP SSRF checks, redirect/size limit.
 - [x] Generation API xác thực JWT/session/device/license/organization/project và rate limit.
@@ -50,20 +51,20 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 - [x] Bộ dọn credential BYOK cũ chỉ xóa đúng `provider-secrets.bin` và `.tmp`.
 - [x] SQL role ít quyền cho database user desktop.
 - [x] Cập nhật README, tài liệu nghiệp vụ và runbook triển khai.
-- [x] Build toàn solution Release không có warning/error.
-- [x] Toàn bộ 510/510 test đạt ngày 2026-09-03, gồm role, cost snapshot, allowlist, SSRF, language/speech policy, speech-first/recovery prompt, prompt analyzer, xác nhận tài sản, legacy credential cleanup và luồng license/SePay.
+- [x] Build toàn solution Release không có warning/error ngày 2026-09-05.
+- [x] Toàn bộ 649/649 test đạt ngày 2026-09-05, gồm role, cost snapshot, allowlist, SSRF, language/speech policy, scene first-frame/Fal snapshot, speech-first/recovery prompt, prompt analyzer, xác nhận tài sản, legacy credential cleanup và luồng license/SePay.
 
 ## 2. Hạng mục vận hành phải làm khi triển khai
 
 - [ ] Backup và thử restore database đích.
-- [ ] Chạy `VideoFactory.Initial.sql`, migration 4.0.0 đến 4.0.10 và script least privilege theo runbook.
+- [ ] Chạy `VideoFactory.Initial.sql`, migration 4.0.0 đến 4.0.11, migration 4.1.1 và script least privilege theo runbook.
 - [ ] Tạo database user riêng cho server và desktop.
 - [ ] Cấu hình JWT signing key/Data Protection cho môi trường production.
 - [ ] Tạo tổ chức, gán thành viên, budget và member limit thật.
 - [ ] Nhập rate riêng cho model Text, `gpt-image-2`, Kling và provider video thực sự rollout từ hợp đồng/provider dashboard.
 - [ ] Xác nhận tổ chức OpenAI đã được phép dùng GPT-Image-2; xử lý bước organization verification nếu provider yêu cầu.
 - [ ] Nhập production credential qua HTTPS bằng Owner/OrganizationAdmin.
-- [ ] Chạy staging smoke test có phê duyệt chi phí với OpenAI Text, GPT-Image-2 và Kling thật; smoke test BytePlus/Fal trên tổ chức thử nghiệm riêng nếu rollout provider tương ứng.
+- [ ] Chạy staging smoke test có phê duyệt chi phí với OpenAI Text, GPT-Image-2 và Kling thật; nếu rollout Fal, thử riêng on-camera/B-roll first-frame rồi Veo Fast 4 giây trên tổ chức thử nghiệm.
 - [ ] Nếu rollout SePay, cấu hình tài khoản nhận ngoài source và nghiệm thu migration, QR, webhook không API key, giao dịch lặp/đồng thời, đối soát cùng UI locked trên staging.
 - [ ] Đối chiếu usage ledger với hóa đơn/provider dashboard.
 - [ ] Phát hành desktop gateway sau khi server/migration/configuration sẵn sàng.
@@ -79,7 +80,7 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 
 ## 4. Điều kiện phát hành
 
-1. Migration có đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.10-license-sepay-payments`.
+1. Migration có đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.11-organization-seat-provisioning` và `4.1.1-scene-first-frames`.
 2. Budget/rate/credential đã cấu hình và credential test thành công.
 3. Desktop không có provider key và dùng database role riêng.
 4. Cross-organization, Viewer, license hết hạn và budget exceeded đều bị chặn trước provider.
@@ -92,5 +93,6 @@ Tài liệu này chỉ theo dõi trạng thái source/vận hành còn mở. Ngh
 11. Assignment sai quy tắc hoặc thay đổi đồng thời bị chặn; thao tác xác nhận hợp lệ khóa đúng tài sản đang gắn và không khóa tài sản ngoài scene.
 12. Scene video dài Kling có presenter và lời chỉ dùng on-camera; request snapshot chứa template/policy/recovery profile an toàn nhưng không chứa full speech, và retry im lặng cần một xác nhận chi phí mới.
 13. Nếu bật SePay, QR đã được quét thử với đúng ngân hàng/tài khoản/nội dung, webhook không API key chỉ fulfillment khi đúng tài khoản/mã/số tiền và giao dịch lặp/đồng thời chỉ fulfillment một lần.
+14. Nếu bật Fal/Veo, ảnh identity `1024x1024` không được gửi thẳng sang Veo; mỗi scene dùng đúng first-frame Approved/current, retry download không tạo cost mới và frame stale bị chặn trước request video.
 
 Chi tiết thao tác: [TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md](TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md) và [HUONG_DAN_CAU_HINH_SEPAY_LICENSE.md](HUONG_DAN_CAU_HINH_SEPAY_LICENSE.md).

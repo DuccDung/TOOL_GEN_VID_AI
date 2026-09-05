@@ -6,6 +6,7 @@ using TOOL_SERVER.Authentication;
 using TOOL_SERVER.Data;
 using TOOL_SERVER.Domain.Accounts;
 using TOOL_SHARED.Contracts.Accounts;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Accounts;
 
@@ -236,6 +237,45 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
             .Select(x => new UserRow(x.Id, x.Email ?? string.Empty, x.DisplayName, x.AccountStatus, x.LastLoginAtUtc))
             .ToListAsync(cancellationToken);
         return await BuildUserSummariesAsync(users, cancellationToken);
+    }
+
+    public async Task<PagedResponse<AdminUserSummaryResponse>> GetUsersPageAsync(
+        string? search,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (page < 1)
+        {
+            throw Validation("invalid_page", "Số trang phải lớn hơn hoặc bằng 1.");
+        }
+        if (pageSize is < 1 or > 100)
+        {
+            throw Validation("invalid_page_size", "Số bản ghi mỗi trang phải từ 1 đến 100.");
+        }
+
+        var query = dbContext.Users.AsNoTracking().Where(x => x.DeletedAtUtc == null);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim();
+            query = query.Where(x =>
+                (x.Email != null && x.Email.Contains(term)) ||
+                (x.DisplayName != null && x.DisplayName.Contains(term)));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var effectivePage = totalPages == 0 ? 1 : Math.Min(page, totalPages);
+        var users = await query
+            .OrderByDescending(x => x.LastLoginAtUtc)
+            .ThenBy(x => x.Email)
+            .ThenBy(x => x.Id)
+            .Skip((effectivePage - 1) * pageSize)
+            .Take(pageSize)
+            .Select(x => new UserRow(x.Id, x.Email ?? string.Empty, x.DisplayName, x.AccountStatus, x.LastLoginAtUtc))
+            .ToListAsync(cancellationToken);
+        var summaries = await BuildUserSummariesAsync(users, cancellationToken);
+        return new PagedResponse<AdminUserSummaryResponse>(summaries, effectivePage, pageSize, totalCount);
     }
 
     public async Task<AdminUserDetailResponse> GetUserAsync(string userId, CancellationToken cancellationToken)

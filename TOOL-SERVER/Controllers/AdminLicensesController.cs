@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TOOL_SERVER.Accounts;
 using TOOL_SHARED.Contracts.Accounts;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Controllers;
 
@@ -45,6 +46,14 @@ public sealed class AdminLicensesController(IAdminLicenseService licenseService)
         [FromQuery] string? search,
         CancellationToken cancellationToken) =>
         licenseService.GetUsersAsync(search, cancellationToken);
+
+    [HttpGet("users/page")]
+    public Task<PagedResponse<AdminUserSummaryResponse>> GetUsersPage(
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default) =>
+        licenseService.GetUsersPageAsync(search, page, pageSize, cancellationToken);
 
     [HttpGet("users/{userId}")]
     public Task<AdminUserDetailResponse> GetUser(string userId, CancellationToken cancellationToken) =>
