@@ -27,6 +27,10 @@ internal sealed record VietsubSubtitleWorkspaceSummary(
     Guid? ActiveTrackId,
     IReadOnlyList<VietsubSubtitleTrackSummary> Tracks);
 
+internal sealed record VietsubTrackActivationImpact(
+    bool RequiresConfirmation,
+    IReadOnlyList<string> Reasons);
+
 internal sealed record VietsubSubtitleCueSummary(
     Guid CueId,
     int CueIndex,
@@ -266,6 +270,43 @@ internal sealed partial class VietsubSubtitleService(
             speaker,
             speakers,
             page);
+    }
+
+    public async Task<VietsubTrackActivationImpact> AssessActivationImpactAsync(
+        VietsubProjectManifest project,
+        Guid nextTrackId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        var tracks = await store.LoadTracksAsync(project.ProjectId, cancellationToken);
+        if (tracks.All(track => track.TrackId != nextTrackId))
+        {
+            throw TrackNotFound();
+        }
+        if (project.ActiveSubtitleTrackId is not Guid currentTrackId || currentTrackId == nextTrackId)
+        {
+            return new(false, []);
+        }
+        var current = tracks.SingleOrDefault(track => track.TrackId == currentTrackId);
+        if (current is null)
+        {
+            return new(false, []);
+        }
+
+        var reasons = new List<string>();
+        if (current.Cues.Any(cue => !string.IsNullOrWhiteSpace(cue.TranslatedText)))
+        {
+            reasons.Add("Bản dịch hiện tại đang phụ thuộc track nguồn cũ.");
+        }
+        if (current.Artifacts.Any(artifact =>
+                artifact.Status == VietsubSubtitleArtifactStatuses.Ready
+                && (artifact.ArtifactType.Contains("VOICE", StringComparison.OrdinalIgnoreCase)
+                    || artifact.ArtifactType.Contains("DUB", StringComparison.OrdinalIgnoreCase)
+                    || artifact.ArtifactType.Contains("TRANSLATED", StringComparison.OrdinalIgnoreCase))))
+        {
+            reasons.Add("Voice hoặc artifact đã dựng đang phụ thuộc track nguồn cũ.");
+        }
+        return new(reasons.Count > 0, reasons);
     }
 
     public async Task<VietsubTimelineWindow> GetTimelineWindowAsync(

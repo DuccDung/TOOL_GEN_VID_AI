@@ -11,6 +11,8 @@ using TOOL_LOCAL.Vietsub.Storage;
 using TOOL_LOCAL.Vietsub.Api;
 using TOOL_LOCAL.Vietsub.Media;
 using TOOL_LOCAL.Vietsub.Subtitles;
+using TOOL_LOCAL.Vietsub.Jobs;
+using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.Payments;
 
 namespace TOOL_LOCAL;
@@ -138,7 +140,10 @@ internal static class Program
                 IVietsubProjectRegistryClient? vietsubProjectRegistryClient = null;
                 VietsubMediaImportService? vietsubMediaImportService = null;
                 VietsubTimelineThumbnailService? vietsubThumbnailService = null;
+                VietsubTimelineWaveformService? vietsubWaveformService = null;
                 VietsubSubtitleService? vietsubSubtitleService = null;
+                VietsubJobManager? vietsubJobManager = null;
+                VietsubOcrService? vietsubOcrService = null;
                 if (options.Features.VietsubEnabled)
                 {
                     var vietsubPaths = new VietsubAppPaths(options.Storage.WorkspaceRoot);
@@ -153,7 +158,43 @@ internal static class Program
                         vietsubPaths,
                         mediaToolPreflight,
                         mediaProbe);
+                    var vietsubJobStore = new VietsubJobStore(vietsubPaths, vietsubSubtitleStore);
+                    IVietsubOcrRecognizer ocrRecognizer = options.Features.VietsubOcrEnabled
+                        ? new PaddleVietsubOcrRecognizer()
+                        : new UnavailableVietsubOcrRecognizer(
+                            "OCR_FEATURE_DISABLED",
+                            "OCR local đang bị khóa bởi feature flag cho tới khi runtime và package gate được duyệt.");
+                    var ocrFrameReader = new VietsubFfmpegFrameReader(
+                        mediaToolPaths.FfmpegPath,
+                        mediaToolPreflight);
+                    var ocrExecutor = new VietsubOcrJobExecutor(
+                        vietsubProjectStore,
+                        vietsubMediaImportService,
+                        ocrFrameReader,
+                        ocrRecognizer,
+                        vietsubSubtitleStore,
+                        vietsubJobStore,
+                        vietsubPaths);
+                    vietsubJobManager = new VietsubJobManager(
+                        vietsubJobStore,
+                        new VietsubJobExecutorRegistry([ocrExecutor]));
+                    vietsubOcrService = new VietsubOcrService(
+                        new VietsubLocalJobAuthorizer(
+                            new DesktopVietsubLocalAccessContext(
+                                sessionManager,
+                                licenseManager,
+                                generationClient)),
+                        vietsubMediaImportService,
+                        ocrFrameReader,
+                        ocrRecognizer,
+                        vietsubJobManager);
                     vietsubThumbnailService = new VietsubTimelineThumbnailService(
+                        vietsubPaths,
+                        vietsubMediaImportService,
+                        mediaToolPreflight,
+                        mediaToolPaths.FfmpegPath,
+                        mediaProcessRunner);
+                    vietsubWaveformService = new VietsubTimelineWaveformService(
                         vietsubPaths,
                         vietsubMediaImportService,
                         mediaToolPreflight,
@@ -177,7 +218,10 @@ internal static class Program
                     vietsubProjectRegistryClient,
                     vietsubMediaImportService,
                     vietsubThumbnailService,
+                    vietsubWaveformService,
                     vietsubSubtitleService,
+                    vietsubJobManager,
+                    vietsubOcrService,
                     licensePaymentClient);
                 try
                 {
@@ -185,6 +229,8 @@ internal static class Program
                 }
                 finally
                 {
+                    vietsubThumbnailService?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    vietsubJobManager?.DisposeAsync().AsTask().GetAwaiter().GetResult();
                     licenseManager.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }
 

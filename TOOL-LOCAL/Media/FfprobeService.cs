@@ -12,7 +12,8 @@ public sealed record MediaProbeResult(
     string? AudioCodec,
     int? AudioSampleRate,
     bool HasVideo,
-    bool HasAudio);
+    bool HasAudio,
+    int RotationDegrees = 0);
 
 public sealed class FfprobeService(string ffprobePath, IExternalProcessRunner processRunner)
 {
@@ -70,7 +71,8 @@ public sealed class FfprobeService(string ffprobePath, IExternalProcessRunner pr
             GetString(audio, "codec_name"),
             ParseInt32(GetString(audio, "sample_rate")),
             video.ValueKind != JsonValueKind.Undefined,
-            audio.ValueKind != JsonValueKind.Undefined);
+            audio.ValueKind != JsonValueKind.Undefined,
+            GetRotationDegrees(video));
     }
 
     private static string? GetString(JsonElement element, string property) =>
@@ -82,6 +84,58 @@ public sealed class FfprobeService(string ffprobePath, IExternalProcessRunner pr
         element.ValueKind != JsonValueKind.Undefined && element.TryGetProperty(property, out var value) && value.TryGetInt32(out var result)
             ? result
             : null;
+
+    private static int GetRotationDegrees(JsonElement video)
+    {
+        if (video.ValueKind == JsonValueKind.Undefined)
+        {
+            return 0;
+        }
+
+        double? rotation = null;
+        if (video.TryGetProperty("side_data_list", out var sideData)
+            && sideData.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in sideData.EnumerateArray())
+            {
+                if (item.TryGetProperty("rotation", out var value))
+                {
+                    rotation = value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number)
+                        ? number
+                        : double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number)
+                            ? number
+                            : null;
+                    if (rotation is not null)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        if (rotation is null
+            && video.TryGetProperty("tags", out var tags)
+            && tags.TryGetProperty("rotate", out var tagValue))
+        {
+            rotation = double.TryParse(
+                tagValue.GetString(),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var number)
+                    ? number
+                    : null;
+        }
+
+        var rounded = (int)Math.Round(rotation ?? 0, MidpointRounding.AwayFromZero);
+        var normalized = ((rounded % 360) + 360) % 360;
+        return normalized switch
+        {
+            < 45 => 0,
+            < 135 => 90,
+            < 225 => 180,
+            < 315 => 270,
+            _ => 0
+        };
+    }
 
     private static decimal? ParseDecimal(string? value) =>
         decimal.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : null;

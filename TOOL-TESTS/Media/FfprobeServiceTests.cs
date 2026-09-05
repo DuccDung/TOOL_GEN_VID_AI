@@ -49,4 +49,29 @@ public sealed class FfprobeServiceTests
         Assert.Null(result.AudioCodec);
         Assert.Null(result.AudioSampleRate);
     }
+
+    [Theory]
+    [InlineData("-90", 270)]
+    [InlineData("90", 90)]
+    [InlineData("270", 270)]
+    public void ParseOutput_ReadsAndNormalizesDisplayRotation(string rotation, int expected)
+    {
+        var json = $$"""
+            {
+              "streams": [
+                {
+                  "codec_type": "video",
+                  "width": 1920,
+                  "height": 1080,
+                  "side_data_list": [{ "rotation": "{{rotation}}" }]
+                }
+              ],
+              "format": { "duration": "5" }
+            }
+            """;
+
+        var result = FfprobeService.ParseOutput(json);
+
+        Assert.Equal(expected, result.RotationDegrees);
+    }
 }

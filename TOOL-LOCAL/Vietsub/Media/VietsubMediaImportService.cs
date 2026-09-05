@@ -30,7 +30,7 @@ internal sealed class VietsubMediaException(string code, string message, Excepti
     public string Code { get; } = code;
 }
 
-internal sealed class VietsubMediaImportService
+internal sealed class VietsubMediaImportService : TOOL_LOCAL.Vietsub.Ocr.IVietsubOcrSourceResolver
 {
     internal const long DefaultMaximumFileSizeBytes = 50L * 1024 * 1024 * 1024;
     private const long CopySafetyMarginBytes = 512L * 1024 * 1024;
@@ -178,7 +178,8 @@ internal sealed class VietsubMediaImportService
                 AudioCodec = probe.AudioCodec,
                 AudioSampleRate = probe.AudioSampleRate,
                 HasVideo = probe.HasVideo,
-                HasAudio = probe.HasAudio
+                HasAudio = probe.HasAudio,
+                RotationDegrees = probe.RotationDegrees
             }
         };
     }
@@ -246,6 +247,37 @@ internal sealed class VietsubMediaImportService
         }
 
         return Path.GetFullPath(media.OriginalPath);
+    }
+
+    public async Task<string> ResolveVerifiedSourcePathAsync(
+        Guid projectId,
+        VietsubMediaReference media,
+        CancellationToken cancellationToken = default)
+    {
+        var status = GetSourceStatus(projectId, media);
+        if (!status.Available || status.Changed || string.IsNullOrWhiteSpace(status.EffectivePath))
+        {
+            throw new TOOL_LOCAL.Vietsub.Ocr.VietsubOcrException(
+                status.Changed
+                    ? TOOL_LOCAL.Vietsub.Ocr.VietsubOcrErrorCodes.SourceChanged
+                    : TOOL_LOCAL.Vietsub.Ocr.VietsubOcrErrorCodes.VideoNotReady,
+                status.Changed
+                    ? "Video nguồn đã thay đổi từ khi được nhập vào dự án."
+                    : "Video nguồn không còn sẵn sàng.");
+        }
+
+        var hash = await HashAsync(
+            status.EffectivePath,
+            media.SizeBytes,
+            progress: null,
+            cancellationToken);
+        if (!string.Equals(hash, media.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new TOOL_LOCAL.Vietsub.Ocr.VietsubOcrException(
+                TOOL_LOCAL.Vietsub.Ocr.VietsubOcrErrorCodes.SourceChanged,
+                "Nội dung video nguồn không còn khớp SHA-256 đã lưu.");
+        }
+        return status.EffectivePath;
     }
 
     private string GetExistingSourcePath(string sourcePath)

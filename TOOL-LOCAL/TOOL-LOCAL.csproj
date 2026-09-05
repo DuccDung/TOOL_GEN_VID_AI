@@ -26,6 +26,11 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Sdcb.PaddleOCR" Version="3.3.1" />
+    <PackageReference Include="Sdcb.PaddleOCR.Models.Local" Version="3.3.1" />
+    <PackageReference Include="Sdcb.PaddleOCR.Models.LocalV5" Version="3.3.1" />
+    <PackageReference Include="Sdcb.PaddleInference.runtime.win64.mkl" Version="3.3.1.70" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.11.0.20250507" />
     <ProjectReference Include="..\TOOL-SHARED.Contracts\TOOL-SHARED.Contracts.csproj" />
     <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
     <ProjectReference Include="..\TOOL-UPDATER\TOOL-UPDATER.csproj" ReferenceOutputAssembly="false" />
@@ -49,6 +54,7 @@
     <DashboardWebDirectory>$(MSBuildProjectDirectory)\Web</DashboardWebDirectory>
     <DashboardWebDist>$(DashboardWebDirectory)\dist</DashboardWebDist>
     <FfmpegBundleDirectory Condition="'$(FfmpegBundleDirectory)' == ''">$(MSBuildProjectDirectory)\..\third_party\ffmpeg\win-x64</FfmpegBundleDirectory>
+    <OcrNoticeDirectory>$(MSBuildProjectDirectory)\..\third_party\ocr</OcrNoticeDirectory>
     <RequireMediaToolBundle Condition="'$(RequireMediaToolBundle)' == ''">false</RequireMediaToolBundle>
   </PropertyGroup>
 
@@ -59,6 +65,18 @@
     <Content Include="$(FfmpegBundleDirectory)\PROVENANCE.md" Link="tools\ffmpeg\PROVENANCE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(FfmpegBundleDirectory)\PROVENANCE.md')" />
     <Content Include="$(FfmpegBundleDirectory)\checksums.sha256" Link="tools\ffmpeg\checksums.sha256" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(FfmpegBundleDirectory)\checksums.sha256')" />
   </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt') And Exists('$(OcrNoticeDirectory)\PROVENANCE.md') And Exists('$(OcrNoticeDirectory)\NUGET_HASHES.sha512')">
+    <Content Include="$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt" Link="third_party\ocr\LICENSE-APACHE-2.0.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(OcrNoticeDirectory)\PROVENANCE.md" Link="third_party\ocr\PROVENANCE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(OcrNoticeDirectory)\NUGET_HASHES.sha512" Link="third_party\ocr\NUGET_HASHES.sha512" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidateOcrNotices" BeforeTargets="Publish">
+    <Error Condition="!Exists('$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt')" Text="OCR third-party license is missing: $(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt" />
+    <Error Condition="!Exists('$(OcrNoticeDirectory)\PROVENANCE.md')" Text="OCR provenance is missing: $(OcrNoticeDirectory)\PROVENANCE.md" />
+    <Error Condition="!Exists('$(OcrNoticeDirectory)\NUGET_HASHES.sha512')" Text="OCR NuGet hashes are missing: $(OcrNoticeDirectory)\NUGET_HASHES.sha512" />
+  </Target>
 
   <Target Name="ValidateMediaToolBundle" BeforeTargets="Publish" Condition="'$(RequireMediaToolBundle)' == 'true'">
     <Error Condition="!Exists('$(FfmpegBundleDirectory)\ffmpeg.exe')" Text="FFmpeg bundle is missing ffmpeg.exe: $(FfmpegBundleDirectory)" />
@@ -83,6 +101,7 @@
   </Target>
 
   <Target Name="CopyDashboardWeb" AfterTargets="Build" DependsOnTargets="BuildDashboardWeb">
+    <RemoveDir Directories="$(TargetDir)wwwroot\assets" />
     <ItemGroup>
       <DashboardWebAsset Include="$(DashboardWebDist)\**\*" />
     </ItemGroup>
@@ -100,6 +119,10 @@
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
     </ItemGroup>
+  </Target>
+
+  <Target Name="CleanDashboardPublishAssets" BeforeTargets="CopyFilesToPublishDirectory" Condition="'$(PublishDir)' != ''">
+    <RemoveDir Directories="$(PublishDir)wwwroot\assets" />
   </Target>
 
   <Target Name="CopyUpdaterForBuild" AfterTargets="Build">

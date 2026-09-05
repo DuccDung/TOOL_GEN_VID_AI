@@ -1,12 +1,12 @@
 # Task triển khai Vietsub Editor Workspace đầy đủ
 
 > **Task ID:** `VSE-EDITOR-001`  
-> **Trạng thái:** `IN_PROGRESS` — đã hoàn tất E1–E3; E2.4 mở rộng thumbnail và E4 trở đi còn mở  
+> **Trạng thái:** `IN_PROGRESS` — E1–E4 và luồng chức năng E5 OCR đã có trong source/test; E2.4, E5 release gate/benchmark/smoke test và E6 trở đi còn mở
 > **Ngày lập:** 2026-09-02  
 > **Repository đích:** `TOOL_GEN_VID_AI`  
 > **Nguồn tham chiếu chỉ đọc:** `D:\laptrinhweb\code_outsrc\TOOL_VIETSUB\TOOL_VIETSUB`  
 > **Kế hoạch cha:** `KE_HOACH_TICH_HOP_MODULE_VIETSUB_DOC_LAP.md`  
-> **Điểm bắt đầu kỹ thuật:** Gate 1–5 của kế hoạch cha và editor E1–E3 đã có trong source; Gate 6/E4 trở đi còn mở.
+> **Điểm bắt đầu kỹ thuật:** Gate 1–6 và E1–E4 đã có trong source; Gate 8/E5 OCR đã chạy ở mức chức năng nhưng chưa qua legal/package release gate và benchmark máy sạch.
 
 Tài liệu này là task bàn giao để một agent hoặc developer khác có thể tiếp tục triển khai khi không còn ngữ cảnh hội thoại. Tài liệu tập trung vào trải nghiệm sau khi tạo/mở dự án: người dùng phải vào một editor chuyên dụng có preview, cue inspector, timeline, OCR, nhận dạng, dịch, voice và export; không tiếp tục làm việc trong trang danh sách dự án dạng cuộn dọc hiện tại.
 
@@ -611,35 +611,37 @@ Phase này tương ứng Gate 6 của kế hoạch cha và là prerequisite củ
 
 ### Task E4.1 — Domain/state machine
 
-- [ ] Job type allowlist: `EXTRACT_AUDIO`, `TRANSCRIBE_LOCAL`, `OCR_LOCAL`, `TRANSLATE_LOCAL`, `TRANSLATE_CLOUD`, `SYNTHESIZE_VOICE_LOCAL`, `EXPORT_VIDEO_LOCAL`.
-- [ ] Status: `PENDING`, `RUNNING`, `PAUSING`, `PAUSED`, `INTERRUPTED`, `COMPLETED`, `FAILED`, `CANCELLED`.
-- [ ] Chỉ cho transition hợp lệ; test mọi transition sai.
-- [ ] Một project chỉ có một heavy job active, trừ tác vụ read-only được quyết định rõ.
-- [ ] Global semaphore giới hạn OCR/STT/model nặng giữa các project.
+- [x] Job type allowlist: `EXTRACT_AUDIO`, `TRANSCRIBE_LOCAL`, `OCR_LOCAL`, `TRANSLATE_LOCAL`, `TRANSLATE_CLOUD`, `SYNTHESIZE_VOICE_LOCAL`, `EXPORT_VIDEO_LOCAL`.
+- [x] Status: `PENDING`, `RUNNING`, `PAUSING`, `PAUSED`, `INTERRUPTED`, `COMPLETED`, `FAILED`, `CANCELLED`.
+- [x] Chỉ cho transition hợp lệ; test mọi transition sai.
+- [x] Một project chỉ có một heavy job active, trừ tác vụ read-only được quyết định rõ.
+- [x] Global semaphore giới hạn OCR/STT/model nặng giữa các project.
 
 ### Task E4.2 — Persistence
 
-- [ ] Migration SQLite schema 3.
-- [ ] Job/step/checkpoint lưu trước khi executor chạy.
-- [ ] `RUNNING -> INTERRUPTED` khi app/project mở lại sau crash.
-- [ ] Lưu input track/revision và settings snapshot.
-- [ ] Event/log có retention/cap, không tăng vô hạn.
+- [x] Migration SQLite schema 3.
+- [x] Job/step/checkpoint lưu trước khi executor chạy.
+- [x] `RUNNING -> INTERRUPTED` khi app/project mở lại sau crash.
+- [x] Lưu input track/revision và settings snapshot.
+- [x] Event/log có retention/cap, không tăng vô hạn.
 
 ### Task E4.3 — Executor registry
 
-- [ ] Interface executor riêng Vietsub.
-- [ ] Không resolve executor bằng string reflection.
-- [ ] Pause/cancel thông qua token + checkpoint boundary.
-- [ ] Retry tạo attempt đúng, không chạy lại job đang active.
-- [ ] Resume kiểm tra dependency/model/source hash trước chạy.
+- [x] Interface executor riêng Vietsub.
+- [x] Không resolve executor bằng string reflection.
+- [x] Pause/cancel thông qua token + checkpoint boundary.
+- [x] Retry tạo attempt đúng, không chạy lại job đang active.
+- [x] Resume kiểm tra dependency/model/source hash trước chạy.
 
 ### Task E4.4 — Bridge/UI
 
-- [ ] `vietsub.job.*` validate job thuộc selected project/session.
-- [ ] Progress throttle/coalesce.
+- [x] `vietsub.job.*` validate job thuộc selected project/session.
+- [x] Progress throttle/coalesce.
 - [ ] Editor header/status bar hiển thị phase, %, ETA nếu có, cancel/pause/resume/retry.
-- [ ] `vietsub.state.get` chỉ đọc state.
-- [ ] Đóng app không sync-wait trên UI thread.
+- [x] `vietsub.state.get` chỉ đọc state.
+- [x] Đóng app không sync-wait trên UI thread.
+
+Ghi chú: progress/ETA và các nút điều khiển đã có trong settings panel; mục header/status bar vẫn để mở vì chưa đặt đúng vị trí mô tả.
 
 ### File tạo dự kiến E4
 
@@ -665,42 +667,44 @@ TOOL-TESTS/Vietsub/VietsubJobTests.cs
 
 ### Task E5.0 — Legal/package gate
 
-- [ ] Xác minh license NuGet/runtime/model cho PaddleOCR, PaddleInference và OpenCV.
-- [ ] Chốt package version; không copy `bin`, model cache hoặc runtime từ repository nguồn.
+- [x] Xác minh license NuGet/runtime/model cho PaddleOCR, PaddleInference và OpenCV.
+- [x] Chốt package version; không copy `bin`, model cache hoặc runtime từ repository nguồn.
 - [ ] Ghi third-party notice, nguồn tải, size, SHA-256 và redistribution scope.
 - [ ] Quyết định optional component hay bundle; mặc định ưu tiên optional component.
 
 ### Task E5.1 — OCR settings và region selector
 
-- [ ] Thêm region normalized `x/y/width/height` với default vùng dưới video.
-- [ ] Profile `FAST`, `BALANCED`, `ACCURATE`.
-- [ ] Source language routing `en`, `zh`; `auto` phải có behavior rõ.
+- [x] Thêm region normalized `x/y/width/height` với default vùng dưới video.
+- [x] Profile `FAST`, `BALANCED`, `ACCURATE`.
+- [x] Source language routing `en`, `zh`; `auto` phải có behavior rõ.
 - [ ] Dialog hiển thị frame thật, drag/resize region, flip/rotation đúng display coordinates.
 - [ ] Preview chỉ xử lý một frame và trả text/confidence, có cancel/timeout.
 
+Ghi chú: selector frame thật, drag/resize/keyboard và preview một frame đã có inline; chưa có dialog riêng và timeout riêng nên hai mục trên chưa tích.
+
 ### Task E5.2 — Frame pipeline
 
-- [ ] FFmpeg đọc/crop frame theo region, không xuất hàng nghìn JPEG nếu stream/raw frame phù hợp.
-- [ ] Source hash/preflight trước job.
-- [ ] Sampling interval/profile snapshot trên job.
-- [ ] Frame dedup/change tracker và periodic safety recognition.
-- [ ] Dọn frame/temp khi complete/fail/cancel.
+- [x] FFmpeg đọc/crop frame theo region, không xuất hàng nghìn JPEG nếu stream/raw frame phù hợp.
+- [x] Source hash/preflight trước job.
+- [x] Sampling interval/profile snapshot trên job.
+- [x] Frame dedup/change tracker và periodic safety recognition.
+- [x] Dọn frame/temp khi complete/fail/cancel.
 
 ### Task E5.3 — OCR inference và cue accumulation
 
-- [ ] PaddleOCR chạy ngoài UI thread.
-- [ ] English/Chinese model routing.
-- [ ] Confidence threshold và subtitle line segmentation.
-- [ ] Gộp frame gần giống thành cue; bỏ flash confidence thấp.
-- [ ] Checkpoint theo thời gian/frame; resume không lặp cue.
-- [ ] Không ghi đè cue locked; output là track mới nguồn `PADDLE_OCR_LOCAL`.
+- [x] PaddleOCR chạy ngoài UI thread.
+- [x] English/Chinese model routing.
+- [x] Confidence threshold và subtitle line segmentation.
+- [x] Gộp frame gần giống thành cue; bỏ flash confidence thấp.
+- [x] Checkpoint theo thời gian/frame; resume không lặp cue.
+- [x] Không ghi đè cue locked; output là track mới nguồn `PADDLE_OCR_LOCAL`.
 
 ### Task E5.4 — UI và metrics
 
 - [ ] Action **Quét OCR** mở region dialog trước khi chạy.
-- [ ] Hiển thị frame processed, elapsed, ETA, reused/recognized frames.
-- [ ] Hoàn tất tự activate track mới sau xác nhận hợp lý; track cũ vẫn giữ.
-- [ ] Lỗi model/runtime/disk/source changed có hướng sửa cụ thể.
+- [x] Hiển thị frame processed, elapsed, ETA, reused/recognized frames.
+- [x] Hoàn tất tự activate track mới sau xác nhận hợp lý; track cũ vẫn giữ.
+- [x] Lỗi model/runtime/disk/source changed có hướng sửa cụ thể.
 
 ### File tham chiếu chính E5
 
@@ -1360,7 +1364,35 @@ Việc còn mở gần nhất:
 - E2.4 mở rộng thumbnail theo timestamp/profile và request/cancel theo visible viewport.
 - E4/Gate 6 xây local job engine có persistence/checkpoint/cancel/retry/recovery trước khi thêm OCR/STT/ML runtime.
 
-Task chính xác tiếp theo: **E4.1 — chốt state machine và schema local job idempotent trong `project.db`, thêm test transition/race/recovery; chưa cài model hay gọi provider thật.**
+Task chính xác tiếp theo tại mốc E3: **E4.1 — chốt state machine và schema local job idempotent trong `project.db`, thêm test transition/race/recovery; chưa cài model hay gọi provider thật.**
+
+### Mốc 2026-09-04 — E4 và luồng chức năng E5 OCR
+
+Đã triển khai và kiểm chứng:
+
+- Local job engine schema 3, state machine, store/event/checkpoint, registry, global semaphore, pause/resume/cancel/retry và crash recovery.
+- OCR settings/profile/region, FFmpeg raw BGR24, PaddleOCR English/Chinese, frame dedup, line segmentation, cue accumulator, track/SRT atomic, metric/ETA và bridge/UI điều khiển job.
+- Resume phục hồi pending accumulator và bỏ frame overlap đã commit, không còn cắt cue dài tại checkpoint.
+- Mở lại project `PROCESSING` tự đối soát completed/failed/cancelled OCR job; track có bản dịch được giữ cho tới khi người dùng xác nhận đổi nguồn.
+- Runtime probe khởi tạo thật cả hai model; source được kiểm SHA-256 ngay cả khi kẻ thay đổi giữ nguyên size/timestamp.
+
+Kết quả xác minh mốc này:
+
+- `npm test -- --run`: đạt `7/7`.
+- `dotnet restore`: đạt.
+- Release build: đạt, `0 warning / 0 error`.
+- Toàn bộ test .NET: đạt `636/636`, không skip.
+- OCR integration thật: đạt `4/4`, gồm FFmpeg raw frame, PaddleOCR English/Chinese và video hard-subtitle.
+- Smoke test WebView2/máy sạch: chưa chạy.
+
+Việc còn mở gần nhất:
+
+- E2.4 mở rộng thumbnail theo visible viewport.
+- E5 còn dialog/timeout riêng, integration test kill process tree, benchmark CPU/RAM/video dài và clean-machine smoke test.
+- Payload OCR trong output Release khoảng `496.58 MiB`; toàn output Release khoảng `986.74 MiB`. Chưa chốt optional component hay bundle.
+- E5 legal/notice/provenance mới ở mức source; phải review dependency graph và installer cuối trước release.
+
+Task chính xác tiếp theo: **hoàn tất E5 release hardening: chốt optional component/bundle, thêm timeout + test kill process tree, benchmark video dài/CPU/RAM và smoke test máy sạch; không gọi provider thật.**
 
 ### Checklist bắt đầu phiên triển khai tiếp theo
 
@@ -1368,7 +1400,7 @@ Task chính xác tiếp theo: **E4.1 — chốt state machine và schema local j
 2. Đọc file task này và mục 0 của `KE_HOACH_TICH_HOP_MODULE_VIETSUB_DOC_LAP.md`.
 3. Chạy `git status --short`; giữ nguyên thay đổi không liên quan của người dùng.
 4. Chạy baseline restore/build/test trước phase lớn nếu chưa có mốc mới đáng tin cậy.
-5. Bắt đầu E4/Gate 6 bằng local job engine, chưa thêm ML package.
+5. Tiếp tục các mục E5 release hardening còn bỏ trống; không làm lại E4 hoặc luồng OCR đã kiểm chứng.
 6. Chỉ đánh dấu checkbox khi code + test tương ứng đã thực sự đạt.
 
 ### Mẫu cập nhật sau mỗi phase

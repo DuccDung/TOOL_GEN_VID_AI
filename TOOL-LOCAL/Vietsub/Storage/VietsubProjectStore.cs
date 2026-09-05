@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using TOOL_LOCAL.Vietsub.Domain;
+using TOOL_LOCAL.Vietsub.Ocr;
 
 namespace TOOL_LOCAL.Vietsub.Storage;
 
@@ -168,6 +169,18 @@ internal sealed class VietsubProjectStore
                 "Dự án Vietsub đang được mở ở một phiên khác.",
                 exception);
         }
+    }
+
+    internal async Task<VietsubProjectManifest> LoadForBackgroundJobAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectId == Guid.Empty)
+        {
+            throw new ArgumentException("Mã dự án Vietsub không hợp lệ.", nameof(projectId));
+        }
+        return await LoadAsync(projectId, cancellationToken)
+            ?? throw new FileNotFoundException("Không tìm thấy dự án Vietsub cho local job.");
     }
 
     internal static VietsubProjectSummary ToSummary(VietsubProjectManifest manifest) =>
@@ -385,5 +398,7 @@ internal sealed class VietsubProjectStore
             ? "auto"
             : manifest.SourceLanguageCode.Trim().ToLowerInvariant();
         manifest.TargetLanguageCode = "vi";
+        manifest.OcrSettings ??= new VietsubOcrSettings();
+        manifest.OcrSettings.Normalize();
     }
 }

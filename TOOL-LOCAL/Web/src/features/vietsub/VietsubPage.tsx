@@ -1,6 +1,7 @@
 import { RefreshCw, TriangleAlert } from 'lucide-react';
 import type {
   VietsubModuleState,
+  VietsubOcrSettings,
   VietsubSubtitleCue,
   VietsubSubtitlePageQuery,
   VietsubTimelineCueUpdate,
@@ -17,10 +18,20 @@ export type VietsubPageProps = {
   onRenameProject: (projectId: string, name: string) => void;
   onCloseProject: () => Promise<boolean>;
   onImportMedia: (mode: 'COPY' | 'LINK') => void;
+  onUpdateOcrSettings: (settings: VietsubOcrSettings) => Promise<boolean>;
+  onPreviewOcr: (settings: VietsubOcrSettings, timestampMilliseconds: number) => void;
+  onStartOcr: (settings: VietsubOcrSettings) => void;
+  onPauseJob: (jobId: string) => void;
+  onResumeJob: (jobId: string) => void;
+  onRetryJob: (jobId: string) => void;
+  onCancelJob: (jobId: string) => void;
+  onActivateOcrTrack: (jobId: string, confirmImpact: boolean) => void;
   onImportSrt: (languageCode: string) => void;
   onActivateSubtitleTrack: (trackId: string) => void;
   onLoadSubtitlePage: (query: VietsubSubtitlePageQuery) => void;
   onLoadTimelineWindow: (query: VietsubTimelineWindowQuery) => void;
+  onRequestTimelineThumbnails: (sourceSha256: string, indices: number[]) => void;
+  onRequestTimelineWaveform: (sourceSha256: string) => void;
   onUpdateSubtitleCue: (cue: Pick<VietsubSubtitleCue, 'cueId' | 'originalText' | 'translatedText' | 'speaker'>) => Promise<boolean>;
   onUpdateTimelineCue: (update: VietsubTimelineCueUpdate) => Promise<boolean>;
   onSplitSubtitleCue: (cueId: string, positionMilliseconds: number) => void;

@@ -4,6 +4,7 @@ import {
   MIN_TIMELINE_ZOOM,
   calculateViewportRange,
   clampTimelineZoom,
+  fitTimelineZoom,
   pixelToTime,
   rulerStepMilliseconds,
   snapTimelineTime,
@@ -37,6 +38,13 @@ describe('timelineGeometry', () => {
       startMilliseconds: 0,
       endMilliseconds: 125
     });
+  });
+
+  it('stretches a short timeline to the full viewport without changing media time', () => {
+    const scale = fitTimelineZoom(8_000, 1_200, 40);
+    expect(scale).toBe(150);
+    expect(timelineContentWidth(8_000, scale, 1_200)).toBe(1_200);
+    expect(pixelToTime(1_200, scale)).toBe(8_000);
   });
 
   it('keeps fractional CSS pixels stable on scaled displays', () => {

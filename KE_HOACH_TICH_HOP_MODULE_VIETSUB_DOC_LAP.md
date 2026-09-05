@@ -1,6 +1,6 @@
 # Kế hoạch tích hợp module Vietsub độc lập vào VideoMaker
 
-> Trạng thái: **đang triển khai** — Gate 1 đến Gate 5 đã hoàn tất ở mức source và automated test; Gate 6 là điểm tiếp tục hiện tại. Smoke test media/WebView2 thật vẫn phải thực hiện trước release.
+> Trạng thái: **đang triển khai** — Gate 1 đến Gate 6 đã có ở mức source và automated test; Gate 8/PaddleOCR đã có luồng chức năng nhưng release gate, benchmark và smoke test máy sạch còn mở. Gate 7/Whisper và các gate sau chưa triển khai.
 >
 > Mục tiêu: chuyển đầy đủ logic nghiệp vụ của `TOOL_VIETSUB` vào repository VideoMaker, nhưng giữ Vietsub thành một module độc lập. Hai hệ thống chỉ dùng chung app shell WinForms/WebView2, phiên đăng nhập, tổ chức hiện hành, theme, AI Gateway, updater và những runtime dùng chung đã được phê duyệt.
 >
@@ -8,6 +8,17 @@
 > `D:\laptrinhweb\code_outsrc\TOOL_VIETSUB\TOOL_VIETSUB`.
 
 ## 0. Nhật ký triển khai và điểm chuyển giao
+
+### Mốc 2026-09-04 — Gate 6 và luồng chức năng Gate 8
+
+- Đã có local job engine schema 3, state machine/store/checkpoint/registry, global concurrency, pause/resume/cancel/retry và recovery `RUNNING -> INTERRUPTED`.
+- Đã có OCR local English/Chinese: FFmpeg raw BGR24, PaddleOCR V5, normalized region/profile, preview, dedup/segment/cue accumulation, track/SRT atomic, metrics/ETA và UI điều khiển job.
+- Đã sửa resume để phục hồi pending cue accumulator; thêm đối soát OCR job đã kết thúc khi mở lại project và bảo vệ active track có bản dịch bằng bước xác nhận.
+- Runtime probe khởi tạo thật cả English V5 và Chinese V5; kiểm thử fixture tiếng Trung không skip. Source OCR được xác minh SHA-256 trước khi chạy.
+- Xác minh: web test `7/7`; restore đạt; Release build `0 warning / 0 error`; .NET test `636/636`; OCR integration `4/4`.
+- Chưa chạy WebView2/clean-machine smoke test, chưa benchmark CPU/RAM/video dài và chưa chốt bundle hay optional OCR component. Payload OCR Release khoảng `496.58 MiB`, toàn output Release khoảng `986.74 MiB`.
+
+Điểm tiếp tục: hoàn tất hardening/release gate của Gate 8 trước khi coi OCR sẵn sàng phát hành; không làm lại Gate 6 hoặc mở rộng sang provider cloud.
 
 ### Mốc 2026-09-01 — Baseline và Gate 1
 
@@ -650,15 +661,15 @@ Mỗi gate chỉ hoàn thành khi code, test và tiêu chí nghiệm thu tương
 
 ### Gate 6 — Job engine local và recovery
 
-- [ ] G6-01 Chuyển local job state machine.
-- [ ] G6-02 Job/step/event persistence trong workspace Vietsub.
-- [ ] G6-03 Progress throttling để không spam bridge.
-- [ ] G6-04 Pause/cancel tại checkpoint an toàn.
-- [ ] G6-05 Resume/retry theo executor registry Vietsub.
-- [ ] G6-06 Running → interrupted sau crash.
-- [ ] G6-07 Getter state không khởi động job.
-- [ ] G6-08 Không chờ semaphore đồng bộ trên UI thread.
-- [ ] G6-09 Global concurrency limit cho local AI nặng.
+- [x] G6-01 Chuyển local job state machine.
+- [x] G6-02 Job/step/event persistence trong workspace Vietsub.
+- [x] G6-03 Progress throttling để không spam bridge.
+- [x] G6-04 Pause/cancel tại checkpoint an toàn.
+- [x] G6-05 Resume/retry theo executor registry Vietsub.
+- [x] G6-06 Running → interrupted sau crash.
+- [x] G6-07 Getter state không khởi động job.
+- [x] G6-08 Không chờ semaphore đồng bộ trên UI thread.
+- [x] G6-09 Global concurrency limit cho local AI nặng.
 - [ ] G6-10 Test race, startup recovery, cancellation và app close.
 
 Điều kiện qua gate: job dài không treo app; mở lại dự án có thể tiếp tục từ checkpoint.
@@ -682,15 +693,15 @@ Mỗi gate chỉ hoàn thành khi code, test và tiêu chí nghiệm thu tương
 ### Gate 8 — PaddleOCR
 
 - [ ] G8-01 Tích hợp PaddleOCR/OpenCV runtime theo legal/package review.
-- [ ] G8-02 UI chọn vùng OCR theo theme VideoMaker.
-- [ ] G8-03 Preview frame và text/confidence.
-- [ ] G8-04 English/Chinese routing.
-- [ ] G8-05 Processing profiles.
-- [ ] G8-06 Frame extraction stream.
-- [ ] G8-07 Change detection/reuse.
-- [ ] G8-08 Cue accumulator/segmenter.
-- [ ] G8-09 Checkpoint/resume/metrics.
-- [ ] G8-10 Không ghi đè cue khóa.
+- [x] G8-02 UI chọn vùng OCR theo theme VideoMaker.
+- [x] G8-03 Preview frame và text/confidence.
+- [x] G8-04 English/Chinese routing.
+- [x] G8-05 Processing profiles.
+- [x] G8-06 Frame extraction stream.
+- [x] G8-07 Change detection/reuse.
+- [x] G8-08 Cue accumulator/segmenter.
+- [x] G8-09 Checkpoint/resume/metrics.
+- [x] G8-10 Không ghi đè cue khóa.
 - [ ] G8-11 Benchmark video ngắn/dài và giới hạn RAM.
 
 Điều kiện qua gate: phụ đề cứng tạo được track OCR chính xác trong vùng chọn và không block UI.

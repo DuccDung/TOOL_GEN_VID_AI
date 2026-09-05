@@ -11,14 +11,32 @@ export function clampTimelineZoom(pixelsPerSecond: number): number {
   return Math.max(MIN_TIMELINE_ZOOM, Math.min(MAX_TIMELINE_ZOOM, pixelsPerSecond));
 }
 
+function normalizeTimelineScale(pixelsPerSecond: number): number {
+  if (!Number.isFinite(pixelsPerSecond)) return MIN_TIMELINE_ZOOM;
+  return Math.max(MIN_TIMELINE_ZOOM, pixelsPerSecond);
+}
+
+export function fitTimelineZoom(
+  durationMilliseconds: number,
+  viewportWidth: number,
+  requestedPixelsPerSecond: number
+): number {
+  const requested = clampTimelineZoom(requestedPixelsPerSecond);
+  const duration = Math.max(0, Number.isFinite(durationMilliseconds) ? durationMilliseconds : 0);
+  const width = Math.max(1, Number.isFinite(viewportWidth) ? viewportWidth : 1);
+  return duration > 0
+    ? Math.max(requested, width * 1000 / duration)
+    : requested;
+}
+
 export function timeToPixel(milliseconds: number, pixelsPerSecond: number): number {
   const safeTime = Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : 0;
-  return safeTime * clampTimelineZoom(pixelsPerSecond) / 1000;
+  return safeTime * normalizeTimelineScale(pixelsPerSecond) / 1000;
 }
 
 export function pixelToTime(pixels: number, pixelsPerSecond: number): number {
   const safePixels = Number.isFinite(pixels) ? Math.max(0, pixels) : 0;
-  return safePixels * 1000 / clampTimelineZoom(pixelsPerSecond);
+  return safePixels * 1000 / normalizeTimelineScale(pixelsPerSecond);
 }
 
 export function timelineContentWidth(
@@ -59,7 +77,7 @@ export function snapTimelineTime(
 ): number {
   const value = Math.max(0, Number.isFinite(milliseconds) ? milliseconds : 0);
   const thresholdMilliseconds = Math.max(0, thresholdPixels) * 1000
-    / clampTimelineZoom(pixelsPerSecond);
+    / normalizeTimelineScale(pixelsPerSecond);
   let nearest = value;
   let distance = thresholdMilliseconds + 1;
   for (const candidate of candidates) {
@@ -74,7 +92,7 @@ export function snapTimelineTime(
 }
 
 export function rulerStepMilliseconds(pixelsPerSecond: number): number {
-  const zoom = clampTimelineZoom(pixelsPerSecond);
-  const candidates = [100, 250, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 300_000];
+  const zoom = normalizeTimelineScale(pixelsPerSecond);
+  const candidates = [10, 25, 50, 100, 250, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 300_000];
   return candidates.find((step) => step * zoom / 1000 >= 64) ?? candidates[candidates.length - 1];
 }

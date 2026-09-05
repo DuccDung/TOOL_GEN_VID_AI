@@ -11,6 +11,7 @@ internal sealed class VietsubAppPaths
         "music",
         "cache",
         "thumbnails",
+        "waveforms",
         "output",
         "temp",
         "logs"

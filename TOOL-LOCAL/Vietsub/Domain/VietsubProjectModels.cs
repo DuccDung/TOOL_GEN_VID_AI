@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using TOOL_LOCAL.Vietsub.Ocr;
 
 namespace TOOL_LOCAL.Vietsub.Domain;
 
@@ -46,6 +47,8 @@ internal sealed class VietsubProjectManifest
     public string? ServerSyncErrorCode { get; set; }
 
     public VietsubMediaReference? SourceVideo { get; set; }
+
+    public VietsubOcrSettings OcrSettings { get; set; } = new();
 
     [JsonIgnore]
     public bool RecoveryRequired { get; set; }
@@ -109,6 +112,8 @@ internal sealed class VietsubMediaMetadata
     public bool HasVideo { get; set; }
 
     public bool HasAudio { get; set; }
+
+    public int RotationDegrees { get; set; }
 }
 
 internal sealed record VietsubMediaSummary(
@@ -128,7 +133,33 @@ internal sealed record VietsubMediaSummary(
     bool SourceChanged,
     string? SourceIssueCode,
     string PlaybackUrl,
-    IReadOnlyList<string> ThumbnailUrls);
+    IReadOnlyList<string> ThumbnailUrls,
+    IReadOnlyList<VietsubTimelineThumbnailSummary> TimelineThumbnails,
+    string? WaveformUrl,
+    string WaveformStatus,
+    int RotationDegrees = 0,
+    int ThumbnailProfileVersion = 1,
+    int ThumbnailCount = 12,
+    int WaveformProfileVersion = 1,
+    long WaveformRevision = 0);
+
+internal sealed record VietsubTimelineThumbnailSummary(
+    int Index,
+    int ProfileVersion,
+    string SourceSha256,
+    string Url,
+    long Revision,
+    long TimestampMilliseconds,
+    long StartMilliseconds,
+    long EndMilliseconds);
+
+internal static class VietsubWaveformStatuses
+{
+    public const string Ready = "READY";
+    public const string Pending = "PENDING";
+    public const string NoAudio = "NO_AUDIO";
+    public const string Failed = "FAILED";
+}
 
 internal sealed class VietsubSubtitleTrack
 {

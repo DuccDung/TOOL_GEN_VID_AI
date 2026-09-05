@@ -30,7 +30,7 @@ public sealed class VietsubWorkspaceTests : IDisposable
         foreach (var directory in new[]
         {
             "source", "audio", "subtitles", "voice", "music", "cache",
-            "thumbnails", "output", "temp", "logs"
+            "thumbnails", "waveforms", "output", "temp", "logs"
         })
         {
             Assert.True(Directory.Exists(paths.GetProjectPath(projectId, directory)));

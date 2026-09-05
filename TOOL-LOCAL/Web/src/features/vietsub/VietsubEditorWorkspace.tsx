@@ -71,10 +71,20 @@ export function VietsubEditorWorkspace({
   project,
   onCloseProject,
   onImportMedia,
+  onUpdateOcrSettings,
+  onPreviewOcr,
+  onStartOcr,
+  onPauseJob,
+  onResumeJob,
+  onRetryJob,
+  onCancelJob,
+  onActivateOcrTrack,
   onImportSrt,
   onActivateSubtitleTrack,
   onLoadSubtitlePage,
   onLoadTimelineWindow,
+  onRequestTimelineThumbnails,
+  onRequestTimelineWaveform,
   onUpdateSubtitleCue,
   onUpdateTimelineCue,
   onSplitSubtitleCue,
@@ -406,6 +416,20 @@ export function VietsubEditorWorkspace({
             progress={state.mediaImportProgress}
             busy={busy}
             onImportMedia={onImportMedia}
+            ocrSettings={state.ocrSettings}
+            ocrRuntime={state.ocrRuntime}
+            ocrPreview={state.ocrPreview}
+            activeJob={state.activeJob}
+            activationRequest={state.ocrActivationRequest}
+            playheadMilliseconds={playheadMilliseconds}
+            onUpdateOcrSettings={onUpdateOcrSettings}
+            onPreviewOcr={onPreviewOcr}
+            onStartOcr={onStartOcr}
+            onPauseJob={onPauseJob}
+            onResumeJob={onResumeJob}
+            onRetryJob={onRetryJob}
+            onCancelJob={onCancelJob}
+            onActivateOcrTrack={onActivateOcrTrack}
           />
         </div>
         <VietsubLayoutResizeHandle
@@ -489,6 +513,7 @@ export function VietsubEditorWorkspace({
       />
       <VietsubTimeline
         media={project.sourceVideo}
+        mediaEvent={state.timelineMediaEvent}
         trackId={state.subtitleWorkspace?.activeTrackId}
         window={state.timelineWindow}
         playheadMilliseconds={playheadMilliseconds}
@@ -498,6 +523,8 @@ export function VietsubEditorWorkspace({
         onSeek={seek}
         onSelectCue={selectCue}
         onLoadWindow={onLoadTimelineWindow}
+        onRequestThumbnails={onRequestTimelineThumbnails}
+        onRequestWaveform={onRequestTimelineWaveform}
         onUpdateCue={onUpdateTimelineCue}
       />
       </div>

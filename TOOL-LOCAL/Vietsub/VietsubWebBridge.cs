@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using TOOL_LOCAL.Authentication;
 using TOOL_LOCAL.Vietsub.Api;
@@ -6,6 +7,8 @@ using TOOL_LOCAL.Vietsub.Media;
 using TOOL_LOCAL.Vietsub.Playback;
 using TOOL_LOCAL.Vietsub.Storage;
 using TOOL_LOCAL.Vietsub.Subtitles;
+using TOOL_LOCAL.Vietsub.Jobs;
+using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.WebView;
 
 namespace TOOL_LOCAL.Vietsub;
@@ -57,6 +60,22 @@ internal sealed record VietsubSubtitleCueRequest(Guid CueId);
 
 internal sealed record ExportVietsubSrtRequest(string Mode);
 
+internal sealed record VietsubJobRequest(Guid JobId);
+
+internal sealed record VietsubOcrPreviewRequest(
+    string LanguageCode,
+    string Profile,
+    VietsubNormalizedRegion Region,
+    long TimestampMilliseconds);
+
+internal sealed record ActivateVietsubOcrTrackRequest(Guid JobId, bool ConfirmImpact);
+
+internal sealed record RequestVietsubTimelineThumbnails(
+    string SourceSha256,
+    int[] Indices);
+
+internal sealed record RequestVietsubTimelineWaveform(string SourceSha256);
+
 internal sealed class VietsubWebBridge : IDisposable
 {
     private const string MessagePrefix = "vietsub.";
@@ -70,15 +89,22 @@ internal sealed class VietsubWebBridge : IDisposable
     private readonly Func<string?>? _mediaFileSelector;
     private readonly VietsubMediaPlaybackService? _mediaPlaybackService;
     private readonly VietsubTimelineThumbnailService? _thumbnailService;
+    private readonly VietsubTimelineWaveformService? _waveformService;
     private readonly VietsubSubtitleService? _subtitleService;
     private readonly Func<string?>? _subtitleFileSelector;
     private readonly Func<string?>? _subtitleExportSelector;
+    private readonly VietsubJobManager? _jobManager;
+    private readonly VietsubOcrService? _ocrService;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
     };
     private readonly object _operationSync = new();
+    private readonly ConcurrentDictionary<Guid, byte> _ocrCompletionInFlight = new();
+    private readonly ConcurrentDictionary<string, byte> _waveformFailures = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Task> _timelineArtifactTasks = new(StringComparer.Ordinal);
     private CancellationTokenSource? _activeOperation;
+    private CancellationTokenSource? _timelineArtifactCancellation;
     private string? _activeOperationRequestId;
     private VietsubProjectSession? _projectSession;
     private bool _disposed;
@@ -95,7 +121,10 @@ internal sealed class VietsubWebBridge : IDisposable
         VietsubTimelineThumbnailService? thumbnailService = null,
         VietsubSubtitleService? subtitleService = null,
         Func<string?>? subtitleFileSelector = null,
-        Func<string?>? subtitleExportSelector = null)
+        Func<string?>? subtitleExportSelector = null,
+        VietsubJobManager? jobManager = null,
+        VietsubOcrService? ocrService = null,
+        VietsubTimelineWaveformService? waveformService = null)
     {
         _enabled = enabled;
         _postJson = postJson;
@@ -109,6 +138,18 @@ internal sealed class VietsubWebBridge : IDisposable
         _subtitleService = subtitleService;
         _subtitleFileSelector = subtitleFileSelector;
         _subtitleExportSelector = subtitleExportSelector;
+        _jobManager = jobManager;
+        _ocrService = ocrService;
+        _waveformService = waveformService;
+        if (_jobManager is not null)
+        {
+            _jobManager.JobChanged += JobManagerOnChanged;
+        }
+        if (_thumbnailService is not null)
+        {
+            _thumbnailService.ThumbnailReady += ThumbnailServiceOnReady;
+            _thumbnailService.ThumbnailFailed += ThumbnailServiceOnFailed;
+        }
     }
 
     public async Task<bool> TryHandleAsync(
@@ -205,6 +246,12 @@ internal sealed class VietsubWebBridge : IDisposable
                 case "vietsub.timeline.window.get":
                     await PostTimelineWindowAsync(request, request.RequestId, cancellationToken);
                     break;
+                case "vietsub.timeline.thumbnails.request":
+                    RequestTimelineThumbnails(request);
+                    break;
+                case "vietsub.timeline.waveform.request":
+                    RequestTimelineWaveform(request, request.RequestId);
+                    break;
                 case "vietsub.timeline.cue.update":
                     await RunProjectOperationAsync(
                         request.RequestId,
@@ -252,6 +299,46 @@ internal sealed class VietsubWebBridge : IDisposable
                 case "vietsub.operation.cancel":
                     await CancelActiveOperationAsync(request.RequestId, cancellationToken);
                     break;
+                case "vietsub.job.status":
+                    await PostJobStatusAsync(request, request.RequestId, cancellationToken);
+                    break;
+                case "vietsub.job.pause":
+                    await ControlJobAsync(request, request.RequestId, "PAUSE", cancellationToken);
+                    break;
+                case "vietsub.job.resume":
+                    await ControlJobAsync(request, request.RequestId, "RESUME", cancellationToken);
+                    break;
+                case "vietsub.job.retry":
+                    await ControlJobAsync(request, request.RequestId, "RETRY", cancellationToken);
+                    break;
+                case "vietsub.job.cancel":
+                    await ControlJobAsync(request, request.RequestId, "CANCEL", cancellationToken);
+                    break;
+                case "vietsub.ocr.runtime.status":
+                    await PostOcrRuntimeStatusAsync(request.RequestId, cancellationToken);
+                    break;
+                case "vietsub.ocr.region.update":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => UpdateOcrSettingsAsync(request, request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
+                    break;
+                case "vietsub.ocr.preview":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => PreviewOcrAsync(request, request.RequestId, token),
+                        cancellationToken);
+                    break;
+                case "vietsub.job.ocr":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => StartOcrAsync(request, request.RequestId, token),
+                        cancellationToken);
+                    break;
+                case "vietsub.ocr.track.activate":
+                    await ActivateCompletedOcrTrackAsync(request, request.RequestId, cancellationToken);
+                    break;
                 default:
                     PostError(
                         request.RequestId,
@@ -276,6 +363,14 @@ internal sealed class VietsubWebBridge : IDisposable
             PostError(request.RequestId, exception.Code, exception.Message);
         }
         catch (VietsubSubtitleException exception)
+        {
+            PostError(request.RequestId, exception.Code, exception.Message);
+        }
+        catch (VietsubJobException exception)
+        {
+            PostError(request.RequestId, exception.Code, exception.Message);
+        }
+        catch (VietsubOcrException exception)
         {
             PostError(request.RequestId, exception.Code, exception.Message);
         }
@@ -411,6 +506,8 @@ internal sealed class VietsubWebBridge : IDisposable
             await SynchronizeManifestAsync(manifest, cancellationToken);
         }
         await SelectProjectAsync(manifest, cancellationToken);
+        await PostStateAsync(request.RequestId!, cancellationToken);
+        await EnsureTimelineArtifactsAsync(manifest, request.RequestId!, cancellationToken);
     }
 
     private async Task RenameProjectAsync(
@@ -493,38 +590,213 @@ internal sealed class VietsubWebBridge : IDisposable
             },
             cancellationToken);
         await session.FlushAsync(cancellationToken);
-        if (_thumbnailService is not null)
+        await PostStateAsync(requestId, cancellationToken);
+        await EnsureTimelineArtifactsAsync(session.Manifest, requestId, cancellationToken);
+    }
+
+    private async Task EnsureTimelineArtifactsAsync(
+        VietsubProjectManifest project,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        StartWaveformGeneration(project, requestId);
+        await Task.CompletedTask;
+    }
+
+    private void StartWaveformGeneration(
+        VietsubProjectManifest project,
+        string requestId)
+    {
+        if (_waveformService is null || project.SourceVideo is null)
         {
-            var thumbnailProgress = new Progress<double>(percent =>
-                Post(new WebMessageResponse(
-                    "vietsub.thumbnail.progress",
-                    requestId,
-                    new { percent })));
-            try
+            return;
+        }
+
+        CancellationToken cancellationToken;
+        lock (_operationSync)
+        {
+            if (_disposed || _projectSession?.Manifest.ProjectId != project.ProjectId)
             {
-                await _thumbnailService.EnsureAsync(
-                    session.Manifest,
-                    thumbnailProgress,
-                    cancellationToken);
+                return;
             }
-            catch (OperationCanceledException)
+            _timelineArtifactCancellation ??= new CancellationTokenSource();
+            cancellationToken = _timelineArtifactCancellation.Token;
+        }
+        var key = GetWaveformFailureKey(project);
+        _timelineArtifactTasks.GetOrAdd(
+            key,
+            _ => Task.Run(
+                () => RunWaveformGenerationAsync(project, requestId, key, cancellationToken),
+                CancellationToken.None));
+    }
+
+    private async Task RunWaveformGenerationAsync(
+        VietsubProjectManifest project,
+        string requestId,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var artifact = await _waveformService!.EnsureAsync(project, cancellationToken);
+            if (!IsCurrentTimelineSource(project))
             {
-                throw;
+                return;
             }
-            catch (Exception exception) when (
-                exception is VietsubMediaException
-                    or TOOL_LOCAL.Media.MediaToolUnavailableException
-                    or IOException
-                    or UnauthorizedAccessException
-                    or TimeoutException)
+            _waveformFailures.TryRemove(key, out _);
+            Post(new WebMessageResponse(
+                "vietsub.timeline.waveform.ready",
+                requestId,
+                new
+                {
+                    mediaId = project.SourceVideo!.MediaId,
+                    sourceSha256 = project.SourceVideo.Sha256,
+                    profileVersion = VietsubTimelineWaveformService.ProfileVersion,
+                    artifact.Status,
+                    artifact.Url,
+                    artifact.Revision
+                }));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception) when (
+            exception is VietsubMediaException
+                or TOOL_LOCAL.Media.MediaToolUnavailableException
+                or IOException
+                or UnauthorizedAccessException
+                or TimeoutException)
+        {
+            if (!IsCurrentTimelineSource(project))
             {
-                Post(new WebMessageResponse(
-                    "vietsub.thumbnail.failed",
-                    requestId,
-                    new { message = "Video đã được nhập nhưng chưa thể tạo đủ ảnh timeline." }));
+                return;
             }
+            _waveformFailures[key] = 0;
+            Post(new WebMessageResponse(
+                "vietsub.timeline.waveform.failed",
+                requestId,
+                new
+                {
+                    resourceType = VietsubPlaybackResourceTypes.Waveform,
+                    index = (int?)null,
+                    errorCode = exception is VietsubMediaException mediaException
+                        ? mediaException.Code
+                        : "vietsub_waveform_generation_failed"
+                }));
+        }
+        finally
+        {
+            _timelineArtifactTasks.TryRemove(key, out _);
         }
     }
+
+    private void RequestTimelineThumbnails(WebMessageRequest request)
+    {
+        var session = RequireProjectSession();
+        var service = _thumbnailService
+            ?? throw new InvalidOperationException("Dịch vụ thumbnail timeline chưa được cấu hình.");
+        var payload = request.Payload.Deserialize<RequestVietsubTimelineThumbnails>(_jsonOptions)
+            ?? throw new JsonException();
+        var media = RequireCurrentTimelineMedia(session.Manifest, payload.SourceSha256);
+        if (payload.Indices is null || payload.Indices.Length == 0)
+        {
+            throw new ArgumentException("Danh sách thumbnail cần tạo không được để trống.");
+        }
+        if (payload.Indices.Length > 64)
+        {
+            throw new VietsubMediaException(
+                "vietsub_thumbnail_request_too_large",
+                "Mỗi yêu cầu chỉ được chứa tối đa 64 thumbnail.");
+        }
+        if (payload.Indices.Any(index =>
+            index is < 0 or >= VietsubTimelineThumbnailService.ThumbnailCount))
+        {
+            throw new VietsubMediaException(
+                "vietsub_thumbnail_index_invalid",
+                "Index thumbnail không thuộc profile timeline hiện hành.");
+        }
+        var indices = payload.Indices.Distinct().ToArray();
+        _ = media;
+        service.Request(session.Manifest, indices);
+    }
+
+    private void RequestTimelineWaveform(WebMessageRequest request, string requestId)
+    {
+        var session = RequireProjectSession();
+        var payload = request.Payload.Deserialize<RequestVietsubTimelineWaveform>(_jsonOptions)
+            ?? throw new JsonException();
+        RequireCurrentTimelineMedia(session.Manifest, payload.SourceSha256);
+        StartWaveformGeneration(session.Manifest, requestId);
+    }
+
+    private VietsubMediaReference RequireCurrentTimelineMedia(
+        VietsubProjectManifest manifest,
+        string sourceSha256)
+    {
+        var context = RequireContext();
+        if (context.OrganizationId != manifest.OrganizationId
+            || !string.Equals(context.UserId, manifest.OwnerUserId, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException();
+        }
+        var media = manifest.SourceVideo
+            ?? throw new VietsubMediaException("vietsub_media_source_required", "Dự án chưa có video nguồn.");
+        if (!string.Equals(sourceSha256, media.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new VietsubMediaException(
+                "vietsub_media_artifact_stale",
+                "Nguồn media đã thay đổi; hãy tải lại trạng thái timeline.");
+        }
+        var status = _mediaImportService?.GetSourceStatus(manifest.ProjectId, media)
+            ?? throw new InvalidOperationException("Dịch vụ media Vietsub chưa được cấu hình.");
+        if (!status.Available || status.Changed || string.IsNullOrWhiteSpace(status.EffectivePath))
+        {
+            throw new VietsubMediaException(
+                status.Changed ? "vietsub_media_source_changed" : "vietsub_media_source_unavailable",
+                "Video nguồn không còn sẵn sàng.");
+        }
+        return media;
+    }
+
+    private void ThumbnailServiceOnReady(object? sender, VietsubTimelineThumbnailReady ready)
+    {
+        if (!IsCurrentTimelineSource(ready.MediaId, ready.SourceSha256))
+        {
+            return;
+        }
+        Post(new WebMessageResponse(
+            "vietsub.timeline.thumbnail.ready",
+            null,
+            ready));
+    }
+
+    private void ThumbnailServiceOnFailed(object? sender, VietsubTimelineThumbnailFailed failed)
+    {
+        if (!IsCurrentTimelineSource(failed.MediaId, failed.SourceSha256))
+        {
+            return;
+        }
+        Post(new WebMessageResponse(
+            "vietsub.timeline.thumbnail.failed",
+            null,
+            new
+            {
+                resourceType = VietsubPlaybackResourceTypes.Thumbnail,
+                failed.ProfileVersion,
+                failed.Index,
+                failed.ErrorCode
+            }));
+    }
+
+    private bool IsCurrentTimelineSource(VietsubProjectManifest project) =>
+        project.SourceVideo is { } media && IsCurrentTimelineSource(media.MediaId, media.Sha256);
+
+    private bool IsCurrentTimelineSource(Guid mediaId, string sourceSha256) =>
+        !_disposed
+        && _projectSession?.Manifest.SourceVideo is { } current
+        && current.MediaId == mediaId
+        && string.Equals(current.Sha256, sourceSha256, StringComparison.OrdinalIgnoreCase);
 
     private async Task ImportSrtAsync(
         WebMessageRequest request,
@@ -771,6 +1043,330 @@ internal sealed class VietsubWebBridge : IDisposable
             requestId,
             new { resetPage, trackId, trackRevision }));
 
+    private async Task PostJobStatusAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        await RequireOcrService().AuthorizeProjectAsync(
+            session,
+            context.UserId,
+            context.OrganizationId,
+            cancellationToken);
+        var payload = request.Payload.Deserialize<VietsubJobRequest>(_jsonOptions)
+            ?? throw new JsonException();
+        if (payload.JobId == Guid.Empty)
+        {
+            throw new ArgumentException("Mã job Vietsub không hợp lệ.");
+        }
+        var job = await RequireJobManager().GetAsync(
+            session.Manifest.ProjectId,
+            payload.JobId,
+            cancellationToken)
+            ?? throw new VietsubJobException(
+                "vietsub_job_not_found",
+                "Không tìm thấy job trong dự án Vietsub hiện tại.");
+        Post(new WebMessageResponse("vietsub.job.status", requestId, job));
+    }
+
+    private async Task PostOcrRuntimeStatusAsync(
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var status = await RequireOcrService().GetRuntimeStatusAsync(cancellationToken);
+        Post(new WebMessageResponse("vietsub.ocr.runtime.status", requestId, status));
+    }
+
+    private async Task UpdateOcrSettingsAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var input = request.Payload.Deserialize<VietsubOcrSettingsInput>(_jsonOptions)
+            ?? throw new JsonException();
+        var settings = await RequireOcrService().UpdateSettingsAsync(
+            session,
+            context.UserId,
+            context.OrganizationId,
+            input,
+            cancellationToken);
+        Post(new WebMessageResponse("vietsub.ocr.settings", requestId, settings));
+    }
+
+    private async Task PreviewOcrAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var payload = request.Payload.Deserialize<VietsubOcrPreviewRequest>(_jsonOptions)
+            ?? throw new JsonException();
+        var result = await RequireOcrService().PreviewAsync(
+            session,
+            context.UserId,
+            context.OrganizationId,
+            new VietsubOcrSettingsInput(payload.LanguageCode, payload.Profile, payload.Region),
+            payload.TimestampMilliseconds,
+            cancellationToken);
+        Post(new WebMessageResponse("vietsub.ocr.preview", requestId, result));
+    }
+
+    private async Task StartOcrAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var userContext = RequireContext();
+        var input = request.Payload.Deserialize<VietsubOcrSettingsInput>(_jsonOptions)
+            ?? throw new JsonException();
+        var job = await RequireOcrService().StartAsync(
+            session,
+            userContext.UserId,
+            userContext.OrganizationId,
+            input,
+            cancellationToken);
+        Post(new WebMessageResponse("vietsub.job.changed", requestId, job));
+    }
+
+    private async Task ActivateCompletedOcrTrackAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        await RequireOcrService().AuthorizeProjectAsync(
+            session,
+            context.UserId,
+            context.OrganizationId,
+            cancellationToken);
+        var payload = request.Payload.Deserialize<ActivateVietsubOcrTrackRequest>(_jsonOptions)
+            ?? throw new JsonException();
+        var job = await RequireJobManager().GetAsync(
+            session.Manifest.ProjectId,
+            payload.JobId,
+            cancellationToken)
+            ?? throw new VietsubJobException(
+                "vietsub_job_not_found",
+                "Không tìm thấy OCR job trong dự án hiện tại.");
+        if (job.Type != VietsubJobTypes.OcrLocal
+            || job.Status != VietsubJobStatusNames.Completed
+            || job.OutputTrackId is not Guid outputTrackId)
+        {
+            throw new VietsubOcrException(
+                VietsubOcrErrorCodes.JobNotResumable,
+                "OCR job chưa hoàn thành hoặc không có track đầu ra.");
+        }
+        var impact = await RequireSubtitleService().AssessActivationImpactAsync(
+            session.Manifest,
+            outputTrackId,
+            cancellationToken);
+        if (impact.RequiresConfirmation && !payload.ConfirmImpact)
+        {
+            Post(new WebMessageResponse(
+                "vietsub.ocr.activation.required",
+                requestId,
+                new { jobId = job.Id, outputTrackId, impact.Reasons }));
+            return;
+        }
+        await ActivateOcrTrackCoreAsync(session, job.Id, outputTrackId, requestId, cancellationToken);
+    }
+
+    private async Task ControlJobAsync(
+        WebMessageRequest request,
+        string requestId,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        await RequireOcrService().AuthorizeProjectAsync(
+            session,
+            context.UserId,
+            context.OrganizationId,
+            cancellationToken);
+        var payload = request.Payload.Deserialize<VietsubJobRequest>(_jsonOptions)
+            ?? throw new JsonException();
+        if (payload.JobId == Guid.Empty)
+        {
+            throw new ArgumentException("Mã job Vietsub không hợp lệ.");
+        }
+
+        var manager = RequireJobManager();
+        var projectId = session.Manifest.ProjectId;
+        var job = action switch
+        {
+            "PAUSE" => await manager.PauseAsync(projectId, payload.JobId, cancellationToken),
+            "RESUME" => await manager.ResumeAsync(projectId, payload.JobId, cancellationToken),
+            "RETRY" => await manager.RetryAsync(projectId, payload.JobId, cancellationToken),
+            "CANCEL" => await manager.CancelAsync(projectId, payload.JobId, cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(nameof(action))
+        };
+        Post(new WebMessageResponse("vietsub.job.changed", requestId, job));
+        await PostStateAsync(requestId, cancellationToken);
+    }
+
+    private void JobManagerOnChanged(object? sender, VietsubJobChangedEventArgs eventArgs)
+    {
+        if (_disposed || _projectSession?.Manifest.ProjectId != eventArgs.Job.ProjectId)
+        {
+            return;
+        }
+
+        if (eventArgs.Job.Type == VietsubJobTypes.OcrLocal
+            && eventArgs.Job.Status is VietsubJobStatusNames.Completed
+                or VietsubJobStatusNames.Failed
+                or VietsubJobStatusNames.Cancelled)
+        {
+            _ = CompleteOcrJobOnceAsync(eventArgs.Job);
+        }
+
+        TryPostJobNotification(
+            new WebMessageResponse("vietsub.job.changed", null, eventArgs.Job),
+            eventArgs.Job.ProjectId,
+            eventArgs.Job.Id,
+            "JOB_NOTIFICATION_FAILED");
+    }
+
+    private async Task CompleteOcrJobOnceAsync(VietsubJobSummary job)
+    {
+        if (!_ocrCompletionInFlight.TryAdd(job.Id, 0))
+        {
+            return;
+        }
+
+        try
+        {
+            await HandleOcrJobFinishedCoreAsync(job);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _jobManager?.RecordDiagnostic(
+                job.ProjectId,
+                job.Id,
+                "OCR_COMPLETION_FAILED",
+                $"Không thể hoàn tất trạng thái OCR ({exception.GetType().Name}).");
+            TryPostJobNotification(
+                new WebMessageResponse(
+                    "vietsub.error",
+                    null,
+                    Error: new WebMessageError(
+                        "vietsub_ocr_completion_update_failed",
+                        "OCR đã xong nhưng chưa thể cập nhật track đang dùng.")),
+                job.ProjectId,
+                job.Id,
+                "OCR_COMPLETION_NOTIFICATION_FAILED");
+        }
+        finally
+        {
+            _ocrCompletionInFlight.TryRemove(job.Id, out _);
+        }
+    }
+
+    private async Task HandleOcrJobFinishedCoreAsync(VietsubJobSummary job)
+    {
+        var session = _projectSession;
+        if (_disposed || session?.Manifest.ProjectId != job.ProjectId)
+        {
+            return;
+        }
+        if (job.Status != VietsubJobStatusNames.Completed || job.OutputTrackId is not Guid outputTrackId)
+        {
+            var nextStatus = job.Status == VietsubJobStatusNames.Failed
+                ? VietsubProjectStatuses.Failed
+                : VietsubProjectStatuses.Ready;
+            if (session.Manifest.Status == nextStatus)
+            {
+                return;
+            }
+            await session.UpdateAsync(
+                manifest => manifest.Status = nextStatus,
+                CancellationToken.None);
+            await session.FlushAsync(CancellationToken.None);
+            return;
+        }
+
+        if (session.Manifest.Status == VietsubProjectStatuses.Completed
+            && session.Manifest.ActiveSubtitleTrackId == outputTrackId)
+        {
+            return;
+        }
+
+        var subtitleService = RequireSubtitleService();
+        var impact = await subtitleService.AssessActivationImpactAsync(
+            session.Manifest,
+            outputTrackId,
+            CancellationToken.None);
+        if (impact.RequiresConfirmation)
+        {
+            if (session.Manifest.Status != VietsubProjectStatuses.Ready)
+            {
+                await session.UpdateAsync(
+                    manifest => manifest.Status = VietsubProjectStatuses.Ready,
+                    CancellationToken.None);
+                await session.FlushAsync(CancellationToken.None);
+            }
+            TryPostJobNotification(
+                new WebMessageResponse(
+                    "vietsub.ocr.activation.required",
+                    null,
+                    new { jobId = job.Id, outputTrackId, impact.Reasons }),
+                job.ProjectId,
+                job.Id,
+                "OCR_ACTIVATION_NOTIFICATION_FAILED");
+            return;
+        }
+        await ActivateOcrTrackCoreAsync(
+            session,
+            job.Id,
+            outputTrackId,
+            requestId: null,
+            CancellationToken.None);
+    }
+
+    private async Task ActivateOcrTrackCoreAsync(
+        VietsubProjectSession session,
+        Guid jobId,
+        Guid outputTrackId,
+        string? requestId,
+        CancellationToken cancellationToken)
+    {
+        await RequireSubtitleService().ActivateTrackAsync(
+            session.Manifest,
+            outputTrackId,
+            cancellationToken);
+        await session.UpdateAsync(
+            manifest =>
+            {
+                manifest.ActiveSubtitleTrackId = outputTrackId;
+                manifest.Status = VietsubProjectStatuses.Completed;
+            },
+            cancellationToken);
+        await session.FlushAsync(cancellationToken);
+        TryPostJobNotification(
+            new WebMessageResponse(
+                "vietsub.ocr.completed",
+                requestId,
+                new { jobId, outputTrackId, activated = true }),
+            session.Manifest.ProjectId,
+            jobId,
+            "OCR_COMPLETED_NOTIFICATION_FAILED");
+        TryPostJobNotification(
+            new WebMessageResponse(
+                "vietsub.subtitle.changed",
+                requestId ?? string.Empty,
+                new { resetPage = true, trackId = outputTrackId, trackRevision = (int?)null }),
+            session.Manifest.ProjectId,
+            jobId,
+            "OCR_SUBTITLE_NOTIFICATION_FAILED");
+    }
+
     private async Task SelectProjectAsync(
         VietsubProjectManifest manifest,
         CancellationToken cancellationToken)
@@ -781,11 +1377,64 @@ internal sealed class VietsubWebBridge : IDisposable
         {
             await session.StartAsync(cancellationToken);
             _projectSession = session;
+            lock (_operationSync)
+            {
+                _timelineArtifactCancellation = new CancellationTokenSource();
+            }
+            if (_jobManager is not null)
+            {
+                await _jobManager.RestoreInterruptedJobsAsync(
+                    manifest.ProjectId,
+                    cancellationToken);
+                await ReconcileOcrProjectStatusAsync(session, cancellationToken);
+            }
         }
         catch
         {
             await session.DisposeAsync();
             throw;
+        }
+    }
+
+    private async Task ReconcileOcrProjectStatusAsync(
+        VietsubProjectSession session,
+        CancellationToken cancellationToken)
+    {
+        if (_jobManager is null
+            || session.Manifest.Status != VietsubProjectStatuses.Processing)
+        {
+            return;
+        }
+
+        var latestOcrJob = (await _jobManager.ListAsync(
+                session.Manifest.ProjectId,
+                cancellationToken: cancellationToken))
+            .FirstOrDefault(job => job.Type == VietsubJobTypes.OcrLocal);
+        if (latestOcrJob?.Status is VietsubJobStatusNames.Completed
+            or VietsubJobStatusNames.Failed
+            or VietsubJobStatusNames.Cancelled)
+        {
+            await CompleteOcrJobOnceAsync(latestOcrJob);
+        }
+    }
+
+    private void TryPostJobNotification(
+        WebMessageResponse response,
+        Guid projectId,
+        Guid jobId,
+        string failureEventType)
+    {
+        try
+        {
+            Post(response);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _jobManager?.RecordDiagnostic(
+                projectId,
+                jobId,
+                failureEventType,
+                $"Không thể gửi notification OCR ({exception.GetType().Name}).");
         }
     }
 
@@ -845,6 +1494,15 @@ internal sealed class VietsubWebBridge : IDisposable
 
     private async Task CloseCurrentSessionAsync(CancellationToken cancellationToken)
     {
+        CancellationTokenSource? artifactCancellation;
+        lock (_operationSync)
+        {
+            artifactCancellation = _timelineArtifactCancellation;
+            _timelineArtifactCancellation = null;
+        }
+        artifactCancellation?.Cancel();
+        artifactCancellation?.Dispose();
+        _thumbnailService?.CancelActive();
         var session = _projectSession;
         _projectSession = null;
         if (session is null)
@@ -889,6 +1547,7 @@ internal sealed class VietsubWebBridge : IDisposable
         IReadOnlyList<VietsubProjectSummary> projects = [];
         VietsubProjectSummary? selectedProject = null;
         VietsubSubtitleWorkspaceSummary? subtitleWorkspace = null;
+        IReadOnlyList<VietsubJobSummary> jobs = [];
         if (_projectStore is not null && _contextProvider is not null)
         {
             var context = RequireContext();
@@ -915,6 +1574,12 @@ internal sealed class VietsubWebBridge : IDisposable
                     _projectSession.Manifest,
                     cancellationToken);
             }
+            if (_projectSession is not null && _jobManager is not null)
+            {
+                jobs = await _jobManager.ListAsync(
+                    _projectSession.Manifest.ProjectId,
+                    cancellationToken: cancellationToken);
+            }
         }
 
         Post(new WebMessageResponse(
@@ -928,7 +1593,16 @@ internal sealed class VietsubWebBridge : IDisposable
                 stage = _projectStore is null ? "shell_ready" : "workspace_ready",
                 projects,
                 selectedProject,
-                subtitleWorkspace
+                subtitleWorkspace,
+                ocrSettings = _projectSession?.Manifest.OcrSettings,
+                jobs,
+                activeJob = jobs.FirstOrDefault(job => job.Status is
+                    VietsubJobStatusNames.Pending or
+                    VietsubJobStatusNames.Running or
+                    VietsubJobStatusNames.Pausing or
+                    VietsubJobStatusNames.Paused or
+                    VietsubJobStatusNames.Interrupted or
+                    VietsubJobStatusNames.Failed)
             }));
     }
 
@@ -945,6 +1619,22 @@ internal sealed class VietsubWebBridge : IDisposable
         var playbackUrl = sourceStatus.Available && !sourceStatus.Changed
             ? VietsubMediaPlaybackService.CreatePlaybackUrl(manifest.ProjectId, media.MediaId)
             : string.Empty;
+        var artifactsCanBeServed = sourceStatus.Available
+            && !sourceStatus.Changed
+            && !string.IsNullOrWhiteSpace(sourceStatus.EffectivePath);
+        var waveform = artifactsCanBeServed
+            ? _waveformService?.GetExistingArtifact(manifest)
+            : null;
+        waveform ??= new VietsubTimelineWaveformArtifact(
+                media.Metadata.HasAudio
+                    ? VietsubWaveformStatuses.Pending
+                    : VietsubWaveformStatuses.NoAudio,
+                null);
+        if (waveform.Status == VietsubWaveformStatuses.Pending
+            && _waveformFailures.ContainsKey(GetWaveformFailureKey(manifest)))
+        {
+            waveform = new(VietsubWaveformStatuses.Failed, null);
+        }
         return summary with
         {
             SourceVideo = new VietsubMediaSummary(
@@ -964,21 +1654,51 @@ internal sealed class VietsubWebBridge : IDisposable
                 sourceStatus.Changed,
                 sourceStatus.IssueCode,
                 playbackUrl,
-                _thumbnailService?.GetExistingUrls(manifest) ?? [])
+                artifactsCanBeServed ? _thumbnailService?.GetExistingUrls(manifest) ?? [] : [],
+                artifactsCanBeServed ? _thumbnailService?.GetExistingTimelineThumbnails(manifest) ?? [] : [],
+                waveform.Url,
+                waveform.Status,
+                media.Metadata.RotationDegrees,
+                VietsubTimelineThumbnailService.ProfileVersion,
+                VietsubTimelineThumbnailService.ThumbnailCount,
+                VietsubTimelineWaveformService.ProfileVersion,
+                waveform.Revision)
         };
     }
 
-    public VietsubPlaybackResponse? TryOpenPlaybackRequest(
+    private static string GetWaveformFailureKey(VietsubProjectManifest project) =>
+        project.SourceVideo is { } media
+            ? $"{project.ProjectId:N}:{media.Sha256}"
+            : project.ProjectId.ToString("N");
+
+    public VietsubPlaybackResponse TryOpenPlaybackRequest(
         Uri requestUri,
         string method,
         string? rangeHeader)
     {
-        if (!_enabled
-            || _disposed
-            || _mediaPlaybackService is null
-            || _projectSession?.Manifest is not { } manifest)
+        if (!_enabled)
         {
-            return null;
+            return VietsubMediaPlaybackService.Error(
+                403,
+                "Forbidden",
+                "vietsub_feature_disabled",
+                VietsubMediaPlaybackService.ClassifyResource(requestUri));
+        }
+        if (_disposed || _mediaPlaybackService is null)
+        {
+            return VietsubMediaPlaybackService.Error(
+                503,
+                "Service Unavailable",
+                "vietsub_media_bridge_unavailable",
+                VietsubMediaPlaybackService.ClassifyResource(requestUri));
+        }
+        if (_projectSession?.Manifest is not { } manifest)
+        {
+            return VietsubMediaPlaybackService.Error(
+                403,
+                "Forbidden",
+                "vietsub_media_project_session_required",
+                VietsubMediaPlaybackService.ClassifyResource(requestUri));
         }
 
         var context = _contextProvider?.Invoke();
@@ -986,7 +1706,11 @@ internal sealed class VietsubWebBridge : IDisposable
             || context.OrganizationId != manifest.OrganizationId
             || !string.Equals(context.UserId, manifest.OwnerUserId, StringComparison.Ordinal))
         {
-            return null;
+            return VietsubMediaPlaybackService.Error(
+                403,
+                "Forbidden",
+                "vietsub_media_session_context_mismatch",
+                VietsubMediaPlaybackService.ClassifyResource(requestUri));
         }
 
         return _mediaPlaybackService.Open(requestUri, method, rangeHeader, manifest);
@@ -1000,6 +1724,12 @@ internal sealed class VietsubWebBridge : IDisposable
 
     private VietsubSubtitleService RequireSubtitleService() =>
         _subtitleService ?? throw new InvalidOperationException("Dịch vụ phụ đề Vietsub chưa được cấu hình.");
+
+    private VietsubJobManager RequireJobManager() =>
+        _jobManager ?? throw new InvalidOperationException("Job engine Vietsub chưa được cấu hình.");
+
+    private VietsubOcrService RequireOcrService() =>
+        _ocrService ?? throw new InvalidOperationException("Dịch vụ OCR Vietsub chưa được cấu hình.");
 
     private VietsubUserContext RequireContext() =>
         _contextProvider?.Invoke() is { } context
@@ -1042,6 +1772,20 @@ internal sealed class VietsubWebBridge : IDisposable
             session = _projectSession;
             _projectSession = null;
         }
+
+        if (_jobManager is not null)
+        {
+            _jobManager.JobChanged -= JobManagerOnChanged;
+        }
+        if (_thumbnailService is not null)
+        {
+            _thumbnailService.ThumbnailReady -= ThumbnailServiceOnReady;
+            _thumbnailService.ThumbnailFailed -= ThumbnailServiceOnFailed;
+            _thumbnailService.CancelActive();
+        }
+        _timelineArtifactCancellation?.Cancel();
+        _timelineArtifactCancellation?.Dispose();
+        _timelineArtifactCancellation = null;
 
         if (session is not null)
         {

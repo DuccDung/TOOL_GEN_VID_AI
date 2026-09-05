@@ -104,16 +104,17 @@ public sealed class VietsubModuleShellTests
                     "Platform": "win-x64",
                     "CheckIntervalSeconds": 120
                   },
-                  "Features": { "VietsubEnabled": false }
+                  "Features": { "VietsubEnabled": false, "VietsubOcrEnabled": false }
                 }
                 """);
             File.WriteAllText(Path.Combine(root, "appsettings.user.json"), """
-                { "Features": { "VietsubEnabled": true } }
+                { "Features": { "VietsubEnabled": true, "VietsubOcrEnabled": false } }
                 """);
 
             var options = DesktopOptions.Load(root);
 
             Assert.True(options.Features.VietsubEnabled);
+            Assert.False(options.Features.VietsubOcrEnabled);
             Assert.Equal("https://localhost:7202/", options.Server.BaseUrl);
             Assert.Equal("Stable", options.Update.Channel);
         }
@@ -175,6 +176,11 @@ public sealed class VietsubModuleShellTests
         Assert.Contains("onSelectCue", timeline);
         Assert.Contains("expectedTrackRevision", timeline);
         Assert.Contains("calculateViewportRange", timeline);
+        Assert.Contains("timelineThumbnails", timeline);
+        Assert.Contains("waveformUrl", timeline);
+        Assert.Contains("Voice gốc", timeline);
+        Assert.Contains("cue.previewText", timeline);
+        Assert.Contains("vietsub-timeline-grid", timeline);
         Assert.Contains("flushPendingEdits", editor);
         Assert.Contains("onRegisterBeforeLeave", editor);
         Assert.Contains("vietsub.timeline.window.get", hook);
@@ -182,6 +188,102 @@ public sealed class VietsubModuleShellTests
         Assert.Contains("\"test\": \"vitest run\"", package);
         Assert.Contains("keepsCurrentEditor", hook);
         Assert.Contains("invalidatesEditor", hook);
+    }
+
+    [Fact]
+    public void Timeline_updates_media_viewport_before_requiring_an_active_subtitle_track()
+    {
+        var timeline = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubTimeline.tsx");
+        var methodStart = timeline.IndexOf(
+            "const requestVisibleWindow = useCallback", StringComparison.Ordinal);
+        var methodEnd = timeline.IndexOf(
+            "const scheduleWindowRequest = useCallback", methodStart, StringComparison.Ordinal);
+
+        Assert.True(methodStart >= 0 && methodEnd > methodStart);
+        var method = timeline[methodStart..methodEnd];
+        var mediaGuard = method.IndexOf(
+            "if (!viewport || durationMilliseconds <= 0) return;", StringComparison.Ordinal);
+        var visibleRangeUpdate = method.IndexOf("setVisibleRange(range);", StringComparison.Ordinal);
+        var subtitleTrackGuard = method.IndexOf("if (!trackId) return;", StringComparison.Ordinal);
+        var subtitleWindowRequest = method.IndexOf("onLoadWindow({", StringComparison.Ordinal);
+
+        Assert.True(mediaGuard >= 0);
+        Assert.True(visibleRangeUpdate > mediaGuard);
+        Assert.True(subtitleTrackGuard > visibleRangeUpdate);
+        Assert.True(subtitleWindowRequest > subtitleTrackGuard);
+        Assert.DoesNotContain("!viewport || !trackId", method, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Host_MarshalsBackgroundNotificationsBeforeAccessingCoreWebView()
+    {
+        var form = ReadRepositoryFile("TOOL-LOCAL", "Form1.cs");
+        var methodStart = form.IndexOf("private void PostJsonToWebView", StringComparison.Ordinal);
+        var methodEnd = form.IndexOf("private string? SelectVietsubMediaFile", methodStart, StringComparison.Ordinal);
+        Assert.True(methodStart >= 0 && methodEnd > methodStart);
+        var method = form[methodStart..methodEnd];
+        var marshalCheck = method.IndexOf("if (InvokeRequired)", StringComparison.Ordinal);
+        var webViewAccess = method.IndexOf("_webView?.CoreWebView2", StringComparison.Ordinal);
+
+        Assert.True(marshalCheck >= 0);
+        Assert.True(webViewAccess > marshalCheck);
+        Assert.Contains("BeginInvoke(() => PostJsonToWebView(json))", method);
+    }
+
+    [Fact]
+    public void Host_registers_media_filter_before_navigation_and_assigns_typed_response_synchronously()
+    {
+        var form = ReadRepositoryFile("TOOL-LOCAL", "Form1.cs");
+        var configureCall = form.IndexOf("ConfigureWebViewSecurity(", StringComparison.Ordinal);
+        var firstNavigation = form.IndexOf(".Navigate(", configureCall, StringComparison.Ordinal);
+        var configureMethodStart = form.IndexOf("private void ConfigureWebViewSecurity", StringComparison.Ordinal);
+        var configureMethodEnd = form.IndexOf("private async void WebViewOnWebMessageReceived", configureMethodStart, StringComparison.Ordinal);
+        var handlerStart = form.IndexOf("private void WebViewOnVietsubMediaRequested", StringComparison.Ordinal);
+        var handlerEnd = form.IndexOf("private void WebViewOnNavigationCompleted", handlerStart, StringComparison.Ordinal);
+
+        Assert.True(configureCall >= 0);
+        Assert.True(firstNavigation > configureCall);
+        Assert.True(configureMethodStart >= 0 && configureMethodEnd > configureMethodStart);
+        Assert.True(handlerStart >= 0 && handlerEnd > handlerStart);
+
+        var configureMethod = form[configureMethodStart..configureMethodEnd];
+        var handler = form[handlerStart..handlerEnd];
+        Assert.Contains("AddWebResourceRequestedFilter(", configureMethod);
+        Assert.Contains("CoreWebView2WebResourceContext.All", configureMethod);
+        Assert.Contains("CoreWebView2WebResourceRequestSourceKinds.All", configureMethod);
+        Assert.Contains("WebResourceRequested += WebViewOnVietsubMediaRequested", configureMethod);
+        Assert.Contains("WebResourceResponseReceived += WebViewOnVietsubMediaResponseReceived", configureMethod);
+        Assert.Contains("eventArgs.Response =", handler);
+        Assert.Contains("CreateVietsubWebResourceResponse", handler);
+        Assert.Contains("response.StatusCode", handler);
+        Assert.Contains("response.ReasonPhrase", handler);
+        Assert.Contains("response.Headers", handler);
+        Assert.Contains("response.Content", handler);
+        Assert.Contains("response.ResourceType", handler);
+        Assert.Contains("response.ErrorCode", handler);
+        Assert.Contains("_vietsubMediaLog.Write", handler);
+        Assert.Contains("PostVietsubMediaFailure", handler);
+        Assert.Contains("ReadVietsubRangeHeader", handler);
+        Assert.Contains("VietsubPlaybackResourceTypes.Video", handler);
+        Assert.Contains("headers.Contains(\"Range\")", handler);
+        Assert.Contains("exception is ArgumentException or COMException", handler);
+        Assert.Contains("ReadVietsubResponseHeader", handler);
+        Assert.DoesNotContain("eventArgs.Request.Uri,\n            correlationId", handler, StringComparison.Ordinal);
+        Assert.DoesNotContain("404,\n                \"Not Found\"", handler, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Host_versions_dashboard_navigation_and_build_removes_stale_asset_hashes()
+    {
+        var form = ReadRepositoryFile("TOOL-LOCAL", "Form1.cs");
+        var project = ReadRepositoryFile("TOOL-LOCAL", "TOOL-LOCAL.csproj");
+
+        Assert.Contains("File.GetLastWriteTimeUtc(indexPath).Ticks", form, StringComparison.Ordinal);
+        Assert.Contains("index.html?v={webVersion}", form, StringComparison.Ordinal);
+        Assert.Contains("<RemoveDir Directories=\"$(TargetDir)wwwroot\\assets\" />", project, StringComparison.Ordinal);
+        Assert.Contains("CleanDashboardPublishAssets", project, StringComparison.Ordinal);
+        Assert.Contains("<RemoveDir Directories=\"$(PublishDir)wwwroot\\assets\" />", project, StringComparison.Ordinal);
     }
 
     private static JsonDocument ParseSingleResponse(IReadOnlyCollection<string> responses)

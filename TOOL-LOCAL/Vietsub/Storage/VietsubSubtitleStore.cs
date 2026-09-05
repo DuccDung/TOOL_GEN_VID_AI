@@ -23,7 +23,7 @@ internal sealed record VietsubTimelineWindowRecord(
 
 internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     public async Task InitializeAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
@@ -40,7 +40,7 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
             );
 
             INSERT INTO schema_info(schema_version)
-            SELECT 2
+            SELECT 3
             WHERE NOT EXISTS (SELECT 1 FROM schema_info);
 
             CREATE TABLE IF NOT EXISTS subtitle_tracks (
@@ -92,6 +92,67 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
 
             CREATE INDEX IF NOT EXISTS ix_subtitle_artifacts_track_revision
                 ON subtitle_artifacts(track_id, track_revision, status);
+
+            CREATE TABLE IF NOT EXISTS local_jobs (
+                id TEXT NOT NULL PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                started_at_utc TEXT NULL,
+                updated_at_utc TEXT NOT NULL,
+                completed_at_utc TEXT NULL,
+                progress_percent REAL NOT NULL,
+                status_message TEXT NULL,
+                input_track_id TEXT NULL,
+                output_track_id TEXT NULL,
+                input_revision INTEGER NULL,
+                parameters_json TEXT NOT NULL,
+                checkpoint_json TEXT NULL,
+                metrics_json TEXT NULL,
+                attempt_count INTEGER NOT NULL,
+                max_attempts INTEGER NOT NULL,
+                error_code TEXT NULL,
+                error_message TEXT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_local_jobs_project_updated
+                ON local_jobs(project_id, updated_at_utc DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_local_jobs_project_active
+                ON local_jobs(project_id)
+                WHERE status IN ('PENDING', 'RUNNING', 'PAUSING', 'PAUSED');
+
+            CREATE TABLE IF NOT EXISTS local_job_steps (
+                job_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                status TEXT NOT NULL,
+                progress_percent REAL NOT NULL,
+                started_at_utc TEXT NULL,
+                updated_at_utc TEXT NOT NULL,
+                completed_at_utc TEXT NULL,
+                error_code TEXT NULL,
+                error_message TEXT NULL,
+                PRIMARY KEY(job_id, step_index),
+                CONSTRAINT fk_local_job_steps_job
+                    FOREIGN KEY(job_id) REFERENCES local_jobs(id) ON DELETE CASCADE
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_local_job_steps_code
+                ON local_job_steps(job_id, code);
+
+            CREATE TABLE IF NOT EXISTS local_job_events (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                message TEXT NULL,
+                created_at_utc TEXT NOT NULL,
+                CONSTRAINT fk_local_job_events_job
+                    FOREIGN KEY(job_id) REFERENCES local_jobs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_local_job_events_job_created
+                ON local_job_events(job_id, created_at_utc DESC);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
 
@@ -101,6 +162,11 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         if (version == 1)
         {
             await MigrateFromVersion1Async(connection, cancellationToken);
+            version = 2;
+        }
+        if (version == 2)
+        {
+            await MigrateFromVersion2Async(connection, cancellationToken);
             version = SchemaVersion;
         }
         if (version != SchemaVersion)
@@ -109,10 +175,51 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         }
     }
 
-    public async Task SaveTrackAsync(
+    public Task SaveTrackAsync(
         Guid projectId,
         VietsubSubtitleTrack track,
+        CancellationToken cancellationToken = default) =>
+        SaveTrackInternalAsync(
+            projectId,
+            track,
+            checkpointJobId: null,
+            checkpointJson: null,
+            cancellationToken);
+
+    public Task SaveTrackAndJobCheckpointAsync(
+        Guid projectId,
+        VietsubSubtitleTrack track,
+        Guid jobId,
+        string checkpointJson,
         CancellationToken cancellationToken = default)
+    {
+        if (jobId == Guid.Empty)
+        {
+            throw new ArgumentException("Mã job Vietsub không hợp lệ.", nameof(jobId));
+        }
+        try
+        {
+            using var _ = JsonDocument.Parse(checkpointJson);
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException("Checkpoint job Vietsub không phải JSON hợp lệ.", nameof(checkpointJson), exception);
+        }
+
+        return SaveTrackInternalAsync(
+            projectId,
+            track,
+            jobId,
+            checkpointJson,
+            cancellationToken);
+    }
+
+    private async Task SaveTrackInternalAsync(
+        Guid projectId,
+        VietsubSubtitleTrack track,
+        Guid? checkpointJobId,
+        string? checkpointJson,
+        CancellationToken cancellationToken)
     {
         ValidateTrack(track);
         await InitializeAsync(projectId, cancellationToken);
@@ -237,6 +344,28 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 """;
             deleteArtifactCommand.Parameters.AddWithValue("$trackId", track.TrackId.ToString("D"));
             await deleteArtifactCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (checkpointJobId is Guid jobId)
+        {
+            await using var checkpointCommand = connection.CreateCommand();
+            checkpointCommand.Transaction = (SqliteTransaction)transaction;
+            checkpointCommand.CommandText = """
+                UPDATE local_jobs
+                SET checkpoint_json = $checkpointJson,
+                    updated_at_utc = $updatedAtUtc
+                WHERE id = $jobId
+                  AND project_id = $projectId
+                  AND status IN ('RUNNING', 'PAUSING');
+                """;
+            checkpointCommand.Parameters.AddWithValue("$checkpointJson", checkpointJson!);
+            checkpointCommand.Parameters.AddWithValue("$updatedAtUtc", DateTime.UtcNow.ToString("O"));
+            checkpointCommand.Parameters.AddWithValue("$jobId", jobId.ToString("D"));
+            checkpointCommand.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+            if (await checkpointCommand.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                throw new InvalidOperationException("Không thể lưu đồng thời track và checkpoint của OCR job.");
+            }
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -536,6 +665,18 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 ON subtitle_artifacts(track_id, track_revision, status);
             UPDATE schema_info SET schema_version = 2;
             """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task MigrateFromVersion2Async(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = "UPDATE schema_info SET schema_version = 3;";
         await command.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }

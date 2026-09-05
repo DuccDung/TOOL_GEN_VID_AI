@@ -16,7 +16,10 @@ using TOOL_LOCAL.Vietsub.Api;
 using TOOL_LOCAL.Vietsub.Media;
 using TOOL_LOCAL.Vietsub.Playback;
 using TOOL_LOCAL.Vietsub.Subtitles;
+using TOOL_LOCAL.Vietsub.Jobs;
+using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.Payments;
+using System.Runtime.InteropServices;
 
 namespace TOOL_LOCAL;
 
@@ -43,8 +46,12 @@ public partial class Form1 : Form
     private readonly IVietsubProjectRegistryClient? _vietsubProjectRegistryClient;
     private readonly VietsubMediaImportService? _vietsubMediaImportService;
     private readonly VietsubTimelineThumbnailService? _vietsubThumbnailService;
+    private readonly VietsubTimelineWaveformService? _vietsubWaveformService;
     private readonly VietsubSubtitleService? _vietsubSubtitleService;
+    private readonly VietsubJobManager? _vietsubJobManager;
+    private readonly VietsubOcrService? _vietsubOcrService;
     private readonly LicensePaymentApiClient? _licensePaymentClient;
+    private readonly VietsubMediaRuntimeLog _vietsubMediaLog = VietsubMediaRuntimeLog.CreateDefault();
     private WebView2? _webView;
     private Panel? _loadingPanel;
     private Label? _loadingLabel;
@@ -83,7 +90,10 @@ public partial class Form1 : Form
         IVietsubProjectRegistryClient? vietsubProjectRegistryClient,
         VietsubMediaImportService? vietsubMediaImportService,
         VietsubTimelineThumbnailService? vietsubThumbnailService,
+        VietsubTimelineWaveformService? vietsubWaveformService,
         VietsubSubtitleService? vietsubSubtitleService,
+        VietsubJobManager? vietsubJobManager,
+        VietsubOcrService? vietsubOcrService,
         LicensePaymentApiClient licensePaymentClient) : this()
     {
         _sessionManager = sessionManager;
@@ -102,7 +112,10 @@ public partial class Form1 : Form
         _vietsubProjectRegistryClient = vietsubProjectRegistryClient;
         _vietsubMediaImportService = vietsubMediaImportService;
         _vietsubThumbnailService = vietsubThumbnailService;
+        _vietsubWaveformService = vietsubWaveformService;
         _vietsubSubtitleService = vietsubSubtitleService;
+        _vietsubJobManager = vietsubJobManager;
+        _vietsubOcrService = vietsubOcrService;
         _licensePaymentClient = licensePaymentClient;
         _updateTimer.Interval = Math.Max(30, updateOptions.CheckIntervalSeconds) * 1000;
         ConfigureWindow();
@@ -208,14 +221,19 @@ public partial class Form1 : Form
                     ? null
                     : new VietsubMediaPlaybackService(
                         _vietsubMediaImportService,
-                        _vietsubThumbnailService),
+                        _vietsubThumbnailService,
+                        _vietsubWaveformService),
                 _vietsubThumbnailService,
                 _vietsubSubtitleService,
                 SelectVietsubSrtFile,
-                SelectVietsubSrtDestination);
+                SelectVietsubSrtDestination,
+                _vietsubJobManager,
+                _vietsubOcrService,
+                _vietsubWaveformService);
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
             _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;
-            _webView.CoreWebView2.Navigate($"https://{AppHostName}/index.html");
+            var webVersion = File.GetLastWriteTimeUtc(indexPath).Ticks;
+            _webView.CoreWebView2.Navigate($"https://{AppHostName}/index.html?v={webVersion}");
         }
         catch (WebView2RuntimeNotFoundException)
         {
@@ -239,8 +257,10 @@ public partial class Form1 : Form
             CoreWebView2HostResourceAccessKind.DenyCors);
         coreWebView.AddWebResourceRequestedFilter(
             $"https://{VietsubMediaPlaybackService.HostName}/*",
-            CoreWebView2WebResourceContext.All);
+            CoreWebView2WebResourceContext.All,
+            CoreWebView2WebResourceRequestSourceKinds.All);
         coreWebView.WebResourceRequested += WebViewOnVietsubMediaRequested;
+        coreWebView.WebResourceResponseReceived += WebViewOnVietsubMediaResponseReceived;
 
         var settings = coreWebView.Settings;
         settings.IsWebMessageEnabled = true;
@@ -309,29 +329,233 @@ public partial class Form1 : Form
             return;
         }
 
-        string? rangeHeader = null;
-        try
+        var correlationId = Guid.NewGuid().ToString("N");
+        var resourceType = VietsubMediaPlaybackService.ClassifyResource(requestUri);
+        var method = eventArgs.Request.Method;
+        _vietsubMediaLog.Write(
+            correlationId,
+            resourceType,
+            method,
+            null,
+            null,
+            "filter");
+
+        var rangeHeader = ReadVietsubRangeHeader(
+            eventArgs.Request.Headers,
+            resourceType,
+            out var rangeHeaderExceptionType);
+        if (rangeHeaderExceptionType is not null)
         {
-            rangeHeader = eventArgs.Request.Headers.GetHeader("Range");
-        }
-        catch (ArgumentException)
-        {
+            _vietsubMediaLog.Write(
+                correlationId,
+                resourceType,
+                method,
+                null,
+                "vietsub_media_range_header_unavailable",
+                "request_headers",
+                rangeHeaderExceptionType);
         }
 
-        var response = _vietsubBridge?.TryOpenPlaybackRequest(
-            requestUri,
-            eventArgs.Request.Method,
-            rangeHeader);
-        response ??= new VietsubPlaybackResponse(
-            404,
-            "Not Found",
-            "Cache-Control: no-store\r\n",
-            Stream.Null);
-        eventArgs.Response = coreWebView.Environment.CreateWebResourceResponse(
+        VietsubPlaybackResponse response;
+        try
+        {
+            _vietsubMediaLog.Write(
+                correlationId,
+                resourceType,
+                method,
+                null,
+                null,
+                "bridge");
+            response = _vietsubBridge?.TryOpenPlaybackRequest(
+                requestUri,
+                method,
+                rangeHeader)
+                ?? VietsubMediaPlaybackService.Error(
+                    503,
+                    "Service Unavailable",
+                    "vietsub_media_bridge_unavailable",
+                    resourceType);
+        }
+        catch (Exception exception)
+        {
+            _vietsubMediaLog.Write(
+                correlationId,
+                resourceType,
+                method,
+                500,
+                "vietsub_media_request_failed",
+                "bridge",
+                exception.GetType().Name);
+            response = VietsubMediaPlaybackService.Error(
+                500,
+                "Internal Server Error",
+                "vietsub_media_request_failed",
+                resourceType);
+        }
+        _vietsubMediaLog.Write(
+            correlationId,
+            response.ResourceType,
+            method,
+            response.StatusCode,
+            response.ErrorCode,
+            "playback");
+        if (response.StatusCode >= 400)
+        {
+            PostVietsubMediaFailure(
+                response.ResourceType,
+                correlationId,
+                response.ErrorCode ?? "vietsub_media_unknown_error");
+        }
+        try
+        {
+            eventArgs.Response = CreateVietsubWebResourceResponse(
+                coreWebView.Environment,
+                response,
+                correlationId);
+            _vietsubMediaLog.Write(
+                correlationId,
+                response.ResourceType,
+                method,
+                response.StatusCode,
+                response.ErrorCode,
+                "response_creation");
+        }
+        catch (Exception exception)
+        {
+            response.Content.Dispose();
+            const string responseErrorCode = "vietsub_media_response_creation_failed";
+            _vietsubMediaLog.Write(
+                correlationId,
+                response.ResourceType,
+                method,
+                500,
+                responseErrorCode,
+                "response_creation",
+                exception.GetType().Name);
+            PostVietsubMediaFailure(response.ResourceType, correlationId, responseErrorCode);
+            eventArgs.Response = coreWebView.Environment.CreateWebResourceResponse(
+                Stream.Null,
+                500,
+                "Internal Server Error",
+                "Content-Length: 0\r\n" +
+                "Cache-Control: no-store\r\n" +
+                $"X-Vietsub-Error-Code: {responseErrorCode}\r\n" +
+                $"X-Vietsub-Correlation-Id: {correlationId}\r\n");
+        }
+    }
+
+    internal static CoreWebView2WebResourceResponse CreateVietsubWebResourceResponse(
+        CoreWebView2Environment environment,
+        VietsubPlaybackResponse response,
+        string? correlationId = null)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        ArgumentNullException.ThrowIfNull(response);
+        var webResponse = environment.CreateWebResourceResponse(
             response.Content,
             response.StatusCode,
             response.ReasonPhrase,
-            response.Headers);
+            string.Empty);
+        foreach (var header in response.Headers.Split(
+            ["\r\n", "\n"],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = header.IndexOf(':');
+            if (separator <= 0 || separator == header.Length - 1)
+            {
+                throw new InvalidDataException("Header media nội bộ không hợp lệ.");
+            }
+
+            webResponse.Headers.AppendHeader(
+                header[..separator].Trim(),
+                header[(separator + 1)..].Trim());
+        }
+        if (Guid.TryParseExact(correlationId, "N", out var parsedCorrelation))
+        {
+            webResponse.Headers.AppendHeader(
+                "X-Vietsub-Correlation-Id",
+                parsedCorrelation.ToString("N"));
+        }
+        return webResponse;
+    }
+
+    internal static string? ReadVietsubRangeHeader(
+        CoreWebView2HttpRequestHeaders headers,
+        string resourceType,
+        out string? exceptionType)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        exceptionType = null;
+        if (!string.Equals(
+            resourceType,
+            VietsubPlaybackResourceTypes.Video,
+            StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            return headers.Contains("Range")
+                ? headers.GetHeader("Range")
+                : null;
+        }
+        catch (Exception exception) when (exception is ArgumentException or COMException)
+        {
+            exceptionType = exception.GetType().Name;
+            return null;
+        }
+    }
+
+    internal static string ReadVietsubResponseHeader(
+        CoreWebView2HttpResponseHeaders headers,
+        string name)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        try
+        {
+            return headers.Contains(name) ? headers.GetHeader(name) : string.Empty;
+        }
+        catch (Exception exception) when (exception is ArgumentException or COMException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private void PostVietsubMediaFailure(
+        string resourceType,
+        string correlationId,
+        string errorCode) =>
+        PostHostMessage(
+            "vietsub.media.load.failed",
+            VietsubMediaLoadFailure.Create(resourceType, correlationId, errorCode));
+
+    private void WebViewOnVietsubMediaResponseReceived(
+        object? sender,
+        CoreWebView2WebResourceResponseReceivedEventArgs eventArgs)
+    {
+        if (!Uri.TryCreate(eventArgs.Request.Uri, UriKind.Absolute, out var requestUri)
+            || !requestUri.Host.Equals(VietsubMediaPlaybackService.HostName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var errorCode = ReadVietsubResponseHeader(
+            eventArgs.Response.Headers,
+            "X-Vietsub-Error-Code");
+        var correlationId = ReadVietsubResponseHeader(
+            eventArgs.Response.Headers,
+            "X-Vietsub-Correlation-Id");
+
+        var resourceType = VietsubMediaPlaybackService.ClassifyResource(requestUri);
+        _vietsubMediaLog.Write(
+            correlationId,
+            resourceType,
+            eventArgs.Request.Method,
+            eventArgs.Response.StatusCode,
+            errorCode,
+            "response_received");
     }
 
     private void WebViewOnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs eventArgs)
@@ -571,18 +795,29 @@ public partial class Form1 : Form
 
     private void PostJsonToWebView(string json)
     {
-        if (_closing || IsDisposed || _webView?.CoreWebView2 is null)
-        {
-            return;
-        }
-
         if (InvokeRequired)
         {
-            BeginInvoke(() => PostJsonToWebView(json));
+            try
+            {
+                BeginInvoke(() => PostJsonToWebView(json));
+            }
+            catch (ObjectDisposedException)
+            {
+                // The form closed before the queued WebView notification could be delivered.
+            }
+            catch (InvalidOperationException)
+            {
+                // The form handle was destroyed while a background job was reporting progress.
+            }
             return;
         }
 
-        _webView.CoreWebView2.PostWebMessageAsJson(json);
+        if (_closing || IsDisposed || _webView?.CoreWebView2 is not { } coreWebView)
+        {
+            return;
+        }
+
+        coreWebView.PostWebMessageAsJson(json);
     }
 
     private string? SelectVietsubMediaFile()

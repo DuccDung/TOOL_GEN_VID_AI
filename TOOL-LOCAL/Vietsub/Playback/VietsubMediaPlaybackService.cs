@@ -13,7 +13,17 @@ internal sealed record VietsubPlaybackResponse(
     int StatusCode,
     string ReasonPhrase,
     string Headers,
-    Stream Content);
+    Stream Content,
+    string ResourceType = VietsubPlaybackResourceTypes.Unknown,
+    string? ErrorCode = null);
+
+internal static class VietsubPlaybackResourceTypes
+{
+    public const string Unknown = "unknown";
+    public const string Video = "video";
+    public const string Thumbnail = "thumbnail";
+    public const string Waveform = "waveform";
+}
 
 internal static class VietsubLocalMediaRange
 {
@@ -87,19 +97,53 @@ internal static class VietsubLocalMediaRange
     }
 }
 
-internal sealed class VietsubMediaPlaybackService(
-    VietsubMediaImportService mediaImportService,
-    VietsubTimelineThumbnailService? thumbnailService = null)
+internal sealed class VietsubMediaPlaybackService
 {
+    private static readonly byte[] JpegMagic = [0xff, 0xd8, 0xff];
+    private static readonly byte[] PngMagic = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    internal const int MaximumThumbnailBytes = 4 * 1024 * 1024;
+    internal const int MaximumWaveformBytes = 8 * 1024 * 1024;
+    private readonly VietsubMediaImportService _mediaImportService;
+    private readonly VietsubTimelineThumbnailService? _thumbnailService;
+    private readonly VietsubTimelineWaveformService? _waveformService;
+
+    public VietsubMediaPlaybackService(
+        VietsubMediaImportService mediaImportService,
+        VietsubTimelineThumbnailService? thumbnailService = null,
+        VietsubTimelineWaveformService? waveformService = null)
+    {
+        _mediaImportService = mediaImportService;
+        _thumbnailService = thumbnailService;
+        _waveformService = waveformService;
+    }
+
     public const string HostName = "vietsub-media.app.local";
 
     public static string CreatePlaybackUrl(Guid projectId, Guid mediaId) =>
         $"https://{HostName}/projects/{projectId:N}/media/{mediaId:N}";
 
-    public static string CreateThumbnailUrl(Guid projectId, Guid mediaId, int index) =>
-        $"https://{HostName}/projects/{projectId:N}/media/{mediaId:N}/thumbnails/{index:D3}.jpg";
+    public static string CreateThumbnailUrl(
+        Guid projectId,
+        Guid mediaId,
+        string sourceSha256,
+        int index) =>
+        $"https://{HostName}/projects/{projectId:N}/media/{mediaId:N}/thumbnails/" +
+        $"v{VietsubTimelineThumbnailService.ProfileVersion}/{NormalizeSha256(sourceSha256)}/{index:D3}.jpg";
 
-    public VietsubPlaybackResponse? Open(
+    public static string CreateWaveformUrl(Guid projectId, Guid mediaId, string sourceSha256) =>
+        $"https://{HostName}/projects/{projectId:N}/media/{mediaId:N}/waveform/" +
+        $"v{VietsubTimelineWaveformService.ProfileVersion}/{NormalizeSha256(sourceSha256)}/source.png";
+
+    internal static string ClassifyResource(Uri requestUri) =>
+        TryParseThumbnailUrl(requestUri, out _, out _, out _, out _, out _)
+            ? VietsubPlaybackResourceTypes.Thumbnail
+            : TryParseWaveformUrl(requestUri, out _, out _, out _, out _)
+                ? VietsubPlaybackResourceTypes.Waveform
+                : TryParseUrl(requestUri, out _, out _)
+                    ? VietsubPlaybackResourceTypes.Video
+                    : VietsubPlaybackResourceTypes.Unknown;
+
+    public VietsubPlaybackResponse Open(
         Uri requestUri,
         string method,
         string? rangeHeader,
@@ -107,30 +151,67 @@ internal sealed class VietsubMediaPlaybackService(
     {
         ArgumentNullException.ThrowIfNull(requestUri);
         ArgumentNullException.ThrowIfNull(activeProject);
-        if (TryParseThumbnailUrl(requestUri, out var thumbnailProjectId, out var thumbnailMediaId, out var index))
+        if (!IsSupportedMethod(method))
+        {
+            return Error(
+                400,
+                "Bad Request",
+                "vietsub_media_method_invalid",
+                VietsubPlaybackResourceTypes.Unknown,
+                "Allow: GET, HEAD\r\n");
+        }
+
+        if (TryParseWaveformUrl(
+            requestUri,
+            out var waveformProjectId,
+            out var waveformMediaId,
+            out var waveformProfileVersion,
+            out var waveformSourceSha256))
+        {
+            return OpenWaveform(
+                method,
+                activeProject,
+                waveformProjectId,
+                waveformMediaId,
+                waveformProfileVersion,
+                waveformSourceSha256);
+        }
+        if (TryParseThumbnailUrl(
+            requestUri,
+            out var thumbnailProjectId,
+            out var thumbnailMediaId,
+            out var thumbnailProfileVersion,
+            out var thumbnailSourceSha256,
+            out var index))
         {
             return OpenThumbnail(
                 method,
                 activeProject,
                 thumbnailProjectId,
                 thumbnailMediaId,
+                thumbnailProfileVersion,
+                thumbnailSourceSha256,
                 index);
         }
-        if (!TryParseUrl(requestUri, out var projectId, out var mediaId)
-            || projectId != activeProject.ProjectId
-            || activeProject.SourceVideo is not { } media
-            || media.MediaId != mediaId)
+        if (!TryParseUrl(requestUri, out var projectId, out var mediaId))
         {
-            return null;
+            return Error(
+                400,
+                "Bad Request",
+                "vietsub_media_route_invalid",
+                VietsubPlaybackResourceTypes.Unknown);
         }
 
-        if (!string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase))
+        if (!TryGetScopedMedia(activeProject, projectId, mediaId, out var media))
         {
-            return Error(405, "Method Not Allowed", "Allow: GET, HEAD\r\n");
+            return Error(
+                403,
+                "Forbidden",
+                "vietsub_media_context_mismatch",
+                VietsubPlaybackResourceTypes.Video);
         }
 
-        var status = mediaImportService.GetSourceStatus(projectId, media);
+        var status = _mediaImportService.GetSourceStatus(projectId, media);
         if (!status.Available || status.Changed || string.IsNullOrWhiteSpace(status.EffectivePath))
         {
             var issueCode = status.Changed
@@ -144,8 +225,8 @@ internal sealed class VietsubMediaPlaybackService(
             return Error(
                 409,
                 "Media Source Unavailable",
-                "Cache-Control: no-store\r\n" +
-                $"X-Vietsub-Error-Code: {issueCode}\r\n" +
+                issueCode,
+                VietsubPlaybackResourceTypes.Video,
                 "X-Vietsub-Recovery-Action: relink-or-copy-source\r\n");
         }
 
@@ -162,7 +243,11 @@ internal sealed class VietsubMediaPlaybackService(
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return null;
+            return Error(
+                500,
+                "Internal Server Error",
+                "vietsub_media_stream_unreadable",
+                VietsubPlaybackResourceTypes.Video);
         }
 
         var totalLength = source.Length;
@@ -172,6 +257,8 @@ internal sealed class VietsubMediaPlaybackService(
             return Error(
                 416,
                 "Range Not Satisfiable",
+                "vietsub_media_range_invalid",
+                VietsubPlaybackResourceTypes.Video,
                 $"Accept-Ranges: bytes\r\nContent-Range: bytes */{totalLength}\r\n");
         }
 
@@ -193,7 +280,8 @@ internal sealed class VietsubMediaPlaybackService(
             partial ? 206 : 200,
             partial ? "Partial Content" : "OK",
             headers,
-            content);
+            content,
+            VietsubPlaybackResourceTypes.Video);
     }
 
     internal static bool TryParseUrl(Uri uri, out Guid projectId, out Guid mediaId)
@@ -226,10 +314,14 @@ internal sealed class VietsubMediaPlaybackService(
         Uri uri,
         out Guid projectId,
         out Guid mediaId,
+        out int profileVersion,
+        out string sourceSha256,
         out int index)
     {
         projectId = Guid.Empty;
         mediaId = Guid.Empty;
+        profileVersion = -1;
+        sourceSha256 = string.Empty;
         index = -1;
         if (!uri.IsAbsoluteUri
             || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
@@ -246,77 +338,373 @@ internal sealed class VietsubMediaPlaybackService(
             return false;
         }
         var parts = unescapedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length == 6
+        return parts.Length == 8
             && string.Equals(parts[0], "projects", StringComparison.Ordinal)
             && Guid.TryParseExact(parts[1], "N", out projectId)
             && string.Equals(parts[2], "media", StringComparison.Ordinal)
             && Guid.TryParseExact(parts[3], "N", out mediaId)
             && string.Equals(parts[4], "thumbnails", StringComparison.Ordinal)
-            && parts[5].EndsWith(".jpg", StringComparison.Ordinal)
+            && TryParseProfileVersion(parts[5], out profileVersion)
+            && IsSha256(parts[6])
+            && AssignNormalizedSha256(parts[6], out sourceSha256)
+            && parts[7].EndsWith(".jpg", StringComparison.Ordinal)
             && int.TryParse(
-                parts[5].AsSpan(0, parts[5].Length - 4),
+                parts[7].AsSpan(0, parts[7].Length - 4),
                 NumberStyles.None,
                 CultureInfo.InvariantCulture,
                 out index)
             && index is >= 0 and < VietsubTimelineThumbnailService.ThumbnailCount;
     }
 
-    private VietsubPlaybackResponse? OpenThumbnail(
+    internal static bool TryParseWaveformUrl(
+        Uri uri,
+        out Guid projectId,
+        out Guid mediaId,
+        out int profileVersion,
+        out string sourceSha256)
+    {
+        projectId = Guid.Empty;
+        mediaId = Guid.Empty;
+        profileVersion = -1;
+        sourceSha256 = string.Empty;
+        if (!uri.IsAbsoluteUri
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uri.Host, HostName, StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+        {
+            return false;
+        }
+
+        var unescapedPath = uri.GetComponents(UriComponents.Path, UriFormat.Unescaped);
+        if (unescapedPath.Contains('\\') || unescapedPath.Contains("..", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var parts = unescapedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 8
+            && string.Equals(parts[0], "projects", StringComparison.Ordinal)
+            && Guid.TryParseExact(parts[1], "N", out projectId)
+            && string.Equals(parts[2], "media", StringComparison.Ordinal)
+            && Guid.TryParseExact(parts[3], "N", out mediaId)
+            && string.Equals(parts[4], "waveform", StringComparison.Ordinal)
+            && TryParseProfileVersion(parts[5], out profileVersion)
+            && IsSha256(parts[6])
+            && AssignNormalizedSha256(parts[6], out sourceSha256)
+            && string.Equals(parts[7], "source.png", StringComparison.Ordinal);
+    }
+
+    private VietsubPlaybackResponse OpenThumbnail(
         string method,
         VietsubProjectManifest activeProject,
         Guid projectId,
         Guid mediaId,
+        int profileVersion,
+        string sourceSha256,
         int index)
     {
-        if (thumbnailService is null
-            || projectId != activeProject.ProjectId
-            || activeProject.SourceVideo is not { } media
-            || media.MediaId != mediaId)
+        if (!TryGetScopedMedia(activeProject, projectId, mediaId, out var media))
         {
-            return null;
+            return Error(
+                403,
+                "Forbidden",
+                "vietsub_media_context_mismatch",
+                VietsubPlaybackResourceTypes.Thumbnail);
         }
-        if (!string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase))
+        if (_thumbnailService is null)
         {
-            return Error(405, "Method Not Allowed", "Allow: GET, HEAD\r\n");
+            return Error(
+                500,
+                "Internal Server Error",
+                "vietsub_thumbnail_service_unavailable",
+                VietsubPlaybackResourceTypes.Thumbnail);
+        }
+        if (profileVersion != VietsubTimelineThumbnailService.ProfileVersion
+            || !string.Equals(sourceSha256, media.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return Error(
+                409,
+                "Conflict",
+                "vietsub_media_artifact_stale",
+                VietsubPlaybackResourceTypes.Thumbnail,
+                "X-Vietsub-Recovery-Action: refresh-artifact-state\r\n");
         }
 
-        var path = thumbnailService.ResolveExistingPath(projectId, media.Sha256, index);
-        if (path is null)
+        var sourceConflict = GetArtifactSourceConflict(projectId, media, VietsubPlaybackResourceTypes.Thumbnail);
+        if (sourceConflict is not null)
         {
-            return null;
+            return sourceConflict;
         }
+
+        var path = _thumbnailService.ResolveArtifactPath(projectId, media.Sha256, index);
+        if (path is not null
+            && !File.Exists(path)
+            && _thumbnailService.HasStaleArtifacts(projectId, media.Sha256))
+        {
+            return Error(
+                409,
+                "Conflict",
+                "vietsub_media_artifact_stale",
+                VietsubPlaybackResourceTypes.Thumbnail,
+                "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+        }
+
+        return OpenImageArtifact(
+            method,
+            path,
+            "image/jpeg",
+            JpegMagic,
+            MaximumThumbnailBytes,
+            VietsubPlaybackResourceTypes.Thumbnail,
+            "vietsub_thumbnail_artifact_missing",
+            "vietsub_thumbnail_artifact_invalid");
+    }
+
+    private VietsubPlaybackResponse OpenWaveform(
+        string method,
+        VietsubProjectManifest activeProject,
+        Guid projectId,
+        Guid mediaId,
+        int profileVersion,
+        string sourceSha256)
+    {
+        if (!TryGetScopedMedia(activeProject, projectId, mediaId, out var media))
+        {
+            return Error(
+                403,
+                "Forbidden",
+                "vietsub_media_context_mismatch",
+                VietsubPlaybackResourceTypes.Waveform);
+        }
+        if (_waveformService is null)
+        {
+            return Error(
+                500,
+                "Internal Server Error",
+                "vietsub_waveform_service_unavailable",
+                VietsubPlaybackResourceTypes.Waveform);
+        }
+        if (profileVersion != VietsubTimelineWaveformService.ProfileVersion
+            || !string.Equals(sourceSha256, media.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return Error(
+                409,
+                "Conflict",
+                "vietsub_media_artifact_stale",
+                VietsubPlaybackResourceTypes.Waveform,
+                "X-Vietsub-Recovery-Action: refresh-artifact-state\r\n");
+        }
+
+        var sourceConflict = GetArtifactSourceConflict(projectId, media, VietsubPlaybackResourceTypes.Waveform);
+        if (sourceConflict is not null)
+        {
+            return sourceConflict;
+        }
+
+        var path = _waveformService.ResolveArtifactPath(projectId, media.Sha256);
+        if (path is not null
+            && !File.Exists(path)
+            && _waveformService.HasStaleArtifacts(projectId, media.Sha256))
+        {
+            return Error(
+                409,
+                "Conflict",
+                "vietsub_media_artifact_stale",
+                VietsubPlaybackResourceTypes.Waveform,
+                "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+        }
+
+        return OpenImageArtifact(
+            method,
+            path,
+            "image/png",
+            PngMagic,
+            MaximumWaveformBytes,
+            VietsubPlaybackResourceTypes.Waveform,
+            "vietsub_waveform_artifact_missing",
+            "vietsub_waveform_artifact_invalid");
+    }
+
+    private VietsubPlaybackResponse OpenImageArtifact(
+        string method,
+        string? path,
+        string contentType,
+        ReadOnlySpan<byte> magic,
+        int maximumBytes,
+        string resourceType,
+        string missingErrorCode,
+        string invalidErrorCode)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Error(
+                409,
+                "Conflict",
+                "vietsub_media_artifact_stale",
+                resourceType,
+                "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+        }
+
+        byte[] bytes;
         try
         {
-            var source = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            var length = source.Length;
-            var content = string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase)
-                ? DisposeAndReturnEmpty(source)
-                : source;
-            return new(
-                200,
-                "OK",
-                "Content-Type: image/jpeg\r\n" +
-                $"Content-Length: {length}\r\n" +
-                "Cache-Control: private, max-age=31536000, immutable\r\n" +
-                "Access-Control-Allow-Origin: https://app.local\r\n" +
-                "Cross-Origin-Resource-Policy: same-site\r\n",
-                content);
+            var info = new FileInfo(path);
+            if (!info.Exists)
+            {
+                return Error(
+                    404,
+                    "Not Found",
+                    missingErrorCode,
+                    resourceType,
+                    "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+            }
+            if (info.Length < magic.Length || info.Length > maximumBytes)
+            {
+                return Error(
+                    500,
+                    "Internal Server Error",
+                    invalidErrorCode,
+                    resourceType,
+                    "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+            }
+            bytes = File.ReadAllBytes(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return Error(
+                404,
+                "Not Found",
+                missingErrorCode,
+                resourceType,
+                "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return Error(
+                404,
+                "Not Found",
+                missingErrorCode,
+                resourceType,
+                "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return null;
+            return Error(500, "Internal Server Error", "vietsub_media_artifact_unreadable", resourceType);
         }
+
+        if (bytes.Length < magic.Length
+            || bytes.Length > maximumBytes
+            || !bytes.AsSpan(0, magic.Length).SequenceEqual(magic))
+        {
+            return Error(
+                500,
+                "Internal Server Error",
+                invalidErrorCode,
+                resourceType,
+                "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+        }
+
+        var content = string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase)
+            ? Stream.Null
+            : new MemoryStream(bytes, writable: false);
+        return new(
+            200,
+            "OK",
+            $"Content-Type: {contentType}\r\n" +
+            $"Content-Length: {bytes.Length}\r\n" +
+            "Cache-Control: private, max-age=31536000, immutable\r\n" +
+            "Access-Control-Allow-Origin: https://app.local\r\n" +
+            "Cross-Origin-Resource-Policy: same-site\r\n" +
+            "X-Content-Type-Options: nosniff\r\n" +
+            "Vary: Origin\r\n",
+            content,
+            resourceType);
     }
 
-    private static VietsubPlaybackResponse Error(int status, string reason, string headers) =>
-        new(status, reason, headers, Stream.Null);
+    internal static VietsubPlaybackResponse Error(
+        int status,
+        string reason,
+        string errorCode,
+        string resourceType = VietsubPlaybackResourceTypes.Unknown,
+        string additionalHeaders = "") =>
+        new(
+            status,
+            reason,
+            "Content-Length: 0\r\n" +
+            "Cache-Control: no-store\r\n" +
+            $"X-Vietsub-Error-Code: {errorCode}\r\n" +
+            additionalHeaders,
+            Stream.Null,
+            resourceType,
+            errorCode);
+
+    private VietsubPlaybackResponse? GetArtifactSourceConflict(
+        Guid projectId,
+        VietsubMediaReference media,
+        string resourceType)
+    {
+        var status = _mediaImportService.GetSourceStatus(projectId, media);
+        if (status.Available && !status.Changed && !string.IsNullOrWhiteSpace(status.EffectivePath))
+        {
+            return null;
+        }
+
+        return Error(
+            409,
+            "Conflict",
+            status.Changed ? "vietsub_media_source_changed" : "vietsub_media_artifact_stale",
+            resourceType,
+            "X-Vietsub-Recovery-Action: regenerate-artifact\r\n");
+    }
+
+    private static bool TryGetScopedMedia(
+        VietsubProjectManifest activeProject,
+        Guid projectId,
+        Guid mediaId,
+        out VietsubMediaReference media)
+    {
+        if (projectId != activeProject.ProjectId
+            || activeProject.SourceVideo is not { } sourceVideo
+            || sourceVideo.MediaId != mediaId)
+        {
+            media = null!;
+            return false;
+        }
+
+        media = sourceVideo;
+        return true;
+    }
+
+    private static bool IsSupportedMethod(string method) =>
+        string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeSha256(string value) =>
+        IsSha256(value)
+            ? value.ToLowerInvariant()
+            : throw new ArgumentException("SHA-256 của media không hợp lệ.", nameof(value));
+
+    private static bool AssignNormalizedSha256(string value, out string normalized)
+    {
+        normalized = value.ToLowerInvariant();
+        return true;
+    }
+
+    private static bool TryParseProfileVersion(string value, out int profileVersion)
+    {
+        profileVersion = -1;
+        return value.Length > 1
+            && value[0] == 'v'
+            && int.TryParse(
+                value.AsSpan(1),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out profileVersion)
+            && profileVersion > 0;
+    }
+
+    private static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(Uri.IsHexDigit);
 
     private static Stream DisposeAndReturnEmpty(Stream stream)
     {
