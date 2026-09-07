@@ -50,6 +50,8 @@ public partial class VideoFactoryDbContext : DbContext
 
     public virtual DbSet<ScenePrompt> ScenePrompts { get; set; }
 
+    public virtual DbSet<SpeechVerificationReport> SpeechVerificationReports { get; set; }
+
     public virtual DbSet<SchemaVersion> SchemaVersions { get; set; }
 
     public virtual DbSet<Script> Scripts { get; set; }
@@ -65,6 +67,10 @@ public partial class VideoFactoryDbContext : DbContext
     public virtual DbSet<VideoGeneration> VideoGenerations { get; set; }
 
     public virtual DbSet<VoiceGeneration> VoiceGenerations { get; set; }
+
+    public virtual DbSet<VoiceProfile> VoiceProfiles { get; set; }
+
+    public virtual DbSet<VoiceProfileVersion> VoiceProfileVersions { get; set; }
 
     public virtual DbSet<VwProjectProgress> VwProjectProgresses { get; set; }
 
@@ -131,6 +137,8 @@ public partial class VideoFactoryDbContext : DbContext
                 .IsUnicode(false);
             entity.Property(e => e.Name).HasMaxLength(200);
             entity.Property(e => e.Role).HasMaxLength(200);
+            entity.Property(e => e.VoiceCode).HasMaxLength(100);
+            entity.Property(e => e.VoiceSpeakingRate).HasColumnType("decimal(6, 3)");
             entity.Property(e => e.RowVersion)
                 .IsRowVersion()
                 .IsConcurrencyToken();
@@ -143,6 +151,10 @@ public partial class VideoFactoryDbContext : DbContext
                 .HasForeignKey(d => d.ProjectId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_Characters_Projects");
+            entity.HasOne(d => d.ApprovedVoiceProfileVersion).WithMany()
+                .HasForeignKey(d => d.ApprovedVoiceProfileVersionId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_Characters_ApprovedVoiceProfileVersion");
         });
 
         modelBuilder.Entity<CharacterReference>(entity =>
@@ -522,6 +534,14 @@ public partial class VideoFactoryDbContext : DbContext
                 .HasDefaultValue("vi-VN", "DF_Projects_Language");
             entity.Property(e => e.VoiceCode).HasMaxLength(100);
             entity.Property(e => e.VoiceSpeakingRate).HasColumnType("decimal(6, 3)");
+            entity.Property(e => e.SpeechProductionPolicy)
+                .HasMaxLength(40)
+                .IsUnicode(false)
+                .HasDefaultValue("ProviderNativeVerified", "DF_Projects_SpeechProductionPolicy");
+            entity.HasOne(d => d.ApprovedNarratorVoiceProfileVersion).WithMany()
+                .HasForeignKey(d => d.ApprovedNarratorVoiceProfileVersionId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_Projects_ApprovedNarratorVoiceProfileVersion");
             entity.Property(e => e.VideoProviderCode)
                 .HasMaxLength(80)
                 .IsUnicode(false);
@@ -763,6 +783,10 @@ public partial class VideoFactoryDbContext : DbContext
                 .HasMaxLength(30)
                 .IsUnicode(false)
                 .HasDefaultValue("Pending", "DF_Scenes_Status");
+            entity.Property(e => e.SpeechStatus)
+                .HasMaxLength(40)
+                .IsUnicode(false)
+                .HasDefaultValue("SpeechNotRequired", "DF_Scenes_SpeechStatus");
             entity.Property(e => e.StoryBeatId)
                 .HasMaxLength(100)
                 .IsUnicode(false);
@@ -775,6 +799,14 @@ public partial class VideoFactoryDbContext : DbContext
             entity.HasOne(d => d.ApprovedGeneration).WithMany(p => p.Scenes)
                 .HasForeignKey(d => d.ApprovedGenerationId)
                 .HasConstraintName("FK_Scenes_ApprovedGeneration");
+
+            entity.HasOne(d => d.ApprovedVoiceGeneration).WithMany()
+                .HasForeignKey(d => d.ApprovedVoiceGenerationId)
+                .HasConstraintName("FK_Scenes_ApprovedVoiceGeneration");
+
+            entity.HasOne(d => d.ApprovedRenderMediaAsset).WithMany()
+                .HasForeignKey(d => d.ApprovedRenderMediaAssetId)
+                .HasConstraintName("FK_Scenes_ApprovedRenderMediaAsset");
 
             entity.HasOne(d => d.GenerationDependencyScene).WithMany(p => p.InverseGenerationDependencyScene)
                 .HasForeignKey(d => d.GenerationDependencySceneId)
@@ -1112,6 +1144,15 @@ public partial class VideoFactoryDbContext : DbContext
                 .IsUnicode(false)
                 .IsFixedLength();
             entity.Property(e => e.ProviderVoiceCode).HasMaxLength(100);
+            entity.Property(e => e.VoiceSnapshotHash)
+                .HasMaxLength(64)
+                .IsUnicode(false)
+                .IsFixedLength();
+            entity.Property(e => e.VerificationStatus)
+                .HasMaxLength(30)
+                .IsUnicode(false)
+                .HasDefaultValue("NotRequested", "DF_VoiceGenerations_VerificationStatus");
+            entity.Property(e => e.ApprovedAtUtc).HasPrecision(3);
             entity.Property(e => e.RowVersion)
                 .IsRowVersion()
                 .IsConcurrencyToken();
@@ -1147,6 +1188,114 @@ public partial class VideoFactoryDbContext : DbContext
                 .HasForeignKey(d => d.ScriptId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_VoiceGenerations_Scripts");
+
+            entity.HasOne(d => d.VoiceProfileVersion).WithMany()
+                .HasForeignKey(d => d.VoiceProfileVersionId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_VoiceGenerations_VoiceProfileVersion");
+        });
+
+        modelBuilder.Entity<VoiceProfile>(entity =>
+        {
+            entity.ToTable("VoiceProfiles", "vf");
+            entity.HasIndex(e => e.ProjectId, "UX_VoiceProfiles_ProjectNarrator")
+                .IsUnique()
+                .HasFilter("([Scope] = 'ProjectNarrator')");
+            entity.HasIndex(e => new { e.ProjectId, e.CharacterId }, "UX_VoiceProfiles_Character")
+                .IsUnique()
+                .HasFilter("([Scope] = 'Character' AND [CharacterId] IS NOT NULL)");
+            entity.Property(e => e.VoiceProfileId)
+                .HasDefaultValueSql("(newsequentialid())", "DF_VoiceProfiles_Id");
+            entity.Property(e => e.Scope).HasMaxLength(30).IsUnicode(false);
+            entity.Property(e => e.CreatedAtUtc)
+                .HasPrecision(3)
+                .HasDefaultValueSql("(sysutcdatetime())", "DF_VoiceProfiles_CreatedAtUtc");
+            entity.Property(e => e.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasOne(d => d.Project).WithMany()
+                .HasForeignKey(d => d.ProjectId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_VoiceProfiles_Projects");
+            entity.HasOne(d => d.Character).WithMany()
+                .HasForeignKey(d => d.CharacterId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_VoiceProfiles_Characters");
+        });
+
+        modelBuilder.Entity<VoiceProfileVersion>(entity =>
+        {
+            entity.ToTable("VoiceProfileVersions", "vf");
+            entity.HasIndex(e => new { e.VoiceProfileId, e.Version }, "UQ_VoiceProfileVersions_Profile_Version").IsUnique();
+            entity.HasIndex(e => e.VoiceProfileId, "UX_VoiceProfileVersions_Approved")
+                .IsUnique()
+                .HasFilter("([Status] = 'Approved')");
+            entity.HasIndex(e => e.SnapshotHash, "IX_VoiceProfileVersions_SnapshotHash");
+            entity.Property(e => e.VoiceProfileVersionId)
+                .HasDefaultValueSql("(newsequentialid())", "DF_VoiceProfileVersions_Id");
+            entity.Property(e => e.ProviderCode).HasMaxLength(80).IsUnicode(false);
+            entity.Property(e => e.ModelCode).HasMaxLength(200);
+            entity.Property(e => e.VoiceCode).HasMaxLength(100);
+            entity.Property(e => e.ProviderVoiceCode).HasMaxLength(100);
+            entity.Property(e => e.LanguageCode).HasMaxLength(10).IsUnicode(false);
+            entity.Property(e => e.SpeakingRate).HasColumnType("decimal(6, 3)");
+            entity.Property(e => e.SnapshotHash).HasMaxLength(64).IsUnicode(false).IsFixedLength();
+            entity.Property(e => e.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(e => e.CreatedAtUtc).HasPrecision(3);
+            entity.Property(e => e.ApprovedAtUtc).HasPrecision(3);
+            entity.Property(e => e.SupersededAtUtc).HasPrecision(3);
+            entity.Property(e => e.PreviewSha256).HasMaxLength(64).IsUnicode(false).IsFixedLength();
+            entity.Property(e => e.PreviewExpiresAtUtc).HasPrecision(3);
+            entity.Property(e => e.ApprovedByUserId).HasMaxLength(450);
+            entity.Property(e => e.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasOne(d => d.VoiceProfile).WithMany(p => p.Versions)
+                .HasForeignKey(d => d.VoiceProfileId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_VoiceProfileVersions_VoiceProfiles");
+            entity.HasOne(d => d.PreviewProviderRequest).WithMany()
+                .HasForeignKey(d => d.PreviewProviderRequestId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_VoiceProfileVersions_PreviewProviderRequest");
+        });
+
+        modelBuilder.Entity<SpeechVerificationReport>(entity =>
+        {
+            entity.ToTable("SpeechVerificationReports", "vf");
+
+            entity.HasIndex(e => new { e.SceneId, e.CreatedAtUtc }, "IX_SpeechVerificationReports_Scene_Created")
+                .IsDescending(false, true);
+            entity.HasIndex(e => new { e.ProjectId, e.ExpectedSpeechHash, e.MediaSha256 }, "IX_SpeechVerificationReports_Project_Snapshot");
+            entity.HasIndex(e => e.ProviderRequestId, "UQ_SpeechVerificationReports_ProviderRequest").IsUnique();
+
+            entity.Property(e => e.SpeechVerificationReportId)
+                .HasDefaultValueSql("(newsequentialid())", "DF_SpeechVerificationReports_Id");
+            entity.Property(e => e.ExpectedSpeechHash)
+                .HasMaxLength(64)
+                .IsUnicode(false)
+                .IsFixedLength();
+            entity.Property(e => e.MediaSha256)
+                .HasMaxLength(64)
+                .IsUnicode(false)
+                .IsFixedLength();
+            entity.Property(e => e.WordErrorRate).HasColumnType("decimal(7, 6)");
+            entity.Property(e => e.CharacterErrorRate).HasColumnType("decimal(7, 6)");
+            entity.Property(e => e.RequiredTermRecall).HasColumnType("decimal(7, 6)");
+            entity.Property(e => e.RequiredTermsJson).HasDefaultValue("[]", "DF_SpeechVerificationReports_RequiredTermsJson");
+            entity.Property(e => e.MissingTermsJson).HasDefaultValue("[]", "DF_SpeechVerificationReports_MissingTermsJson");
+            entity.Property(e => e.Status)
+                .HasMaxLength(30)
+                .IsUnicode(false)
+                .HasDefaultValue("Pending", "DF_SpeechVerificationReports_Status");
+            entity.Property(e => e.ReviewApproved)
+                .HasDefaultValue(false, "DF_SpeechVerificationReports_ReviewApproved");
+            entity.Property(e => e.ReviewReason).HasMaxLength(1000);
+            entity.Property(e => e.ReviewedByUserId).HasMaxLength(450);
+            entity.Property(e => e.ReviewedAtUtc).HasPrecision(3);
+            entity.Property(e => e.CreatedAtUtc)
+                .HasPrecision(3)
+                .HasDefaultValueSql("(sysutcdatetime())", "DF_SpeechVerificationReports_CreatedAtUtc");
+            entity.Property(e => e.CompletedAtUtc).HasPrecision(3);
+            entity.Property(e => e.RowVersion)
+                .IsRowVersion()
+                .IsConcurrencyToken();
         });
 
         modelBuilder.Entity<VwProjectProgress>(entity =>

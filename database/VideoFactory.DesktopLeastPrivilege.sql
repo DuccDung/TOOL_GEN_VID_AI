@@ -21,6 +21,23 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[vf] TO [VideoMakerDesktopRole];
 /* Provider catalog is readable for display, never mutable from Desktop. */
 DENY INSERT, UPDATE, DELETE ON OBJECT::[vf].[Providers] TO [VideoMakerDesktopRole];
 DENY INSERT, UPDATE, DELETE ON OBJECT::[vf].[ProviderModels] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[vf].[SpeechVerificationReports]', N'U') IS NOT NULL
+BEGIN
+    GRANT SELECT ON OBJECT::[vf].[SpeechVerificationReports] TO [VideoMakerDesktopRole];
+    DENY INSERT, UPDATE, DELETE ON OBJECT::[vf].[SpeechVerificationReports] TO [VideoMakerDesktopRole];
+END;
+
+IF OBJECT_ID(N'[vf].[VoiceProfiles]', N'U') IS NOT NULL
+BEGIN
+    GRANT SELECT ON OBJECT::[vf].[VoiceProfiles] TO [VideoMakerDesktopRole];
+    DENY INSERT, UPDATE, DELETE ON OBJECT::[vf].[VoiceProfiles] TO [VideoMakerDesktopRole];
+END;
+
+IF OBJECT_ID(N'[vf].[VoiceProfileVersions]', N'U') IS NOT NULL
+BEGIN
+    GRANT SELECT ON OBJECT::[vf].[VoiceProfileVersions] TO [VideoMakerDesktopRole];
+    DENY INSERT, UPDATE, DELETE ON OBJECT::[vf].[VoiceProfileVersions] TO [VideoMakerDesktopRole];
+END;
 DENY INSERT, UPDATE, DELETE ON OBJECT::[vf].[CostRates] TO [VideoMakerDesktopRole];
 
 /* AI gateway request/cost truth is server-owned. */

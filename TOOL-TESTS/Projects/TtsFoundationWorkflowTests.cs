@@ -1,4 +1,5 @@
 using TOOL_LOCAL.Projects;
+using TOOL_SERVER.Generation;
 using TOOL_SHARED.Contracts.Generation;
 
 namespace TOOL_TESTS.Projects;
@@ -38,6 +39,18 @@ public sealed class TtsFoundationWorkflowTests
     }
 
     [Fact]
+    public void CanonicalVoiceConfiguration_DoesNotRequireSpeechVerification()
+    {
+        var options = new SpeechSynchronizationOptions
+        {
+            CanonicalVoiceEnabled = true,
+            SpeechVerificationEnabled = false
+        };
+
+        options.Validate();
+    }
+
+    [Fact]
     public void DefaultWebWorkflow_UsesProviderNativeAudioWithoutRemovingLegacyTtsStorage()
     {
         var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
@@ -48,8 +61,11 @@ public sealed class TtsFoundationWorkflowTests
         Assert.Contains("scene.native-audio.approve", bridge);
         Assert.Contains("\"ProviderNative\"", service);
         Assert.Contains("Provider Native Audio", app);
-        Assert.DoesNotContain("openAiVoiceReady", app);
-        Assert.DoesNotContain("voiceSpeakingRate", app);
+        Assert.Contains("openAiVoiceReady", app);
+        Assert.Contains("canonicalVoiceReady", app);
+        Assert.Contains("speechProductionPolicy", app);
+        Assert.Contains("voiceSpeakingRate", app);
+        Assert.Contains("Canonical Voice", app);
         Assert.Contains("GeneratedVoiceOutputs", leastPrivilege);
         Assert.DoesNotContain("api.openai.com", app, StringComparison.OrdinalIgnoreCase);
     }

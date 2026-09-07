@@ -1,47 +1,40 @@
 # Hướng dẫn AI agent — database
 
-Áp dụng thêm `../AGENTS.md`.
+Áp dụng thêm `../AGENTS.md` và đọc `../TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md` trước mọi thay đổi hoặc thực thi SQL.
 
-## Vai trò các script
+## Schema
 
-- `VideoFactory.Initial.sql`: bootstrap đầy đủ cho database mới và chứa các bước nâng cấp lịch sử cần thiết.
-- `VideoFactory.4.0.0.OrganizationAiGateway.sql`: migration idempotent sang AI Gateway theo tổ chức.
-- `VideoFactory.DesktopLeastPrivilege.sql`: tạo role quyền tối thiểu cho desktop trong giai đoạn còn truy cập workflow trực tiếp.
+- `auth`: Identity, session, device, license, payment và Data Protection keys.
+- `ai`: organization, membership, credential, budget, reservation, ledger, audit và seat provisioning.
+- `vf`: project/workflow, asset, provider catalog/model/rate/request và render.
+- `vs`: Vietsub project registry; media/subtitle content vẫn ở workspace local.
 
-Schema chính:
+## Migration
 
-- `auth`: Identity, session, device, license và Data Protection keys.
-- `ai`: organization, membership, credential version, budget period, reservation, usage ledger và audit.
-- `vf`: project/workflow, provider catalog/model/rate và provider request log.
+- `VideoFactory.Initial.sql` khởi tạo database.
+- Migration versioned từ `4.0.0` đến `4.1.5` chạy theo thứ tự số trong runbook.
+- `VideoFactory.DesktopLeastPrivilege.sql` chạy sau cùng để áp quyền desktop.
+- Không sửa migration đã có khả năng được triển khai. Tạo file version mới và ghi version idempotent.
 
-## Bất biến dữ liệu
+## Bất biến
 
-- `OrganizationId` phải đi cùng project/provider request/budget/usage để truy vết tenant.
-- Idempotency generation là duy nhất trong phạm vi organization, không phải toàn hệ thống.
-- Ledger và rate snapshot là dữ liệu đối soát; không cascade delete hoặc cập nhật lại chi phí lịch sử.
-- Credential payload chỉ tồn tại dạng mã hóa trên server; desktop role không được đọc schema/bảng chứa secret.
-- Migration legacy tạo `legacy-default` với budget `0` để không phát sinh chi phí ngoài ý muốn.
-- Không xóa version credential `Retiring` khi còn task Kling đang chạy tham chiếu.
+- Organization ID và ownership phải theo mọi request/usage/resource tenant-scoped.
+- Idempotency cloud nằm trong organization.
+- Ledger, rate snapshot, provider request và credential version là dữ liệu đối soát; không cascade/xóa/sửa lịch sử tùy tiện.
+- Budget `0` là khóa AI.
+- Credential chỉ tồn tại dạng mã hóa và desktop role không được đọc.
+- Retiring credential còn được giữ khi task đang chạy tham chiếu.
+- Backfill phải hoàn tất trước `NOT NULL`/unique/FK mới.
 
-## Quy tắc viết migration
+## Quy tắc viết SQL
 
-- Script phải idempotent: kiểm tra schema/table/column/index/constraint/version trước khi tạo hoặc đổi.
-- Dùng transaction và `XACT_ABORT ON` cho nhóm thay đổi cần nguyên tử; lỗi phải rollback và trả exit code cho `sqlcmd -b`.
-- Backfill trước khi đặt `NOT NULL` hoặc unique constraint.
-- Kiểm tra/tránh tên index/constraint cũ trước khi tạo uniqueness mới.
-- Không tự điền đơn giá provider; rate production do Global Admin nhập từ hợp đồng/dashboard hiện hành.
-- Không thay trực tiếp migration đã có thể được chạy ở production. Tạo migration phiên bản mới và cập nhật `ai.SchemaVersions`.
-- Giữ script least-privilege đồng bộ khi thêm bảng/view/procedure desktop thực sự cần.
+- Idempotent: kiểm tra schema/table/column/index/constraint/version trước tạo/đổi.
+- Dùng `SET XACT_ABORT ON` và transaction cho thay đổi cần nguyên tử.
+- Lỗi phải rollback và làm `sqlcmd -b` trả exit code khác 0.
+- Không seed giá provider hoặc secret production.
+- Khi thêm bảng mới, cập nhật EF server/local phù hợp, least-privilege và migration test.
+- Không cấp quyền rộng schema `ai`, `auth` hoặc `dbo` cho desktop.
 
-## An toàn chạy SQL
+## An toàn thực thi
 
-AI không được tự chạy các script này trên database thật. Trước khi chạy cần người dùng chỉ rõ instance/database, xác nhận backup đã restore thử và cho phép cửa sổ bảo trì. Thứ tự chuẩn:
-
-```powershell
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.Initial.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.0.OrganizationAiGateway.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.DesktopLeastPrivilege.sql
-```
-
-Ưu tiên test migration trên bản sao có dữ liệu gần production, chạy lặp lại để chứng minh idempotency, rồi đối chiếu row count, FK/index và `ai.SchemaVersions`.
-
+AI không tự chạy SQL thay đổi dữ liệu trên database thật. Cần người dùng xác nhận instance, database, backup đã restore thử và quyền tác động. Luôn chạy lặp trên clone, kiểm tra version/FK/index/row count rồi mới lập kế hoạch production.

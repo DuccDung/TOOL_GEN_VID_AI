@@ -218,13 +218,14 @@ internal sealed class AiPricingAdminService(
         "InputToken" => "InputToken",
         "OutputToken" => "OutputToken",
         "VideoSecond" => "VideoSecond",
-        _ => throw new ArgumentException("UsageType chỉ hỗ trợ InputToken, OutputToken hoặc VideoSecond.")
+        "AudioSecond" => "AudioSecond",
+        _ => throw new ArgumentException("UsageType chỉ hỗ trợ InputToken, OutputToken, VideoSecond hoặc AudioSecond.")
     };
 
     private static string ValidateUnit(string usageType, string value)
     {
         var unit = value.Trim();
-        if (usageType == "VideoSecond" && unit == "Second")
+        if (usageType is "VideoSecond" or "AudioSecond" && unit == "Second")
         {
             return unit;
         }

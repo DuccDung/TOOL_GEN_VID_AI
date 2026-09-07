@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -63,8 +63,24 @@ import openAiLogo from '@lobehub/icons-static-svg/icons/openai.svg';
 import pikaLogo from '@lobehub/icons-static-svg/icons/pika.svg';
 import runwayLogo from '@lobehub/icons-static-svg/icons/runway.svg';
 import { isHosted, postToHost, subscribeToHost } from './bridge';
+import {
+  formatContentLanguageError,
+  formatViolation,
+  parseContentLanguageFailure,
+  restoreContentLanguageFailure,
+  shortProviderRequestId,
+  type ContentLanguageFailureView
+} from './contentLanguageError';
 import { VietsubPage } from './features/vietsub/VietsubPage';
 import { useVietsubModule } from './features/vietsub/useVietsubModule';
+import { getSceneFirstFrameAssetBlocker } from './sceneAssetValidation';
+import { buildSpeechTranscriptDiff, type SpeechDiffSegment } from './speechTranscriptDiff';
+import {
+  getCanonicalVoiceJourney,
+  getStoryboardActionSummary,
+  isCanonicalSpeechScene,
+  needsCanonicalVoicePreparation
+} from './videoWorkflowUx';
 import type {
   AiModel,
   CharacterSummary,
@@ -73,11 +89,13 @@ import type {
   CreateShortVideoPayload,
   DashboardState,
   DesktopRelease,
+  DesktopFeatureSettings,
   DesktopUpdateNotice,
   DesktopUpdateProgress,
   GenerationProviderStatus,
   HostMessage,
   CurrentLicensePayment,
+  ContentRepairQuote,
   LicenseOffer,
   LicensePaymentCheckout,
   LicensePaymentStatus,
@@ -92,13 +110,17 @@ import type {
   ProviderSettings,
   SceneFirstFrameQuote,
   SceneFirstFrameSummary,
+  SceneSpeechVerificationQuote,
   SceneSummary,
+  CanonicalVoiceQuote,
+  VoiceProfilePreviewQuote,
+  VoiceProfileSummary,
   UpdateScenePayload,
   UpdateCharacterPayload,
   UpdateProjectAssetPayload,
 } from './types';
 
-type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'apiKeys';
+type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'apiKeys' | 'settings';
 type LongVideoStepId = 'setup' | 'content' | 'assets' | 'storyboard' | 'export';
 type LongVideoStep = {
   id: LongVideoStepId;
@@ -167,6 +189,10 @@ const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
   apiKeys: {
     title: 'API AI tổ chức',
     subtitle: 'Trạng thái OpenAI, provider video và ngân sách do tổ chức quản lý tập trung.'
+  },
+  settings: {
+    title: 'Cài đặt',
+    subtitle: 'Điều chỉnh các tính năng cục bộ áp dụng cho ứng dụng trên máy này.'
   }
 };
 
@@ -202,9 +228,11 @@ const emptyState: DashboardState = {
   },
   generationRunning: false,
   features: {
-    vietsubEnabled: false
+    vietsubEnabled: false,
+    speechSynchronizationEnabled: false
   },
-  sceneFirstFrames: []
+  sceneFirstFrames: [],
+  contentLanguageFailure: null
 };
 type PendingFirstFrameQuote = {
   scene: SceneSummary;
@@ -239,7 +267,7 @@ const secondaryMenu: Array<{ label: string; icon: LucideIcon; page?: Page }> = [
   { label: 'AI Models', icon: Bot },
   { label: 'API AI tổ chức', icon: KeyRound, page: 'apiKeys' },
   { label: 'Tài nguyên', icon: Database },
-  { label: 'Cài đặt', icon: Settings },
+  { label: 'Cài đặt', icon: Settings, page: 'settings' },
   { label: 'Thanh toán', icon: CreditCard },
   { label: 'Hướng dẫn', icon: CircleHelp }
 ];
@@ -322,6 +350,7 @@ type ModelDisplay = {
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
+  const latestDashboardRef = useRef(dashboard);
   const [page, setPage] = useState<Page>('create');
   const [busy, setBusy] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -338,8 +367,15 @@ function App() {
   const [updateProgress, setUpdateProgress] = useState<DesktopUpdateProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
+  const [desktopSettings, setDesktopSettings] = useState<DesktopFeatureSettings>({
+    speechSynchronizationEnabled: false,
+    activeSpeechSynchronizationEnabled: false,
+    restartRequired: false
+  });
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [serviceError, setServiceError] = useState<ServiceError | null>(null);
+  const [contentGenerationError, setContentGenerationError] = useState<string | null>(null);
+  const [contentLanguageFailure, setContentLanguageFailure] = useState<ContentLanguageFailureView | null>(null);
   const [characterImageBusyId, setCharacterImageBusyId] = useState<string | null>(null);
   const [assetConfirmBusyId, setAssetConfirmBusyId] = useState<string | null>(null);
   const [mediaInstallProgress, setMediaInstallProgress] = useState<DesktopUpdateProgress | null>(null);
@@ -354,6 +390,10 @@ function App() {
   const pendingSceneSaveRef = useRef<PendingSceneSave | null>(null);
   const pendingFirstFrameQuoteRef = useRef(new Map<string, PendingFirstFrameQuote>());
   const pendingFirstFrameOperationRef = useRef(new Map<string, string>());
+  const pendingContentRepairQuoteRef = useRef(new Map<string, string>());
+  const pendingSpeechVerificationQuoteRef = useRef(new Map<string, SceneSummary>());
+  const pendingVoicePreviewQuoteRef = useRef(new Map<string, VoiceProfileSummary>());
+  const pendingVideoVoiceQuoteRef = useRef(new Map<string, string[]>());
   const vietsub = useVietsubModule(
     dashboard.features.vietsubEnabled,
     dashboard.selectedOrganizationId
@@ -363,11 +403,21 @@ function App() {
   const licenseBootstrapRequestedRef = useRef(false);
   const licenseStatusInFlightRef = useRef(false);
 
+  useLayoutEffect(() => {
+    latestDashboardRef.current = dashboard;
+  }, [dashboard]);
+
   const notify = (message: string, error = false) => {
     const id = Date.now();
     setToasts((current) => [...current, { id, message, error }]);
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3600);
   };
+
+  useEffect(() => {
+    const restored = restoreContentLanguageFailure(dashboard.contentLanguageFailure);
+    setContentLanguageFailure(restored);
+    setContentGenerationError(restored ? restored.message : null);
+  }, [dashboard.selectedProject?.project.projectId, dashboard.contentLanguageFailure]);
 
   const postLicenseRequest = <T,>(kind: LicenseRequestKind, type: string, payload?: T) => {
     const requestId = postToHost(type, payload);
@@ -389,9 +439,17 @@ function App() {
         const nextDashboard = message.payload as DashboardState;
         setDashboard({
           ...nextDashboard,
-          features: nextDashboard.features ?? { vietsubEnabled: false },
-          sceneFirstFrames: nextDashboard.sceneFirstFrames ?? []
+          features: nextDashboard.features ?? { vietsubEnabled: false, speechSynchronizationEnabled: false },
+          sceneFirstFrames: nextDashboard.sceneFirstFrames ?? [],
+          contentLanguageFailure: nextDashboard.contentLanguageFailure ?? null
         });
+        setDesktopSettings((current) => current.restartRequired
+          ? current
+          : {
+              speechSynchronizationEnabled: nextDashboard.features?.speechSynchronizationEnabled ?? false,
+              activeSpeechSynchronizationEnabled: nextDashboard.features?.speechSynchronizationEnabled ?? false,
+              restartRequired: false
+            });
         if (!nextDashboard.generationRunning) setCharacterImageBusyId(null);
         setAssetConfirmBusyId(null);
         setBusy(false);
@@ -485,8 +543,101 @@ function App() {
         return;
       }
 
+      if (message.type === 'scene.speech.verify.quote' && message.payload && message.requestId) {
+        const scene = pendingSpeechVerificationQuoteRef.current.get(message.requestId);
+        pendingSpeechVerificationQuoteRef.current.delete(message.requestId);
+        setBusy(false);
+        if (!scene) return;
+        const quote = message.payload as SceneSpeechVerificationQuote;
+        setConfirmation({
+          eyebrow: 'XÁC NHẬN KIỂM TRA LỜI NÓI',
+          title: `Chạy ASR cho cảnh ${scene.sequenceNumber}?`,
+          description: `${quote.providerCode}/${quote.modelCode} sẽ đối chiếu audio với lời đã khóa của cảnh. Thời lượng tính phí: ${quote.billableAudioSeconds} giây.`,
+          note: `Đây là request AI có phí. Server sẽ giữ khoảng ${formatMoney(quote.estimatedCost, quote.currencyCode)} theo rate Active trước khi gửi audio.`,
+          confirmLabel: 'Kiểm tra transcript',
+          onConfirm: () => {
+            setBusy(true);
+            postToHost('scene.speech.verify', { sceneId: scene.sceneId });
+          }
+        });
+        return;
+      }
+
+      if (message.type === 'voice-profile.preview.quote' && message.payload && message.requestId) {
+        const version = pendingVoicePreviewQuoteRef.current.get(message.requestId);
+        pendingVoicePreviewQuoteRef.current.delete(message.requestId);
+        setBusy(false);
+        if (!version) return;
+        const quote = message.payload as VoiceProfilePreviewQuote;
+        setConfirmation({
+          eyebrow: 'XÁC NHẬN NGHE THỬ GIỌNG',
+          title: `Tạo preview voice version ${version.version}?`,
+          description: `${quote.providerCode}/${quote.modelCode} sẽ đọc một câu mẫu tiếng Việt bằng ${voiceName(version.voiceCode)}, tốc độ ${version.speakingRate}×.`,
+          note: `Đây là request AI có phí. Server sẽ giữ khoảng ${formatMoney(quote.estimatedCost, quote.currencyCode)} theo rate Active trước outbound.`,
+          confirmLabel: 'Tạo audio preview',
+          onConfirm: () => {
+            setBusy(true);
+            postToHost('voice-profile.preview', {
+              voiceProfileVersionId: version.voiceProfileVersionId,
+              expectedVoiceSnapshotHash: version.snapshotHash
+            });
+          }
+        });
+        return;
+      }
+
+      if (message.type === 'generation.video.quote' && message.payload && message.requestId) {
+        const sceneIds = pendingVideoVoiceQuoteRef.current.get(message.requestId);
+        pendingVideoVoiceQuoteRef.current.delete(message.requestId);
+        setBusy(false);
+        if (!sceneIds) return;
+        confirmGenerateVideos(sceneIds, message.payload as CanonicalVoiceQuote);
+        return;
+      }
+
+      if (message.type === 'generation.content.repair.quote' && message.payload && message.requestId) {
+        const failedProviderRequestId = pendingContentRepairQuoteRef.current.get(message.requestId);
+        pendingContentRepairQuoteRef.current.delete(message.requestId);
+        setBusy(false);
+        if (!failedProviderRequestId) return;
+
+        const quote = message.payload as ContentRepairQuote;
+        if (quote.failedProviderRequestId.toLowerCase() !== failedProviderRequestId.toLowerCase()) {
+          notify('Báo giá sửa nội dung không khớp request đã chọn.', true);
+          return;
+        }
+        setConfirmation({
+          eyebrow: 'XÁC NHẬN SỬA CONTENT PLAN',
+          title: `Sửa ${quote.violations.length} trường bằng AI?`,
+          description: `${quote.providerCode}/${quote.modelCode} sẽ sửa các trường bị rỗng hoặc chưa đạt tiếng Việt. Cấu trúc, thứ tự cảnh, thời lượng và mapping tài sản/nhân vật phải được giữ nguyên.`,
+          note: `Đây là một request OpenAI riêng có phí. Server sẽ giữ khoảng ${formatMoney(quote.estimatedCost, quote.currencyCode)} theo rate Active trước khi gọi provider. Mỗi failed plan chỉ có tối đa một lượt sửa.`,
+          confirmLabel: 'Sửa các trường bằng AI',
+          onConfirm: () => {
+            setBusy(true);
+            postToHost('generation.content.repair', { failedProviderRequestId });
+          }
+        });
+        return;
+      }
+
+      if (message.type === 'generation.content.repaired') {
+        setContentGenerationError(null);
+        setContentLanguageFailure(null);
+        return;
+      }
+
       if (message.type === 'operation.error') {
+        const operationErrorMessage = formatContentLanguageError(message.error);
+        const recoverableContentFailure = parseContentLanguageFailure(message.error);
+        if (recoverableContentFailure) {
+          setContentGenerationError(operationErrorMessage);
+          setContentLanguageFailure(recoverableContentFailure);
+        }
         if (message.requestId) pendingFirstFrameQuoteRef.current.delete(message.requestId);
+        if (message.requestId) pendingContentRepairQuoteRef.current.delete(message.requestId);
+        if (message.requestId) pendingSpeechVerificationQuoteRef.current.delete(message.requestId);
+        if (message.requestId) pendingVoicePreviewQuoteRef.current.delete(message.requestId);
+        if (message.requestId) pendingVideoVoiceQuoteRef.current.delete(message.requestId);
         const failedFirstFrameSceneId = message.requestId
           ? pendingFirstFrameOperationRef.current.get(message.requestId)
           : undefined;
@@ -533,7 +684,25 @@ function App() {
           });
           return;
         }
-        notify(message.error?.message ?? 'Không thể hoàn tất thao tác.', true);
+        if (message.error?.code === 'speech_verification_disabled' || message.error?.code === 'canonical_voice_disabled') {
+          setConfirmation({
+            eyebrow: 'SERVER CHƯA CHO PHÉP',
+            title: message.error.code === 'speech_verification_disabled'
+              ? 'ASR đang tắt trên máy chủ'
+              : 'Canonical Voice đang tắt trên máy chủ',
+            description: message.error.message,
+            note: 'Người dùng có thể bật phần Desktop trong Cài đặt, nhưng cờ server, model và bảng giá phải do quản trị viên hệ thống chuẩn bị.',
+            noteTone: 'info',
+            confirmLabel: 'Mở Cài đặt',
+            onConfirm: () => {
+              setPage('settings');
+              setBusy(true);
+              postToHost('desktop.settings.get');
+            }
+          });
+          return;
+        }
+        notify(operationErrorMessage, true);
         return;
       }
 
@@ -557,6 +726,18 @@ function App() {
       if (message.type === 'providers.settings' && message.payload) {
         setProviderSettings(message.payload as ProviderSettings);
         setBusy(false);
+        return;
+      }
+
+      if ((message.type === 'desktop.settings' || message.type === 'desktop.settings.updated') && message.payload) {
+        const nextSettings = message.payload as DesktopFeatureSettings;
+        setDesktopSettings(nextSettings);
+        setBusy(false);
+        if (message.type === 'desktop.settings.updated') {
+          notify(nextSettings.restartRequired
+            ? 'Đã lưu cài đặt. Hãy đóng và mở lại VideoMaker để áp dụng.'
+            : 'Cài đặt đồng bộ lời nói đã được cập nhật.');
+        }
         return;
       }
 
@@ -692,10 +873,32 @@ function App() {
     if (target) {
       setPage(target);
       if (target === 'apiKeys') postToHost('providers.settings.get');
+      if (target === 'settings') {
+        setBusy(true);
+        postToHost('desktop.settings.get');
+      }
       return;
     }
 
     notify(`${label} đang được phát triển.`);
+  };
+
+  const navigateToSpeechSynchronizationSettings = () => {
+    setPage('settings');
+    setBusy(true);
+    postToHost('desktop.settings.get');
+  };
+
+  const showSpeechSynchronizationDisabled = (requestedAction: string) => {
+    setConfirmation({
+      eyebrow: 'TÍNH NĂNG ĐANG TẮT',
+      title: 'Bật đồng bộ lời nói trên máy này?',
+      description: `${requestedAction} cần bật quy trình đồng bộ lời nói trong cài đặt Desktop.`,
+      note: 'Công tắc Desktop chỉ mở giao diện và workflow trên máy này. ASR/TTS vẫn phải được quản trị viên cho phép trên server trước khi phát sinh chi phí.',
+      noteTone: 'info',
+      confirmLabel: 'Đi tới Cài đặt',
+      onConfirm: navigateToSpeechSynchronizationSettings
+    });
   };
 
   const selectProject = (projectId: string) => {
@@ -764,30 +967,50 @@ function App() {
 
   const generateContent = () => {
     if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setContentGenerationError(null);
+    setContentLanguageFailure(null);
     setBusy(true);
     postToHost('generation.content');
+  };
+
+  const requestContentRepair = () => {
+    const failure = contentLanguageFailure;
+    if (!dashboard.selectedProject || dashboard.generationRunning || !failure?.canRepair || !failure.providerRequestId) {
+      return;
+    }
+
+    setBusy(true);
+    const requestId = postToHost('generation.content.repair.quote', {
+      failedProviderRequestId: failure.providerRequestId
+    });
+    pendingContentRepairQuoteRef.current.set(requestId, failure.providerRequestId);
   };
 
   const renderFinalVideo = () => {
     const project = dashboard.selectedProject;
     if (!project || dashboard.generationRunning) return;
     const silentOutput = project.audioStrategy === 'SilentOutput';
+    const canonicalOutput = project.speechProductionPolicy === 'CanonicalVoice';
     if (!dashboard.mediaTools.ready) {
       notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
       return;
     }
-    if (project.totalScenes === 0 || project.approvedScenes !== project.totalScenes) {
-      notify(silentOutput
-        ? 'Hãy hoàn tất tất cả clip trước khi dựng video cuối.'
-        : 'Hãy nghe và duyệt Native Audio của tất cả cảnh trước khi dựng video cuối.', true);
+    if (project.totalScenes === 0 || project.approvedScenes === 0) {
+      notify('Hãy tạo và duyệt ít nhất một cảnh trước khi dựng video.', true);
       return;
     }
+    const omittedSceneCount = Math.max(0, project.totalScenes - project.approvedScenes);
+    const omittedSceneNote = omittedSceneCount > 0
+      ? ` ${omittedSceneCount} cảnh chưa duyệt sẽ không được đưa vào bản dựng này.`
+      : '';
     setConfirmation({
       eyebrow: 'XÁC NHẬN DỰNG VIDEO CUỐI',
       title: project.preview?.url ? 'Dựng lại video hoàn chỉnh?' : 'Dựng video hoàn chỉnh?',
       description: silentOutput
-        ? `${project.totalScenes} clip SceneVideo không âm thanh sẽ được ghép đúng thứ tự. Video đầu ra sẽ không chứa audio stream.`
-        : `${project.totalScenes} clip SceneVideo đã duyệt sẽ được ghép đúng thứ tự. Âm thanh Native Audio của provider được giữ nguyên; hệ thống không tạo hoặc chèn thêm giọng TTS.`,
+        ? `${project.approvedScenes} clip đã duyệt sẽ được ghép đúng thứ tự. Video đầu ra sẽ không chứa audio stream.${omittedSceneNote}`
+        : canonicalOutput
+          ? `${project.approvedScenes} clip đã duyệt có Canonical Voice sẽ được ghép đúng thứ tự.${omittedSceneNote}`
+          : `${project.approvedScenes} clip đã duyệt sẽ được ghép đúng thứ tự và giữ nguyên Native Audio của provider.${omittedSceneNote}`,
       note: silentOutput
         ? 'FFmpeg sẽ kiểm tra lại hình, thời lượng và xác nhận file đầu ra không có audio stream.'
         : 'FFmpeg sẽ kiểm tra lại hình, audio stream, mức âm lượng và thời lượng trước khi công nhận video đầu ra.',
@@ -799,15 +1022,27 @@ function App() {
     });
   };
 
-  const generateVideos = (sceneIds: string[]) => {
+  const exportFinalVideo = () => {
     const project = dashboard.selectedProject;
-    if (!project || dashboard.generationRunning || sceneIds.length === 0) return;
+    if (!project?.preview?.url) {
+      notify('Hãy dựng xong video hoàn chỉnh trước khi xuất file MP4.', true);
+      return;
+    }
+    if (busy || dashboard.generationRunning) return;
+    setBusy(true);
+    postToHost('final-video.export');
+  };
+
+  const confirmGenerateVideos = (sceneIds: string[], canonicalVoiceQuote?: CanonicalVoiceQuote | null) => {
+    const currentDashboard = latestDashboardRef.current;
+    const project = currentDashboard.selectedProject;
+    if (!project || currentDashboard.generationRunning || sceneIds.length === 0) return;
     if (project.requiresVietnameseContentRegeneration) {
       notify('Dự án Video Dài này còn nội dung tiếng Anh. Hãy sinh lại nội dung tiếng Việt trước khi tạo clip.', true);
       return;
     }
-    if (!dashboard.mediaTools.ready) {
-      notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
+    if (!currentDashboard.mediaTools.ready) {
+      notify(currentDashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
       return;
     }
     const longFormProviderCode = project.videoProviderCode?.toLowerCase();
@@ -825,9 +1060,13 @@ function App() {
     }
     const resumableScenes = selectedScenes.filter(sceneNeedsLocalCompletion);
     const newRequestScenes = selectedScenes.filter((scene) => !sceneNeedsLocalCompletion(scene));
+    const canonicalVoicePreparationScenes = newRequestScenes.filter((scene) =>
+      needsCanonicalVoicePreparation(scene, project.speechProductionPolicy));
+    const videoRequestScenes = newRequestScenes.filter((scene) =>
+      !needsCanonicalVoicePreparation(scene, project.speechProductionPolicy));
     if (longFormProviderCode === 'fal') {
       const scenesWithoutApprovedFirstFrame = newRequestScenes.filter((scene) =>
-        !dashboard.sceneFirstFrames.some((frame) =>
+        !currentDashboard.sceneFirstFrames.some((frame) =>
           frame.sceneId === scene.sceneId && frame.status === 'Approved' && frame.isCurrent && Boolean(frame.previewUrl)));
       if (scenesWithoutApprovedFirstFrame.length > 0) {
         notify(
@@ -838,11 +1077,11 @@ function App() {
       }
     }
     const blockedAssetScenes = newRequestScenes.filter(
-      (scene) => !areSceneAssetsReady(scene.sceneId, dashboard.assetLibrary ?? null)
+      (scene) => !areSceneAssetsReady(scene.sceneId, currentDashboard.assetLibrary ?? null)
     );
     if (blockedAssetScenes.length > 0) {
       const hasInvalidSelection = blockedAssetScenes.some((scene) =>
-        dashboard.assetLibrary?.sceneAssignments.find((assignment) => assignment.sceneId === scene.sceneId)?.isValid === false);
+        currentDashboard.assetLibrary?.sceneAssignments.find((assignment) => assignment.sceneId === scene.sceneId)?.isValid === false);
       notify(
         hasInvalidSelection
           ? `Cảnh ${blockedAssetScenes.map((scene) => scene.sequenceNumber).join(', ')} có lựa chọn tài sản không hợp lệ. Hãy sửa trong Storyboard trước khi tạo clip.`
@@ -852,9 +1091,14 @@ function App() {
       return;
     }
     const isDownloadOnly = resumableScenes.length === selectedScenes.length;
-    const isMixedOperation = resumableScenes.length > 0 && newRequestScenes.length > 0;
+    const isVoicePreparationOnly = canonicalVoicePreparationScenes.length === selectedScenes.length;
+    const isMixedOperation = [
+      resumableScenes.length,
+      canonicalVoicePreparationScenes.length,
+      videoRequestScenes.length
+    ].filter((count) => count > 0).length > 1;
     const totalSeconds = Math.ceil(selectedScenes.reduce((total, scene) => total + scene.durationMs, 0) / 1000);
-    const newRequestSeconds = Math.ceil(newRequestScenes.reduce(
+    const newVideoRequestSeconds = Math.ceil(videoRequestScenes.reduce(
       (total, scene) => total + (scene.generationDurationMs ?? scene.durationMs),
       0) / 1000);
     const spokenSceneCount = selectedScenes.filter((scene) => scene.speechMode !== 'None').length;
@@ -864,22 +1108,52 @@ function App() {
         const speech = scene.speechMode === 'None'
           ? 'Không có lời nói'
           : `${speechModeLabel(scene.speechMode, enforceKlingLongFormSpeechPolicy)}: “${scene.narration?.trim() || 'chưa có nội dung'}”`;
-        const operation = sceneNeedsLocalCompletion(scene) ? 'Tải clip đã tạo' : 'Tạo clip mới';
+        const operation = sceneNeedsLocalCompletion(scene)
+          ? 'Tải clip đã tạo'
+          : needsCanonicalVoicePreparation(scene, project.speechProductionPolicy)
+            ? 'Chuẩn bị WAV; chưa tạo video'
+            : 'Tạo clip mới';
         return `${isMixedOperation ? `${operation} · ` : ''}Cảnh ${scene.sequenceNumber} (${durationSeconds}s) — ${speech}`;
       })
       .join('\n');
-    const retryCount = newRequestScenes.filter((scene) => scene.status === 'NativeAudioInvalid').length;
-    const estimatedVideoCost = newRequestSeconds > 0 && dashboard.providerStatus.estimatedVideoCostPerSecond
-      ? dashboard.providerStatus.estimatedVideoCostPerSecond * newRequestSeconds
+    const retryCount = videoRequestScenes.filter((scene) => scene.status === 'NativeAudioInvalid').length;
+    const estimatedVideoCost = newVideoRequestSeconds > 0 && currentDashboard.providerStatus.estimatedVideoCostPerSecond
+      ? currentDashboard.providerStatus.estimatedVideoCostPerSecond * newVideoRequestSeconds
       : null;
-    const costNote = estimatedVideoCost
-      ? `Chi phí ước tính ${formatMoney(estimatedVideoCost, dashboard.providerStatus.currencyCode ?? 'USD')} theo rate Active hiện tại; server sẽ quote và giữ budget chính xác trước outbound.`
-      : 'Chi phí được server quote theo rate Active và giữ trong budget tổ chức trước outbound.';
+    const videoCostNote = videoRequestScenes.length === 0
+      ? ''
+      : estimatedVideoCost
+        ? `Chi phí video ước tính ${formatMoney(estimatedVideoCost, currentDashboard.providerStatus.currencyCode ?? 'USD')} theo rate Active hiện tại; server sẽ quote và giữ budget chính xác trước outbound.`
+        : 'Chi phí video được server quote theo rate Active và giữ trong budget tổ chức trước outbound.';
+    const canonicalCostNote = canonicalVoicePreparationScenes.length > 0
+      ? canonicalVoiceQuote
+        ? `Canonical Voice: ${canonicalVoiceQuote.newVoiceCount} WAV mới, ${canonicalVoiceQuote.reusedVoiceCount} WAV dùng lại; chi phí TTS ước tính ${formatMoney(canonicalVoiceQuote.estimatedCost, canonicalVoiceQuote.currencyCode)}.`
+        : 'Canonical Voice sẽ có request TTS riêng trước video.'
+      : '';
+    const costNote = [videoCostNote, canonicalCostNote].filter(Boolean).join(' ');
     const languageNote = ' Bạn phải nghe và duyệt từng clip trước khi dựng video cuối.';
     const retryNote = retryCount > 0
       ? ` ${retryCount} clip có Native Audio không đạt sẽ được tạo lại bằng prompt ưu tiên lời thoại và phát sinh chi phí provider mới.`
       : '';
-    const providerLabel = dashboard.providerStatus.videoProviderName ?? dashboard.providerStatus.videoProviderCode ?? 'Provider do server chọn';
+    const providerLabel = currentDashboard.providerStatus.videoProviderName ?? currentDashboard.providerStatus.videoProviderCode ?? 'Provider do server chọn';
+    const videoAudioLabel = project.speechProductionPolicy === 'CanonicalVoice'
+      ? 'Video nền · Canonical WAV được ghép cục bộ'
+      : 'Native Audio';
+
+    if (isVoicePreparationOnly) {
+      setConfirmation({
+        eyebrow: 'XÁC NHẬN CHUẨN BỊ GIỌNG ĐỌC',
+        title: `Chuẩn bị WAV cho ${selectedScenes.length} cảnh?`,
+        description: `Thao tác này chỉ tạo hoặc tải lại Canonical WAV cho ${selectedScenes.length} cảnh. Video chưa được gửi sang ${providerLabel} ở bước này.\n\n${spokenPreview}`,
+        note: `${canonicalCostNote} Sau khi WAV hoàn tất kiểm tra kỹ thuật, nút “Tạo video nền” sẽ xuất hiện. WAV hiện hành được dùng lại, không cần bước duyệt riêng.`,
+        confirmLabel: `Tạo ${selectedScenes.length} bản đọc WAV`,
+        onConfirm: () => {
+          setBusy(true);
+          postToHost('generation.video', { sceneIds });
+        }
+      });
+      return;
+    }
 
     if (isDownloadOnly) {
       setConfirmation({
@@ -887,7 +1161,7 @@ function App() {
         noteTone: 'info',
         eyebrow: 'XÁC NHẬN TẢI CLIP',
         title: `Tải ${selectedScenes.length} clip đã tạo về máy?`,
-        description: `Video đã hoàn thành trên server và đang chờ lưu về máy.\n${providerLabel} · ${dashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${dashboard.providerStatus.videoResolution ?? '720p'} · Native Audio\nTổng thời lượng: khoảng ${totalSeconds} giây\n\n${spokenPreview}`,
+        description: `Video đã hoàn thành trên server và đang chờ lưu về máy.\n${providerLabel} · ${currentDashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${currentDashboard.providerStatus.videoResolution ?? '720p'} · ${videoAudioLabel}\nTổng thời lượng: khoảng ${totalSeconds} giây\n\n${spokenPreview}`,
         note: 'VideoMaker sẽ tiếp tục từ provider request hiện có, chỉ tải và kiểm tra clip bằng FFmpeg; không gửi yêu cầu tạo video mới và không phát sinh chi phí provider mới. Sau khi tải xong, bạn cần nghe và duyệt hình cùng Native Audio.',
         confirmLabel: `Tải ${selectedScenes.length} clip`,
         onConfirm: () => {
@@ -899,11 +1173,18 @@ function App() {
     }
 
     if (isMixedOperation) {
+      const operationSummary = [
+        resumableScenes.length > 0 ? `${resumableScenes.length} clip sẽ được tải về` : '',
+        canonicalVoicePreparationScenes.length > 0
+          ? `${canonicalVoicePreparationScenes.length} cảnh chỉ chuẩn bị WAV, chưa gửi video`
+          : '',
+        videoRequestScenes.length > 0 ? `${videoRequestScenes.length} clip sẽ được tạo mới` : ''
+      ].filter(Boolean).join('; ');
       setConfirmation({
-        eyebrow: 'XÁC NHẬN TẢI VÀ TẠO CLIP',
+        eyebrow: 'XÁC NHẬN TIẾP TỤC QUY TRÌNH',
         title: `Tiếp tục xử lý ${selectedScenes.length} clip video?`,
-        description: `${providerLabel} · ${dashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${dashboard.providerStatus.videoResolution ?? '720p'} · Native Audio\n${resumableScenes.length} clip sẽ dùng lại video đã có; ${newRequestScenes.length} clip sẽ được tạo mới. Phần tạo mới dài khoảng ${newRequestSeconds} giây.\n\n${spokenPreview}`,
-        note: `${resumableScenes.length} clip tải lại không phát sinh chi phí provider mới. ${costNote}${languageNote}${retryNote}`,
+        description: `${providerLabel} · ${currentDashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${currentDashboard.providerStatus.videoResolution ?? '720p'}\n${operationSummary}.${videoRequestScenes.length > 0 ? ` Phần video mới dài khoảng ${newVideoRequestSeconds} giây.` : ''}\n\n${spokenPreview}`,
+        note: `${resumableScenes.length > 0 ? `${resumableScenes.length} clip tải lại không phát sinh chi phí provider mới. ` : ''}${costNote} Cảnh chuẩn bị WAV phải hoàn tất kiểm tra kỹ thuật và nghe duyệt trước khi có thể tạo video.${languageNote}${retryNote}`,
         confirmLabel: `Tiếp tục ${selectedScenes.length} clip`,
         onConfirm: () => {
           setBusy(true);
@@ -917,17 +1198,48 @@ function App() {
       eyebrow: 'XÁC NHẬN TẠO VIDEO',
       title: retryCount === selectedScenes.length
         ? `Tạo lại ${selectedScenes.length} clip với prompt ưu tiên lời thoại?`
-        : `Tạo ${selectedScenes.length} clip video?`,
-      description: `${providerLabel} · ${dashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${dashboard.providerStatus.videoResolution ?? '720p'} · Native Audio\nTổng thời lượng: khoảng ${totalSeconds} giây · ${spokenSceneCount}/${selectedScenes.length} cảnh có lời nói\n\n${spokenPreview}`,
+        : project.speechProductionPolicy === 'CanonicalVoice'
+          ? `Tạo video nền cho ${selectedScenes.length} cảnh?`
+          : `Tạo ${selectedScenes.length} clip video?`,
+      description: `${providerLabel} · ${currentDashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${currentDashboard.providerStatus.videoResolution ?? '720p'} · ${videoAudioLabel}\nTổng thời lượng: khoảng ${totalSeconds} giây · ${spokenSceneCount}/${selectedScenes.length} cảnh có lời nói\n\n${spokenPreview}`,
       note: `${costNote}${languageNote}${retryNote}`,
       confirmLabel: retryCount === selectedScenes.length
         ? `Tạo lại ${selectedScenes.length} clip`
-        : `Tạo ${selectedScenes.length} clip`,
+        : project.speechProductionPolicy === 'CanonicalVoice'
+          ? `Tạo ${selectedScenes.length} video nền`
+          : `Tạo ${selectedScenes.length} clip`,
       onConfirm: () => {
         setBusy(true);
         postToHost('generation.video', { sceneIds });
       }
     });
+  };
+
+  const generateVideos = (sceneIds: string[]) => {
+    const project = dashboard.selectedProject;
+    if (!project || dashboard.generationRunning || sceneIds.length === 0) return;
+    const hasCanonicalVoiceToPrepare = project.scenes.some((scene) =>
+      sceneIds.includes(scene.sceneId) &&
+      needsCanonicalVoicePreparation(scene, project.speechProductionPolicy));
+    if (!hasCanonicalVoiceToPrepare) {
+      confirmGenerateVideos(sceneIds, null);
+      return;
+    }
+    if (!dashboard.features.speechSynchronizationEnabled) {
+      showSpeechSynchronizationDisabled('Tạo Canonical Voice và ghép lời vào video');
+      return;
+    }
+    if (!dashboard.providerStatus.canonicalVoiceReady) {
+      notify(
+        dashboard.providerStatus.canonicalVoiceUnavailableMessage ??
+          'Canonical Voice chưa đủ TTS, rate, budget hoặc feature flag trên server.',
+        true
+      );
+      return;
+    }
+    setBusy(true);
+    const requestId = postToHost('generation.video.quote', { sceneIds });
+    pendingVideoVoiceQuoteRef.current.set(requestId, sceneIds);
   };
 
   const requestContentRegeneration = () => {
@@ -959,10 +1271,108 @@ function App() {
       current?.sceneId === sceneId && current.status === 'failed' ? null : current);
   };
 
-  const approveSceneNativeAudio = (sceneId: string, playbackConfirmed: boolean) => {
+  const approveSceneNativeAudio = (sceneId: string, playbackConfirmed: boolean, speechReviewReason?: string) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    const scene = dashboard.selectedProject.scenes.find((candidate) => candidate.sceneId === sceneId);
+    const verification = scene?.speechVerification;
+    const canonicalSpeech = dashboard.selectedProject.speechProductionPolicy === 'CanonicalVoice' &&
+      scene?.speechMode !== 'None';
+    const needsReviewOverride = !canonicalSpeech &&
+      verification?.status === 'NeedsReview' &&
+      !verification.reviewApproved;
+    if (needsReviewOverride && (!verification?.rowVersion || (speechReviewReason?.trim().length ?? 0) < 10)) {
+      notify('Hãy nhập lý do chấp nhận transcript lệch, tối thiểu 10 ký tự.', true);
+      return;
+    }
+    setBusy(true);
+    postToHost('scene.native-audio.approve', {
+      sceneId,
+      playbackConfirmed,
+      speechVerificationReportId: needsReviewOverride ? verification?.speechVerificationReportId : null,
+      speechReviewReason: needsReviewOverride ? speechReviewReason?.trim() : null,
+      speechVerificationRowVersion: needsReviewOverride ? verification?.rowVersion : null
+    });
+  };
+
+  const unapproveSceneAudio = (sceneId: string) => {
     if (!dashboard.selectedProject || dashboard.generationRunning) return;
     setBusy(true);
-    postToHost('scene.native-audio.approve', { sceneId, playbackConfirmed });
+    postToHost('scene.audio.unapprove', { sceneId });
+  };
+
+  const requestSceneSpeechVerification = (scene: SceneSummary) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    if (!dashboard.features.speechSynchronizationEnabled) {
+      showSpeechSynchronizationDisabled('Báo giá và kiểm tra transcript bằng ASR');
+      return;
+    }
+    setBusy(true);
+    const requestId = postToHost('scene.speech.verify.quote', { sceneId: scene.sceneId });
+    pendingSpeechVerificationQuoteRef.current.set(requestId, scene);
+  };
+
+  const createVoiceProfileDraft = (
+    scope: 'ProjectNarrator' | 'Character',
+    characterId: string | null,
+    voiceCode: string,
+    speakingRate: number
+  ) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setBusy(true);
+    postToHost('voice-profile.draft', { scope, characterId, voiceCode, speakingRate });
+  };
+
+  const requestVoiceProfilePreview = (version: VoiceProfileSummary) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning || version.status !== 'Draft') return;
+    setBusy(true);
+    const requestId = postToHost('voice-profile.preview.quote', {
+      voiceProfileVersionId: version.voiceProfileVersionId,
+      expectedVoiceSnapshotHash: version.snapshotHash
+    });
+    pendingVoicePreviewQuoteRef.current.set(requestId, version);
+  };
+
+  const approveVoiceProfile = (version: VoiceProfileSummary, playbackConfirmed: boolean) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    if (!playbackConfirmed) {
+      notify('Hãy phát và nghe audio preview trước khi duyệt giọng.', true);
+      return;
+    }
+    setConfirmation({
+      eyebrow: 'XÁC NHẬN KHÓA GIỌNG',
+      title: `Duyệt voice version ${version.version}?`,
+      description: `Các cảnh ${version.scope === 'ProjectNarrator' ? 'voice-over' : 'có nhân vật tương ứng'} sẽ dùng đúng snapshot ${version.snapshotHash.slice(0, 12)}.`,
+      note: 'Nếu đang có version được duyệt, version cũ sẽ thành Superseded và các audio/render phụ thuộc sẽ mất hiệu lực.',
+      confirmLabel: 'Duyệt và khóa giọng',
+      onConfirm: () => {
+        setBusy(true);
+        postToHost('voice-profile.approve', {
+          voiceProfileVersionId: version.voiceProfileVersionId,
+          expectedVoiceSnapshotHash: version.snapshotHash,
+          playbackConfirmed: true
+        });
+      }
+    });
+  };
+
+  const supersedeVoiceProfile = (version: VoiceProfileSummary) => {
+    if (!dashboard.selectedProject || dashboard.generationRunning) return;
+    setConfirmation({
+      eyebrow: 'XÁC NHẬN HỦY PHIÊN BẢN GIỌNG',
+      title: version.status === 'Approved' ? 'Hủy duyệt giọng đang khóa?' : 'Bỏ bản nháp giọng?',
+      description: version.status === 'Approved'
+        ? 'Các audio và narrated video dùng voice version này sẽ không còn được phép render.'
+        : 'Bản nháp sẽ chuyển sang Revoked và không thể preview hoặc duyệt tiếp.',
+      note: 'File media cũ vẫn được giữ để truy vết; hệ thống chỉ bỏ trạng thái sẵn sàng.',
+      confirmLabel: version.status === 'Approved' ? 'Hủy duyệt' : 'Bỏ bản nháp',
+      onConfirm: () => {
+        setBusy(true);
+        postToHost('voice-profile.supersede', {
+          voiceProfileVersionId: version.voiceProfileVersionId,
+          expectedVoiceSnapshotHash: version.snapshotHash
+        });
+      }
+    });
   };
 
   const updateCharacter = (payload: UpdateCharacterPayload) => {
@@ -1140,6 +1550,11 @@ function App() {
       notify(dashboard.providerStatus.openAiImageUnavailableMessage ?? 'GPT-Image-2 chưa sẵn sàng.', true);
       return;
     }
+    const assetBlocker = getSceneFirstFrameAssetBlocker(scene.sceneId, dashboard.assetLibrary ?? null);
+    if (assetBlocker) {
+      notify(`Cảnh ${scene.sequenceNumber} chưa thể tạo first-frame. ${assetBlocker}`, true);
+      return;
+    }
     const frames = dashboard.sceneFirstFrames.filter((frame) => frame.sceneId === scene.sceneId);
     const attempt = regenerate ? Math.max(0, ...frames.map((frame) => frame.version)) + 1 : 1;
     setFirstFrameOperation((current) => current?.sceneId === scene.sceneId ? null : current);
@@ -1193,6 +1608,12 @@ function App() {
     if (generationBusy) return;
     setBusy(true);
     postToHost('media.tools.install.prepare');
+  };
+
+  const updateSpeechSynchronizationSetting = (enabled: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    postToHost('desktop.settings.update', { speechSynchronizationEnabled: enabled });
   };
 
   return (
@@ -1303,18 +1724,28 @@ function App() {
             busy={busy}
             onTest={(providerCode) => postToHost('providers.settings.test', { providerCode })}
           />
+        ) : page === 'settings' ? (
+          <DesktopSettingsPage
+            settings={desktopSettings}
+            busy={busy}
+            onSpeechSynchronizationChange={updateSpeechSynchronizationSetting}
+          />
         ) : page === 'longVideo' ? (
           <LongVideoPage
             project={dashboard.selectedProject ?? null}
+            contentGenerationError={contentGenerationError}
+            contentLanguageFailure={contentLanguageFailure}
             assetLibrary={dashboard.assetLibrary ?? null}
             sceneFirstFrames={dashboard.sceneFirstFrames}
             firstFrameOperation={firstFrameOperation}
             providerStatus={dashboard.providerStatus}
             mediaTools={dashboard.mediaTools}
+            speechSynchronizationEnabled={dashboard.features.speechSynchronizationEnabled}
             busy={generationBusy}
             onCreate={createProject}
             onGenerateContent={generateContent}
             onRegenerateContent={requestContentRegeneration}
+            onRepairContent={requestContentRepair}
             onGenerateVideo={generateVideos}
             onRequestSceneFirstFrame={requestSceneFirstFrame}
             onApproveSceneFirstFrame={approveSceneFirstFrame}
@@ -1322,7 +1753,14 @@ function App() {
             onRetrySceneFirstFrameDownload={retrySceneFirstFrameDownload}
             onPreviewSceneFirstFrame={setFirstFramePreview}
             onRenderFinalVideo={renderFinalVideo}
+            onExportFinalVideo={exportFinalVideo}
             onApproveSceneNativeAudio={approveSceneNativeAudio}
+            onUnapproveSceneAudio={unapproveSceneAudio}
+            onVerifySceneSpeech={requestSceneSpeechVerification}
+            onCreateVoiceProfile={createVoiceProfileDraft}
+            onPreviewVoiceProfile={requestVoiceProfilePreview}
+            onApproveVoiceProfile={approveVoiceProfile}
+            onSupersedeVoiceProfile={supersedeVoiceProfile}
             onInstallMediaTools={requestMediaToolInstall}
             onCheckMediaTools={checkMediaTools}
             onUpdateScene={updateScene}
@@ -1349,16 +1787,23 @@ function App() {
         ) : (
           <DashboardPage
             project={dashboard.selectedProject ?? null}
+            contentGenerationError={contentGenerationError}
+            contentLanguageFailure={contentLanguageFailure}
             models={dashboard.models}
             providerStatus={dashboard.providerStatus}
             mediaTools={dashboard.mediaTools}
+            speechSynchronizationEnabled={dashboard.features.speechSynchronizationEnabled}
             busy={generationBusy}
             onCreate={createProject}
             onGenerateContent={generateContent}
             onRegenerateContent={requestContentRegeneration}
+            onRepairContent={requestContentRepair}
             onGenerateVideo={generateVideos}
             onRenderFinalVideo={renderFinalVideo}
+            onExportFinalVideo={exportFinalVideo}
             onApproveSceneNativeAudio={approveSceneNativeAudio}
+            onUnapproveSceneAudio={unapproveSceneAudio}
+            onVerifySceneSpeech={requestSceneSpeechVerification}
             onInstallMediaTools={requestMediaToolInstall}
             onCheckMediaTools={checkMediaTools}
             onUpdateScene={updateScene}
@@ -2170,7 +2615,7 @@ function Header({
           <Plus size={17} /> <span>Tạo video mới</span>
         </button>
       )}
-      {page !== 'apiKeys' && page !== 'shortVideo' && page !== 'vietsub' && dashboard.projects.length > 0 && (
+      {page !== 'apiKeys' && page !== 'settings' && page !== 'shortVideo' && page !== 'vietsub' && dashboard.projects.length > 0 && (
         <label className="project-picker">
           <span>Dự án</span>
           <select
@@ -2432,16 +2877,23 @@ function ShortVideoPage({
 
 function DashboardPage({
   project,
+  contentGenerationError,
+  contentLanguageFailure,
   models,
   providerStatus,
   mediaTools,
+  speechSynchronizationEnabled,
   busy,
   onCreate,
   onGenerateContent,
   onRegenerateContent,
+  onRepairContent,
   onGenerateVideo,
   onRenderFinalVideo,
+  onExportFinalVideo,
   onApproveSceneNativeAudio,
+  onUnapproveSceneAudio,
+  onVerifySceneSpeech,
   onInstallMediaTools,
   onCheckMediaTools,
   onUpdateScene,
@@ -2456,16 +2908,23 @@ function DashboardPage({
   onUnavailable
 }: {
   project: ProjectDashboard | null;
+  contentGenerationError: string | null;
+  contentLanguageFailure: ContentLanguageFailureView | null;
   models: AiModel[];
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
+  speechSynchronizationEnabled: boolean;
   busy: boolean;
   onCreate: (payload: CreateProjectPayload) => void;
   onGenerateContent: () => void;
   onRegenerateContent: () => void;
+  onRepairContent: () => void;
   onGenerateVideo: (sceneIds: string[]) => void;
   onRenderFinalVideo: () => void;
-  onApproveSceneNativeAudio: (sceneId: string, playbackConfirmed: boolean) => void;
+  onExportFinalVideo: () => void;
+  onApproveSceneNativeAudio: (sceneId: string, playbackConfirmed: boolean, speechReviewReason?: string) => void;
+  onUnapproveSceneAudio: (sceneId: string) => void;
+  onVerifySceneSpeech: (scene: SceneSummary) => void;
   onInstallMediaTools: () => void;
   onCheckMediaTools: () => void;
   onUpdateScene: (payload: UpdateScenePayload) => void;
@@ -2485,13 +2944,20 @@ function DashboardPage({
     <div className="page-shell">
       <div className="workspace-grid">
         <section className="workspace-main">
-          <CreateVideoCard busy={busy} onCreate={onCreate} />
+          <CreateVideoCard
+            busy={busy}
+            speechSynchronizationEnabled={speechSynchronizationEnabled}
+            onCreate={onCreate}
+          />
           <GenerationActions
             project={project}
+            errorMessage={contentGenerationError}
+            languageFailure={contentLanguageFailure}
             providerStatus={providerStatus}
             busy={busy}
             onGenerateContent={onGenerateContent}
             onRegenerateContent={onRegenerateContent}
+            onRepairContent={onRepairContent}
           />
           <CharacterSection
             project={project}
@@ -2513,6 +2979,8 @@ function DashboardPage({
             busy={busy}
             onGenerateVideo={onGenerateVideo}
             onApproveNativeAudio={onApproveSceneNativeAudio}
+            onUnapproveAudio={onUnapproveSceneAudio}
+            onVerifySceneSpeech={onVerifySceneSpeech}
             onInstallMediaTools={onInstallMediaTools}
             onCheckMediaTools={onCheckMediaTools}
             onUpdateScene={onUpdateScene}
@@ -2534,6 +3002,7 @@ function DashboardPage({
             busy={busy}
             mediaToolsReady={mediaTools.ready}
             onRender={onRenderFinalVideo}
+            onExport={onExportFinalVideo}
             onUnavailable={onUnavailable}
           />
         </aside>
@@ -2544,15 +3013,19 @@ function DashboardPage({
 
 function LongVideoPage({
   project,
+  contentGenerationError,
+  contentLanguageFailure,
   assetLibrary,
   sceneFirstFrames,
   firstFrameOperation,
   providerStatus,
   mediaTools,
+  speechSynchronizationEnabled,
   busy,
   onCreate,
   onGenerateContent,
   onRegenerateContent,
+  onRepairContent,
   onGenerateVideo,
   onRequestSceneFirstFrame,
   onApproveSceneFirstFrame,
@@ -2560,7 +3033,14 @@ function LongVideoPage({
   onRetrySceneFirstFrameDownload,
   onPreviewSceneFirstFrame,
   onRenderFinalVideo,
+  onExportFinalVideo,
   onApproveSceneNativeAudio,
+  onUnapproveSceneAudio,
+  onVerifySceneSpeech,
+  onCreateVoiceProfile,
+  onPreviewVoiceProfile,
+  onApproveVoiceProfile,
+  onSupersedeVoiceProfile,
   onInstallMediaTools,
   onCheckMediaTools,
   onUpdateScene,
@@ -2585,15 +3065,19 @@ function LongVideoPage({
   onUnavailable
 }: {
   project: ProjectDashboard | null;
+  contentGenerationError: string | null;
+  contentLanguageFailure: ContentLanguageFailureView | null;
   assetLibrary: ProjectAssetLibrary | null;
   sceneFirstFrames: SceneFirstFrameSummary[];
   firstFrameOperation: SceneFirstFrameOperation | null;
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
+  speechSynchronizationEnabled: boolean;
   busy: boolean;
   onCreate: (payload: CreateProjectPayload) => void;
   onGenerateContent: () => void;
   onRegenerateContent: () => void;
+  onRepairContent: () => void;
   onGenerateVideo: (sceneIds: string[]) => void;
   onRequestSceneFirstFrame: (scene: SceneSummary, regenerate: boolean) => void;
   onApproveSceneFirstFrame: (frame: SceneFirstFrameSummary) => void;
@@ -2601,7 +3085,14 @@ function LongVideoPage({
   onRetrySceneFirstFrameDownload: (frame: SceneFirstFrameSummary) => void;
   onPreviewSceneFirstFrame: (frame: SceneFirstFrameSummary) => void;
   onRenderFinalVideo: () => void;
-  onApproveSceneNativeAudio: (sceneId: string, playbackConfirmed: boolean) => void;
+  onExportFinalVideo: () => void;
+  onApproveSceneNativeAudio: (sceneId: string, playbackConfirmed: boolean, speechReviewReason?: string) => void;
+  onUnapproveSceneAudio: (sceneId: string) => void;
+  onVerifySceneSpeech: (scene: SceneSummary) => void;
+  onCreateVoiceProfile: (scope: 'ProjectNarrator' | 'Character', characterId: string | null, voiceCode: string, speakingRate: number) => void;
+  onPreviewVoiceProfile: (version: VoiceProfileSummary) => void;
+  onApproveVoiceProfile: (version: VoiceProfileSummary, playbackConfirmed: boolean) => void;
+  onSupersedeVoiceProfile: (version: VoiceProfileSummary) => void;
   onInstallMediaTools: () => void;
   onCheckMediaTools: () => void;
   onUpdateScene: (payload: UpdateScenePayload) => void;
@@ -2651,7 +3142,11 @@ function LongVideoPage({
             <button onClick={() => setActiveStep('content')}>Tiếp tục dự án <ArrowRight size={15} /></button>
           </section>
         )}
-        <CreateVideoCard busy={busy} onCreate={onCreate} />
+        <CreateVideoCard
+          busy={busy}
+          speechSynchronizationEnabled={speechSynchronizationEnabled}
+          onCreate={onCreate}
+        />
       </>;
     }
 
@@ -2661,10 +3156,13 @@ function LongVideoPage({
         {project && <LongVideoContentScenes scenes={project.scenes} />}
         <GenerationActions
           project={project}
+          errorMessage={contentGenerationError}
+          languageFailure={contentLanguageFailure}
           providerStatus={providerStatus}
           busy={busy}
           onGenerateContent={onGenerateContent}
           onRegenerateContent={onRegenerateContent}
+          onRepairContent={onRepairContent}
         />
         <WorkflowCard project={project} />
         <PipelineDetails project={project} onUnavailable={onUnavailable} />
@@ -2680,18 +3178,30 @@ function LongVideoPage({
           <button className={assetTab === 'Item' ? 'active' : ''} onClick={() => setAssetTab('Item')}><Database size={16} /> Item <span>{countAssets(assetLibrary, 'Item')}</span></button>
         </div>
         {assetTab === 'characters' ? (
-          <CharacterSection
-            project={project}
-            providerStatus={providerStatus}
-            busy={busy}
-            imageBusyId={characterImageBusyId}
-            onRegenerateContent={onRegenerateContent}
-            onUpdate={onUpdateCharacter}
-            onSelectReference={onSelectCharacterReference}
-            onGenerateReference={onGenerateCharacterReference}
-            onApprove={onApproveCharacter}
-            onOpenImageSetup={onOpenImageSetup}
-          />
+          <>
+            {speechSynchronizationEnabled && project?.speechProductionPolicy === 'CanonicalVoice' && (
+              <VoiceProfilesSection
+                project={project}
+                busy={busy}
+                onCreateDraft={onCreateVoiceProfile}
+                onPreview={onPreviewVoiceProfile}
+                onApprove={onApproveVoiceProfile}
+                onSupersede={onSupersedeVoiceProfile}
+              />
+            )}
+            <CharacterSection
+              project={project}
+              providerStatus={providerStatus}
+              busy={busy}
+              imageBusyId={characterImageBusyId}
+              onRegenerateContent={onRegenerateContent}
+              onUpdate={onUpdateCharacter}
+              onSelectReference={onSelectCharacterReference}
+              onGenerateReference={onGenerateCharacterReference}
+              onApprove={onApproveCharacter}
+              onOpenImageSetup={onOpenImageSetup}
+            />
+          </>
         ) : (
           <ProjectAssetLibrarySection
             project={project}
@@ -2726,6 +3236,8 @@ function LongVideoPage({
         onRetrySceneFirstFrameDownload={onRetrySceneFirstFrameDownload}
         onPreviewSceneFirstFrame={onPreviewSceneFirstFrame}
         onApproveNativeAudio={onApproveSceneNativeAudio}
+        onUnapproveAudio={onUnapproveSceneAudio}
+        onVerifySceneSpeech={onVerifySceneSpeech}
         onInstallMediaTools={onInstallMediaTools}
         onCheckMediaTools={onCheckMediaTools}
         onUpdateScene={onUpdateScene}
@@ -2744,6 +3256,7 @@ function LongVideoPage({
         busy={busy}
         mediaToolsReady={mediaTools.ready}
         onRender={onRenderFinalVideo}
+        onExport={onExportFinalVideo}
         onUnavailable={onUnavailable}
       />
     </>;
@@ -3066,11 +3579,12 @@ function LongVideoContentScenes({ scenes }: { scenes: SceneSummary[] }) {
 function LongVideoExportOverview({ project, mediaTools }: { project: ProjectDashboard | null; mediaTools: MediaToolStatus }) {
   const totalScenes = project?.totalScenes ?? 0;
   const approvedScenes = project?.approvedScenes ?? 0;
-  const ready = totalScenes > 0 && approvedScenes === totalScenes && mediaTools.ready;
+  const ready = approvedScenes > 0 && mediaTools.ready;
+  const allScenesApproved = totalScenes > 0 && approvedScenes === totalScenes;
   return (
     <section className="card long-video-export-overview">
       <div className={`long-video-export-icon ${ready ? 'ready' : ''}`}>{ready ? <CircleCheck size={25} /> : <Clapperboard size={25} />}</div>
-      <div><span>KIỂM TRA TRƯỚC KHI XUẤT</span><h3>{ready ? 'Dự án đã sẵn sàng để dựng video cuối' : 'Hoàn tất các điều kiện còn thiếu'}</h3><p>{totalScenes > 0 ? `Đã duyệt ${approvedScenes}/${totalScenes} cảnh. ${mediaTools.ready ? 'FFmpeg và FFprobe đã sẵn sàng.' : mediaTools.message}` : 'Dự án chưa có cảnh để dựng video.'}</p></div>
+      <div><span>KIỂM TRA TRƯỚC KHI XUẤT</span><h3>{ready ? allScenesApproved ? 'Dự án đã sẵn sàng để dựng video cuối' : 'Có thể dựng video từ các cảnh đã duyệt' : 'Hoàn tất các điều kiện còn thiếu'}</h3><p>{totalScenes > 0 ? `Đã duyệt ${approvedScenes}/${totalScenes} cảnh. ${approvedScenes > 0 && approvedScenes < totalScenes ? 'Bản dựng chỉ gồm các cảnh đã duyệt. ' : ''}${mediaTools.ready ? 'FFmpeg và FFprobe đã sẵn sàng.' : mediaTools.message}` : 'Dự án chưa có cảnh để dựng video.'}</p></div>
       <strong className={ready ? 'ready' : 'waiting'}>{ready ? 'Sẵn sàng' : 'Chưa sẵn sàng'}</strong>
     </section>
   );
@@ -3102,6 +3616,9 @@ function LongVideoReadinessCard({
       <h2>Điều kiện workflow</h2>
       <div><span><Bot size={15} /> OpenAI Content</span><strong className={providerStatus.openAiReady ? 'ready' : 'missing'}>{providerStatus.openAiReady ? 'Sẵn sàng' : 'Thiếu cấu hình'}</strong></div>
       <div><span><Film size={15} /> Video Provider</span><strong className={providerStatus.videoReady ? 'ready' : 'missing'}>{providerStatus.videoReady ? 'Sẵn sàng' : 'Thiếu cấu hình'}</strong></div>
+      {project?.speechProductionPolicy === 'CanonicalVoice' && (
+        <div><span><Volume2 size={15} /> Canonical TTS</span><strong className={providerStatus.openAiVoiceReady ? 'ready' : 'missing'}>{providerStatus.openAiVoiceReady ? 'Sẵn sàng' : 'Thiếu cấu hình'}</strong></div>
+      )}
       <div><span><Users size={15} /> Nhân vật</span><strong className={charactersReady ? 'ready' : 'waiting'}>{characterLabel}</strong></div>
       <div><span><Clapperboard size={15} /> FFmpeg</span><strong className={mediaTools.ready ? 'ready' : 'missing'}>{mediaTools.ready ? 'Sẵn sàng' : 'Cần kiểm tra'}</strong></div>
     </section>
@@ -3110,20 +3627,26 @@ function LongVideoReadinessCard({
 
 function GenerationActions({
   project,
+  errorMessage,
+  languageFailure,
   providerStatus,
   busy,
   onGenerateContent,
-  onRegenerateContent
+  onRegenerateContent,
+  onRepairContent
 }: {
   project: ProjectDashboard | null;
+  errorMessage: string | null;
+  languageFailure: ContentLanguageFailureView | null;
   providerStatus: GenerationProviderStatus;
   busy: boolean;
   onGenerateContent: () => void;
   onRegenerateContent: () => void;
+  onRepairContent: () => void;
 }) {
   if (!project) return null;
   const hasContent = project.totalScenes > 0;
-  if (hasContent && !project.requiresVietnameseContentRegeneration) return null;
+  if (hasContent && !project.requiresVietnameseContentRegeneration && !errorMessage) return null;
   const requiresVietnamese = project.requiresVietnameseContentRegeneration;
 
   return (
@@ -3134,6 +3657,34 @@ function GenerationActions({
         <p>{requiresVietnamese
           ? 'Dự án video dài dùng provider Native Audio còn dữ liệu tiếng Anh. OpenAI cần tạo một version tiếng Việt mới trước khi sinh clip.'
           : 'OpenAI sẽ viết hook, kịch bản, chia cảnh và tạo prompt có cấu trúc.'}</p>
+        {errorMessage && (
+          <div className="generation-content-error" role="alert">
+            <TriangleAlert size={15} />
+            <div>
+              <strong>{languageFailure?.message ?? errorMessage}</strong>
+              {languageFailure && languageFailure.violations.length > 0 && (
+                <ul>
+                  {languageFailure.violations.map((violation) => (
+                    <li key={`${violation.field}:${violation.reason}`}>{formatViolation(violation)}</li>
+                  ))}
+                </ul>
+              )}
+              {languageFailure?.providerRequestId && (
+                <small>Mã đối chiếu: {shortProviderRequestId(languageFailure.providerRequestId)}</small>
+              )}
+              {languageFailure?.canRepair && (
+                <button type="button" disabled={busy || !providerStatus.openAiReady} onClick={onRepairContent}>
+                  <WandSparkles size={14} /> Sửa các trường bằng AI
+                </button>
+              )}
+              {languageFailure && !languageFailure.canRepair && (
+                <small>{languageFailure.code === 'content_failure_schema_not_ready'
+                  ? 'Server chưa có migration 4.1.2; hãy liên hệ vận hành, không thử repair.'
+                  : 'Bản lỗi này không thể phục hồi; hãy tạo lại toàn bộ nội dung.'}</small>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       <div className="generation-provider-state">
         <span className={providerStatus.openAiReady ? 'ready' : 'missing'}>
@@ -3145,12 +3696,187 @@ function GenerationActions({
       </div>
       <button
         disabled={busy || !providerStatus.openAiReady}
-        onClick={requiresVietnamese ? onRegenerateContent : onGenerateContent}
+        onClick={errorMessage || requiresVietnamese ? onRegenerateContent : onGenerateContent}
       >
         {busy ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />}
-        {requiresVietnamese ? 'Sinh lại nội dung tiếng Việt' : 'Tạo nội dung & chia cảnh'}
+        {errorMessage ? 'Tạo lại toàn bộ' : requiresVietnamese ? 'Sinh lại nội dung tiếng Việt' : 'Tạo nội dung & chia cảnh'}
       </button>
     </section>
+  );
+}
+
+function VoiceProfilesSection({
+  project,
+  busy,
+  onCreateDraft,
+  onPreview,
+  onApprove,
+  onSupersede
+}: {
+  project: ProjectDashboard;
+  busy: boolean;
+  onCreateDraft: (scope: 'ProjectNarrator' | 'Character', characterId: string | null, voiceCode: string, speakingRate: number) => void;
+  onPreview: (version: VoiceProfileSummary) => void;
+  onApprove: (version: VoiceProfileSummary, playbackConfirmed: boolean) => void;
+  onSupersede: (version: VoiceProfileSummary) => void;
+}) {
+  const versions = project.voiceProfiles ?? [];
+  const hasNarratorScenes = project.scenes.some((scene) => scene.speechMode === 'NativeVoiceOver');
+  const speakingCharacterIds = new Set(project.scenes
+    .filter((scene) => scene.speechMode === 'OnCameraDialogue')
+    .flatMap((scene) => scene.characters.map((character) => character.characterId)));
+  const targets = [
+    ...(hasNarratorScenes ? [{
+      key: 'narrator',
+      label: 'Narrator của dự án',
+      scope: 'ProjectNarrator' as const,
+      characterId: null,
+      defaultVoiceCode: project.voiceCode ?? 'female-sweet',
+      defaultRate: project.voiceSpeakingRate ?? 1
+    }] : []),
+    ...project.characters
+      .filter((character) => speakingCharacterIds.has(character.characterId))
+      .map((character) => ({
+        key: character.characterId,
+        label: `Nhân vật ${character.name}`,
+        scope: 'Character' as const,
+        characterId: character.characterId,
+        defaultVoiceCode: character.voiceCode ?? project.voiceCode ?? 'female-sweet',
+        defaultRate: character.voiceSpeakingRate ?? project.voiceSpeakingRate ?? 1
+      }))
+  ];
+
+  return (
+    <section className="card voice-profile-section">
+      <header className="voice-profile-header">
+        <div>
+          <span className="generation-eyebrow">CANONICAL VOICE · NGUỒN GIỌNG BẤT BIẾN</span>
+          <h2>Khóa giọng trước khi tạo video</h2>
+          <p>Mỗi narrator/nhân vật phải có một version đã nghe preview và duyệt. Đổi giọng sẽ làm mất hiệu lực audio/render cũ.</p>
+        </div>
+        <span className="voice-policy-badge"><Volume2 size={14} /> CanonicalVoice</span>
+      </header>
+      {targets.length === 0 ? (
+        <div className="voice-profile-empty"><CircleHelp size={16} /> Nội dung hiện tại chưa có cảnh cần lời nói.</div>
+      ) : (
+        <div className="voice-profile-grid">
+          {targets.map((target) => (
+            <VoiceProfileTargetCard
+              key={target.key}
+              label={target.label}
+              scope={target.scope}
+              characterId={target.characterId}
+              defaultVoiceCode={target.defaultVoiceCode}
+              defaultRate={target.defaultRate}
+              versions={versions.filter((version) =>
+                version.scope === target.scope &&
+                (target.characterId === null
+                  ? !version.characterId
+                  : version.characterId?.toLowerCase() === target.characterId.toLowerCase()))}
+              busy={busy}
+              onCreateDraft={onCreateDraft}
+              onPreview={onPreview}
+              onApprove={onApprove}
+              onSupersede={onSupersede}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function VoiceProfileTargetCard({
+  label,
+  scope,
+  characterId,
+  defaultVoiceCode,
+  defaultRate,
+  versions,
+  busy,
+  onCreateDraft,
+  onPreview,
+  onApprove,
+  onSupersede
+}: {
+  label: string;
+  scope: 'ProjectNarrator' | 'Character';
+  characterId: string | null;
+  defaultVoiceCode: string;
+  defaultRate: number;
+  versions: VoiceProfileSummary[];
+  busy: boolean;
+  onCreateDraft: (scope: 'ProjectNarrator' | 'Character', characterId: string | null, voiceCode: string, speakingRate: number) => void;
+  onPreview: (version: VoiceProfileSummary) => void;
+  onApprove: (version: VoiceProfileSummary, playbackConfirmed: boolean) => void;
+  onSupersede: (version: VoiceProfileSummary) => void;
+}) {
+  const approved = versions.find((version) => version.status === 'Approved') ?? null;
+  const draft = versions.find((version) => version.status === 'Draft') ?? null;
+  const [voiceCode, setVoiceCode] = useState(defaultVoiceCode);
+  const [speakingRate, setSpeakingRate] = useState(defaultRate);
+  const [previewPlayed, setPreviewPlayed] = useState(false);
+
+  useEffect(() => {
+    setVoiceCode(draft?.voiceCode ?? approved?.voiceCode ?? defaultVoiceCode);
+    setSpeakingRate(draft?.speakingRate ?? approved?.speakingRate ?? defaultRate);
+    setPreviewPlayed(false);
+  }, [draft?.voiceProfileVersionId, approved?.voiceProfileVersionId, defaultVoiceCode, defaultRate]);
+
+  return (
+    <article className={`voice-profile-card${approved ? ' approved' : ''}`}>
+      <div className="voice-profile-title">
+        <div><small>{scope === 'ProjectNarrator' ? 'PROJECT NARRATOR' : 'CHARACTER VOICE'}</small><strong>{label}</strong></div>
+        <span className={approved ? 'ready' : draft ? 'draft' : 'missing'}>
+          {approved ? <ShieldCheck size={13} /> : <Clock3 size={13} />}
+          {approved ? `Đã khóa v${approved.version}` : draft ? `Bản nháp v${draft.version}` : 'Chưa khóa'}
+        </span>
+      </div>
+      <div className="voice-profile-controls">
+        <label>Giọng<select disabled={busy || Boolean(draft)} value={voiceCode} onChange={(event) => setVoiceCode(event.target.value)}>
+          <option value="female-sweet">Nữ · dịu, rõ</option>
+          <option value="male-warm">Nam · ấm, rõ</option>
+        </select></label>
+        <label>Tốc độ<select disabled={busy || Boolean(draft)} value={speakingRate} onChange={(event) => setSpeakingRate(Number(event.target.value))}>
+          <option value={0.9}>Chậm · 0,9×</option>
+          <option value={1}>Tự nhiên · 1,0×</option>
+          <option value={1.1}>Nhanh · 1,1×</option>
+        </select></label>
+      </div>
+      {draft ? (
+        <div className="voice-profile-version">
+          <div className="voice-profile-version-meta">
+            <span>{draft.providerCode}/{draft.modelCode}</span>
+            <span>snapshot {draft.snapshotHash.slice(0, 12)}</span>
+          </div>
+          {draft.preview?.url ? (
+            <>
+              <audio controls preload="metadata" src={draft.preview.url} onEnded={() => setPreviewPlayed(true)} />
+              <small>{previewPlayed ? 'Đã nghe hết preview · có thể duyệt' : 'Hãy nghe hết preview trước khi duyệt.'}</small>
+            </>
+          ) : (
+            <div className="voice-preview-missing"><TriangleAlert size={14} /> Chưa có audio preview trên máy.</div>
+          )}
+          <div className="voice-profile-actions">
+            <button type="button" disabled={busy} onClick={() => onPreview(draft)}><WandSparkles size={14} /> {draft.preview?.url ? 'Tạo lại preview' : 'Tạo preview'}</button>
+            <button type="button" className="voice-approve" disabled={busy || !draft.preview?.url || !previewPlayed} onClick={() => onApprove(draft, previewPlayed)}><ShieldCheck size={14} /> Duyệt giọng</button>
+            <button type="button" className="voice-cancel" disabled={busy} onClick={() => onSupersede(draft)}><X size={14} /> Bỏ nháp</button>
+          </div>
+        </div>
+      ) : (
+        <div className="voice-profile-actions">
+          <button type="button" disabled={busy} onClick={() => onCreateDraft(scope, characterId, voiceCode, speakingRate)}>
+            <Plus size={14} /> {approved ? 'Tạo version mới' : 'Tạo bản nháp giọng'}
+          </button>
+          {approved && <button type="button" className="voice-cancel" disabled={busy} onClick={() => onSupersede(approved)}><X size={14} /> Hủy duyệt</button>}
+        </div>
+      )}
+      {approved && (
+        <div className="voice-approved-summary">
+          <CircleCheck size={14} /> {voiceName(approved.voiceCode)} · {approved.speakingRate}× · v{approved.version} · {approved.snapshotHash.slice(0, 12)}
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -3265,6 +3991,8 @@ function CharacterCard({
   const [wardrobe, setWardrobe] = useState(character.wardrobe);
   const [immutableTraits, setImmutableTraits] = useState(character.immutableTraits.join('\n'));
   const [forbiddenChanges, setForbiddenChanges] = useState(character.forbiddenChanges.join('\n'));
+  const [voiceCode, setVoiceCode] = useState(character.voiceCode ?? '');
+  const [voiceSpeakingRate, setVoiceSpeakingRate] = useState(character.voiceSpeakingRate ?? 1);
   const locked = character.status === 'Approved';
   const valid = name.trim() && visualIdentity.trim() && wardrobe.trim() &&
     parseCharacterRules(immutableTraits).length > 0 && parseCharacterRules(forbiddenChanges).length > 0;
@@ -3276,6 +4004,8 @@ function CharacterCard({
     setWardrobe(character.wardrobe);
     setImmutableTraits(character.immutableTraits.join('\n'));
     setForbiddenChanges(character.forbiddenChanges.join('\n'));
+    setVoiceCode(character.voiceCode ?? '');
+    setVoiceSpeakingRate(character.voiceSpeakingRate ?? 1);
     if (!character.canEdit) setEditing(false);
   }, [character]);
 
@@ -3288,7 +4018,9 @@ function CharacterCard({
       visualIdentity: visualIdentity.trim(),
       wardrobe: wardrobe.trim(),
       immutableTraits: parseCharacterRules(immutableTraits),
-      forbiddenChanges: parseCharacterRules(forbiddenChanges)
+      forbiddenChanges: parseCharacterRules(forbiddenChanges),
+      voiceCode: voiceCode || null,
+      voiceSpeakingRate: voiceCode ? voiceSpeakingRate : null
     });
     setEditing(false);
   };
@@ -3355,6 +4087,22 @@ function CharacterCard({
             <label className="wide">Trang phục và phụ kiện<textarea maxLength={4000} value={wardrobe} onChange={(event) => setWardrobe(event.target.value)} /></label>
             <label>Đặc điểm cố định<textarea value={immutableTraits} onChange={(event) => setImmutableTraits(event.target.value)} /></label>
             <label>Không được thay đổi<textarea value={forbiddenChanges} onChange={(event) => setForbiddenChanges(event.target.value)} /></label>
+            <label>
+              Giọng nhân vật
+              <select value={voiceCode} onChange={(event) => setVoiceCode(event.target.value)}>
+                <option value="">Dùng giọng narrator của dự án</option>
+                <option value="female-sweet">Nữ · dịu, rõ</option>
+                <option value="male-warm">Nam · ấm, rõ</option>
+              </select>
+            </label>
+            <label>
+              Tốc độ giọng
+              <select disabled={!voiceCode} value={voiceSpeakingRate} onChange={(event) => setVoiceSpeakingRate(Number(event.target.value))}>
+                <option value={0.9}>Chậm · 0,9×</option>
+                <option value={1}>Tự nhiên · 1,0×</option>
+                <option value={1.1}>Nhanh · 1,1×</option>
+              </select>
+            </label>
             <div className="character-edit-actions">
               <button type="button" className="scene-cancel" disabled={busy} onClick={() => setEditing(false)}><X size={14} /> Hủy</button>
               <button type="button" className="scene-save" disabled={busy || !valid} onClick={save}><Save size={14} /> Lưu hồ sơ</button>
@@ -3365,6 +4113,7 @@ function CharacterCard({
             <div className="character-profile-grid">
               <div><span>Nhận diện cố định</span><p>{character.visualIdentity}</p></div>
               <div><span>Trang phục</span><p>{character.wardrobe}</p></div>
+              <div><span>Giọng nhân vật</span><p>{character.voiceCode ? `${character.voiceCode} · ${character.voiceSpeakingRate ?? 1}×` : 'Dùng giọng narrator của dự án'}</p></div>
             </div>
             <div className="character-rule-row">
               <div><span>Đặc điểm khóa</span>{character.immutableTraits.map((trait) => <small key={trait}>{trait}</small>)}</div>
@@ -3633,6 +4382,8 @@ function StoryboardSection({
   onRetrySceneFirstFrameDownload = () => undefined,
   onPreviewSceneFirstFrame = () => undefined,
   onApproveNativeAudio,
+  onUnapproveAudio,
+  onVerifySceneSpeech,
   onInstallMediaTools,
   onCheckMediaTools,
   onUpdateScene,
@@ -3655,7 +4406,9 @@ function StoryboardSection({
   onRejectSceneFirstFrame?: (frame: SceneFirstFrameSummary) => void;
   onRetrySceneFirstFrameDownload?: (frame: SceneFirstFrameSummary) => void;
   onPreviewSceneFirstFrame?: (frame: SceneFirstFrameSummary) => void;
-  onApproveNativeAudio: (sceneId: string, playbackConfirmed: boolean) => void;
+  onApproveNativeAudio: (sceneId: string, playbackConfirmed: boolean, speechReviewReason?: string) => void;
+  onUnapproveAudio: (sceneId: string) => void;
+  onVerifySceneSpeech: (scene: SceneSummary) => void;
   onInstallMediaTools: () => void;
   onCheckMediaTools: () => void;
   onUpdateScene: (payload: UpdateScenePayload) => void;
@@ -3670,6 +4423,8 @@ function StoryboardSection({
   const selectionProjectId = useRef('');
   const scenes = project?.scenes ?? [];
   const isVeo = project?.videoProviderCode?.toLowerCase() === 'fal';
+  const canonicalWorkflowReady = project?.speechProductionPolicy !== 'CanonicalVoice' ||
+    providerStatus.canonicalVoiceReady === true;
   const hasReadyFirstFrame = (sceneId: string) => !isVeo || sceneFirstFrames.some((frame) =>
     frame.sceneId === sceneId && frame.status === 'Approved' && frame.isCurrent && Boolean(frame.previewUrl));
   const filteredScenes = scenes.filter((scene) => matchesStoryboardFilter(scene, filter));
@@ -3706,16 +4461,27 @@ function StoryboardSection({
 
   const selectedScenes = selectableScenes.filter((scene) => selectedSceneIds.has(scene.sceneId));
   const selectedIds = selectedScenes.map((scene) => scene.sceneId);
-  const selectedDownloadCount = selectedScenes.filter(sceneNeedsLocalCompletion).length;
-  const selectedCreateCount = selectedScenes.length - selectedDownloadCount;
-  const downloadOnlySelection = selectedDownloadCount > 0 && selectedCreateCount === 0;
-  const selectionActionLabel = selectedIds.length === 0
-    ? 'Chọn cảnh để xử lý'
-    : downloadOnlySelection
-      ? `Tải ${selectedDownloadCount} clip đã tạo`
-      : selectedDownloadCount > 0
-        ? `Xử lý ${selectedIds.length} clip`
-        : `Tạo ${selectedCreateCount} clip video`;
+  const actionSummary = getStoryboardActionSummary(selectedScenes, project.speechProductionPolicy);
+  const downloadOnlySelection = actionSummary.downloadCount > 0 && actionSummary.downloadCount === selectedScenes.length;
+  const selectionActionLabel = actionSummary.label;
+  const canonicalSpeechScenes = scenes.filter((scene) =>
+    isCanonicalSpeechScene(scene, project.speechProductionPolicy));
+  const canonicalNeedWavCount = canonicalSpeechScenes.filter((scene) =>
+    !scene.hasCanonicalVoicePreview &&
+    scene.speechStatus !== 'SpeechApproved' &&
+    scene.speechStatus !== 'SpeechReadyForLipSync').length;
+  const canonicalNeedVoiceReviewCount = canonicalSpeechScenes.filter((scene) =>
+    scene.speechMode === 'OnCameraDialogue' &&
+    scene.hasCanonicalVoicePreview &&
+    !scene.preview?.url &&
+    scene.speechStatus !== 'SpeechApproved' &&
+    scene.speechStatus !== 'SpeechReadyForLipSync').length;
+  const canonicalReadyForVideoCount = canonicalSpeechScenes.filter((scene) =>
+    scene.speechMode === 'NativeVoiceOver' &&
+    scene.hasCanonicalVoicePreview &&
+    !scene.preview?.url).length;
+  const canonicalVideoReviewCount = canonicalSpeechScenes.filter((scene) =>
+    Boolean(scene.preview?.url) && !isSceneCompleted(scene)).length;
   const completedScenes = scenes.filter(isSceneCompleted).length;
   const totalDurationSeconds = Math.ceil(scenes.reduce((total, scene) => total + scene.durationMs, 0) / 1000);
   const allSelected = visibleSelectableScenes.length > 0 && visibleSelectableScenes.every(
@@ -3761,14 +4527,16 @@ function StoryboardSection({
           <button
             type="button"
             className="storyboard-generate"
-            disabled={busy || !providerStatus.videoReady || !mediaTools.ready || selectedIds.length === 0}
+            disabled={busy || !providerStatus.videoReady || !canonicalWorkflowReady || !mediaTools.ready || selectedIds.length === 0}
             onClick={() => onGenerateVideo(selectedIds)}
           >
             {busy
               ? <LoaderCircle className="spin" size={17} />
               : downloadOnlySelection
                 ? <Download size={17} />
-                : <Film size={17} />}
+                : actionSummary.voicePreparationCount === selectedScenes.length
+                  ? <Volume2 size={17} />
+                  : <Film size={17} />}
             {selectionActionLabel}
           </button>
         </div>
@@ -3777,6 +4545,12 @@ function StoryboardSection({
       {!providerStatus.videoReady && (
         <div className="storyboard-warning">
           <TriangleAlert size={16} /> {providerStatus.videoUnavailableMessage || 'Provider video chưa sẵn sàng. Bạn vẫn có thể xem và chỉnh nội dung cảnh trước khi quản trị viên hoàn tất cấu hình.'}
+        </div>
+      )}
+
+      {!canonicalWorkflowReady && (
+        <div className="storyboard-warning">
+          <TriangleAlert size={16} /> {providerStatus.canonicalVoiceUnavailableMessage || 'Canonical Voice chưa sẵn sàng trên server.'}
         </div>
       )}
 
@@ -3810,6 +4584,21 @@ function StoryboardSection({
         </div>
       )}
 
+      {canonicalSpeechScenes.length > 0 && (
+        <div className="storyboard-workflow-summary" role="status">
+          <div>
+            <strong><Volume2 size={15} /> Lộ trình Canonical Voice</strong>
+            <span>Với lời dẫn ngoài khung hình, WAV qua kiểm tra kỹ thuật sẽ được dùng thẳng khi tạo video nền, không cần duyệt WAV riêng.</span>
+          </div>
+          <ul aria-label="Tổng hợp trạng thái Canonical Voice">
+            <li><b>{canonicalNeedWavCount}</b> cần tạo WAV</li>
+            <li><b>{canonicalNeedVoiceReviewCount}</b> chờ duyệt WAV thoại trực diện</li>
+            <li><b>{canonicalReadyForVideoCount}</b> sẵn sàng tạo video nền</li>
+            <li><b>{canonicalVideoReviewCount}</b> chờ duyệt video</li>
+          </ul>
+        </div>
+      )}
+
       <div className="storyboard-filters" aria-label="Lọc cảnh theo trạng thái">
         {storyboardFilters.map((item) => {
           const count = scenes.filter((scene) => matchesStoryboardFilter(scene, item.id)).length;
@@ -3832,6 +4621,7 @@ function StoryboardSection({
             busy={busy}
             videoReady={providerStatus.videoReady}
             mediaToolsReady={mediaTools.ready}
+            speechProductionPolicy={project.speechProductionPolicy}
             enforceKlingLongFormSpeechPolicy={enforceKlingLongFormSpeechPolicy}
             onToggle={() => toggleScene(scene.sceneId)}
             onGenerate={() => onGenerateVideo([scene.sceneId])}
@@ -3840,7 +4630,9 @@ function StoryboardSection({
             onRejectFirstFrame={onRejectSceneFirstFrame}
             onRetryFirstFrameDownload={onRetrySceneFirstFrameDownload}
             onPreviewFirstFrame={onPreviewSceneFirstFrame}
-            onApproveNativeAudio={(playbackConfirmed) => onApproveNativeAudio(scene.sceneId, playbackConfirmed)}
+            onApproveNativeAudio={(playbackConfirmed, speechReviewReason) => onApproveNativeAudio(scene.sceneId, playbackConfirmed, speechReviewReason)}
+            onUnapproveAudio={() => onUnapproveAudio(scene.sceneId)}
+            onVerifySceneSpeech={() => onVerifySceneSpeech(scene)}
             onUpdate={onUpdateScene}
             saveState={sceneSaveState?.sceneId === scene.sceneId ? sceneSaveState : null}
             onClearSaveFailure={() => onClearSaveFailure(scene.sceneId)}
@@ -3865,6 +4657,7 @@ function SceneCard({
   busy,
   videoReady,
   mediaToolsReady,
+  speechProductionPolicy,
   enforceKlingLongFormSpeechPolicy,
   onToggle,
   onGenerate,
@@ -3874,6 +4667,8 @@ function SceneCard({
   onRetryFirstFrameDownload,
   onPreviewFirstFrame,
   onApproveNativeAudio,
+  onUnapproveAudio,
+  onVerifySceneSpeech,
   onUpdate,
   saveState,
   onClearSaveFailure,
@@ -3890,6 +4685,7 @@ function SceneCard({
   busy: boolean;
   videoReady: boolean;
   mediaToolsReady: boolean;
+  speechProductionPolicy: string;
   enforceKlingLongFormSpeechPolicy: boolean;
   onToggle: () => void;
   onGenerate: () => void;
@@ -3898,7 +4694,9 @@ function SceneCard({
   onRejectFirstFrame: (frame: SceneFirstFrameSummary) => void;
   onRetryFirstFrameDownload: (frame: SceneFirstFrameSummary) => void;
   onPreviewFirstFrame: (frame: SceneFirstFrameSummary) => void;
-  onApproveNativeAudio: (playbackConfirmed: boolean) => void;
+  onApproveNativeAudio: (playbackConfirmed: boolean, speechReviewReason?: string) => void;
+  onUnapproveAudio: () => void;
+  onVerifySceneSpeech: () => void;
   onUpdate: (payload: UpdateScenePayload) => void;
   saveState: SceneSaveState | null;
   onClearSaveFailure: () => void;
@@ -3914,7 +4712,9 @@ function SceneCard({
   const [soundEffects, setSoundEffects] = useState(scene.soundEffects ?? '');
   const [visualDescription, setVisualDescription] = useState(scene.visualDescription);
   const [prompt, setPrompt] = useState(scene.prompt);
-  const [previewPlaybackConfirmed, setPreviewPlaybackConfirmed] = useState(false);
+  const [videoPlaybackConfirmed, setVideoPlaybackConfirmed] = useState(false);
+  const [canonicalVoicePlaybackConfirmed, setCanonicalVoicePlaybackConfirmed] = useState(false);
+  const [speechReviewReason, setSpeechReviewReason] = useState('');
   const [speechContentConfirmed, setSpeechContentConfirmed] = useState(false);
   const [speakerConfirmed, setSpeakerConfirmed] = useState(false);
   const [lipSyncConfirmed, setLipSyncConfirmed] = useState(false);
@@ -3924,14 +4724,14 @@ function SceneCard({
   const [draftAssetIds, setDraftAssetIds] = useState<Set<string>>(new Set(assignedAssetIds));
   const assetAssignment = assetLibrary?.sceneAssignments.find((assignment) => assignment.sceneId === scene.sceneId);
   const assignedAssets = assetLibrary?.assets.filter((asset) => assignedAssetIds.includes(asset.projectAssetId)) ?? [];
-  const assignedAssetsReady = (assetAssignment?.isValid ?? true) &&
-    !(assetAssignment?.hasUnlockedAssets ?? false) &&
-    assignedAssets.every((asset) => asset.status === 'Locked');
+  const sceneAssetBlocker = getSceneFirstFrameAssetBlocker(scene.sceneId, assetLibrary);
+  const assignedAssetsReady = sceneAssetBlocker === null;
   const assetUiState = assetAssignment?.isValid === false
     ? 'invalid'
     : assignedAssetsReady
       ? 'ready'
       : 'pending';
+  const firstFrameAssetBlocker = isVeo ? sceneAssetBlocker : null;
   const draftAssets = assetLibrary?.assets.filter((asset) => draftAssetIds.has(asset.projectAssetId)) ?? [];
   const draftBackgroundCount = draftAssets.filter((asset) => asset.assetType === 'Background').length;
   const draftAssetsValid = draftAssetIds.size === 0 || draftBackgroundCount === 1;
@@ -3941,6 +4741,25 @@ function SceneCard({
   const approvedFirstFrame = firstFrames.find((frame) => frame.status === 'Approved' && frame.isCurrent) ?? null;
   const firstFrameReady = !isVeo || Boolean(approvedFirstFrame?.previewUrl);
   const selectable = canQueueScene(scene) && firstFrameReady && (sceneNeedsLocalCompletion(scene) || assignedAssetsReady);
+  const canonicalVoiceOnlyReview = Boolean(scene.hasCanonicalVoicePreview && !scene.preview?.url);
+  const requiredPlaybackConfirmed = canonicalVoiceOnlyReview
+    ? canonicalVoicePlaybackConfirmed
+    : videoPlaybackConfirmed;
+  const canonicalVoiceWorkflow = isCanonicalSpeechScene(scene, speechProductionPolicy);
+  const canonicalNarrationReadyForVideo = canonicalVoiceWorkflow &&
+    scene.speechMode === 'NativeVoiceOver' &&
+    Boolean(scene.canonicalVoicePreview?.url) &&
+    !scene.preview?.url;
+  const canonicalVoiceJourney = canonicalVoiceWorkflow
+    ? getCanonicalVoiceJourney(scene, requiredPlaybackConfirmed)
+    : null;
+  const reviewControlsReady = !canonicalVoiceOnlyReview || Boolean(scene.canonicalVoicePreview?.url);
+  const speechAudioDurationMs = scene.hasCanonicalVoicePreview
+    ? scene.canonicalVoicePreview?.durationMs
+    : scene.preview?.durationMs;
+  const audioCanBeUnapproved = isSceneCompleted(scene) ||
+    scene.speechStatus === 'SpeechReadyForLipSync' ||
+    (scene.speechStatus === 'SpeechApproved' && Boolean(scene.hasCanonicalVoicePreview));
   const validSpeech = speechMode === 'None'
     ? narration.trim().length === 0
     : narration.trim().length > 0 &&
@@ -3963,14 +4782,36 @@ function SceneCard({
             ? 'Lời thoại trực diện cần đúng một nhân vật trong cảnh.'
             : enforceKlingLongFormSpeechPolicy && speechMode === 'NativeVoiceOver' && scene.characters.length !== 0
               ? 'Lời dẫn ngoài khung hình chỉ dùng cho cảnh B-roll không có nhân vật.'
-            : null;
+              : null;
+  const reviewChecklistComplete = scene.speechMode === 'None' ||
+    (speechContentConfirmed && speakerConfirmed && lipSyncConfirmed);
+  const audioReviewBlocker = !scene.requiresAudioReview
+    ? null
+    : !canonicalVoiceOnlyReview &&
+        scene.speechVerification?.status === 'NeedsReview' &&
+            !scene.speechVerification.reviewApproved &&
+            speechReviewReason.trim().length < 10
+          ? 'ASR cần xem lại: hãy nghe WAV và nhập lý do chấp nhận tối thiểu 10 ký tự.'
+          : !scene.canApproveNativeAudio
+            ? canonicalVoiceOnlyReview
+              ? 'Canonical WAV hiện hành chưa vượt qua kiểm tra kỹ thuật hoặc không còn khớp phiên bản cảnh.'
+              : 'Audio hiện hành chưa đủ điều kiện duyệt. Hãy hoàn tất bước kiểm tra transcript.'
+            : !requiredPlaybackConfirmed
+              ? canonicalVoiceOnlyReview
+                ? 'Hãy phát Canonical WAV ít nhất một lần.'
+                : 'Hãy phát video ít nhất một lần để kiểm tra hình và tiếng.'
+              : !reviewChecklistComplete
+                ? 'Hãy xác nhận đầy đủ checklist nghe duyệt.'
+                : null;
 
   useEffect(() => {
-    setPreviewPlaybackConfirmed(false);
+    setVideoPlaybackConfirmed(false);
+    setCanonicalVoicePlaybackConfirmed(false);
     setSpeechContentConfirmed(false);
     setSpeakerConfirmed(false);
     setLipSyncConfirmed(false);
-  }, [scene.sceneId, scene.preview?.url]);
+    setSpeechReviewReason('');
+  }, [scene.sceneId, scene.preview?.url, scene.canonicalVoicePreview?.url, scene.speechVerification?.speechVerificationReportId]);
   useEffect(() => setDraftAssetIds(new Set(assignedAssetIds)), [scene.sceneId, assignedAssetIds.join('|')]);
   useEffect(() => {
     if (!assignmentSaving || busy) return;
@@ -4033,7 +4874,12 @@ function SceneCard({
           <span className={`scene-status scene-status-${status.tone}`}>{status.label}</span>
           <div className="scene-time"><Clock3 size={14} /> {formatTimeline(scene.timelineStartMs)}–{formatTimeline(scene.timelineEndMs)} · {Math.ceil(scene.durationMs / 1000)}s</div>
           {selectable && (
-            <label className="scene-selector" title="Chọn cảnh để tạo video">
+            <label
+              className="scene-selector"
+              title={needsCanonicalVoicePreparation(scene, speechProductionPolicy)
+                ? 'Chọn cảnh để chuẩn bị Canonical WAV'
+                : 'Chọn cảnh để tạo video'}
+            >
               <input type="checkbox" checked={selected} disabled={busy} onChange={onToggle} />
               <span><Check size={12} /></span>
             </label>
@@ -4042,20 +4888,52 @@ function SceneCard({
       </header>
 
       <div className="scene-card-body">
-        <div className="scene-media">
-          {scene.preview?.url ? (
-            <video
-              src={scene.preview.url}
-              controls
-              preload="metadata"
-              aria-label={`Video cảnh ${scene.sequenceNumber}`}
-              onPlay={() => setPreviewPlaybackConfirmed(true)}
-            />
-          ) : (
-            <div className="scene-placeholder">
-              <ImageIcon size={31} />
-              <strong>Chưa có thumbnail</strong>
-              <small>Clip hoàn thành sẽ hiển thị tại đây</small>
+        <div className="scene-media-column">
+          <div className="scene-media">
+            {scene.preview?.url ? (
+              <video
+                src={scene.preview.url}
+                controls
+                preload="metadata"
+                aria-label={`Video cảnh ${scene.sequenceNumber}`}
+                onPlay={() => setVideoPlaybackConfirmed(true)}
+              />
+            ) : (
+              <div className="scene-placeholder">
+                <ImageIcon size={31} />
+                <strong>Chưa có video</strong>
+                <small>
+                  {scene.hasCanonicalVoicePreview
+                    ? 'WAV đã sẵn sàng; bấm “Tạo video nền” để tiếp tục.'
+                    : 'Video hoàn thành sẽ hiển thị tại đây.'}
+                </small>
+              </div>
+            )}
+          </div>
+          {scene.canonicalVoicePreview?.url && (
+            <div className={`scene-canonical-voice ${canonicalVoicePlaybackConfirmed || canonicalNarrationReadyForVideo ? 'played' : ''}`}>
+              <div className="scene-canonical-voice-heading">
+                <strong><Volume2 size={14} /> Canonical WAV</strong>
+                <span>{canonicalNarrationReadyForVideo
+                  ? <><CircleCheck size={12} /> WAV sẵn sàng cho video</>
+                  : canonicalVoicePlaybackConfirmed
+                    ? <><CircleCheck size={12} /> Đã bắt đầu phát</>
+                    : 'Cần nghe trước khi duyệt'}</span>
+              </div>
+              <audio
+                src={scene.canonicalVoicePreview.url}
+                controls
+                preload="metadata"
+                aria-label={`Canonical Voice cảnh ${scene.sequenceNumber}`}
+                onPlay={() => setCanonicalVoicePlaybackConfirmed(true)}
+              />
+              <small>
+                Voice version {scene.voiceProfileVersionId?.slice(0, 8) ?? 'đang khóa'}
+                {scene.voiceSnapshotHash ? ` · ${scene.voiceSnapshotHash.slice(0, 12)}` : ''}
+                {scene.canonicalVoicePreview.durationMs != null
+                  ? ` · ${(scene.canonicalVoicePreview.durationMs / 1000).toFixed(1)} giây`
+                  : ''}
+              </small>
             </div>
           )}
         </div>
@@ -4096,6 +4974,7 @@ function SceneCard({
                 </small>
                 {latestFirstFrame?.staleReason && <em><TriangleAlert size={12} /> {latestFirstFrame.staleReason}</em>}
                 {latestFirstFrame && !latestFirstFrame.previewUrl && <em><TriangleAlert size={12} /> Đã tạo trên server nhưng file local chưa sẵn sàng.</em>}
+                {firstFrameAssetBlocker && <em><TriangleAlert size={12} /> {firstFrameAssetBlocker}</em>}
                 {firstFrameOperation?.status === 'failed' && <em><TriangleAlert size={12} /> {firstFrameOperation.message}</em>}
               </div>
               {latestFirstFrame?.previewUrl && (
@@ -4105,9 +4984,16 @@ function SceneCard({
                 </button>
               )}
               <div className="scene-first-frame-actions">
-                <button type="button" disabled={busy} onClick={() => onRequestFirstFrame(Boolean(latestFirstFrame))}>
+                <button
+                  type="button"
+                  disabled={busy || Boolean(firstFrameAssetBlocker)}
+                  title={firstFrameAssetBlocker ?? undefined}
+                  onClick={() => onRequestFirstFrame(Boolean(latestFirstFrame))}
+                >
                   {busy ? <LoaderCircle className="spin" size={13} /> : <WandSparkles size={13} />}
-                  {firstFrameOperation?.status === 'generating'
+                  {firstFrameAssetBlocker
+                    ? 'Xác nhận tài sản trước'
+                    : firstFrameOperation?.status === 'generating'
                     ? 'Đang tạo...'
                     : latestFirstFrame
                       ? 'Sinh lại'
@@ -4291,6 +5177,70 @@ function SceneCard({
               <span>SFX: {scene.soundEffects || 'đồng bộ hành động'}</span>
             </div>
           )}
+          {!editing && canonicalVoiceJourney && (
+            <div className="scene-workflow-journey">
+              <div className="scene-workflow-heading">
+                <strong>Lộ trình tạo video có lời</strong>
+                <span>Hệ thống chỉ gọi video provider ở bước “Tạo video nền”.</span>
+              </div>
+              <ol>
+                {canonicalVoiceJourney.steps.map((step, index) => (
+                  <li key={step.id} className={step.state}>
+                    <span>{step.state === 'complete' ? <Check size={11} /> : index + 1}</span>
+                    <b>{step.label}</b>
+                  </li>
+                ))}
+              </ol>
+              <p><CircleHelp size={13} /> {canonicalVoiceJourney.nextAction}</p>
+            </div>
+          )}
+          {scene.speechMode !== 'None' && !canonicalVoiceWorkflow && (
+            <div className={`scene-speech-verification ${(scene.speechVerification?.status ?? 'pending').toLowerCase()}`}>
+              <div>
+                <strong><Languages size={14} /> Kiểm tra transcript</strong>
+                <span>{scene.speechVerification
+                  ? `${scene.speechVerification.status} · WER ${(scene.speechVerification.wordErrorRate * 100).toFixed(1)}% · CER ${(scene.speechVerification.characterErrorRate * 100).toFixed(1)}%`
+                  : 'Chưa chạy ASR cho audio hiện hành.'}</span>
+                {speechAudioDurationMs != null && (
+                  <small>
+                    Audio {(speechAudioDurationMs / 1000).toFixed(1)}s · Thời lượng cảnh {(scene.durationMs / 1000).toFixed(1)}s
+                  </small>
+                )}
+                {scene.speechVerification?.transcript && (
+                  <SpeechTranscriptComparison
+                    expected={scene.narration ?? ''}
+                    transcript={scene.speechVerification.transcript}
+                  />
+                )}
+                {(scene.speechVerification?.missingRequiredTerms.length ?? 0) > 0 && (
+                  <small>Thiếu từ bắt buộc: {scene.speechVerification!.missingRequiredTerms.join(', ')}</small>
+                )}
+                {scene.speechVerification?.status === 'NeedsReview' && !scene.speechVerification.reviewApproved && (
+                  <label className="scene-speech-review-reason">
+                    <span>ASR chưa đạt ngưỡng. Nhập lý do nếu bạn đã nghe và vẫn muốn chấp nhận kết quả này.</span>
+                    <textarea
+                      value={speechReviewReason}
+                      disabled={busy}
+                      maxLength={1000}
+                      placeholder="Ví dụ: ASR sai dấu câu nhưng audio đọc đúng nguyên văn sau khi nghe lại."
+                      onChange={(event) => setSpeechReviewReason(event.target.value)}
+                    />
+                    <small>{speechReviewReason.trim().length}/1000 ký tự · tối thiểu 10</small>
+                  </label>
+                )}
+                {scene.speechVerification?.reviewApproved && (
+                  <small>Đã chấp nhận thủ công: {scene.speechVerification.reviewReason}</small>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={busy || (scene.hasCanonicalVoicePreview ? !scene.canonicalVoicePreview?.url : !scene.preview?.url)}
+                onClick={onVerifySceneSpeech}
+              >
+                <Languages size={13} /> {scene.speechVerification ? 'Kiểm tra lại' : 'Báo giá & kiểm tra lời đọc'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -4317,51 +5267,78 @@ function SceneCard({
                 </div>
               </div>
             )}
-            {scene.requiresAudioReview && (
+            {scene.requiresAudioReview && !canonicalNarrationReadyForVideo && scene.speechStatus !== 'SpeechReadyForLipSync' && (
               <div className="scene-audio-review">
                 <div>
-                  <strong><Volume2 size={15} /> Cần nghe và duyệt Native Audio</strong>
+                  <strong><Volume2 size={15} /> Cần nghe và duyệt lời nói</strong>
                   <span>
                     {scene.speechMode === 'None'
                       ? 'Hãy kiểm tra âm thanh môi trường và hiệu ứng có phù hợp với hình ảnh.'
-                      : `Hãy kiểm tra lời nói đúng nguyên văn, đúng người nói và khớp khẩu hình. Hệ thống đã phát hiện track âm thanh${scene.nativeAudioAudible ? ' có tín hiệu nghe được' : ''}.`}
+                      : scene.hasCanonicalVoicePreview
+                        ? scene.speechMode === 'OnCameraDialogue'
+                          ? 'Hãy nghe Canonical Voice. Sau khi duyệt, cảnh sẽ dừng ở trạng thái sẵn sàng cho lip-sync.'
+                          : canonicalVoiceOnlyReview
+                            ? 'Hãy nghe và duyệt Canonical WAV. Chỉ sau bước này hệ thống mới cho phép sinh video nền.'
+                            : 'Hãy nghe Canonical Voice và clip đã thay hoàn toàn native speech trước khi duyệt.'
+                        : `Hãy kiểm tra lời nói đúng nguyên văn, đúng người nói và khớp khẩu hình. Hệ thống đã phát hiện track âm thanh${scene.nativeAudioAudible ? ' có tín hiệu nghe được' : ''}.`}
                   </span>
-                  {!previewPlaybackConfirmed && <span>Hãy bấm phát clip ít nhất một lần để mở nút duyệt.</span>}
+                  {audioReviewBlocker && (
+                    <span className="scene-audio-review-blocker"><CircleHelp size={13} /> {audioReviewBlocker}</span>
+                  )}
                   {scene.speechMode !== 'None' && (
                     <div className="scene-audio-review-checklist">
-                      <label><input type="checkbox" checked={speechContentConfirmed} disabled={busy} onChange={(event) => setSpeechContentConfirmed(event.target.checked)} /> Tôi đã nghe rõ đủ câu và đúng nguyên văn.</label>
-                      <label><input type="checkbox" checked={speakerConfirmed} disabled={busy} onChange={(event) => setSpeakerConfirmed(event.target.checked)} /> {scene.speechMode === 'OnCameraDialogue' ? 'Đúng nhân vật trên màn hình đang nói.' : 'Đúng là lời dẫn ngoài khung hình; không có nhân vật nói trực tiếp.'}</label>
-                      <label><input type="checkbox" checked={lipSyncConfirmed} disabled={busy} onChange={(event) => setLipSyncConfirmed(event.target.checked)} /> {scene.speechMode === 'OnCameraDialogue' ? 'Khẩu hình và biểu cảm chấp nhận được.' : 'Giọng dẫn và hình ảnh đồng bộ, chấp nhận được.'}</label>
+                      <label><input type="checkbox" checked={speechContentConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setSpeechContentConfirmed(event.target.checked)} /> Tôi đã nghe rõ đủ câu và đúng nguyên văn.</label>
+                      <label><input type="checkbox" checked={speakerConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setSpeakerConfirmed(event.target.checked)} /> {scene.speechMode === 'OnCameraDialogue' ? 'Đúng nhân vật trên màn hình đang nói.' : 'Đúng là lời dẫn ngoài khung hình; không có nhân vật nói trực tiếp.'}</label>
+                      <label><input type="checkbox" checked={lipSyncConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setLipSyncConfirmed(event.target.checked)} /> {canonicalVoiceOnlyReview ? 'Chất giọng và thời lượng WAV phù hợp với cảnh.' : scene.speechMode === 'OnCameraDialogue' ? 'Khẩu hình và biểu cảm chấp nhận được.' : 'Giọng dẫn và hình ảnh đồng bộ, chấp nhận được.'}</label>
                     </div>
                   )}
                 </div>
                 <button
                   type="button"
-                  disabled={busy || !scene.canApproveNativeAudio || !previewPlaybackConfirmed ||
-                    (scene.speechMode !== 'None' && (!speechContentConfirmed || !speakerConfirmed || !lipSyncConfirmed))}
+                  title={audioReviewBlocker ?? undefined}
+                  disabled={busy || !scene.canApproveNativeAudio || !requiredPlaybackConfirmed ||
+                    !reviewChecklistComplete ||
+                    (!canonicalVoiceOnlyReview && scene.speechVerification?.status === 'NeedsReview' && !scene.speechVerification.reviewApproved && speechReviewReason.trim().length < 10)}
                   onClick={() => onApproveNativeAudio(
-                    previewPlaybackConfirmed &&
-                    (scene.speechMode === 'None' || (speechContentConfirmed && speakerConfirmed && lipSyncConfirmed)))}
+                    requiredPlaybackConfirmed && reviewChecklistComplete,
+                    speechReviewReason)}
                 >
-                  <CircleCheck size={14} /> Duyệt hình và âm thanh
+                  <CircleCheck size={14} /> {canonicalVoiceOnlyReview ? 'Duyệt Canonical WAV' : 'Duyệt hình và âm thanh'}
                 </button>
               </div>
             )}
             {scene.characterSetupMessage && (
               <div className="scene-character-warning"><TriangleAlert size={14} /> {scene.characterSetupMessage}</div>
             )}
-            {enforceKlingLongFormSpeechPolicy && scene.status === 'NativeAudioInvalid' && (
+            {enforceKlingLongFormSpeechPolicy && !canonicalVoiceWorkflow && scene.status === 'NativeAudioInvalid' && (
               <div className="scene-character-warning"><Volume2 size={14} /> Lần tạo trước không có lời nghe được. Lần thử tiếp theo sẽ dùng prompt ưu tiên lời thoại và là một request có phí mới.</div>
             )}
             <div className="scene-actions">
               {scene.canEdit && (
                 <button type="button" className="scene-edit" disabled={busy} onClick={beginEdit}><Pencil size={14} /> Chỉnh sửa</button>
               )}
+              {audioCanBeUnapproved && (
+                <button type="button" className="scene-edit" disabled={busy} onClick={onUnapproveAudio}><X size={14} /> Hủy duyệt</button>
+              )}
               {selectable && (
                 <button type="button" className="scene-generate-one" disabled={busy || !videoReady || !mediaToolsReady} onClick={onGenerate}>
-                  {sceneNeedsLocalCompletion(scene) ? <Download size={14} /> : <Film size={14} />}
+                  {sceneNeedsLocalCompletion(scene)
+                    ? <Download size={14} />
+                    : needsCanonicalVoicePreparation(scene, speechProductionPolicy)
+                      ? <Volume2 size={14} />
+                      : <Film size={14} />}
                   {sceneNeedsLocalCompletion(scene)
                     ? 'Tiếp tục tải clip'
+                    : needsCanonicalVoicePreparation(scene, speechProductionPolicy)
+                      ? !canonicalVoiceWorkflow && scene.status === 'NativeAudioInvalid'
+                        ? 'Xử lý lại giọng đọc'
+                        : scene.hasCanonicalVoicePreview
+                          ? 'Tiếp tục duyệt WAV'
+                          : 'Chuẩn bị bản đọc WAV'
+                    : canonicalNarrationReadyForVideo
+                      ? 'Tạo video nền'
+                    : canonicalVoiceWorkflow && scene.speechStatus === 'SpeechApproved' && !scene.preview?.url
+                        ? 'Tạo video nền'
                     : enforceKlingLongFormSpeechPolicy && scene.status === 'NativeAudioInvalid'
                       ? 'Tạo lại với prompt ưu tiên lời thoại'
                       : status.tone === 'running'
@@ -4371,7 +5348,8 @@ function SceneCard({
                           : 'Tạo clip cảnh này'}
                 </button>
               )}
-              {isSceneCompleted(scene) && <span className="scene-complete-note"><CircleCheck size={15} /> Hình và Native Audio đã được duyệt</span>}
+              {scene.speechStatus === 'SpeechReadyForLipSync' && <span className="scene-complete-note"><CircleCheck size={15} /> Canonical Voice đã duyệt · chờ lip-sync</span>}
+              {isSceneCompleted(scene) && <span className="scene-complete-note"><CircleCheck size={15} /> Hình và lời nói đã được duyệt</span>}
             </div>
           </>
         )}
@@ -4416,13 +5394,7 @@ function sceneAssignedAssetIds(sceneId: string, assetLibrary: ProjectAssetLibrar
 }
 
 function areSceneAssetsReady(sceneId: string, assetLibrary: ProjectAssetLibrary | null): boolean {
-  if (!assetLibrary) return true;
-  const assignment = assetLibrary.sceneAssignments.find((item) => item.sceneId === sceneId);
-  if (assignment && !assignment.isValid) return false;
-  if (!assignment || assignment.projectAssetIds.length === 0) return true;
-  if (assignment.hasUnlockedAssets) return false;
-  const assetById = new Map(assetLibrary.assets.map((asset) => [asset.projectAssetId, asset]));
-  return assignment.projectAssetIds.every((assetId) => assetById.get(assetId)?.status === 'Locked');
+  return getSceneFirstFrameAssetBlocker(sceneId, assetLibrary) === null;
 }
 
 function matchesStoryboardFilter(scene: SceneSummary, filter: StoryboardFilter): boolean {
@@ -4443,7 +5415,13 @@ function isSceneCompleted(scene: SceneSummary): boolean {
 function sceneStatus(scene: SceneSummary): { label: string; tone: 'ready' | 'running' | 'completed' | 'failed' | 'waiting' } {
   if (isSceneCompleted(scene)) return { label: 'Hoàn thành', tone: 'completed' };
   const status = scene.status.toLowerCase();
-  if (status === 'audioreviewrequired') return { label: 'Cần nghe duyệt', tone: 'waiting' };
+  if (status === 'audioreviewrequired') {
+    if (scene.hasCanonicalVoicePreview && !scene.preview?.url) {
+      return { label: 'Cần nghe duyệt WAV', tone: 'waiting' };
+    }
+    if (scene.preview?.url) return { label: 'Cần duyệt video', tone: 'waiting' };
+    return { label: 'Cần nghe duyệt', tone: 'waiting' };
+  }
   if (status === 'promptinvalid') return { label: 'Cần sửa lời', tone: 'failed' };
   if (status === 'nativeaudioinvalid') return { label: 'Âm thanh không đạt', tone: 'failed' };
   if (status.includes('fail')) return { label: 'Cần thử lại', tone: 'failed' };
@@ -4462,12 +5440,53 @@ function sceneNeedsLocalCompletion(scene: SceneSummary): boolean {
   return !isSceneCompleted(scene) && (status === 'generated' || status === 'downloading');
 }
 
+function SpeechTranscriptComparison({ expected, transcript }: { expected: string; transcript: string }) {
+  const diff = buildSpeechTranscriptDiff(expected, transcript);
+  return (
+    <div className={`speech-transcript-diff ${diff.matches ? 'matches' : 'differs'}`}>
+      <div>
+        <strong>Lời đã khóa</strong>
+        <SpeechDiffText segments={diff.expected} />
+      </div>
+      <div>
+        <strong>ASR nhận được</strong>
+        <SpeechDiffText segments={diff.transcript} emptyText="Không nhận được lời nói" />
+      </div>
+    </div>
+  );
+}
+
+function SpeechDiffText({
+  segments,
+  emptyText = 'Không có nội dung'
+}: {
+  segments: SpeechDiffSegment[];
+  emptyText?: string;
+}) {
+  if (segments.length === 0) return <p className="speech-diff-empty">{emptyText}</p>;
+  return (
+    <p>
+      {segments.map((segment, index) => (
+        <span className={`speech-diff-${segment.kind}`} key={`${index}-${segment.text}`}>
+          {segment.text}{index < segments.length - 1 ? ' ' : ''}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function speechModeLabel(mode: SceneSummary['speechMode'], enforceKlingLongFormSpeechPolicy = false): string {
   if (mode === 'OnCameraDialogue') return 'Nhân vật nói trực tiếp bằng Native Audio của provider';
   if (mode === 'NativeVoiceOver') return enforceKlingLongFormSpeechPolicy
     ? 'Lời dẫn ngoài khung hình — cảnh không có nhân vật'
     : 'Lời dẫn ngoài khung hình bằng Native Audio của provider';
   return 'Không có lời nói';
+}
+
+function voiceName(voiceCode: string): string {
+  if (voiceCode === 'female-sweet') return 'Nữ · dịu, rõ';
+  if (voiceCode === 'male-warm') return 'Nam · ấm, rõ';
+  return voiceCode;
 }
 
 function formatTimeline(milliseconds: number): string {
@@ -4482,14 +5501,34 @@ function sceneDisplayTitle(scene: SceneSummary): string {
   return normalized || `Nội dung cảnh ${scene.sequenceNumber}`;
 }
 
-function CreateVideoCard({ busy, onCreate }: { busy: boolean; onCreate: (payload: CreateProjectPayload) => void }) {
+function CreateVideoCard({
+  busy,
+  speechSynchronizationEnabled,
+  onCreate
+}: {
+  busy: boolean;
+  speechSynchronizationEnabled: boolean;
+  onCreate: (payload: CreateProjectPayload) => void;
+}) {
   const [topic, setTopic] = useState('');
   const [aspectRatio, setAspectRatio] = useState('16:9');
+  const [speechProductionPolicy, setSpeechProductionPolicy] =
+    useState<CreateProjectPayload['speechProductionPolicy']>('ProviderNativeVerified');
+  const [voiceCode, setVoiceCode] =
+    useState<NonNullable<CreateProjectPayload['voiceCode']>>('female-sweet');
+  const [voiceSpeakingRate, setVoiceSpeakingRate] = useState(1);
 
   const submit = () => {
     const normalizedTopic = topic.trim();
     if (!normalizedTopic || busy) return;
-    onCreate({ topic: normalizedTopic, aspectRatio, languageCode: 'vi-VN' });
+    onCreate({
+      topic: normalizedTopic,
+      aspectRatio,
+      languageCode: 'vi-VN',
+      speechProductionPolicy,
+      voiceCode: speechProductionPolicy === 'CanonicalVoice' ? voiceCode : null,
+      voiceSpeakingRate: speechProductionPolicy === 'CanonicalVoice' ? voiceSpeakingRate : null
+    });
   };
 
   return (
@@ -4511,10 +5550,43 @@ function CreateVideoCard({ busy, onCreate }: { busy: boolean; onCreate: (payload
           ))}
         </div></div>
         <label className="select-group">Ngôn ngữ<select value="vi-VN" disabled><option value="vi-VN">Tiếng Việt</option></select></label>
+        <label className="select-group">
+          Đồng bộ lời nói
+          <select
+            value={speechProductionPolicy}
+            disabled={!speechSynchronizationEnabled}
+            onChange={(event) => setSpeechProductionPolicy(event.target.value as CreateProjectPayload['speechProductionPolicy'])}
+          >
+            <option value="ProviderNativeVerified">Provider Native Audio</option>
+            {speechSynchronizationEnabled && <option value="CanonicalVoice">Canonical Voice</option>}
+          </select>
+          {!speechSynchronizationEnabled && <small>Canonical Voice đang tắt theo cấu hình rollout.</small>}
+        </label>
+        {speechProductionPolicy === 'CanonicalVoice' && (
+          <>
+            <label className="select-group">
+              Giọng narrator
+              <select value={voiceCode} onChange={(event) => setVoiceCode(event.target.value as typeof voiceCode)}>
+                <option value="female-sweet">Nữ · dịu, rõ</option>
+                <option value="male-warm">Nam · ấm, rõ</option>
+              </select>
+            </label>
+            <label className="select-group">
+              Tốc độ đọc
+              <select value={voiceSpeakingRate} onChange={(event) => setVoiceSpeakingRate(Number(event.target.value))}>
+                <option value={0.9}>Chậm · 0,9×</option>
+                <option value={1}>Tự nhiên · 1,0×</option>
+                <option value={1.1}>Nhanh · 1,1×</option>
+              </select>
+            </label>
+          </>
+        )}
         <div className="select-group create-native-audio-note">
           <span>Âm thanh</span>
-          <strong><Volume2 size={15} /> Provider Native Audio</strong>
-          <small>Giọng nói, âm thanh môi trường và hiệu ứng được provider tạo cùng clip.</small>
+          <strong><Volume2 size={15} /> {speechProductionPolicy === 'CanonicalVoice' ? 'Canonical Voice' : 'Provider Native Audio'}</strong>
+          <small>{speechProductionPolicy === 'CanonicalVoice'
+            ? 'Lời dẫn được tạo thành WAV có version và ghép sau khi clip nền hoàn tất. Cảnh thấy miệng sẽ chờ bước lip-sync.'
+            : 'Giọng nói, âm thanh môi trường và hiệu ứng được provider tạo cùng clip.'}</small>
         </div>
         <button className="start-button" disabled={!topic.trim() || busy} onClick={submit}>
           {busy ? <LoaderCircle className="spin" size={18} /> : <Play size={17} fill="currentColor" />} Bắt đầu tạo
@@ -4653,6 +5725,9 @@ function getFinalPreviewState(project: ProjectDashboard | null): { label: string
   if (project.totalScenes > 0 && project.approvedScenes === project.totalScenes) {
     return { label: 'Các cảnh đã sẵn sàng · hãy dựng video cuối', tone: 'waiting' };
   }
+  if (project.approvedScenes > 0) {
+    return { label: `${project.approvedScenes}/${project.totalScenes} cảnh đã duyệt · có thể dựng video ngay`, tone: 'waiting' };
+  }
   if (project.totalScenes > 0) {
     return { label: `Chờ hoàn tất các cảnh · ${project.approvedScenes}/${project.totalScenes} cảnh đã duyệt`, tone: 'waiting' };
   }
@@ -4699,17 +5774,19 @@ function RenderProgressCard({
   busy,
   mediaToolsReady,
   onRender,
+  onExport,
   onUnavailable
 }: {
   project: ProjectDashboard | null;
   busy: boolean;
   mediaToolsReady: boolean;
   onRender: () => void;
+  onExport: () => void;
   onUnavailable: (message: string) => void;
 }) {
   const progress = Math.round(project?.render.progressPercent ?? project?.overallProgressPercent ?? 0);
   const readyToRender = Boolean(
-    project && project.totalScenes > 0 && project.approvedScenes === project.totalScenes
+    project && project.approvedScenes > 0
   );
   return (
     <section className="card side-card render-card">
@@ -4717,7 +5794,7 @@ function RenderProgressCard({
       {project ? <>
         <div className="render-summary">
           <div className="progress-ring" style={{ '--progress': `${Math.min(100, Math.max(0, progress)) * 3.6}deg` } as React.CSSProperties}><div><strong>{progress}%</strong></div></div>
-          <div><strong>{project.render.totalScenes > 0 ? `Đã tạo ${project.render.completedScenes}/${project.render.totalScenes} cảnh` : 'Chưa có cảnh để render'}</strong><span>{project.runningJobs > 0 ? `${project.runningJobs} tác vụ đang xử lý` : translateProjectStatus(project.project.status)}</span><ProgressBar value={progress} /></div>
+          <div><strong>{project.render.totalScenes > 0 ? `Đã duyệt ${project.render.completedScenes}/${project.render.totalScenes} cảnh` : 'Chưa có cảnh để render'}</strong><span>{project.runningJobs > 0 ? `${project.runningJobs} tác vụ đang xử lý` : translateProjectStatus(project.project.status)}</span><ProgressBar value={progress} /></div>
         </div>
         <button
           className="render-final-button"
@@ -4726,7 +5803,13 @@ function RenderProgressCard({
         >
           <Film size={15} /> {project.preview?.url ? 'Dựng lại video' : 'Dựng video cuối'}
         </button>
-        {!readyToRender && <small className="render-requirement">Cần duyệt hình và Native Audio của tất cả cảnh.</small>}
+        {project.preview?.url && (
+          <button className="render-export-button" disabled={busy} onClick={onExport}>
+            <Download size={15} /> Xuất video MP4
+          </button>
+        )}
+        {!readyToRender && <small className="render-requirement">Cần tạo và duyệt ít nhất một cảnh.</small>}
+        {readyToRender && project.approvedScenes < project.totalScenes && <small className="render-requirement">Bản dựng sẽ chỉ gồm {project.approvedScenes} cảnh đã duyệt; các cảnh còn lại được bỏ qua.</small>}
         <button className="danger-outline" disabled={project.runningJobs === 0} onClick={() => onUnavailable('Dừng xử lý sẽ được bật khi pipeline hỗ trợ hủy job an toàn.')}>Dừng xử lý</button>
       </> : <EmptyBlock text="Tiến độ sẽ xuất hiện sau khi tạo dự án." />}
     </section>
@@ -4741,6 +5824,83 @@ function ProjectsPage({ projects, onSelect, onCreate }: { projects: ProjectSumma
           <div className="project-tile-icon"><Film size={23} /></div><div><strong>{project.name}</strong><p>{project.topic}</p><span>{project.aspectRatio} · {formatDuration(project.targetDurationSeconds)} · {translateProjectStatus(project.status)}</span></div><ChevronDown size={18} className="tile-arrow" />
         </button>
       ))}</section>}
+    </div>
+  );
+}
+
+function DesktopSettingsPage({
+  settings,
+  busy,
+  onSpeechSynchronizationChange
+}: {
+  settings: DesktopFeatureSettings;
+  busy: boolean;
+  onSpeechSynchronizationChange: (enabled: boolean) => void;
+}) {
+  const configured = settings.speechSynchronizationEnabled;
+  const statusLabel = settings.restartRequired
+    ? 'Chờ khởi động lại'
+    : settings.activeSpeechSynchronizationEnabled
+      ? 'Đang bật'
+      : 'Đang tắt';
+
+  return (
+    <div className="page-shell desktop-settings-page">
+      <section className="desktop-settings-intro">
+        <span><Settings size={22} /></span>
+        <div>
+          <h2>Cài đặt ứng dụng trên máy này</h2>
+          <p>Các lựa chọn tại đây không chứa API key và không thay đổi quyền AI của tổ chức.</p>
+        </div>
+      </section>
+
+      <section className="card desktop-setting-card" id="speech-synchronization-setting">
+        <div className="desktop-setting-heading">
+          <span className="desktop-setting-icon"><Volume2 size={22} /></span>
+          <div>
+            <span className="api-eyebrow">VIDEO DÀI · ÂM THANH</span>
+            <h2>Đồng bộ lời nói</h2>
+            <p>Mở Canonical Voice và quy trình tạo, kiểm tra kỹ thuật, nghe duyệt lời nói trên Desktop này.</p>
+          </div>
+          <span className={`desktop-setting-status ${settings.activeSpeechSynchronizationEnabled ? 'active' : ''} ${settings.restartRequired ? 'pending' : ''}`}>
+            {statusLabel}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          className={`desktop-feature-switch ${configured ? 'enabled' : ''}`}
+          role="switch"
+          aria-checked={configured}
+          disabled={busy}
+          onClick={() => onSpeechSynchronizationChange(!configured)}
+        >
+          {configured ? <Volume2 size={19} /> : <VolumeX size={19} />}
+          <span>
+            <strong>{configured ? 'Bật đồng bộ lời nói' : 'Đồng bộ lời nói đang tắt'}</strong>
+            <small>Lưu riêng cho ứng dụng VideoMaker trên máy hiện tại.</small>
+          </span>
+          <i aria-hidden="true"><b /></i>
+        </button>
+
+        {settings.restartRequired && (
+          <div className="desktop-setting-restart" role="status">
+            <RefreshCw size={18} />
+            <div>
+              <strong>Đã lưu thay đổi</strong>
+              <p>Hãy đóng hoàn toàn rồi mở lại VideoMaker để cấu hình mới có hiệu lực.</p>
+            </div>
+          </div>
+        )}
+
+        <div className="desktop-setting-server-note">
+          <ShieldCheck size={18} />
+          <div>
+            <strong>Server vẫn kiểm soát request có phí</strong>
+            <p>TTS và ASR của các workflow được hỗ trợ chỉ chạy khi quản trị viên đã bật cờ server, cấu hình model, đơn giá và ngân sách. Canonical Voice không yêu cầu ASR. Desktop không thể tự thay đổi các chốt này.</p>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

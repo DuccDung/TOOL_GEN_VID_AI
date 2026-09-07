@@ -89,7 +89,10 @@ internal static class Program
 
                 var dbContextFactory = new VideoFactoryDbContextFactory(options.Database.ConnectionString);
                 var workspaceService = new ProjectWorkspaceService(options.Storage.WorkspaceRoot);
-                var projectService = new ProjectService(dbContextFactory, workspaceService);
+                var projectService = new ProjectService(
+                    dbContextFactory,
+                    workspaceService,
+                    options.Features.SpeechSynchronizationEnabled);
                 var mediaProcessRunner = new ExternalProcessRunner();
                 var mediaToolPaths = new MediaToolPathResolver(options.MediaTools).Resolve();
                 var mediaToolPreflight = new MediaToolPreflightService(
@@ -105,7 +108,19 @@ internal static class Program
                     mediaToolPaths.FfmpegPath,
                     mediaProcessRunner,
                     mediaProbe,
-                    audioQualityValidator);
+                    audioQualityValidator,
+                    new SceneAudioMixerOptions
+                    {
+                        MaximumTempoAdjustmentRatio = options.SpeechSynchronization.MaximumTempoAdjustmentRatio,
+                        MinimumVoiceDurationRatio = options.SpeechSynchronization.MinimumVoiceDurationRatio,
+                        TargetLoudnessLufs = options.SpeechSynchronization.TargetLoudnessLufs,
+                        TargetSpeechLeadInMs = options.SpeechSynchronization.TargetSpeechLeadInMs,
+                        SpeechBoundaryPaddingMs = options.SpeechSynchronization.SpeechBoundaryPaddingMs
+                    });
+                var speechAudioExtractor = new SpeechAudioExtractor(
+                    mediaToolPaths.FfmpegPath,
+                    mediaProcessRunner,
+                    mediaProbe);
                 var sceneVideoTrimmer = new SceneVideoTrimmer(
                     mediaToolPaths.FfmpegPath,
                     mediaProcessRunner);
@@ -120,7 +135,9 @@ internal static class Program
                     workspaceService,
                     mediaToolPreflight,
                     finalMediaRenderer,
-                    finalOutputInspector);
+                    finalOutputInspector,
+                    options.Features.SpeechSynchronizationEnabled,
+                    options.SpeechSynchronization.TargetLoudnessLufs);
                 var generationClient = new ServerGenerationClient(
                     generationHttpClient,
                     sessionManager,
@@ -133,7 +150,8 @@ internal static class Program
                     mediaToolPreflight,
                     audioQualityValidator,
                     sceneAudioMixer,
-                    sceneVideoTrimmer);
+                    sceneVideoTrimmer,
+                    speechAudioExtractor);
                 var updateApiClient = new DesktopUpdateApiClient(updateHttpClient, sessionManager, options.Update);
                 var packageUpdateService = new DesktopPackageUpdateService(updateHttpClient);
                 VietsubProjectStore? vietsubProjectStore = null;

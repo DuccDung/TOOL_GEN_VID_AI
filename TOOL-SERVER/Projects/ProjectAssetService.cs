@@ -250,7 +250,7 @@ internal sealed class ProjectAssetService(
                 x => x.ProviderRequestId == request.ProviderRequestId &&
                      x.ProjectId == projectId &&
                      x.OrganizationId == access.OrganizationId &&
-                     x.RequestKind == "Text" &&
+                     (x.RequestKind == "Text" || x.RequestKind == "TextRepair") &&
                      x.Status == "Completed",
                 cancellationToken)
             ?? throw NotFound(
@@ -1231,7 +1231,8 @@ internal sealed class ProjectAssetService(
                 "Tên và mô tả tài sản của video dài dùng Kling phải bằng tiếng Việt.",
                 new Dictionary<string, string[]>
                 {
-                    ["fields"] = violations.ToArray()
+                    ["fields"] = violations.Select(x => x.Field).ToArray(),
+                    ["reasons"] = violations.Select(x => $"{x.Field}|{x.Reason}").ToArray()
                 });
         }
     }

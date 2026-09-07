@@ -2,31 +2,32 @@
 
 Áp dụng thêm `../AGENTS.md`.
 
-Test dùng xUnit trên `net10.0-windows` và có quyền truy cập internal của server/desktop qua `InternalsVisibleTo`.
+## Mục tiêu
 
-## Ưu tiên kiểm thử
+Test phải bảo vệ hành vi nghiệp vụ và ranh giới bảo mật, không chỉ tăng số lượng case.
 
-- RBAC: role dương và role bị chặn; bảo vệ Owner cuối cùng.
-- Cross-organization/cross-user/project ownership.
-- Budget: reserve đồng thời, member limit, settle/release/reconciliation và rate snapshot.
-- Idempotency: replay cùng payload và conflict khác payload.
-- Credential: protect/unprotect, test-before-rotate, version retirement và không lộ secret.
-- Provider outbound: HTTPS/host/port allowlist.
-- Kling proxy: loopback/private/reserved IPv4/IPv6, redirect, DNS pinning, MIME và size.
-- Desktop: không có đường lưu/gọi provider trực tiếp; legacy cleaner chỉ xóa đúng hai file.
-- Update: checksum, size, backup và rollback.
+Ưu tiên:
 
-## Quy tắc test
+- auth refresh rotation/reuse, device/session/license;
+- cross-user, cross-organization, role và project ownership;
+- idempotency cùng key/cùng payload và conflict khi payload khác;
+- rate/budget fail-closed trước outbound;
+- reservation settlement/release/reconciliation;
+- credential rotation và không rò secret;
+- provider allowlist, SSRF/DNS/redirect/MIME/size;
+- polling restart/retry không submit/settle trùng;
+- media hash/probe/audio/render lineage;
+- migration idempotency/least-privilege contract;
+- Vietsub path/context/revision/job recovery/OCR;
+- updater/setup traversal, hash và rollback.
 
-- Bug fix phải có regression test tái hiện nhánh lỗi.
-- Không gọi OpenAI/Kling thật trong unit test; dùng fake/mocked HTTP và deterministic time/ID khi có thể.
-- Không phụ thuộc database/máy người phát triển cho unit test. Integration test SQL phải được đánh dấu và cấu hình tách biệt nếu bổ sung sau.
-- Không làm test yếu đi chỉ để pass; nếu behavior nghiệp vụ đổi, cập nhật tài liệu và giải thích rõ.
-- Test security phải kiểm tra kết quả bị từ chối xảy ra trước outbound provider call hoặc trước ghi ledger ngoài ý muốn.
+## Quy tắc
 
-Lệnh chuẩn sau khi đã build Release:
+- Test không gọi provider, webhook hoặc database production thật.
+- Dùng fake HTTP handler/time provider/temp workspace và cleanup có giới hạn.
+- Integration test FFmpeg/WebView2 chỉ skip khi điều kiện môi trường được mô tả rõ; không che regression logic bằng skip rộng.
+- Không chứa API key, token hoặc connection string thật trong fixture/snapshot.
+- Khi sửa lỗi phải có test tái hiện lỗi trước và khóa đường đúng sau sửa.
+- Không hard-code tổng số test trong source. Chỉ cập nhật baseline tài liệu sau khi chạy thực tế.
 
-```powershell
-dotnet test TOOL-TESTS\TOOL-TESTS.csproj -c Release --no-build
-```
-
+Chạy theo `../AGENTS.md`; với frontend chạy thêm `npm test` trong `TOOL-LOCAL/Web`.

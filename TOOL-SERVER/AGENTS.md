@@ -1,95 +1,67 @@
 # Hướng dẫn AI agent — TOOL-SERVER
 
-Áp dụng thêm các quy tắc trong `../AGENTS.md`.
+Áp dụng thêm `../AGENTS.md`. Chỉ đọc `../TRIEN_KHAI_AI_GATEWAY_TO_CHUC.md` khi công việc chạm database, credential, pricing, provider rollout, payment hoặc release.
 
-## Trách nhiệm của server
+## Trách nhiệm
 
-`TOOL-SERVER` là ranh giới tin cậy duy nhất cho tài khoản, license và AI. Desktop chỉ gửi yêu cầu nghiệp vụ; server chịu trách nhiệm xác thực, phân quyền, chọn cấu hình provider, giữ ngân sách, gọi provider, quyết toán và ghi audit/usage.
+Server là ranh giới tin cậy duy nhất cho:
 
-Các nhóm mã chính:
+- auth, session, device, password reset và license;
+- organization, membership/RBAC, budget/usage/audit;
+- provider catalog/model/rate và credential mã hóa;
+- OpenAI/Kling/BytePlus/Fal gateway;
+- polling, settlement, output cache/proxy/cleanup;
+- SePay, organization seat, Vietsub registry và desktop release.
 
-- `Authentication`, `Accounts`, `Controllers/AuthController.cs`, `DevicesController.cs`, `LicenseController.cs`: JWT, refresh rotation, session, device và license lease.
-- `Organizations`: membership/RBAC, budget, credential rotation và các worker reconciliation/retirement.
-- `Generation`: access context, idempotency, OpenAI Responses, Kling submit/polling và proxy output.
-- `Providers`: catalog/model/rate và mã hóa credential. `ProviderAdminDbContext` vẫn cần cho catalog, model, rate và request log; không khôi phục API credential toàn cục cũ.
-- `Updates`: lưu package, chính sách cập nhật và download launcher/desktop.
-- `Data`/`Domain`: mapping EF tới các schema `auth`, `ai`, `vf`.
+Controller phải mỏng; validation nghiệp vụ, transaction và idempotency nằm trong service.
 
-## API AI hiện hành
+## Thứ tự bắt buộc cho request có chi phí
 
-- `GET|POST /api/organizations`
-- `GET|POST /api/organizations/{id}/members`
-- `PUT /api/organizations/{id}/members/{userId}`
-- `PUT /api/organizations/{id}/budget`
-- `GET /api/organizations/{id}/providers`
-- `PUT /api/organizations/{id}/providers/{providerCode}/credential`
-- `GET /api/organizations/{id}/usage`
-- `GET /api/organizations/{id}/audit`
-- `GET /api/admin/ai-pricing`
-- `POST /api/admin/ai-pricing/models/{modelId}/rates`
-- `DELETE /api/admin/ai-pricing/rates/{rateId}`
-- `GET /api/generation/providers/status?organizationId=...`
-- `POST /api/generation/content`
-- `POST /api/generation/kling/videos`
-- `GET /api/generation/kling/videos/{providerRequestId}`
-- `GET /api/generation/kling/videos/{providerRequestId}/content`
-- `POST /api/auth/forgot-password`
-- `POST /api/auth/reset-password`
+1. JWT, session và device.
+2. License lease.
+3. Organization membership/role.
+4. Project ownership.
+5. Payload, request hash và idempotency.
+6. Provider/model/policy/capability.
+7. Credential version.
+8. Rate Active.
+9. Budget reservation.
+10. Outbound provider call.
+11. Persist response/status; settle, release hoặc để worker reconcile theo trạng thái chắc chắn.
 
-Generation controller có rate limit mặc định 30 request/phút theo user/IP.
+Không gọi provider, ghi submit mới hoặc release reservation khi trạng thái upstream còn không chắc chắn.
 
-`POST /api/auth/refresh` phải chuyển refresh token không hợp lệ/hết hạn/tái sử dụng thành `401` hoặc `403` kèm `ApiErrorResponse` ngay tại controller. Đây là kết quả nghiệp vụ để desktop xóa phiên và quay lại đăng nhập, không phải lỗi 500.
+## Auth
 
-`POST /api/auth/login` không dùng exception cho kết quả dự kiến. `AuthService.LoginAsync` trả `AuthLoginResult`: `invalid_credentials`, `account_deleted`, `account_unavailable`, `account_locked` và lỗi validation được controller ánh xạ thành HTTP có cấu trúc. Chỉ lỗi hệ thống ngoài dự kiến mới được ném để exception handler ghi log 500.
+- Login dùng kết quả nghiệp vụ có cấu trúc cho invalid credentials/account state; lỗi dự kiến không thành 500.
+- Refresh token lưu hash, rotate atomically và revoke family/session khi reuse.
+- API authenticated phải xác minh session/device server-side trên mỗi token.
+- Forgot-password giữ response chung, OTP dùng CSPRNG, không lưu/log plaintext và reset thành công revoke session cũ.
 
-`POST /api/auth/forgot-password` phải giữ phản hồi chung cho email tồn tại/không tồn tại, dùng rate limit và không log OTP. OTP phải được sinh bằng CSPRNG, không lưu plaintext, có hạn dùng và giới hạn lần nhập sai. `Smtp:Pass` chỉ nằm trong secret store. Reset thành công phải xóa OTP và thu hồi toàn bộ session/refresh token cũ.
+## Credential, pricing và provider
 
-## Thứ tự kiểm tra generation
+- Data Protection purpose hiện hành không được đổi nếu không có kế hoạch migrate ciphertext.
+- Credential mới phải test trước khi Active; response chỉ trả hint/version/status.
+- Bootstrap tạo catalog/capability nhưng không seed giá hoặc tự bật BytePlus/Fal.
+- Runtime exact-host HTTPS/443: OpenAI, Kling, BytePlus, Fal theo resolver hiện hành; Fal credential test dùng host riêng đã allowlist.
+- OpenAI dùng Responses API/structured output/`store=false`.
+- Kling/BytePlus/Fal task video do worker server polling; status endpoint desktop chỉ đọc database.
+- Fal Standard/Fast không fallback; output URL upstream không được persist/return ngoài storage path an toàn.
+- Thiếu rate trả `pricing_not_configured`; request luôn settle bằng rate snapshot đã lưu.
 
-Không gọi provider trước khi hoàn tất toàn bộ bước tiền kiểm:
+## Output proxy
 
-1. JWT chứa session ID và device ID hợp lệ.
-2. Session/user/device còn Active.
-3. License và device lease còn hiệu lực.
-4. Membership của tổ chức còn Active và role được phép generation.
-5. Project thuộc đúng organization và user.
-6. Idempotency key không xung đột với request hash.
-7. Model, credential Active và rate bắt buộc tồn tại.
-8. Budget organization/member được reserve thành công.
+- Xác minh user/device/license/organization/project/request owner trước download.
+- Chỉ HTTPS và host output allowlist theo provider.
+- Resolve DNS, chặn mọi IP không public, pin địa chỉ đã kiểm tra và kiểm tra lại mỗi redirect.
+- Giới hạn tối đa 3 redirect, MIME, file/storage size và retention.
+- Cache qua file tạm, hash SHA-256 rồi promote; response dùng no-store/nosniff và không lộ URL gốc.
 
-Mọi nhánh lỗi sau reserve phải settle hoặc release đúng trạng thái, hoặc để reconciliation worker xử lý theo thiết kế rõ ràng.
+## Quy tắc sửa
 
-## Credential và outbound security
-
-- Chỉ chấp nhận provider `openai` và `kling` với base URL/host/port trong allowlist.
-- Credential mới phải test trước khi transaction rotate làm thay đổi key hiện tại.
-- Data Protection purpose hiện là `TOOL_SERVER.OrganizationProviderCredentials.v1`; thay purpose sẽ làm key cũ không giải mã được.
-- Request mới dùng credential `Active`; task Kling đang chạy dùng version đã snapshot, kể cả khi credential đó đang `Retiring`.
-- Không dùng automatic redirect cho credential test hoặc Kling output proxy.
-- Proxy phải resolve DNS, loại IP loopback/private/link-local/reserved/multicast, rồi pin kết nối vào đúng IP đã kiểm tra.
-- Output chỉ chấp nhận `video/*` hoặc `application/octet-stream`, tối đa 1 GB, tối đa 3 redirect và có `X-Content-Type-Options: nosniff`.
-
-## Pricing và budget
-
-- Catalog bootstrap hiện tạo `openai/gpt-5.6-luna` và `kling/kling-3.0`, không seed giá.
-- OpenAI cần rate `InputToken` và `OutputToken`; Kling cần `VideoSecond`.
-- Rate có thể dùng token, 1K token hoặc million token; chi phí phải chuẩn hóa đúng đơn vị.
-- Không cho tạo rate hiệu lực trong tương lai theo hành vi hiện tại.
-- Mỗi request lưu `RateSnapshotJson`; không truy lại giá mới để quyết toán request cũ.
-- Budget reservation dùng transaction `Serializable` và operation key idempotent.
-
-## OpenAI và Kling
-
-- OpenAI dùng Responses API, structured output/JSON Schema, `store=false`, giới hạn output và `safety_identifier` là hash ổn định của user ID.
-- Khi provider không trả usage token, actual cost OpenAI dùng estimate đã quote thay vì ghi chi phí 0.
-- Endpoint status Kling từ desktop chỉ đọc trạng thái nội bộ; chỉ worker server polling provider để tránh double polling/double settlement.
-- Không trả URL video gốc của Kling ra response công khai.
-
-## Quy tắc triển khai
-
-- Controller mỏng; nghiệp vụ và transaction nằm trong service.
-- Dùng `IHttpClientFactory`, truyền `CancellationToken` và không log Authorization/API key/prompt nhạy cảm.
-- Mã lỗi nghiệp vụ phải ổn định vì desktop sử dụng chúng để hiển thị.
-- Với thay đổi authorization, thêm test dương và ít nhất một test chặn cross-user/cross-organization/role không hợp lệ.
-- Với thay đổi background worker, chứng minh retry không tạo thêm provider request hoặc ledger entry.
-- Không giả định migration 4.0 đã chạy trên database đích chỉ vì source build thành công.
+- Dùng `IHttpClientFactory`, `CancellationToken`, error code ổn định và log có cấu trúc.
+- Không log Authorization, key, prompt/transcript nhạy cảm, Base64 hoặc raw provider response có URL.
+- Thay contract công khai phải sửa `TOOL-SHARED.Contracts` trước.
+- Thay EF/schema phải thêm migration idempotent và cập nhật least-privilege.
+- Thay worker phải có test retry/restart/idempotency/settlement.
+- Thay authorization phải có test dương và cross-user/cross-org/Viewer.

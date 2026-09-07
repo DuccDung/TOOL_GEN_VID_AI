@@ -83,6 +83,8 @@ export type CharacterSummary = {
   canEdit: boolean;
   canApprove: boolean;
   setupMessage?: string | null;
+  voiceCode?: string | null;
+  voiceSpeakingRate?: number | null;
 };
 
 export type SceneCharacterSummary = {
@@ -90,6 +92,79 @@ export type SceneCharacterSummary = {
   name: string;
   status: string;
   referencePreviewUrl?: string | null;
+};
+
+export type SceneSpeechVerification = {
+  speechVerificationReportId: string;
+  status: 'Pending' | 'Processing' | 'Passed' | 'NeedsReview' | 'Failed' | string;
+  transcript: string;
+  normalizedTranscript: string;
+  wordErrorRate: number;
+  characterErrorRate: number;
+  requiredTermRecall: number;
+  missingRequiredTerms: string[];
+  speechStartMs?: number | null;
+  speechEndMs?: number | null;
+  reviewApproved?: boolean;
+  reviewReason?: string | null;
+  reviewedAtUtc?: string | null;
+  rowVersion?: string | null;
+};
+
+export type SceneSpeechVerificationQuote = {
+  providerCode: string;
+  modelCode: string;
+  estimatedCost: number;
+  currencyCode: string;
+  billableAudioSeconds: number;
+};
+
+export type VoiceProfileSummary = {
+  voiceProfileId: string;
+  voiceProfileVersionId: string;
+  scope: 'ProjectNarrator' | 'Character' | string;
+  characterId?: string | null;
+  version: number;
+  providerCode: string;
+  modelCode: string;
+  voiceCode: string;
+  providerVoiceCode: string;
+  languageCode: string;
+  speakingRate: number;
+  snapshotHash: string;
+  status: 'Draft' | 'Approved' | 'Superseded' | 'Revoked' | string;
+  createdAtUtc: string;
+  approvedAtUtc?: string | null;
+  preview?: PreviewSummary | null;
+  previewProviderRequestId?: string | null;
+};
+
+export type VoiceProfilePreviewQuote = {
+  voiceProfileVersionId: string;
+  providerCode: string;
+  modelCode: string;
+  estimatedCost: number;
+  currencyCode: string;
+  previewTextCharacters: number;
+};
+
+export type SceneVoiceQuote = {
+  sceneId: string;
+  voiceProfileVersionId: string;
+  voiceSnapshotHash: string;
+  providerCode: string;
+  modelCode: string;
+  estimatedCost: number;
+  currencyCode: string;
+  reusesExistingGeneration: boolean;
+};
+
+export type CanonicalVoiceQuote = {
+  estimatedCost: number;
+  currencyCode: string;
+  newVoiceCount: number;
+  reusedVoiceCount: number;
+  scenes: SceneVoiceQuote[];
 };
 
 export type SceneSummary = {
@@ -121,6 +196,12 @@ export type SceneSummary = {
   voiceStyle?: string | null;
   ambientAudio?: string | null;
   soundEffects?: string | null;
+  speechStatus?: string;
+  hasCanonicalVoicePreview?: boolean;
+  canonicalVoicePreview?: PreviewSummary | null;
+  speechVerification?: SceneSpeechVerification | null;
+  voiceProfileVersionId?: string | null;
+  voiceSnapshotHash?: string | null;
 };
 
 export type SceneFirstFrameStatus = 'PendingReview' | 'Approved' | 'Rejected' | 'Superseded' | 'Invalidated';
@@ -245,12 +326,14 @@ export type ProjectDashboard = {
   voiceCode?: string | null;
   voiceSpeakingRate?: number | null;
   audioStrategy: 'ProviderNative' | 'KlingNative' | string;
+  speechProductionPolicy: 'ProviderNativeVerified' | 'CanonicalVoice' | string;
   videoProviderCode?: string | null;
   videoModelCode?: string | null;
   workflowStructureType?: string | null;
   effectiveGenerationLanguageCode?: string | null;
   requiresVietnameseContentRegeneration: boolean;
   content?: ProjectContentSummary | null;
+  voiceProfiles?: VoiceProfileSummary[] | null;
 };
 
 export type AiModel = {
@@ -276,10 +359,18 @@ export type DashboardState = {
   generationRunning: boolean;
   features: DashboardFeatures;
   sceneFirstFrames: SceneFirstFrameSummary[];
+  contentLanguageFailure?: ContentLanguageFailureSummary | null;
 };
 
 export type DashboardFeatures = {
   vietsubEnabled: boolean;
+  speechSynchronizationEnabled: boolean;
+};
+
+export type DesktopFeatureSettings = {
+  speechSynchronizationEnabled: boolean;
+  activeSpeechSynchronizationEnabled: boolean;
+  restartRequired: boolean;
 };
 
 export type CurrentLicense = {
@@ -387,6 +478,16 @@ export type GenerationProviderStatus = {
   openAiVoiceUnavailableCode?: string | null;
   openAiVoiceUnavailableMessage?: string | null;
   estimatedSceneVoiceCost?: number | null;
+  openAiTranscriptionReady?: boolean;
+  openAiTranscriptionModel?: string | null;
+  openAiTranscriptionUnavailableCode?: string | null;
+  openAiTranscriptionUnavailableMessage?: string | null;
+  estimatedSpeechVerificationCost?: number | null;
+  canonicalVoiceEnabled?: boolean;
+  speechVerificationEnabled?: boolean;
+  canonicalVoiceReady?: boolean;
+  canonicalVoiceUnavailableCode?: string | null;
+  canonicalVoiceUnavailableMessage?: string | null;
   klingReady: boolean;
   klingModel?: string | null;
   klingUnavailableCode?: string | null;
@@ -414,13 +515,38 @@ export type HostMessage<T = unknown> = {
   type: string;
   requestId?: string | null;
   payload?: T;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; errors?: Record<string, string[]> | null };
+};
+
+export type ContentLanguageViolation = {
+  field: string;
+  reason: 'required' | 'language_invalid';
+};
+
+export type ContentLanguageFailureSummary = {
+  failedProviderRequestId: string;
+  errorCode: string;
+  message: string;
+  violations: ContentLanguageViolation[];
+  canRepair: boolean;
+};
+
+export type ContentRepairQuote = {
+  failedProviderRequestId: string;
+  providerCode: string;
+  modelCode: string;
+  violations: ContentLanguageViolation[];
+  estimatedCost: number;
+  currencyCode: string;
 };
 
 export type CreateProjectPayload = {
   topic: string;
   aspectRatio: string;
   languageCode: string;
+  speechProductionPolicy: 'ProviderNativeVerified' | 'CanonicalVoice';
+  voiceCode?: 'female-sweet' | 'male-warm' | null;
+  voiceSpeakingRate?: number | null;
 };
 
 export type CreateShortVideoPayload = {
@@ -449,6 +575,8 @@ export type UpdateCharacterPayload = {
   wardrobe: string;
   immutableTraits: string[];
   forbiddenChanges: string[];
+  voiceCode?: string | null;
+  voiceSpeakingRate?: number | null;
 };
 
 export type CreateProjectAssetPayload = {

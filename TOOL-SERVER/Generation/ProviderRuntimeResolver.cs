@@ -193,6 +193,7 @@ internal sealed class ProviderRuntimeResolver(
         var openAi = ReadyProvider(providers, configuredProviderIds, ProviderCodes.OpenAi, "Text");
         var openAiImage = ReadyProvider(providers, configuredProviderIds, ProviderCodes.OpenAi, "Image");
         var openAiVoice = ReadyProvider(providers, configuredProviderIds, ProviderCodes.OpenAi, "Voice");
+        var openAiTranscription = ReadyProvider(providers, configuredProviderIds, ProviderCodes.OpenAi, "Transcription");
         var kling = ReadyProvider(providers, configuredProviderIds, ProviderCodes.Kling, "Video");
         var policy = await governanceDbContext.OrganizationVideoPolicies
             .AsNoTracking()
@@ -225,6 +226,8 @@ internal sealed class ProviderRuntimeResolver(
             OpenAiImageModel: openAiImage.Model,
             OpenAiVoiceReady: openAiVoice.Ready,
             OpenAiVoiceModel: openAiVoice.Model,
+            OpenAiTranscriptionReady: openAiTranscription.Ready,
+            OpenAiTranscriptionModel: openAiTranscription.Model,
             VideoReady: videoReady,
             VideoProviderCode: policyProvider?.ProviderCode,
             VideoProviderName: policyProvider?.DisplayName,

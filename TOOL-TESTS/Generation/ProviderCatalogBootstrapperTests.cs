@@ -41,10 +41,11 @@ public sealed class ProviderCatalogBootstrapperTests
 
         Assert.Equal(4, providers.Count);
         var openAi = Assert.Single(providers, x => x.ProviderCode == "openai");
-        Assert.Equal(3, openAi.Models.Count);
+        Assert.Equal(4, openAi.Models.Count);
         Assert.Single(openAi.Models, x => x.ModelCode == "gpt-5.6-luna" && x.Modality == "Text");
         Assert.Single(openAi.Models, x => x.ModelCode == "gpt-image-2" && x.Modality == "Image");
         Assert.Single(openAi.Models, x => x.ModelCode == "gpt-4o-mini-tts" && x.Modality == "Voice");
+        Assert.Single(openAi.Models, x => x.ModelCode == "whisper-1" && x.Modality == "Transcription");
 
         var kling = Assert.Single(providers, x => x.ProviderCode == "kling");
         Assert.Single(kling.Models, x => x.ModelCode == "kling-3.0" && x.Modality == "Video");
@@ -101,7 +102,7 @@ public sealed class ProviderCatalogBootstrapperTests
 
         Assert.Equal("OpenAI do admin quản lý", refreshedOpenAi.DisplayName);
         Assert.False(refreshedOpenAi.IsEnabled);
-        Assert.Equal("{\"responses\":true,\"imageGeneration\":true,\"speechGeneration\":true}", refreshedOpenAi.CapabilitiesJson);
+        Assert.Equal("{\"responses\":true,\"imageGeneration\":true,\"speechGeneration\":true,\"transcription\":true}", refreshedOpenAi.CapabilitiesJson);
         Assert.Equal("Model text do admin quản lý", refreshedTextModel.DisplayName);
         Assert.False(refreshedTextModel.IsEnabled);
         Assert.False(refreshedTextModel.IsDefault);
@@ -124,7 +125,7 @@ public sealed class ProviderCatalogBootstrapperTests
         await using var scope = services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ProviderAdminDbContext>();
         Assert.Equal(4, await dbContext.Providers.CountAsync());
-        Assert.Equal(8, await dbContext.ProviderModels.CountAsync());
+        Assert.Equal(9, await dbContext.ProviderModels.CountAsync());
     }
 
     [Fact]

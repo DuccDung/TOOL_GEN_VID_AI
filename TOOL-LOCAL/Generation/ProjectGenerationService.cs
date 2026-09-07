@@ -22,15 +22,387 @@ internal sealed class ProjectGenerationService(
     IMediaToolPreflightService mediaToolPreflight,
     AudioQualityValidator audioQualityValidator,
     SceneAudioMixer sceneAudioMixer,
-    SceneVideoTrimmer sceneVideoTrimmer) : IProjectGenerationService
+    SceneVideoTrimmer sceneVideoTrimmer,
+    SpeechAudioExtractor? speechAudioExtractor = null) : IProjectGenerationService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
     };
+    private const string SceneAudioSyncPolicyVersion = "scene-audio-sync-v3";
 
     public Task<GenerationProviderStatusResponse> GetProviderStatusAsync(CancellationToken cancellationToken) =>
         apiClient.GetProviderStatusAsync(cancellationToken);
+
+    public async Task<VoiceProfileVersionSummary> CreateVoiceProfileDraftAsync(
+        Guid projectId,
+        string remoteUserId,
+        string scope,
+        Guid? characterId,
+        string voiceCode,
+        decimal speakingRate,
+        CancellationToken cancellationToken)
+    {
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+            if (project.SpeechProductionPolicy != SpeechProductionPolicies.CanonicalVoice)
+            {
+                throw new ArgumentException("Project chưa bật Canonical Voice.");
+            }
+        }
+        return await apiClient.CreateVoiceProfileDraftAsync(
+            new CreateVoiceProfileDraftRequest(projectId, scope, voiceCode, speakingRate, characterId),
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfilePreviewQuoteResponse> GetVoiceProfilePreviewQuoteAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid voiceProfileVersionId,
+        string expectedVoiceSnapshotHash,
+        CancellationToken cancellationToken)
+    {
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        }
+        return await apiClient.GetVoiceProfilePreviewQuoteAsync(
+            new VoiceProfilePreviewQuoteRequest(projectId, voiceProfileVersionId, expectedVoiceSnapshotHash),
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfilePreviewResponse> GenerateVoiceProfilePreviewAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid voiceProfileVersionId,
+        string expectedVoiceSnapshotHash,
+        CancellationToken cancellationToken)
+    {
+        string projectWorkspace;
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            projectWorkspace = (await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken))
+                .WorkspaceRelativePath;
+        }
+        var response = await apiClient.GenerateVoiceProfilePreviewAsync(
+            new GenerateVoiceProfilePreviewRequest(
+                projectId,
+                voiceProfileVersionId,
+                expectedVoiceSnapshotHash,
+                $"voice-preview:{voiceProfileVersionId:N}:{expectedVoiceSnapshotHash}"),
+            cancellationToken);
+        if (response.VoiceProfileVersionId != voiceProfileVersionId ||
+            response.MimeType != "audio/wav" || response.DurationMs <= 0)
+        {
+            throw new InvalidDataException("Server trả về preview giọng không hợp lệ.");
+        }
+        var relativePath = Path.Combine("voice-profiles", $"profile-{voiceProfileVersionId:N}.wav");
+        var outputPath = workspaceService.Resolve(Path.Combine(
+            projectWorkspace.Replace('/', Path.DirectorySeparatorChar),
+            relativePath));
+        var partialPath = outputPath + ".part";
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        if (File.Exists(partialPath))
+        {
+            File.Delete(partialPath);
+        }
+        try
+        {
+            await apiClient.DownloadVoiceProfilePreviewAsync(response, partialPath, cancellationToken);
+            var probe = await mediaProbe.ProbeAsync(partialPath, cancellationToken);
+            await audioQualityValidator.RequireAudibleAsync(
+                partialPath,
+                "Preview giọng tải về không nghe được",
+                cancellationToken);
+            if (!probe.HasAudio || probe.DurationSeconds <= 0 ||
+                probe.AudioSampleRate != response.SampleRate)
+            {
+                throw new InvalidDataException("Preview giọng tải về không khớp metadata đã xác nhận.");
+            }
+            File.Move(partialPath, outputPath, true);
+        }
+        catch
+        {
+            if (File.Exists(partialPath))
+            {
+                File.Delete(partialPath);
+            }
+            throw;
+        }
+        return response;
+    }
+
+    public async Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid voiceProfileVersionId,
+        string expectedVoiceSnapshotHash,
+        bool playbackConfirmed,
+        CancellationToken cancellationToken)
+    {
+        if (!playbackConfirmed)
+        {
+            throw new ArgumentException("Hãy phát và nghe preview giọng trước khi duyệt.");
+        }
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        }
+        return await apiClient.ApproveVoiceProfileVersionAsync(
+            new ApproveVoiceProfileVersionRequest(
+                projectId,
+                voiceProfileVersionId,
+                expectedVoiceSnapshotHash,
+                PlaybackConfirmed: true),
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfileVersionSummary> SupersedeVoiceProfileVersionAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid voiceProfileVersionId,
+        string expectedVoiceSnapshotHash,
+        CancellationToken cancellationToken)
+    {
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        }
+        return await apiClient.SupersedeVoiceProfileVersionAsync(
+            new SupersedeVoiceProfileVersionRequest(projectId, voiceProfileVersionId, expectedVoiceSnapshotHash),
+            cancellationToken);
+    }
+
+    public async Task<CanonicalVoiceQuoteSummary> GetCanonicalVoiceQuoteAsync(
+        Guid projectId,
+        string remoteUserId,
+        IReadOnlyCollection<Guid> sceneIds,
+        CancellationToken cancellationToken)
+    {
+        if (sceneIds.Count == 0 || sceneIds.Any(x => x == Guid.Empty))
+        {
+            throw new ArgumentException("Danh sách cảnh cần báo giá giọng không hợp lệ.");
+        }
+        var quotes = new List<SceneVoiceQuoteResponse>();
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        if (project.SpeechProductionPolicy != SpeechProductionPolicies.CanonicalVoice)
+        {
+            return new CanonicalVoiceQuoteSummary(0, project.CurrencyCode, 0, 0, []);
+        }
+        var requestedIds = sceneIds.Distinct().ToArray();
+        var scenes = await dbContext.Scenes.AsNoTracking()
+            .Where(x => x.ProjectId == projectId && requestedIds.Contains(x.SceneId))
+            .Select(x => new
+            {
+                x.SceneId,
+                x.ScenePlanVersion,
+                x.Narration,
+                x.Dialogue,
+                x.CharacterIdsJson
+            })
+            .ToListAsync(cancellationToken);
+        if (scenes.Count != requestedIds.Length)
+        {
+            throw new ArgumentException("Danh sách báo giá chứa cảnh không thuộc project.");
+        }
+        foreach (var scene in scenes)
+        {
+            var speech = NormalizeNarration(!string.IsNullOrWhiteSpace(scene.Dialogue) ? scene.Dialogue : scene.Narration);
+            if (speech.Length == 0)
+            {
+                continue;
+            }
+            Guid? approvedVersionId;
+            if (!string.IsNullOrWhiteSpace(scene.Dialogue))
+            {
+                var characterIds = ParseGuidList(scene.CharacterIdsJson);
+                if (characterIds.Count != 1)
+                {
+                    throw new ArgumentException("Cảnh thoại trực diện phải gắn đúng một nhân vật để báo giá giọng.");
+                }
+                approvedVersionId = await dbContext.Characters.AsNoTracking()
+                    .Where(x => x.ProjectId == projectId && x.CharacterId == characterIds[0])
+                    .Select(x => x.ApprovedVoiceProfileVersionId)
+                    .SingleOrDefaultAsync(cancellationToken);
+            }
+            else
+            {
+                approvedVersionId = project.ApprovedNarratorVoiceProfileVersionId;
+            }
+            if (approvedVersionId is null)
+            {
+                throw new AccountClientException(
+                    SpeechSynchronizationErrorCodes.VoiceProfileMissing,
+                    "Hãy tạo, nghe thử và duyệt đầy đủ giọng narrator/nhân vật trước khi tạo video.",
+                    409);
+            }
+            var snapshotHash = await dbContext.VoiceProfileVersions.AsNoTracking()
+                .Where(x => x.VoiceProfileVersionId == approvedVersionId && x.Status == VoiceProfileVersionStatuses.Approved)
+                .Select(x => x.SnapshotHash)
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new AccountClientException(
+                    SpeechSynchronizationErrorCodes.VoiceVersionNotApproved,
+                    "Phiên bản giọng đang chọn không còn ở trạng thái đã duyệt.",
+                    409);
+            quotes.Add(await apiClient.GetSceneVoiceQuoteAsync(
+                new SceneVoiceQuoteRequest(
+                    projectId,
+                    scene.SceneId,
+                    scene.ScenePlanVersion,
+                    Sha256Hex(speech),
+                    ExpectedVoiceSnapshotHash: snapshotHash,
+                    ExpectedVoiceProfileVersionId: approvedVersionId),
+                cancellationToken));
+        }
+        var currency = quotes.Select(x => x.CurrencyCode).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (currency.Length > 1)
+        {
+            throw new InvalidDataException("Báo giá giọng trả về nhiều loại tiền tệ không tương thích.");
+        }
+        return new CanonicalVoiceQuoteSummary(
+            quotes.Sum(x => x.EstimatedCost),
+            currency.SingleOrDefault() ?? project.CurrencyCode,
+            quotes.Count(x => !x.ReusesExistingGeneration),
+            quotes.Count(x => x.ReusesExistingGeneration),
+            quotes);
+    }
+
+    public async Task<SceneSpeechVerificationQuoteResponse> GetSceneSpeechVerificationQuoteAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        var source = await ResolveSpeechVerificationSourceAsync(
+            projectId,
+            remoteUserId,
+            sceneId,
+            cancellationToken);
+        return await apiClient.GetSceneSpeechVerificationQuoteAsync(
+            new SceneSpeechVerificationQuoteRequest(
+                projectId,
+                source.Scene.SceneId,
+                source.Scene.ScenePlanVersion,
+                source.ExpectedSpeechHash,
+                source.DurationMs),
+            cancellationToken);
+    }
+
+    public async Task<SceneSpeechVerificationResponse> VerifySceneSpeechAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        if (speechAudioExtractor is null)
+        {
+            throw new InvalidOperationException("Công cụ trích audio để kiểm tra lời nói chưa sẵn sàng.");
+        }
+
+        var source = await ResolveSpeechVerificationSourceAsync(
+            projectId,
+            remoteUserId,
+            sceneId,
+            cancellationToken);
+        var wavPath = source.ExtractAudio
+            ? source.SourcePath + $".speech-{source.ExpectedSpeechHash[..12]}.wav"
+            : source.SourcePath;
+        try
+        {
+            var probe = source.ExtractAudio
+                ? await speechAudioExtractor.ExtractAsync(source.SourcePath, wavPath, cancellationToken)
+                : await mediaProbe.ProbeAsync(wavPath, cancellationToken);
+            if (!probe.HasAudio || probe.DurationSeconds <= 0)
+            {
+                throw new InvalidDataException("Audio dùng để kiểm tra lời nói không hợp lệ.");
+            }
+
+            string mediaSha256;
+            await using (var stream = new FileStream(
+                             wavPath,
+                             FileMode.Open,
+                             FileAccess.Read,
+                             FileShare.Read,
+                             128 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                mediaSha256 = Convert.ToHexString(
+                    await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+            }
+
+            var durationMs = checked((long)Math.Round(
+                probe.DurationSeconds * 1000m,
+                MidpointRounding.AwayFromZero));
+            var response = await apiClient.VerifySceneSpeechAsync(
+                new VerifySceneSpeechRequest(
+                    projectId,
+                    source.Scene.SceneId,
+                    source.Scene.ScenePlanVersion,
+                    source.ExpectedSpeechHash,
+                    mediaSha256,
+                    durationMs,
+                    $"speech-verification:{source.Scene.SceneId:N}:v{source.Scene.ScenePlanVersion}:{source.ExpectedSpeechHash}:{mediaSha256}",
+                    SourceMediaAssetId: source.SourceMediaAssetId),
+                wavPath,
+                cancellationToken);
+
+            await using (var writeContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+            {
+                await RequireProjectAsync(writeContext, projectId, remoteUserId, cancellationToken);
+                var scene = await writeContext.Scenes.SingleAsync(
+                    x => x.SceneId == source.Scene.SceneId,
+                    cancellationToken);
+                scene.SpeechStatus = response.Status is SpeechVerificationStatuses.Passed or SpeechVerificationStatuses.NeedsReview
+                    ? SceneSpeechStatuses.SpeechReviewRequired
+                    : SceneSpeechStatuses.SpeechInvalid;
+                scene.Status = response.Status is SpeechVerificationStatuses.Passed or SpeechVerificationStatuses.NeedsReview
+                    ? "AudioReviewRequired"
+                    : "NativeAudioInvalid";
+                scene.LastErrorCode = response.Status == SpeechVerificationStatuses.Failed
+                    ? "speech_verification_failed"
+                    : null;
+                scene.LastErrorMessage = response.Status == SpeechVerificationStatuses.Failed
+                    ? "Transcript không khớp lời nói đã khóa. Hãy tạo lại audio hoặc clip."
+                    : null;
+                scene.UpdatedAtUtc = DateTime.UtcNow;
+                await writeContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return response;
+        }
+        finally
+        {
+            if (source.ExtractAudio && File.Exists(wavPath))
+            {
+                File.Delete(wavPath);
+            }
+        }
+    }
+
+    public async Task<SceneSpeechVerificationResponse> ApproveSpeechVerificationReviewAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid sceneId,
+        Guid speechVerificationReportId,
+        string reason,
+        string expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        }
+        return await apiClient.ApproveSpeechVerificationReviewAsync(
+            new ApproveSpeechVerificationReviewRequest(
+                projectId,
+                sceneId,
+                speechVerificationReportId,
+                reason,
+                expectedRowVersion),
+            cancellationToken);
+    }
 
     public async Task<GeneratedContentResponse> GenerateContentAsync(
         Guid projectId,
@@ -72,6 +444,49 @@ internal sealed class ProjectGenerationService(
         return response;
     }
 
+    public Task<ContentLanguageFailureResponse?> GetLatestContentLanguageFailureAsync(
+        Guid projectId,
+        CancellationToken cancellationToken) =>
+        apiClient.GetLatestContentLanguageFailureAsync(projectId, cancellationToken);
+
+    public Task<ContentRepairQuoteResponse> GetContentRepairQuoteAsync(
+        Guid projectId,
+        Guid failedProviderRequestId,
+        CancellationToken cancellationToken) =>
+        apiClient.GetContentRepairQuoteAsync(
+            new ContentRepairQuoteRequest(projectId, failedProviderRequestId),
+            cancellationToken);
+
+    public async Task<GeneratedContentResponse> RepairContentAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid failedProviderRequestId,
+        CancellationToken cancellationToken)
+    {
+        int version;
+        await using (var readContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            await RequireProjectAsync(readContext, projectId, remoteUserId, cancellationToken);
+            version = (await readContext.Scripts
+                .Where(x => x.ProjectId == projectId)
+                .MaxAsync(x => (int?)x.Version, cancellationToken) ?? 0) + 1;
+        }
+
+        var response = await apiClient.RepairContentAsync(
+            new RepairContentRequest(
+                projectId,
+                failedProviderRequestId,
+                $"content-repair:{failedProviderRequestId:N}"),
+            cancellationToken);
+        ValidateContentPlan(response.Plan);
+        await PersistContentPlanAsync(projectId, remoteUserId, version, response, cancellationToken);
+        await apiClient.MaterializeProjectAssetPlanAsync(
+            projectId,
+            new MaterializeProjectAssetPlanRequest(response.ProviderRequestId, version),
+            cancellationToken);
+        return response;
+    }
+
     public async Task<MaterializeProjectAssetPlanResponse> SynchronizeProjectAssetPlanAsync(
         Guid projectId,
         string remoteUserId,
@@ -81,13 +496,11 @@ internal sealed class ProjectGenerationService(
         var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
         var scenePlanVersion = project.CurrentScenePlanVersion
             ?? throw new ArgumentException("Dự án chưa có scene plan để đồng bộ tài sản AI.");
-        var keyPrefix = $"content:{projectId:N}:v{scenePlanVersion}";
         var providerRequestId = await dbContext.ProviderRequests
             .AsNoTracking()
             .Where(x => x.ProjectId == projectId &&
-                        x.RequestKind == "Text" &&
-                        x.Status == "Completed" &&
-                        x.IdempotencyKey.StartsWith(keyPrefix))
+                        (x.RequestKind == "Text" || x.RequestKind == "TextRepair") &&
+                        x.Status == "Completed")
             .OrderByDescending(x => x.CompletedAtUtc)
             .Select(x => (Guid?)x.ProviderRequestId)
             .FirstOrDefaultAsync(cancellationToken)
@@ -721,9 +1134,11 @@ internal sealed class ProjectGenerationService(
         }
 
         IReadOnlyList<SceneWorkItem> scenes;
+        string speechProductionPolicy;
         await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
             var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+            speechProductionPolicy = project.SpeechProductionPolicy;
             var planVersion = project.CurrentScenePlanVersion
                 ?? throw new ArgumentException("Hãy tạo nội dung OpenAI trước khi tạo video.");
             var sceneQuery = dbContext.Scenes
@@ -775,6 +1190,9 @@ internal sealed class ProjectGenerationService(
                         character.CharacterId,
                         character.Name,
                         character.Status,
+                        character.VoiceCode,
+                        character.VoiceSpeakingRate,
+                        character.ApprovedVoiceProfileVersionId,
                         character.CharacterReferences
                             .Where(reference =>
                                 reference.IsPrimary &&
@@ -838,14 +1256,60 @@ internal sealed class ProjectGenerationService(
                     continue;
                 }
 
+                if (speechProductionPolicy == SpeechProductionPolicies.CanonicalVoice &&
+                    !string.IsNullOrWhiteSpace(scene.SpokenText))
+                {
+                    if (reportProgress is not null)
+                    {
+                        await reportProgress(
+                            $"Đang chuẩn bị giọng chuẩn cho cảnh {scene.SequenceNumber}/{scenes.Count}...",
+                            cancellationToken);
+                    }
+                    await EnsureSceneNarrationAsync(
+                        projectId,
+                        remoteUserId,
+                        scene,
+                        cancellationToken);
+                    if (!await IsCanonicalVoiceApprovedAsync(scene, cancellationToken))
+                    {
+                        if (reportProgress is not null)
+                        {
+                            await reportProgress(
+                                scene.SpeechMode == KlingSpeechModes.NativeVoiceOver
+                                    ? $"Cảnh {scene.SequenceNumber} đã có WAV; chọn lại cảnh để tạo video nền mà không gọi TTS mới."
+                                    : $"Cảnh {scene.SequenceNumber} đang chờ nghe và duyệt WAV trước bước lip-sync.",
+                                cancellationToken);
+                        }
+                        continue;
+                    }
+                    if (scene.SpeechMode == KlingSpeechModes.OnCameraDialogue)
+                    {
+                        if (reportProgress is not null)
+                        {
+                            await reportProgress(
+                                $"Cảnh {scene.SequenceNumber} đã sẵn sàng cho bước lip-sync; chưa sinh video ở giai đoạn này.",
+                                cancellationToken);
+                        }
+                        continue;
+                    }
+                }
+
                 if (reportProgress is not null)
                 {
                     await reportProgress(
                         $"Đang tạo video cảnh {scene.SequenceNumber}/{scenes.Count}...",
                         cancellationToken);
                 }
-
                 await GenerateSceneAsync(projectId, remoteUserId, scene, cancellationToken);
+                if (speechProductionPolicy == SpeechProductionPolicies.CanonicalVoice &&
+                    !string.IsNullOrWhiteSpace(scene.SpokenText))
+                {
+                    await EnsureSceneNarrationAsync(
+                        projectId,
+                        remoteUserId,
+                        scene,
+                        cancellationToken);
+                }
                 completed++;
                 if (reportProgress is not null)
                 {
@@ -1000,6 +1464,8 @@ internal sealed class ProjectGenerationService(
                 }, JsonOptions),
                 ForbiddenChangesJson = JsonSerializer.Serialize(generated.ForbiddenChanges, JsonOptions),
                 VisualIdentity = generated.VisualIdentity,
+                VoiceCode = project.VoiceCode,
+                VoiceSpeakingRate = project.VoiceSpeakingRate,
                 Status = "Draft",
                 CreatedAtUtc = now
             })
@@ -1011,6 +1477,10 @@ internal sealed class ProjectGenerationService(
         var scenes = new List<Scene>();
         foreach (var generatedScene in response.Plan.Scenes.OrderBy(x => x.SequenceNumber))
         {
+            var speechMode = ResolveSpeechMode(generatedScene);
+            var canonicalNarration =
+                project.SpeechProductionPolicy == SpeechProductionPolicies.CanonicalVoice &&
+                speechMode == KlingSpeechModes.NativeVoiceOver;
             var sceneId = Guid.NewGuid();
             var contentDurationMs = generatedScene.DurationSeconds * 1000L;
             var generationDurationSeconds = generatedScene.GenerationDurationSeconds ?? generatedScene.DurationSeconds;
@@ -1030,10 +1500,10 @@ internal sealed class ProjectGenerationService(
                 ContinuityGroupKey = "main-story",
                 StoryBeatId = $"scene-{generatedScene.SequenceNumber:000}",
                 StoryPurpose = generatedScene.StoryPurpose,
-                Narration = ResolveSpeechMode(generatedScene) == KlingSpeechModes.NativeVoiceOver
+                Narration = speechMode == KlingSpeechModes.NativeVoiceOver
                     ? NullIfWhiteSpace(generatedScene.Narration)
                     : null,
-                Dialogue = ResolveSpeechMode(generatedScene) == KlingSpeechModes.OnCameraDialogue
+                Dialogue = speechMode == KlingSpeechModes.OnCameraDialogue
                     ? NullIfWhiteSpace(generatedScene.Narration)
                     : null,
                 VisualDescription = generatedScene.VisualPrompt,
@@ -1058,7 +1528,8 @@ internal sealed class ProjectGenerationService(
                     tailTrimSeconds = generationDurationSeconds - generatedScene.DurationSeconds,
                     project.AspectRatio,
                     nativeAudio = true,
-                    speechMode = ResolveSpeechMode(generatedScene),
+                    speechMode,
+                    muteOutputAudio = canonicalNarration,
                     generatedScene.SpeakerCharacterKey,
                     generatedScene.VoiceStyle,
                     generatedScene.AmbientAudio,
@@ -1067,6 +1538,9 @@ internal sealed class ProjectGenerationService(
                     generationLanguagePolicyVersion = response.GenerationLanguagePolicyVersion
                 }, JsonOptions),
                 Status = "PromptReady",
+                SpeechStatus = speechMode == KlingSpeechModes.None
+                    ? "SpeechNotRequired"
+                    : "SpeechMissing",
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now
             };
@@ -1377,11 +1851,13 @@ internal sealed class ProjectGenerationService(
     {
         string projectWorkspace;
         string aspectRatio;
+        string speechProductionPolicy;
         await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
             var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
             projectWorkspace = project.WorkspaceRelativePath;
             aspectRatio = project.AspectRatio;
+            speechProductionPolicy = project.SpeechProductionPolicy;
             var generation = await dbContext.VideoGenerations.SingleAsync(x => x.VideoGenerationId == generationId, cancellationToken);
             generation.Status = "Downloading";
             var localScene = await dbContext.Scenes.SingleAsync(x => x.SceneId == scene.SceneId, cancellationToken);
@@ -1586,6 +2062,9 @@ internal sealed class ProjectGenerationService(
         sceneToApprove.ApprovedGenerationId = outputAudioEnabled
             ? null
             : generationToApprove.VideoGenerationId;
+        sceneToApprove.ApprovedRenderMediaAssetId = outputAudioEnabled
+            ? null
+            : asset.MediaAssetId;
         sceneToApprove.Status = outputAudioEnabled
             ? nativeAudioInvalid ? "NativeAudioInvalid" : "AudioReviewRequired"
             : "Approved";
@@ -1597,6 +2076,19 @@ internal sealed class ProjectGenerationService(
             : null;
         sceneToApprove.UpdatedAtUtc = DateTime.UtcNow;
         await writeContext.SaveChangesAsync(cancellationToken);
+        if (speechExpected &&
+            outputAudioEnabled &&
+            nativeAudioQuality?.IsAudible == true &&
+            string.Equals(
+                speechProductionPolicy,
+                SpeechProductionPolicies.ProviderNativeVerified,
+                StringComparison.Ordinal))
+        {
+            sceneToApprove.SpeechStatus = SceneSpeechStatuses.SpeechVerificationRequired;
+            sceneToApprove.LastErrorCode = null;
+            sceneToApprove.LastErrorMessage = null;
+            await writeContext.SaveChangesAsync(cancellationToken);
+        }
     }
 
     private async Task EnsureSceneNarrationAsync(
@@ -1605,7 +2097,7 @@ internal sealed class ProjectGenerationService(
         SceneWorkItem scene,
         CancellationToken cancellationToken)
     {
-        var narration = NormalizeNarration(scene.Narration);
+        var narration = NormalizeNarration(scene.SpokenText);
         if (string.IsNullOrWhiteSpace(narration))
         {
             return;
@@ -1614,16 +2106,44 @@ internal sealed class ProjectGenerationService(
         string projectWorkspace;
         string voiceCode;
         decimal speakingRate;
+        Guid? approvedVoiceProfileVersionId;
+        string? approvedVoiceSnapshotHash;
         Guid? existingVoiceAssetId;
         Guid? existingVoiceRequestId;
+        Guid? existingVoiceGenerationId;
         string? existingVoiceRelativePath;
+        string? existingVoiceSha256;
+        string? existingVoiceStatus;
         await using (var readContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
             var project = await RequireProjectAsync(readContext, projectId, remoteUserId, cancellationToken);
             projectWorkspace = project.WorkspaceRelativePath;
-            voiceCode = project.VoiceCode?.Trim()
-                ?? throw new InvalidOperationException("Hãy chọn giọng đọc cho dự án trước khi tạo video.");
-            speakingRate = project.VoiceSpeakingRate ?? 1m;
+            var useCharacterVoice = scene.SpeechMode == KlingSpeechModes.OnCameraDialogue;
+            approvedVoiceProfileVersionId = useCharacterVoice
+                ? scene.Character?.ApprovedVoiceProfileVersionId
+                : project.ApprovedNarratorVoiceProfileVersionId;
+            if (approvedVoiceProfileVersionId is null)
+            {
+                throw new AccountClientException(
+                    SpeechSynchronizationErrorCodes.VoiceProfileMissing,
+                    useCharacterVoice
+                        ? "Hãy tạo, nghe thử và duyệt giọng nhân vật trước khi tạo video."
+                        : "Hãy tạo, nghe thử và duyệt giọng narrator trước khi tạo video.",
+                    409);
+            }
+            var approvedVoice = await readContext.VoiceProfileVersions.AsNoTracking()
+                .Where(x => x.VoiceProfileVersionId == approvedVoiceProfileVersionId &&
+                            x.Status == VoiceProfileVersionStatuses.Approved &&
+                            x.PreviewProviderRequestId != null)
+                .Select(x => new { x.VoiceCode, x.SpeakingRate, x.SnapshotHash })
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new AccountClientException(
+                    SpeechSynchronizationErrorCodes.VoiceVersionNotApproved,
+                    "Phiên bản giọng chưa được preview và duyệt hợp lệ.",
+                    409);
+            voiceCode = approvedVoice.VoiceCode;
+            speakingRate = approvedVoice.SpeakingRate;
+            approvedVoiceSnapshotHash = approvedVoice.SnapshotHash;
             var existingVoice = await readContext.VoiceGenerations
                 .AsNoTracking()
                 .Where(x => x.SceneId == scene.SceneId &&
@@ -1631,28 +2151,41 @@ internal sealed class ProjectGenerationService(
                             x.NarrationHash == narrationHash &&
                             x.VoiceCode == voiceCode &&
                             x.SpeakingRate == speakingRate &&
-                            x.Status == "Completed" &&
+                            x.VoiceProfileVersionId == approvedVoiceProfileVersionId &&
+                            x.VoiceSnapshotHash == approvedVoiceSnapshotHash &&
+                            (x.Status == "Completed" || x.Status == "Approved") &&
                             x.OutputMediaAssetId != null &&
                             x.OutputMediaAsset!.Status == "Ready" &&
                             x.OutputMediaAsset.DeletedAtUtc == null)
                 .OrderByDescending(x => x.Version)
                 .Select(x => new
                 {
+                    x.VoiceGenerationId,
                     x.ProviderRequestId,
+                    x.Status,
                     AssetId = x.OutputMediaAssetId,
-                    x.OutputMediaAsset!.RelativePath
+                    x.OutputMediaAsset!.RelativePath,
+                    x.OutputMediaAsset.Sha256
                 })
                 .FirstOrDefaultAsync(cancellationToken);
             existingVoiceAssetId = existingVoice?.AssetId;
             existingVoiceRequestId = existingVoice?.ProviderRequestId;
+            existingVoiceGenerationId = existingVoice?.VoiceGenerationId;
             existingVoiceRelativePath = existingVoice?.RelativePath;
+            existingVoiceSha256 = existingVoice?.Sha256;
+            existingVoiceStatus = existingVoice?.Status;
         }
 
         string voicePath;
         Guid voiceAssetId;
         Guid voiceProviderRequestId;
+        Guid voiceGenerationId;
+        string voiceAssetSha256;
+        var voiceApproved = string.Equals(existingVoiceStatus, "Approved", StringComparison.Ordinal);
+        var reusedExistingVoice = false;
         if (existingVoiceAssetId is { } readyVoiceAssetId &&
             existingVoiceRequestId is { } readyVoiceRequestId &&
+            existingVoiceGenerationId is { } readyVoiceGenerationId &&
             !string.IsNullOrWhiteSpace(existingVoiceRelativePath))
         {
             var relative = Path.Combine(
@@ -1665,21 +2198,33 @@ internal sealed class ProjectGenerationService(
             }
             voiceAssetId = readyVoiceAssetId;
             voiceProviderRequestId = readyVoiceRequestId;
+            voiceGenerationId = readyVoiceGenerationId;
+            voiceAssetSha256 = existingVoiceSha256
+                ?? throw new InvalidDataException("MediaAsset giọng đọc chưa có SHA-256 hợp lệ.");
+            reusedExistingVoice = true;
         }
         else
         {
-            var voiceSnapshotHash = Sha256Hex($"{voiceCode}\n{speakingRate.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            var voiceSnapshotHash = approvedVoiceSnapshotHash;
             var response = await apiClient.GenerateSceneVoiceAsync(
                 new GenerateSceneVoiceRequest(
                     projectId,
                     scene.SceneId,
                     scene.ScenePlanVersion,
                     narrationHash,
-                    $"scene-voice:{scene.SceneId:N}:v{scene.ScenePlanVersion}:{narrationHash}:{voiceSnapshotHash}"),
+                    $"scene-voice:{scene.SceneId:N}:v{scene.ScenePlanVersion}:{narrationHash}:{voiceSnapshotHash}",
+                    ExpectedVoiceSnapshotHash: approvedVoiceSnapshotHash,
+                    ExpectedVoiceProfileVersionId: approvedVoiceProfileVersionId),
                 cancellationToken);
             if (response.Status != "Completed" ||
                 !string.Equals(response.VoiceCode, voiceCode, StringComparison.Ordinal) ||
-                response.DurationMs <= 0)
+                response.DurationMs <= 0 ||
+                !string.Equals(response.ExpectedSpeechHash, narrationHash, StringComparison.OrdinalIgnoreCase) ||
+                (approvedVoiceProfileVersionId.HasValue && response.VoiceProfileVersionId != approvedVoiceProfileVersionId) ||
+                (approvedVoiceSnapshotHash is not null && !string.Equals(
+                    response.VoiceSnapshotHash,
+                    approvedVoiceSnapshotHash,
+                    StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidDataException("Server trả về kết quả giọng đọc không hợp lệ.");
             }
@@ -1694,11 +2239,12 @@ internal sealed class ProjectGenerationService(
             {
                 File.Delete(partialVoicePath);
             }
+            AudioQualityResult downloadedVoiceQuality;
             try
             {
                 await apiClient.DownloadSceneVoiceAsync(response, partialVoicePath, cancellationToken);
                 var voiceProbe = await mediaProbe.ProbeAsync(partialVoicePath, cancellationToken);
-                await audioQualityValidator.RequireAudibleAsync(
+                downloadedVoiceQuality = await audioQualityValidator.RequireAudibleAsync(
                     partialVoicePath,
                     "Giọng đọc tải về không nghe được",
                     cancellationToken);
@@ -1756,8 +2302,18 @@ internal sealed class ProjectGenerationService(
                         response.VoiceCode,
                         response.ProviderVoiceCode,
                         response.Channels,
+                        response.VoiceGenerationId,
+                        response.VoiceProfileVersionId,
+                        response.VoiceSnapshotHash,
+                        response.VerificationStatus,
                         narrationHash,
-                        scene.ScenePlanVersion
+                        scene.ScenePlanVersion,
+                        downloadedVoiceQuality.MeanVolumeDb,
+                        downloadedVoiceQuality.MaxVolumeDb,
+                        downloadedVoiceQuality.SilentRatio,
+                        voiceDurationRatio = scene.ContentDurationMs > 0
+                            ? response.DurationMs / (decimal)scene.ContentDurationMs
+                            : (decimal?)null
                     }, JsonOptions),
                     CreatedAtUtc = DateTime.UtcNow,
                     VerifiedAtUtc = DateTime.UtcNow,
@@ -1766,14 +2322,132 @@ internal sealed class ProjectGenerationService(
                 writeContext.MediaAssets.Add(voiceAsset);
             }
             voiceGeneration.OutputMediaAssetId = voiceAsset.MediaAssetId;
-            voiceGeneration.Status = "Completed";
+            voiceApproved = string.Equals(voiceGeneration.Status, "Approved", StringComparison.Ordinal);
+            if (!voiceApproved)
+            {
+                voiceGeneration.Status = "Completed";
+            }
             voiceGeneration.DurationMs = response.DurationMs;
+            voiceGeneration.VoiceSnapshotHash = response.VoiceSnapshotHash;
+            voiceGeneration.VerificationStatus = response.VerificationStatus;
             voiceGeneration.CompletedAtUtc ??= DateTime.UtcNow;
             await writeContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             voicePath = finalVoicePath;
             voiceAssetId = voiceAsset.MediaAssetId;
             voiceProviderRequestId = response.ProviderRequestId;
+            voiceGenerationId = voiceGeneration.VoiceGenerationId;
+            voiceAssetSha256 = response.Sha256;
+        }
+
+        string currentVoiceSha256;
+        await using (var voiceStream = new FileStream(
+                         voicePath,
+                         FileMode.Open,
+                         FileAccess.Read,
+                         FileShare.Read,
+                         128 * 1024,
+                         FileOptions.Asynchronous | FileOptions.SequentialScan))
+        {
+            currentVoiceSha256 = Convert.ToHexString(
+                await SHA256.HashDataAsync(voiceStream, cancellationToken)).ToLowerInvariant();
+        }
+        if (!string.Equals(currentVoiceSha256, voiceAssetSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Canonical WAV trong workspace đã thay đổi sau khi được ghi nhận.");
+        }
+
+        var voiceDurationProbe = await mediaProbe.ProbeAsync(voicePath, cancellationToken);
+        try
+        {
+            sceneAudioMixer.ValidateVoiceDuration(
+                voiceDurationProbe.DurationSeconds,
+                scene.ContentDurationMs / 1000m);
+        }
+        catch (SpeechDurationOutOfRangeException exception)
+        {
+            await using var invalidContext = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            await RequireProjectAsync(invalidContext, projectId, remoteUserId, CancellationToken.None);
+            var invalidScene = await invalidContext.Scenes.SingleAsync(
+                x => x.SceneId == scene.SceneId,
+                CancellationToken.None);
+            invalidScene.SpeechStatus = SceneSpeechStatuses.SpeechInvalid;
+            invalidScene.LastErrorCode = SpeechSynchronizationErrorCodes.SpeechDurationOutOfRange;
+            invalidScene.LastErrorMessage = exception.Message;
+            invalidScene.UpdatedAtUtc = DateTime.UtcNow;
+            await invalidContext.SaveChangesAsync(CancellationToken.None);
+            throw new AccountClientException(
+                SpeechSynchronizationErrorCodes.SpeechDurationOutOfRange,
+                exception.Message,
+                422);
+        }
+        if (scene.SpeechMode == KlingSpeechModes.OnCameraDialogue)
+        {
+            await using var readyContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+            await RequireProjectAsync(readyContext, projectId, remoteUserId, cancellationToken);
+            var readyScene = await readyContext.Scenes.SingleAsync(x => x.SceneId == scene.SceneId, cancellationToken);
+            readyScene.SpeechStatus = voiceApproved
+                ? SceneSpeechStatuses.SpeechReadyForLipSync
+                : SceneSpeechStatuses.SpeechReviewRequired;
+            readyScene.Status = "AudioReviewRequired";
+            readyScene.LastErrorCode = voiceApproved ? SpeechSynchronizationErrorCodes.SpeechReadyForLipSync : null;
+            readyScene.LastErrorMessage = voiceApproved
+                ? "Canonical Voice đã duyệt và sẵn sàng cho bước lip-sync; chưa sinh video ở giai đoạn này."
+                : null;
+            readyScene.UpdatedAtUtc = DateTime.UtcNow;
+            await readyContext.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        if (!voiceApproved)
+        {
+            if (reusedExistingVoice)
+            {
+                await using var approvalContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+                await using var transaction = await approvalContext.Database.BeginTransactionAsync(cancellationToken);
+                await RequireProjectAsync(approvalContext, projectId, remoteUserId, cancellationToken);
+                var currentVoice = await approvalContext.VoiceGenerations.SingleAsync(
+                    x => x.VoiceGenerationId == voiceGenerationId &&
+                         x.ProjectId == projectId &&
+                         x.SceneId == scene.SceneId &&
+                         x.ScenePlanVersion == scene.ScenePlanVersion &&
+                         x.NarrationHash == narrationHash &&
+                         x.VoiceProfileVersionId == approvedVoiceProfileVersionId &&
+                         x.VoiceSnapshotHash == approvedVoiceSnapshotHash &&
+                         x.OutputMediaAssetId == voiceAssetId &&
+                         x.Status == "Completed",
+                    cancellationToken);
+                var currentScene = await approvalContext.Scenes.SingleAsync(
+                    x => x.SceneId == scene.SceneId &&
+                         x.ProjectId == projectId &&
+                         x.ScenePlanVersion == scene.ScenePlanVersion,
+                    cancellationToken);
+                var now = DateTime.UtcNow;
+                currentVoice.Status = "Approved";
+                currentVoice.ApprovedAtUtc = now;
+                currentScene.ApprovedVoiceGenerationId = currentVoice.VoiceGenerationId;
+                currentScene.ApprovedGenerationId = null;
+                currentScene.ApprovedRenderMediaAssetId = null;
+                currentScene.SpeechStatus = SceneSpeechStatuses.SpeechApproved;
+                currentScene.Status = "PromptReady";
+                currentScene.LastErrorCode = null;
+                currentScene.LastErrorMessage = null;
+                currentScene.UpdatedAtUtc = now;
+                await approvalContext.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return;
+            }
+
+            await using var reviewContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+            await RequireProjectAsync(reviewContext, projectId, remoteUserId, cancellationToken);
+            var reviewScene = await reviewContext.Scenes.SingleAsync(x => x.SceneId == scene.SceneId, cancellationToken);
+            reviewScene.SpeechStatus = SceneSpeechStatuses.SpeechReviewRequired;
+            reviewScene.Status = "AudioReviewRequired";
+            reviewScene.LastErrorCode = null;
+            reviewScene.LastErrorMessage = null;
+            reviewScene.UpdatedAtUtc = DateTime.UtcNow;
+            await reviewContext.SaveChangesAsync(cancellationToken);
+            return;
         }
 
         string rawVideoPath;
@@ -1788,8 +2462,11 @@ internal sealed class ProjectGenerationService(
                     AssetId = x.ApprovedGeneration!.OutputMediaAssetId,
                     x.ApprovedGeneration!.OutputMediaAsset!.RelativePath
                 })
-                .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new InvalidDataException("Cảnh chưa có clip video đã duyệt để ghép giọng đọc.");
+                .SingleOrDefaultAsync(cancellationToken);
+            if (rawAsset is null)
+            {
+                return;
+            }
             if (rawAsset.AssetId is null || string.IsNullOrWhiteSpace(rawAsset.RelativePath))
             {
                 throw new InvalidDataException("Clip video đã duyệt chưa có MediaAsset hợp lệ.");
@@ -1809,16 +2486,46 @@ internal sealed class ProjectGenerationService(
         var narratedPath = workspaceService.Resolve(Path.Combine(projectWorkspace, "scenes", narratedFileName));
         await using (var existingContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
-            var exists = await existingContext.MediaAssets.AsNoTracking().AnyAsync(
+            var existingNarratedAsset = await existingContext.MediaAssets.AsNoTracking()
+                .Where(
                 x => x.ProjectId == projectId &&
                      x.SceneId == scene.SceneId &&
                      x.AssetType == "SceneVideoNarrated" &&
                      x.RelativePath == narratedAssetRelativePath &&
                      x.Status == "Ready" &&
-                     x.DeletedAtUtc == null,
-                cancellationToken);
-            if (exists && File.Exists(narratedPath))
+                     x.DeletedAtUtc == null)
+                .Select(x => new { x.MediaAssetId, x.MetadataJson })
+                .SingleOrDefaultAsync(cancellationToken);
+            var existingMatchesVoice = existingNarratedAsset is not null &&
+                string.Equals(
+                    ReadStringProperty(existingNarratedAsset.MetadataJson, "voiceGenerationId"),
+                    voiceGenerationId.ToString("D"),
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    ReadStringProperty(existingNarratedAsset.MetadataJson, "speechHash"),
+                    narrationHash,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    ReadStringProperty(existingNarratedAsset.MetadataJson, "mixStrategy"),
+                    SpeechMixStrategies.ReplaceAllNativeAudio,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    ReadStringProperty(existingNarratedAsset.MetadataJson, "audioSyncPolicyVersion"),
+                    SceneAudioSyncPolicyVersion,
+                    StringComparison.Ordinal);
+            if (existingMatchesVoice && existingNarratedAsset is not null && File.Exists(narratedPath))
             {
+                await using var updateContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+                await RequireProjectAsync(updateContext, projectId, remoteUserId, cancellationToken);
+                var currentScene = await updateContext.Scenes.SingleAsync(
+                    x => x.SceneId == scene.SceneId,
+                    cancellationToken);
+                currentScene.ApprovedGenerationId = null;
+                currentScene.ApprovedRenderMediaAssetId = null;
+                currentScene.SpeechStatus = "SpeechReviewRequired";
+                currentScene.Status = "AudioReviewRequired";
+                currentScene.UpdatedAtUtc = DateTime.UtcNow;
+                await updateContext.SaveChangesAsync(cancellationToken);
                 return;
             }
         }
@@ -1835,8 +2542,10 @@ internal sealed class ProjectGenerationService(
                 rawVideoPath,
                 voicePath,
                 narratedPartialPath,
-                scene.GenerationDurationMs / 1000m,
-                cancellationToken);
+                scene.ContentDurationMs / 1000m,
+                cancellationToken,
+                SpeechMixStrategies.ReplaceAllNativeAudio,
+                nativeAmbienceVerifiedNoSpeech: false);
             File.Move(narratedPartialPath, narratedPath, true);
         }
         catch
@@ -1866,6 +2575,35 @@ internal sealed class ProjectGenerationService(
             var narratedAsset = await writeContext.MediaAssets.SingleOrDefaultAsync(
                 x => x.ProjectId == projectId && x.RelativePath == narratedAssetRelativePath,
                 cancellationToken);
+            var voiceSnapshot = await writeContext.VoiceGenerations
+                .Where(x => x.VoiceGenerationId == voiceGenerationId)
+                .Select(x => new { x.VoiceSnapshotHash, x.VoiceProfileVersionId })
+                .SingleAsync(cancellationToken);
+            var narratedMetadata = JsonSerializer.Serialize(new
+            {
+                RawVideoMediaAssetId = rawVideoAssetId,
+                VoiceMediaAssetId = voiceAssetId,
+                VoiceProviderRequestId = voiceProviderRequestId,
+                VoiceGenerationId = voiceGenerationId,
+                voiceSnapshot.VoiceSnapshotHash,
+                voiceSnapshot.VoiceProfileVersionId,
+                SpeechHash = narrationHash,
+                audioSyncPolicyVersion = SceneAudioSyncPolicyVersion,
+                mixResult.MixStrategy,
+                mixResult.PreservedNativeAudio,
+                mixResult.VoiceDurationSeconds,
+                mixResult.TargetDurationSeconds,
+                mixResult.AppliedTempo,
+                mixResult.TrailingPaddingSeconds,
+                mixResult.SourceSpeechStartMs,
+                mixResult.SourceSpeechEndMs,
+                mixResult.TargetSpeechStartMs,
+                mixResult.EffectiveVoiceDurationSeconds,
+                canonicalVoiceAudible = mixResult.OutputAudioQuality.IsAudible,
+                mixResult.OutputAudioQuality.MeanVolumeDb,
+                mixResult.OutputAudioQuality.MaxVolumeDb,
+                mixResult.OutputAudioQuality.SilentRatio
+            }, JsonOptions);
             if (narratedAsset is null)
             {
                 narratedAsset = new MediaAsset
@@ -1876,35 +2614,31 @@ internal sealed class ProjectGenerationService(
                     AssetType = "SceneVideoNarrated",
                     DisplayName = $"Cảnh {scene.SequenceNumber} có lời đọc",
                     RelativePath = narratedAssetRelativePath,
-                    MimeType = "video/mp4",
-                    SizeBytes = narratedFile.Length,
-                    Sha256 = narratedHash,
-                    Width = mixResult.OutputProbe.Width,
-                    Height = mixResult.OutputProbe.Height,
-                    FrameRate = mixResult.OutputProbe.FramesPerSecond,
-                    DurationMs = checked((long)Math.Round(mixResult.OutputProbe.DurationSeconds * 1000m, MidpointRounding.AwayFromZero)),
-                    AudioSampleRate = mixResult.OutputProbe.AudioSampleRate,
-                    Status = "Ready",
-                    SourceType = "Generated",
-                    SourceProviderCode = "local-ffmpeg",
-                    MetadataJson = JsonSerializer.Serialize(new
-                    {
-                        RawVideoMediaAssetId = rawVideoAssetId,
-                        VoiceMediaAssetId = voiceAssetId,
-                        VoiceProviderRequestId = voiceProviderRequestId,
-                        mixResult.PreservedNativeAudio,
-                        mixResult.OutputAudioQuality.MeanVolumeDb,
-                        mixResult.OutputAudioQuality.MaxVolumeDb,
-                        mixResult.OutputAudioQuality.SilentRatio
-                    }, JsonOptions),
                     CreatedAtUtc = DateTime.UtcNow,
-                    VerifiedAtUtc = DateTime.UtcNow,
                     RowVersion = new byte[8]
                 };
                 writeContext.MediaAssets.Add(narratedAsset);
             }
+            narratedAsset.MimeType = "video/mp4";
+            narratedAsset.SizeBytes = narratedFile.Length;
+            narratedAsset.Sha256 = narratedHash;
+            narratedAsset.Width = mixResult.OutputProbe.Width;
+            narratedAsset.Height = mixResult.OutputProbe.Height;
+            narratedAsset.FrameRate = mixResult.OutputProbe.FramesPerSecond;
+            narratedAsset.DurationMs = checked((long)Math.Round(
+                mixResult.OutputProbe.DurationSeconds * 1000m,
+                MidpointRounding.AwayFromZero));
+            narratedAsset.AudioSampleRate = mixResult.OutputProbe.AudioSampleRate;
+            narratedAsset.Status = "Ready";
+            narratedAsset.SourceType = "Generated";
+            narratedAsset.SourceProviderCode = "local-ffmpeg";
+            narratedAsset.MetadataJson = narratedMetadata;
+            narratedAsset.VerifiedAtUtc = DateTime.UtcNow;
             var localScene = await writeContext.Scenes.SingleAsync(x => x.SceneId == scene.SceneId, cancellationToken);
-            localScene.Status = "Approved";
+            localScene.ApprovedGenerationId = null;
+            localScene.ApprovedRenderMediaAssetId = null;
+            localScene.SpeechStatus = "SpeechReviewRequired";
+            localScene.Status = "AudioReviewRequired";
             localScene.LastErrorCode = null;
             localScene.LastErrorMessage = null;
             localScene.UpdatedAtUtc = DateTime.UtcNow;
@@ -1912,12 +2646,118 @@ internal sealed class ProjectGenerationService(
         }
     }
 
+    private async Task<SpeechVerificationSource> ResolveSpeechVerificationSourceAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        if (sceneId == Guid.Empty)
+        {
+            throw new ArgumentException("Cảnh cần kiểm tra lời nói không hợp lệ.", nameof(sceneId));
+        }
+
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        var scene = await dbContext.Scenes.AsNoTracking()
+            .Where(x => x.SceneId == sceneId &&
+                        x.ProjectId == projectId &&
+                        x.ScenePlanVersion == project.CurrentScenePlanVersion)
+            .Select(x => new SceneWorkItem(
+                x.SceneId,
+                x.ScriptId,
+                x.ScenePlanVersion,
+                x.SequenceNumber,
+                x.ContentDurationMs,
+                x.GenerationDurationMs,
+                x.Narration,
+                x.Dialogue,
+                x.RequiredCapabilitiesJson,
+                x.Status,
+                x.CharacterIdsJson,
+                null))
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new ArgumentException("Không tìm thấy cảnh hiện hành cần kiểm tra lời nói.");
+        if (string.IsNullOrWhiteSpace(scene.SpokenText))
+        {
+            throw new ArgumentException("Cảnh không có lời nói cần kiểm tra.");
+        }
+
+        var expectedSpeechHash = Sha256Hex(NormalizeNarration(scene.SpokenText));
+        var canonical = string.Equals(
+            project.SpeechProductionPolicy,
+            SpeechProductionPolicies.CanonicalVoice,
+            StringComparison.Ordinal);
+        if (canonical)
+        {
+            throw new AccountClientException(
+                SpeechSynchronizationErrorCodes.SpeechVerificationNotRequired,
+                "Canonical Voice dùng kiểm tra kỹ thuật WAV cục bộ; không chạy kiểm tra transcript ASR.",
+                409);
+        }
+
+        var asset = await dbContext.VideoGenerations.AsNoTracking()
+            .Where(x => x.SceneId == sceneId &&
+                        x.OutputMediaAssetId != null &&
+                        x.OutputMediaAsset!.AssetType == "SceneVideo" &&
+                        x.OutputMediaAsset.Status == "Ready" &&
+                        x.OutputMediaAsset.DeletedAtUtc == null)
+            .OrderByDescending(x => x.AttemptNumber)
+            .ThenByDescending(x => x.CreatedAtUtc)
+            .Select(x => new { AssetId = x.OutputMediaAssetId!.Value, x.OutputMediaAsset!.RelativePath, x.OutputMediaAsset.DurationMs })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (asset is null || string.IsNullOrWhiteSpace(asset.RelativePath))
+        {
+            throw new InvalidOperationException("Cảnh chưa có clip Native Audio để kiểm tra transcript.");
+        }
+
+        var sourcePath = workspaceService.Resolve(Path.Combine(
+            project.WorkspaceRelativePath.Replace('/', Path.DirectorySeparatorChar),
+            asset.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException("Không tìm thấy media cần kiểm tra trong workspace.", sourcePath);
+        }
+
+        return new SpeechVerificationSource(
+            scene,
+            asset.AssetId,
+            sourcePath,
+            Math.Max(1, asset.DurationMs ?? scene.GenerationDurationMs),
+            expectedSpeechHash,
+            ExtractAudio: true);
+    }
+
     private async Task<bool> IsSceneApprovedAsync(Guid sceneId, CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await dbContext.Scenes.AsNoTracking().AnyAsync(
-            x => x.SceneId == sceneId && x.Status == "Approved" && x.ApprovedGenerationId != null,
+            x => x.SceneId == sceneId &&
+                 x.Status == "Approved" &&
+                 x.ApprovedGenerationId != null &&
+                 x.ApprovedRenderMediaAssetId != null &&
+                 (x.SpeechStatus == SceneSpeechStatuses.SpeechNotRequired ||
+                  x.SpeechStatus == SceneSpeechStatuses.SpeechApproved),
             cancellationToken);
+    }
+
+    private async Task<bool> IsCanonicalVoiceApprovedAsync(
+        SceneWorkItem scene,
+        CancellationToken cancellationToken)
+    {
+        var expectedSpeechHash = Sha256Hex(NormalizeNarration(scene.SpokenText));
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await dbContext.Scenes
+            .AsNoTracking()
+            .Where(x => x.SceneId == scene.SceneId && x.ApprovedVoiceGenerationId != null)
+            .AnyAsync(
+                x => x.ApprovedVoiceGeneration!.Status == "Approved" &&
+                     x.ApprovedVoiceGeneration.ScenePlanVersion == scene.ScenePlanVersion &&
+                     x.ApprovedVoiceGeneration.NarrationHash == expectedSpeechHash &&
+                     x.ApprovedVoiceGeneration.OutputMediaAssetId != null &&
+                     x.ApprovedVoiceGeneration.OutputMediaAsset!.Status == "Ready" &&
+                     x.ApprovedVoiceGeneration.OutputMediaAsset.DeletedAtUtc == null,
+                cancellationToken);
     }
 
     private async Task<bool> AreAllScenesApprovedAsync(
@@ -1935,7 +2775,11 @@ internal sealed class ProjectGenerationService(
                    .AsNoTracking()
                    .Where(x => x.ProjectId == projectId && x.ScenePlanVersion == planVersion.Value)
                    .AllAsync(
-                       x => x.ApprovedGenerationId != null,
+                       x => x.Status == "Approved" &&
+                            x.ApprovedGenerationId != null &&
+                            x.ApprovedRenderMediaAssetId != null &&
+                            (x.SpeechStatus == SceneSpeechStatuses.SpeechNotRequired ||
+                             x.SpeechStatus == SceneSpeechStatuses.SpeechApproved),
                        cancellationToken);
     }
 
@@ -2164,6 +3008,27 @@ internal sealed class ProjectGenerationService(
         }
     }
 
+    private static string? ReadStringProperty(string? json, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty(propertyName, out var value) &&
+                   value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static string LocalGenerationStatus(string taskStatus) => taskStatus switch
     {
         "Completed" => "Generated",
@@ -2186,11 +3051,7 @@ internal sealed class ProjectGenerationService(
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private static string NormalizeNarration(string? value) =>
-        string.IsNullOrWhiteSpace(value)
-            ? string.Empty
-            : value.Replace("\r\n", "\n", StringComparison.Ordinal)
-                .Replace('\r', '\n')
-                .Trim();
+        SpeechTextNormalization.Normalize(value);
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -2223,6 +3084,12 @@ internal sealed class ProjectGenerationService(
     {
         public string? SpokenText => !string.IsNullOrWhiteSpace(Dialogue) ? Dialogue : Narration;
 
+        public string SpeechMode => !string.IsNullOrWhiteSpace(Dialogue)
+            ? KlingSpeechModes.OnCameraDialogue
+            : !string.IsNullOrWhiteSpace(Narration)
+                ? KlingSpeechModes.NativeVoiceOver
+                : KlingSpeechModes.None;
+
         public CharacterWorkItem? Character { get; init; }
     }
 
@@ -2236,7 +3103,18 @@ internal sealed class ProjectGenerationService(
         Guid CharacterId,
         string Name,
         string Status,
+        string? VoiceCode,
+        decimal? VoiceSpeakingRate,
+        Guid? ApprovedVoiceProfileVersionId,
         ReferenceWorkItem? Reference);
+
+    private sealed record SpeechVerificationSource(
+        SceneWorkItem Scene,
+        Guid SourceMediaAssetId,
+        string SourcePath,
+        long DurationMs,
+        string ExpectedSpeechHash,
+        bool ExtractAudio);
 
     private sealed record ReferenceWorkItem(
         Guid CharacterReferenceId,

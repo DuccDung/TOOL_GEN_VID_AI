@@ -17,6 +17,11 @@ internal interface IAiCostEstimator
     Task<AiCostQuote> QuoteOpenAiAsync(Guid providerModelId, int topicCharacters, int targetDurationSeconds, CancellationToken cancellationToken);
     Task<AiCostQuote> QuoteOpenAiImageAsync(Guid providerModelId, int promptCharacters, long estimatedInputTokens, long estimatedOutputTokens, CancellationToken cancellationToken);
     Task<AiCostQuote> QuoteOpenAiVoiceAsync(Guid providerModelId, int narrationCharacters, decimal estimatedCharactersPerSecond, long estimatedOutputTokensPerSecond, CancellationToken cancellationToken);
+    Task<AiCostQuote> QuoteTranscriptionAsync(
+        Guid providerModelId,
+        long durationMs,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new AiCostQuote(0, "USD", "[]"));
     Task<AiCostQuote> QuoteKlingAsync(Guid providerModelId, int durationSeconds, string resolution, bool nativeAudio, CancellationToken cancellationToken);
     Task<AiCostQuote> QuoteVideoAsync(string providerCode, Guid providerModelId, int durationSeconds, string resolution, bool nativeAudio, int framesPerSecond, CancellationToken cancellationToken) =>
         providerCode == ProviderCodes.Kling
@@ -198,6 +203,27 @@ internal sealed class AiCostEstimator(
             Snapshot([inputRate, outputRate]),
             inputTokens,
             outputTokens);
+    }
+
+    public async Task<AiCostQuote> QuoteTranscriptionAsync(
+        Guid providerModelId,
+        long durationMs,
+        CancellationToken cancellationToken)
+    {
+        var rates = await CurrentRatesAsync(providerModelId, cancellationToken);
+        var rate = rates.FirstOrDefault(x =>
+            x.UsageType == "AudioSecond" &&
+            string.Equals(x.Unit, "Second", StringComparison.Ordinal));
+        if (rate is null || durationMs <= 0)
+        {
+            return EmptyQuote(rates);
+        }
+
+        var billableSeconds = Math.Max(1, (long)Math.Ceiling(durationMs / 1000m));
+        return new AiCostQuote(
+            Round(rate.UnitPrice * billableSeconds),
+            rate.CurrencyCode,
+            Snapshot([rate]));
     }
 
     public Task<decimal> CalculateOpenAiActualAsync(

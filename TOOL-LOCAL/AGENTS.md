@@ -1,75 +1,69 @@
 # Hướng dẫn AI agent — TOOL-LOCAL
 
-Áp dụng thêm các quy tắc trong `../AGENTS.md`. File này cũng áp dụng cho `Web` và WebView bridge.
+Áp dụng thêm `../AGENTS.md`. File này bao phủ WinForms, WebView bridge, React, media và Vietsub local.
 
-## Vai trò của desktop
+## Trách nhiệm
 
-`TOOL-LOCAL` là WinForms host có giao diện React chạy bằng WebView2. Nó quản lý phiên đăng nhập, organization đang chọn, dữ liệu project/workspace và media cục bộ. Nó không phải AI gateway và không được giữ provider credential.
+- `Program.cs`/`Form1.cs`: composition, login/dashboard lifecycle và WebView2.
+- `Authentication`: token cục bộ, refresh và license heartbeat.
+- `Generation/ServerGenerationClient`: client duy nhất cho AI gateway.
+- `Projects`/`Data`: workflow SQL chuyển tiếp và dashboard projection.
+- `Media`: FFmpeg/FFprobe, validation, trim, audio mix và render.
+- `WebView` + `Web/src`: message contract, UI/state/busy/error.
+- `Vietsub`: workspace, SQLite, playback, timeline, subtitle, local job và OCR.
 
-Luồng chính:
+## Gateway-only
 
-1. `LoginForm` đăng nhập và `LicenseSessionManager` duy trì heartbeat/lease.
-2. `Form1` tạo WebView2, khởi tạo service và chuyển message giữa React với C#.
-3. `ServerGenerationClient` gọi duy nhất `TOOL-SERVER` bằng access token và organization ID.
-4. `ProjectGenerationService` lưu content/scene/output vào dữ liệu workflow và workspace sau khi nhận kết quả server.
-5. Các service `Media` dùng FFmpeg/FFprobe để kiểm tra, ghép, render và tạo subtitle cục bộ.
-
-FFmpeg/FFprobe của bản phát hành phải nằm trong `tools/ffmpeg` và đi cùng `LICENSE.txt`, `PROVENANCE.md`, `checksums.sha256`. Cấu hình máy phát triển chỉ được ghi đè qua `appsettings.user.json`; preflight phải hoàn tất trước outbound Kling và retry sau lỗi media phải dùng lại provider request đã có.
-
-## Bất biến gateway-only
-
-- Không thêm OpenAI/Kling SDK hoặc `HttpClient` gọi host provider trong desktop.
-- Không thêm trường `openAiApiKey`, `klingApiKey`, form nhập key, bridge event lưu key, DPAPI provider store hoặc fallback BYOK.
-- Trang “API AI tổ chức” chỉ hiển thị organization, role, budget và trạng thái provider không bí mật.
-- `ProviderSettingsResponse` là view trạng thái read-only; không tạo lại `SaveProviderSettingsPayload` hay `providers.settings.save`.
-- `LegacyProviderCredentialCleaner` phải chỉ xóa `%LOCALAPPDATA%\ToolGenPostVideo\provider-secrets.bin` và `.tmp` tương ứng. Không mở rộng phạm vi xóa.
-- Token đăng nhập có thể dùng DPAPI; lệnh cấm chỉ áp dụng cho provider API key.
-- Khi refresh token bị từ chối bằng `401`/`403`, `AccountSessionManager` phải xóa token cục bộ, phát `SessionInvalidated`, đóng dashboard và đưa người dùng về `LoginForm`. Không chỉ hiển thị lỗi rồi giữ phiên cũ.
-- `401` từ API đã xác thực cũng làm mất phiên; lỗi license/quyền nghiệp vụ `403` không mặc định ép đăng nhập lại nếu session vẫn hợp lệ.
-- `401 invalid_credentials` trong thao tác login không phải session expiration: giữ nguyên `LoginForm`, hiển thị lỗi tại ô mật khẩu và cho phép nhập lại.
-
-## Organization và project
-
-- User phải chọn organization trước khi tạo project hoặc generation.
-- Project mới phải có cả `OrganizationId` và `CreatedByUserId`.
-- Danh sách project được lọc theo organization hiện hành.
-- Khóa organization selector khi đang chạy thao tác để request không đổi tenant giữa chừng.
-- Không coi kiểm tra desktop là ranh giới bảo mật; server vẫn phải xác minh lại mọi quyền và ownership.
+- Không thêm provider SDK/client, key field, secret store, base URL tùy ý hoặc BYOK fallback.
+- UI provider chỉ hiển thị readiness/model/policy/budget an toàn.
+- Token đăng nhập có thể được bảo vệ cục bộ; provider key thì không bao giờ thuộc desktop.
+- `401` từ API authenticated phải invalidate session và quay về login. `403` license/role không mặc định là token hỏng.
+- Mọi request generation phải dùng organization đang chọn và khóa organization selector trong thao tác.
 
 ## SQL chuyển tiếp
 
-Desktop hiện còn đọc/ghi trực tiếp schema workflow `vf` qua `VideoFactoryDbContext`. Đây là trạng thái chuyển tiếp:
+- Desktop chỉ dùng database user thuộc `VideoMakerDesktopRole`.
+- Không ghi credential, provider request, reservation, usage ledger hoặc audit truth từ desktop.
+- Khi chuyển nghiệp vụ sang server API, bỏ đường SQL tương ứng; không giữ hai nguồn sự thật.
+- Không xóa entity legacy nếu còn EF navigation/migration/data compatibility.
 
-- Chỉ dùng database user thuộc `VideoMakerDesktopRole`.
-- Không thêm thao tác ghi credential, provider request hoặc usage truth từ desktop.
-- Không cấp quyền schema `ai`, `auth`, `dbo` cho desktop.
-- Khi chuyển một nghiệp vụ SQL sang API server, bỏ đường SQL tương ứng và thêm contract/test cùng lượt; không duy trì hai nguồn sự thật.
+## WebView và React
 
-## WebView2 và React
+- Message mới phải cập nhật `Web/src/types.ts`, nơi phát message, `WebMessageContracts.cs`, `DashboardBridge.cs` và test.
+- Validate payload ở C#; giới hạn size, giữ request ID và error code ổn định.
+- Getter state không được khởi động job hoặc gọi provider.
+- Busy state phải được giải phóng ở success/error/cancel; đổi organization/project phải hủy state cũ.
+- Không đưa token, secret, connection string, user/org ID không cần thiết hoặc absolute local path vào DOM/console.
+- Chỉ sửa source TypeScript; không sửa `dist`, generated Vite files hoặc `node_modules`.
 
-- `Web/src/App.tsx`: UI/state và phát message.
-- `Web/src/types.ts`: shape dữ liệu frontend.
-- `Web/src/bridge.ts`: lớp giao tiếp host.
-- `WebView/WebMessageContracts.cs` và `DashboardBridge.cs`: contract/handler C#.
-- Mọi message mới phải có validation ở C#, error code ổn định và trạng thái busy hợp lý ở React.
-- Không chèn secret, access token hoặc connection string vào DOM, console hay bundle.
+## Media
 
-Frontend dùng TypeScript strict, React và Vite. `dist`, `node_modules`, `*.tsbuildinfo`, `vite.config.js` và `vite.config.d.ts` là file sinh ra, không sửa trực tiếp.
+- Chạy media preflight trước provider generation khi output cần FFmpeg.
+- Download qua `.part`, giới hạn size/MIME, xác minh SHA-256 và probe trước promote.
+- Retry lỗi local phải dùng lại provider request/output đã có, không submit cloud lần hai.
+- Native Audio cần playback/manual approval theo policy.
+- Render chỉ dùng approved asset đúng scene/generation/voice/speech snapshot và hash trên disk.
+- FFmpeg process phải dùng argument list, timeout/cancellation và giới hạn stderr; không ghép command string từ input người dùng.
 
-## Kiểm tra desktop
+## Vietsub
 
-Sau thay đổi web:
+- Project/workspace phải khớp exact organization + owner + selected context.
+- Virtual media URL không lộ path; handler luôn kiểm tra project/media/source hash và HTTP Range.
+- `LINK` phải phát hiện source mất/đổi; `COPY` không được sửa source gốc.
+- Subtitle mutation dùng track revision; không ghi đè cue manual/locked.
+- Job local dùng state machine/checkpoint/pause/resume/retry/cancel và global heavy-job limit.
+- OCR phải xác minh session/license/membership/role trước khi chạy; Viewer bị chặn.
+- Không coi job type placeholder là tính năng. Không thêm direct cloud translation hoặc key vào Vietsub.
+
+## Kiểm tra
+
+Frontend:
 
 ```powershell
 Set-Location Web
 npm ci --no-audit --no-fund
 npm run build
+npm test
 ```
 
-Sau thay đổi C#/bridge/generation, chạy build/test toàn solution theo `../AGENTS.md`. Khi kiểm tra bundle, tìm các dấu vết bị cấm:
-
-```powershell
-rg -n -i "openAiApiKey|klingApiKey|providers\.settings\.save|DirectGenerationClient|LocalProviderRuntimeResolver|ProviderSecretStore" Web dist .
-```
-
-Không chạy UI automation hoặc generation thật nếu chưa có môi trường test và phê duyệt chi phí.
+Sau thay đổi C#/bridge/media chạy toàn bộ lệnh trong `../AGENTS.md`.

@@ -6,6 +6,7 @@ using TOOL_LOCAL.Data.Models;
 using TOOL_LOCAL.Media;
 using TOOL_LOCAL.Projects;
 using TOOL_LOCAL.Storage;
+using TOOL_SHARED.Contracts.Generation;
 
 namespace TOOL_TESTS.Projects;
 
@@ -41,6 +42,75 @@ public sealed class ProjectRenderServiceTests
     }
 
     [Fact]
+    public async Task RenderFinalVideo_UsesApprovedSubsetAndSkipsUnapprovedScenes()
+    {
+        await using var fixture = await RenderFixture.CreateAsync("SceneVideo", nativeAudioAudible: true);
+        await using (var setupContext = fixture.Factory.CreateDbContext())
+        {
+            var now = DateTime.UtcNow;
+            setupContext.Scenes.Add(new Scene
+            {
+                SceneId = Guid.NewGuid(),
+                ProjectId = fixture.ProjectId,
+                ScriptId = Guid.NewGuid(),
+                StyleProfileId = Guid.NewGuid(),
+                ScenePlanVersion = 1,
+                SequenceNumber = 2,
+                StoryPurpose = "Pending scene",
+                VisualDescription = "Not approved yet",
+                ContentDurationMs = 5_000,
+                GenerationDurationMs = 5_000,
+                TimelineStartMs = 5_000,
+                TimelineEndMs = 10_000,
+                EntryStateJson = "{}",
+                ExitStateJson = "{}",
+                Status = "PromptReady",
+                SpeechStatus = SceneSpeechStatuses.SpeechNotRequired,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                RowVersion = new byte[8]
+            });
+            await setupContext.SaveChangesAsync();
+        }
+
+        var result = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        Assert.NotEqual(Guid.Empty, result.FinalVideoId);
+        Assert.NotNull(fixture.Renderer.Manifest);
+        Assert.Single(fixture.Renderer.Manifest!.ScenePaths);
+        Assert.EndsWith("scene-001.mp4", fixture.Renderer.Manifest.ScenePaths[0], StringComparison.Ordinal);
+        await using var dbContext = fixture.Factory.CreateDbContext();
+        var renderJob = await dbContext.RenderJobs.SingleAsync();
+        Assert.Contains("\"expectedSceneCount\":1", renderJob.TechnicalReportJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RenderFinalVideo_RejectsWhenNoSceneIsApproved()
+    {
+        await using var fixture = await RenderFixture.CreateAsync("SceneVideo", nativeAudioAudible: true);
+        await using (var setupContext = fixture.Factory.CreateDbContext())
+        {
+            var scene = await setupContext.Scenes.SingleAsync();
+            scene.Status = "PromptReady";
+            scene.ApprovedGenerationId = null;
+            scene.ApprovedRenderMediaAssetId = null;
+            await setupContext.SaveChangesAsync();
+        }
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Service.RenderFinalVideoAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                CancellationToken.None));
+
+        Assert.Contains("chưa có cảnh đã duyệt", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, fixture.Renderer.CallCount);
+    }
+
+    [Fact]
     public async Task RenderFinalVideo_RejectsNarratedOrUnapprovedSourceBeforeFfmpeg()
     {
         await using var fixture = await RenderFixture.CreateAsync(
@@ -53,7 +123,7 @@ public sealed class ProjectRenderServiceTests
                 fixture.UserId,
                 CancellationToken.None));
 
-        Assert.Contains("clip video Native Audio đã duyệt", exception.Message);
+        Assert.Contains("video và lời nói đã kiểm tra/duyệt", exception.Message);
         Assert.Equal(0, fixture.Renderer.CallCount);
         await using var dbContext = fixture.Factory.CreateDbContext();
         Assert.Empty(await dbContext.RenderJobs.ToListAsync());
@@ -105,6 +175,206 @@ public sealed class ProjectRenderServiceTests
         Assert.Null(output.AudioSampleRate);
     }
 
+    [Fact]
+    public async Task RenderFinalVideo_MixedAudioAndSilentScenesPassesAlignedAudioTimeline()
+    {
+        await using var fixture = await RenderFixture.CreateAsync(
+            "SceneVideo",
+            nativeAudioAudible: true,
+            mixedSilentScene: true);
+
+        await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        Assert.NotNull(fixture.Renderer.Manifest);
+        Assert.Equal(2, fixture.Renderer.Manifest!.ScenePaths.Count);
+        Assert.Equal([true, false], fixture.Renderer.Manifest.SceneAudioEnabled);
+        Assert.True(fixture.Renderer.Manifest.OutputAudioEnabled);
+        await using var dbContext = fixture.Factory.CreateDbContext();
+        var renderJob = await dbContext.RenderJobs.SingleAsync();
+        Assert.Contains("\"mixedSceneAudio\":true", renderJob.TechnicalReportJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RenderFinalVideo_CanonicalVoiceOverUsesApprovedNarratedAsset()
+    {
+        await using var fixture = await RenderFixture.CreateCanonicalAsync();
+
+        var result = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        Assert.NotNull(fixture.Renderer.Manifest);
+        Assert.Single(fixture.Renderer.Manifest!.ScenePaths);
+        Assert.EndsWith("scene-001-narrated.mp4", fixture.Renderer.Manifest.ScenePaths[0], StringComparison.Ordinal);
+        await using var dbContext = fixture.Factory.CreateDbContext();
+        var renderJob = await dbContext.RenderJobs.SingleAsync();
+        Assert.Contains("\"audioStrategy\":\"CanonicalVoice\"", renderJob.ManifestJson, StringComparison.Ordinal);
+        Assert.Empty(dbContext.SpeechVerificationReports);
+        Assert.True(File.Exists(fixture.Workspace.Resolve(result.RelativePath)));
+    }
+
+    [Fact]
+    public async Task RenderFinalVideo_CanonicalVoiceOverAcceptsExplicitlyApprovedLegacyV2Asset()
+    {
+        await using var fixture = await RenderFixture.CreateCanonicalAsync("scene-audio-sync-v2");
+
+        var result = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        Assert.NotEqual(Guid.Empty, result.FinalVideoId);
+        Assert.Equal(1, fixture.Renderer.CallCount);
+        Assert.NotNull(fixture.Renderer.Manifest);
+        Assert.Single(fixture.Renderer.Manifest!.ScenePaths);
+        Assert.EndsWith("scene-001-narrated.mp4", fixture.Renderer.Manifest.ScenePaths[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RenderFinalVideo_CanonicalVoiceOverRejectsUnsupportedAudioSyncPolicy()
+    {
+        await using var fixture = await RenderFixture.CreateCanonicalAsync("scene-audio-sync-v1");
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Service.RenderFinalVideoAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                CancellationToken.None));
+
+        Assert.Contains("Canonical Voice", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Renderer.CallCount);
+    }
+
+    [Fact]
+    public async Task RenderFinalVideo_FeatureDisabled_AllowsLegacyNativeSpeechWithoutAsrReport()
+    {
+        await using var fixture = await RenderFixture.CreateAsync(
+            "SceneVideo",
+            nativeAudioAudible: true,
+            speechVerificationEnabled: false,
+            narration: "Xin chào bạn.");
+
+        var result = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        Assert.NotEqual(Guid.Empty, result.FinalVideoId);
+        Assert.Equal(1, fixture.Renderer.CallCount);
+    }
+
+    [Fact]
+    public async Task RenderFinalVideo_FeatureEnabled_RejectsNativeSpeechWithoutAsrReport()
+    {
+        await using var fixture = await RenderFixture.CreateAsync(
+            "SceneVideo",
+            nativeAudioAudible: true,
+            speechVerificationEnabled: true,
+            narration: "Xin chào bạn.");
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Service.RenderFinalVideoAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                CancellationToken.None));
+
+        Assert.Contains("lời nói đã kiểm tra/duyệt", exception.Message);
+        Assert.Equal(0, fixture.Renderer.CallCount);
+    }
+
+    [Fact]
+    public async Task ExportFinalVideo_CopiesLatestValidatedRenderAndPersistsExportState()
+    {
+        await using var fixture = await RenderFixture.CreateAsync("SceneVideo", nativeAudioAudible: true);
+        var render = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+        var exportDirectory = Path.Combine(fixture.Root, "exports");
+        Directory.CreateDirectory(exportDirectory);
+        var destinationPath = Path.Combine(exportDirectory, "video-test.mp4");
+        await File.WriteAllTextAsync(destinationPath, "old-export");
+
+        var result = await fixture.Service.ExportFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            destinationPath,
+            CancellationToken.None);
+
+        Assert.Equal(render.FinalVideoId, result.FinalVideoId);
+        Assert.Equal(render.Version, result.Version);
+        Assert.Equal("video-test.mp4", result.FileName);
+        Assert.Equal(new FileInfo(destinationPath).Length, result.SizeBytes);
+        Assert.Equal(
+            await File.ReadAllBytesAsync(fixture.Workspace.Resolve(render.RelativePath)),
+            await File.ReadAllBytesAsync(destinationPath));
+        Assert.Empty(Directory.GetFiles(exportDirectory, "*.tmp"));
+        await using var dbContext = fixture.Factory.CreateDbContext();
+        var finalVideo = await dbContext.FinalVideos.SingleAsync();
+        var project = await dbContext.Projects.SingleAsync();
+        Assert.Equal("Exported", finalVideo.Status);
+        Assert.Equal(Path.GetFullPath(destinationPath), finalVideo.ExportedPath);
+        Assert.NotNull(finalVideo.ApprovedAtUtc);
+        Assert.NotNull(finalVideo.ExportedAtUtc);
+        Assert.Equal("Completed", project.Status);
+        Assert.Empty(await dbContext.ProviderRequests.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ExportFinalVideo_RejectsChangedWorkspaceFileAndPreservesExistingDestination()
+    {
+        await using var fixture = await RenderFixture.CreateAsync("SceneVideo", nativeAudioAudible: true);
+        var render = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+        await File.WriteAllTextAsync(
+            fixture.Workspace.Resolve(render.RelativePath),
+            "tampered-final-video");
+        var exportDirectory = Path.Combine(fixture.Root, "exports");
+        Directory.CreateDirectory(exportDirectory);
+        var destinationPath = Path.Combine(exportDirectory, "existing.mp4");
+        await File.WriteAllTextAsync(destinationPath, "keep-me");
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Service.ExportFinalVideoAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                destinationPath,
+                CancellationToken.None));
+
+        Assert.Contains("đã thay đổi trong workspace", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("keep-me", await File.ReadAllTextAsync(destinationPath));
+        await using var dbContext = fixture.Factory.CreateDbContext();
+        Assert.Equal("AwaitingApproval", (await dbContext.FinalVideos.SingleAsync()).Status);
+        Assert.Null((await dbContext.FinalVideos.SingleAsync()).ExportedPath);
+    }
+
+    [Fact]
+    public async Task ExportFinalVideo_RejectsDifferentProjectOwner()
+    {
+        await using var fixture = await RenderFixture.CreateAsync("SceneVideo", nativeAudioAudible: true);
+        await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+        var destinationPath = Path.Combine(fixture.Root, "unauthorized.mp4");
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Service.ExportFinalVideoAsync(
+                fixture.ProjectId,
+                "another-user",
+                destinationPath,
+                CancellationToken.None));
+
+        Assert.Contains("không có quyền", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(destinationPath));
+    }
+
     private sealed class RenderFixture : IAsyncDisposable
     {
         private RenderFixture(
@@ -137,19 +407,28 @@ public sealed class ProjectRenderServiceTests
             string assetType,
             bool nativeAudioAudible,
             bool outputAudible = true,
-            bool silentOutput = false)
+            bool silentOutput = false,
+            bool speechVerificationEnabled = true,
+            string? narration = null,
+            bool mixedSilentScene = false)
         {
             var root = Path.Combine(Path.GetTempPath(), $"videomaker-render-{Guid.NewGuid():N}");
             var workspace = new ProjectWorkspaceService(root);
             var projectId = Guid.NewGuid();
             const string userId = "render-user";
             var projectRelativePath = workspace.Create(projectId);
-            var sourceRelativePath = Path.Combine(projectRelativePath, "scenes", "scene-001.mp4")
-                .Replace(Path.DirectorySeparatorChar, '/');
-            var sourcePath = workspace.Resolve(sourceRelativePath);
+            const string sourceRelativePath = "scenes/scene-001.mp4";
+            var sourcePath = workspace.Resolve(Path.Combine(projectRelativePath, sourceRelativePath));
             var sourceBytes = "approved-kling-native-audio"u8.ToArray();
             await File.WriteAllBytesAsync(sourcePath, sourceBytes);
             var sourceHash = Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant();
+            const string silentSourceRelativePath = "scenes/scene-002.mp4";
+            var silentSourceBytes = "approved-kling-silent-video"u8.ToArray();
+            if (mixedSilentScene)
+            {
+                var silentSourcePath = workspace.Resolve(Path.Combine(projectRelativePath, silentSourceRelativePath));
+                await File.WriteAllBytesAsync(silentSourcePath, silentSourceBytes);
+            }
 
             var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
                 .UseInMemoryDatabase($"project-render-{Guid.NewGuid():N}")
@@ -231,6 +510,7 @@ public sealed class ProjectRenderServiceTests
                     ScenePlanVersion = 1,
                     SequenceNumber = 1,
                     StoryPurpose = "Test",
+                    Narration = narration,
                     VisualDescription = "Test",
                     ContentDurationMs = 5000,
                     GenerationDurationMs = 5000,
@@ -238,23 +518,204 @@ public sealed class ProjectRenderServiceTests
                     EntryStateJson = "{}",
                     ExitStateJson = "{}",
                     Status = "Approved",
+                    SpeechStatus = narration is null
+                        ? SceneSpeechStatuses.SpeechNotRequired
+                        : SceneSpeechStatuses.SpeechApproved,
                     ApprovedGenerationId = generationId,
+                    ApprovedRenderMediaAssetId = assetId,
                     CreatedAtUtc = now,
                     UpdatedAtUtc = now,
                     RowVersion = new byte[8]
                 });
+                if (mixedSilentScene)
+                {
+                    var silentSceneId = Guid.NewGuid();
+                    var silentGenerationId = Guid.NewGuid();
+                    var silentAssetId = Guid.NewGuid();
+                    dbContext.MediaAssets.Add(new MediaAsset
+                    {
+                        MediaAssetId = silentAssetId,
+                        ProjectId = projectId,
+                        SceneId = silentSceneId,
+                        AssetType = "SceneVideo",
+                        RelativePath = silentSourceRelativePath,
+                        MimeType = "video/mp4",
+                        SizeBytes = silentSourceBytes.Length,
+                        Sha256 = Convert.ToHexString(SHA256.HashData(silentSourceBytes)).ToLowerInvariant(),
+                        Width = 1280,
+                        Height = 720,
+                        FrameRate = 25,
+                        DurationMs = 5_000,
+                        Status = "Ready",
+                        SourceType = "Generated",
+                        MetadataJson = "{\"nativeAudioAudible\":false,\"audioStrategy\":\"SilentOutput\"}",
+                        CreatedAtUtc = now,
+                        VerifiedAtUtc = now,
+                        RowVersion = new byte[8]
+                    });
+                    dbContext.VideoGenerations.Add(new VideoGeneration
+                    {
+                        VideoGenerationId = silentGenerationId,
+                        SceneId = silentSceneId,
+                        ScenePromptId = Guid.NewGuid(),
+                        ProviderRequestId = Guid.NewGuid(),
+                        AttemptNumber = 1,
+                        Status = "Approved",
+                        RequestedDurationMs = 5_000,
+                        ActualDurationMs = 5_000,
+                        OutputMediaAssetId = silentAssetId,
+                        CreatedAtUtc = now,
+                        CompletedAtUtc = now,
+                        RowVersion = new byte[8]
+                    });
+                    dbContext.Scenes.Add(new Scene
+                    {
+                        SceneId = silentSceneId,
+                        ProjectId = projectId,
+                        ScriptId = Guid.NewGuid(),
+                        StyleProfileId = Guid.NewGuid(),
+                        ScenePlanVersion = 1,
+                        SequenceNumber = 2,
+                        StoryPurpose = "Silent cutaway",
+                        VisualDescription = "Silent cutaway",
+                        ContentDurationMs = 5_000,
+                        GenerationDurationMs = 5_000,
+                        TimelineStartMs = 5_000,
+                        TimelineEndMs = 10_000,
+                        EntryStateJson = "{}",
+                        ExitStateJson = "{}",
+                        Status = "Approved",
+                        SpeechStatus = SceneSpeechStatuses.SpeechNotRequired,
+                        ApprovedGenerationId = silentGenerationId,
+                        ApprovedRenderMediaAssetId = silentAssetId,
+                        CreatedAtUtc = now,
+                        UpdatedAtUtc = now,
+                        RowVersion = new byte[8]
+                    });
+                }
                 await dbContext.SaveChangesAsync();
             }
 
             var renderer = new CaptureRenderer();
-            var inspector = new StubOutputInspector(outputAudible, hasAudio: !silentOutput);
+            var inspector = new StubOutputInspector(
+                outputAudible,
+                hasAudio: !silentOutput,
+                durationSeconds: mixedSilentScene ? 10m : 5m);
             var service = new ProjectRenderService(
                 factory,
                 workspace,
                 new ReadyMediaToolPreflight(),
                 renderer,
-                inspector);
+                inspector,
+                speechVerificationEnabled);
             return new RenderFixture(root, factory, workspace, renderer, service, projectId, userId);
+        }
+
+        public static async Task<RenderFixture> CreateCanonicalAsync(
+            string audioSyncPolicyVersion = "scene-audio-sync-v3")
+        {
+            var fixture = await CreateAsync("SceneVideo", nativeAudioAudible: false, outputAudible: true);
+            const string spokenText = "Xin chào Việt Nam.";
+            var speechHash = Convert.ToHexString(
+                SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(SpeechTextNormalization.Normalize(spokenText))))
+                .ToLowerInvariant();
+            var voiceGenerationId = Guid.NewGuid();
+            var voiceAssetId = Guid.NewGuid();
+            var narratedAssetId = Guid.NewGuid();
+            var snapshotHash = new string('c', 64);
+            var narratedRelativePath = "scenes/scene-001-narrated.mp4";
+            var narratedPath = fixture.Workspace.Resolve(Path.Combine(
+                fixture.Workspace.Create(fixture.ProjectId),
+                narratedRelativePath));
+            var narratedBytes = "approved-canonical-narrated-video"u8.ToArray();
+            await File.WriteAllBytesAsync(narratedPath, narratedBytes);
+
+            await using var dbContext = fixture.Factory.CreateDbContext();
+            var project = await dbContext.Projects.SingleAsync();
+            var scene = await dbContext.Scenes.SingleAsync();
+            var generation = await dbContext.VideoGenerations.SingleAsync();
+            var rawVideoAsset = await dbContext.MediaAssets.SingleAsync(
+                x => x.MediaAssetId == generation.OutputMediaAssetId);
+            project.SpeechProductionPolicy = SpeechProductionPolicies.CanonicalVoice;
+            rawVideoAsset.MetadataJson = "{\"nativeAudioAudible\":false,\"audioStrategy\":\"SilentOutput\"}";
+            scene.Narration = spokenText;
+            scene.SpeechStatus = SceneSpeechStatuses.SpeechApproved;
+            scene.ApprovedVoiceGenerationId = voiceGenerationId;
+            scene.ApprovedRenderMediaAssetId = narratedAssetId;
+            dbContext.MediaAssets.AddRange(
+                new MediaAsset
+                {
+                    MediaAssetId = voiceAssetId,
+                    ProjectId = fixture.ProjectId,
+                    SceneId = scene.SceneId,
+                    AssetType = "SceneVoice",
+                    RelativePath = "voice/scene-001.wav",
+                    MimeType = "audio/wav",
+                    SizeBytes = 1_024,
+                    Sha256 = new string('b', 64),
+                    DurationMs = 4_500,
+                    AudioSampleRate = 24_000,
+                    Status = "Ready",
+                    SourceType = "Generated",
+                    CreatedAtUtc = DateTime.UtcNow,
+                    RowVersion = new byte[8]
+                },
+                new MediaAsset
+                {
+                    MediaAssetId = narratedAssetId,
+                    ProjectId = fixture.ProjectId,
+                    SceneId = scene.SceneId,
+                    AssetType = "SceneVideoNarrated",
+                    RelativePath = narratedRelativePath,
+                    MimeType = "video/mp4",
+                    SizeBytes = narratedBytes.Length,
+                    Sha256 = Convert.ToHexString(SHA256.HashData(narratedBytes)).ToLowerInvariant(),
+                    Width = 1280,
+                    Height = 720,
+                    FrameRate = 25,
+                    DurationMs = 5_000,
+                    AudioSampleRate = 48_000,
+                    Status = "Ready",
+                    SourceType = "Generated",
+                    MetadataJson = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        voiceGenerationId,
+                        voiceSnapshotHash = snapshotHash,
+                        speechHash,
+                        mixStrategy = SpeechMixStrategies.ReplaceAllNativeAudio,
+                        audioSyncPolicyVersion,
+                        canonicalVoiceAudible = true
+                    }),
+                    CreatedAtUtc = DateTime.UtcNow,
+                    VerifiedAtUtc = DateTime.UtcNow,
+                    RowVersion = new byte[8]
+                });
+            dbContext.VoiceGenerations.Add(new VoiceGeneration
+            {
+                VoiceGenerationId = voiceGenerationId,
+                ProjectId = fixture.ProjectId,
+                ScriptId = scene.ScriptId,
+                SceneId = scene.SceneId,
+                ScenePlanVersion = scene.ScenePlanVersion,
+                ProviderRequestId = Guid.NewGuid(),
+                Version = 1,
+                VoiceCode = "female-sweet",
+                NarrationHash = speechHash,
+                VoiceSnapshotHash = snapshotHash,
+                VerificationStatus = SpeechVerificationStatuses.NotRequested,
+                LanguageCode = "vi-VN",
+                SpeakingRate = 1m,
+                Status = "Approved",
+                DurationMs = 4_500,
+                OutputMediaAssetId = voiceAssetId,
+                CreatedAtUtc = DateTime.UtcNow,
+                CompletedAtUtc = DateTime.UtcNow,
+                ApprovedAtUtc = DateTime.UtcNow,
+                RowVersion = new byte[8]
+            });
+            generation.Status = "Approved";
+            await dbContext.SaveChangesAsync();
+            return fixture;
         }
 
         public ValueTask DisposeAsync()
@@ -288,14 +749,17 @@ public sealed class ProjectRenderServiceTests
         }
     }
 
-    private sealed class StubOutputInspector(bool audible, bool hasAudio = true) : IFinalOutputInspector
+    private sealed class StubOutputInspector(
+        bool audible,
+        bool hasAudio = true,
+        decimal durationSeconds = 5m) : IFinalOutputInspector
     {
         public Task<FinalOutputInspection> InspectAsync(
             string outputPath,
             CancellationToken cancellationToken) =>
             Task.FromResult(new FinalOutputInspection(
                 new MediaProbeResult(
-                    5m,
+                    durationSeconds,
                     1280,
                     720,
                     25,

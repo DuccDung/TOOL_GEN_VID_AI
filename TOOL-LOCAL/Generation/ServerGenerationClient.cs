@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Globalization;
 using System.Text.Json;
 using TOOL_LOCAL.Authentication;
 using TOOL_LOCAL.Providers;
@@ -88,10 +89,125 @@ internal sealed class ServerGenerationClient(
         CancellationToken cancellationToken) =>
         SendContentAsync(request, cancellationToken);
 
+    public async Task<ContentLanguageFailureResponse?> GetLatestContentLanguageFailureAsync(
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        var response = await SendAsync<LatestContentLanguageFailureResponse>(
+            HttpMethod.Get,
+            $"api/generation/content/failure?projectId={projectId:D}&organizationId={organizationId:D}",
+            null,
+            cancellationToken);
+        return response.Failure;
+    }
+
+    public async Task<ContentRepairQuoteResponse> GetContentRepairQuoteAsync(
+        ContentRepairQuoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<ContentRepairQuoteResponse>(
+            HttpMethod.Post,
+            "api/generation/content/repair/quote",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<GeneratedContentResponse> RepairContentAsync(
+        RepairContentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<GeneratedContentResponse>(
+            HttpMethod.Post,
+            "api/generation/content/repair",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
     public Task<GenerateCharacterReferenceImageResponse> GenerateCharacterReferenceImageAsync(
         GenerateCharacterReferenceImageRequest request,
         CancellationToken cancellationToken) =>
         SendCharacterImageAsync(request, cancellationToken);
+
+    public async Task<SceneSpeechVerificationQuoteResponse> GetSceneSpeechVerificationQuoteAsync(
+        SceneSpeechVerificationQuoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneSpeechVerificationQuoteResponse>(
+            HttpMethod.Post,
+            $"api/generation/scenes/{request.SceneId:D}/speech-verification/quote",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<SceneSpeechVerificationResponse> VerifySceneSpeechAsync(
+        VerifySceneSpeechRequest request,
+        string wavPath,
+        CancellationToken cancellationToken)
+    {
+        var file = new FileInfo(wavPath);
+        if (!file.Exists || file.Length <= 0 || file.Length > 25L * 1024 * 1024)
+        {
+            throw new InvalidDataException("File WAV kiểm tra lời nói không hợp lệ.");
+        }
+
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        await licenseManager.EnsureAccessAsync(cancellationToken);
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"api/generation/scenes/{request.SceneId:D}/speech-verification");
+        message.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            await sessionManager.GetValidAccessTokenAsync(cancellationToken));
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(request.ProjectId.ToString("D")), "projectId");
+        form.Add(new StringContent(request.ScenePlanVersion.ToString(CultureInfo.InvariantCulture)), "scenePlanVersion");
+        form.Add(new StringContent(request.ExpectedSpeechHash), "expectedSpeechHash");
+        form.Add(new StringContent(request.MediaSha256), "mediaSha256");
+        form.Add(new StringContent(request.DurationMs.ToString(CultureInfo.InvariantCulture)), "durationMs");
+        form.Add(new StringContent(request.IdempotencyKey), "idempotencyKey");
+        form.Add(new StringContent(organizationId.ToString("D")), "organizationId");
+        if (request.SourceMediaAssetId is { } sourceMediaAssetId)
+        {
+            form.Add(new StringContent(sourceMediaAssetId.ToString("D")), "sourceMediaAssetId");
+        }
+        await using var stream = new FileStream(
+            file.FullName,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            128 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var audio = new StreamContent(stream);
+        audio.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        form.Add(audio, "audioFile", "speech.wav");
+        message.Content = form;
+        using var response = await httpClient.SendAsync(
+            message,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<SceneSpeechVerificationResponse>(JsonOptions, cancellationToken)
+            ?? throw new AccountClientException(
+                "invalid_server_response",
+                "Server trả về kết quả kiểm tra lời nói không hợp lệ.",
+                (int)response.StatusCode);
+    }
+
+    public async Task<SceneSpeechVerificationResponse> ApproveSpeechVerificationReviewAsync(
+        ApproveSpeechVerificationReviewRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneSpeechVerificationResponse>(
+            HttpMethod.Post,
+            $"api/generation/scenes/{request.SceneId:D}/speech-verification/review/approve",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
 
     public async Task<SceneFirstFrameQuoteResponse> GetSceneFirstFrameQuoteAsync(
         Guid projectId,
@@ -191,6 +307,90 @@ internal sealed class ServerGenerationClient(
         GenerateSceneVoiceRequest request,
         CancellationToken cancellationToken) =>
         SendSceneVoiceAsync(request, cancellationToken);
+
+    public async Task<VoiceProfileVersionListResponse> GetVoiceProfileVersionsAsync(
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceProfileVersionListResponse>(
+            HttpMethod.Get,
+            $"api/generation/projects/{projectId:D}/voice-profiles?organizationId={organizationId:D}",
+            null,
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfileVersionSummary> CreateVoiceProfileDraftAsync(
+        CreateVoiceProfileDraftRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceProfileVersionSummary>(
+            HttpMethod.Post,
+            $"api/generation/projects/{request.ProjectId:D}/voice-profiles/drafts",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfilePreviewQuoteResponse> GetVoiceProfilePreviewQuoteAsync(
+        VoiceProfilePreviewQuoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceProfilePreviewQuoteResponse>(
+            HttpMethod.Post,
+            $"api/generation/projects/{request.ProjectId:D}/voice-profiles/{request.VoiceProfileVersionId:D}/preview/quote",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfilePreviewResponse> GenerateVoiceProfilePreviewAsync(
+        GenerateVoiceProfilePreviewRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceProfilePreviewResponse>(
+            HttpMethod.Post,
+            $"api/generation/projects/{request.ProjectId:D}/voice-profiles/{request.VoiceProfileVersionId:D}/preview",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(
+        ApproveVoiceProfileVersionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceProfileVersionSummary>(
+            HttpMethod.Post,
+            $"api/generation/projects/{request.ProjectId:D}/voice-profiles/{request.VoiceProfileVersionId:D}/approve",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<VoiceProfileVersionSummary> SupersedeVoiceProfileVersionAsync(
+        SupersedeVoiceProfileVersionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceProfileVersionSummary>(
+            HttpMethod.Post,
+            $"api/generation/projects/{request.ProjectId:D}/voice-profiles/{request.VoiceProfileVersionId:D}/supersede",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<SceneVoiceQuoteResponse> GetSceneVoiceQuoteAsync(
+        SceneVoiceQuoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<SceneVoiceQuoteResponse>(
+            HttpMethod.Post,
+            $"api/generation/scenes/{request.SceneId:D}/voice/quote",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
 
     public Task<VideoTaskResponse> SubmitVideoAsync(
         SubmitVideoRequest request,
@@ -521,17 +721,58 @@ internal sealed class ServerGenerationClient(
         string destinationPath,
         CancellationToken cancellationToken)
     {
+        await DownloadVoiceAsync(
+            voice.ProviderRequestId,
+            voice.ContentUrl,
+            voice.MimeType,
+            voice.Sha256,
+            voice.SizeBytes,
+            voice.DurationMs,
+            voice.SampleRate,
+            voice.Channels,
+            destinationPath,
+            cancellationToken);
+    }
+
+    public Task DownloadVoiceProfilePreviewAsync(
+        VoiceProfilePreviewResponse preview,
+        string destinationPath,
+        CancellationToken cancellationToken) =>
+        DownloadVoiceAsync(
+            preview.ProviderRequestId,
+            preview.ContentUrl,
+            preview.MimeType,
+            preview.Sha256,
+            preview.SizeBytes,
+            preview.DurationMs,
+            preview.SampleRate,
+            preview.Channels,
+            destinationPath,
+            cancellationToken);
+
+    private async Task DownloadVoiceAsync(
+        Guid providerRequestId,
+        string contentUrl,
+        string expectedMimeType,
+        string expectedSha256,
+        long expectedSizeBytes,
+        long expectedDurationMs,
+        int expectedSampleRate,
+        int expectedChannels,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
         await licenseManager.EnsureAccessAsync(cancellationToken);
-        var expectedPath = $"/api/generation/scene-voices/{voice.ProviderRequestId:D}/content";
-        if (!Uri.TryCreate(voice.ContentUrl, UriKind.RelativeOrAbsolute, out var uri) ||
+        var expectedPath = $"/api/generation/scene-voices/{providerRequestId:D}/content";
+        if (!Uri.TryCreate(contentUrl, UriKind.RelativeOrAbsolute, out var uri) ||
             uri.IsAbsoluteUri ||
-            !string.Equals(voice.ContentUrl, expectedPath, StringComparison.OrdinalIgnoreCase) ||
-            voice.SizeBytes is <= 0 or > MaximumVoiceBytes ||
-            voice.MimeType != "audio/wav" ||
-            voice.Sha256.Length != 64 ||
-            voice.DurationMs <= 0 ||
-            voice.SampleRate is < 8_000 or > 192_000 ||
-            voice.Channels is < 1 or > 2)
+            !string.Equals(contentUrl, expectedPath, StringComparison.OrdinalIgnoreCase) ||
+            expectedSizeBytes is <= 0 or > MaximumVoiceBytes ||
+            expectedMimeType != "audio/wav" ||
+            expectedSha256.Length != 64 ||
+            expectedDurationMs <= 0 ||
+            expectedSampleRate is < 8_000 or > 192_000 ||
+            expectedChannels is < 1 or > 2)
         {
             throw new InvalidDataException("Server trả về metadata giọng đọc không hợp lệ.");
         }
@@ -543,9 +784,9 @@ internal sealed class ServerGenerationClient(
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         var mimeType = response.Content.Headers.ContentType?.MediaType;
-        if (!string.Equals(mimeType, voice.MimeType, StringComparison.OrdinalIgnoreCase) ||
+        if (!string.Equals(mimeType, expectedMimeType, StringComparison.OrdinalIgnoreCase) ||
             response.Content.Headers.ContentLength is > MaximumVoiceBytes ||
-            response.Content.Headers.ContentLength is { } contentLength && contentLength != voice.SizeBytes)
+            response.Content.Headers.ContentLength is { } contentLength && contentLength != expectedSizeBytes)
         {
             throw new InvalidDataException("Nội dung giọng đọc tải về không khớp metadata của server.");
         }
@@ -569,7 +810,7 @@ internal sealed class ServerGenerationClient(
                 break;
             }
             total += read;
-            if (total > MaximumVoiceBytes || total > voice.SizeBytes)
+            if (total > MaximumVoiceBytes || total > expectedSizeBytes)
             {
                 throw new InvalidDataException("Giọng đọc vượt quá dung lượng đã xác nhận.");
             }
@@ -578,7 +819,7 @@ internal sealed class ServerGenerationClient(
         }
         await destination.FlushAsync(cancellationToken);
         var sha256 = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
-        if (total != voice.SizeBytes || !string.Equals(sha256, voice.Sha256, StringComparison.OrdinalIgnoreCase))
+        if (total != expectedSizeBytes || !string.Equals(sha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Giọng đọc tải về không khớp SHA-256 hoặc dung lượng đã xác nhận.");
         }

@@ -15,7 +15,10 @@ internal sealed record WebMessageRequest(
     string? RequestId,
     JsonElement Payload);
 
-internal sealed record WebMessageError(string Code, string Message);
+internal sealed record WebMessageError(
+    string Code,
+    string Message,
+    IReadOnlyDictionary<string, string[]>? Errors = null);
 
 internal sealed record WebMessageResponse(
     string Type,
@@ -36,9 +39,20 @@ internal sealed record DashboardStateResponse(
     CurrentLicenseResponse? License,
     bool GenerationRunning,
     DashboardFeatureFlagsResponse Features,
-    IReadOnlyList<SceneFirstFrameSummary> SceneFirstFrames);
+    IReadOnlyList<SceneFirstFrameSummary> SceneFirstFrames,
+    ContentLanguageFailureResponse? ContentLanguageFailure = null);
 
-internal sealed record DashboardFeatureFlagsResponse(bool VietsubEnabled);
+internal sealed record DashboardFeatureFlagsResponse(
+    bool VietsubEnabled,
+    bool SpeechSynchronizationEnabled = false);
+
+internal sealed record DesktopFeatureSettingsResponse(
+    bool SpeechSynchronizationEnabled,
+    bool ActiveSpeechSynchronizationEnabled,
+    bool RestartRequired);
+
+internal sealed record UpdateDesktopFeatureSettingsWebRequest(
+    bool SpeechSynchronizationEnabled);
 
 internal sealed record SelectProjectWebRequest(Guid ProjectId);
 
@@ -49,7 +63,8 @@ internal sealed record CreateProjectWebRequest(
     string AspectRatio,
     string LanguageCode,
     string? VoiceCode = null,
-    decimal? VoiceSpeakingRate = null);
+    decimal? VoiceSpeakingRate = null,
+    string SpeechProductionPolicy = "ProviderNativeVerified");
 
 internal sealed record CreateShortVideoWebRequest(
     string Content,
@@ -58,6 +73,19 @@ internal sealed record CreateShortVideoWebRequest(
     bool AudioEnabled);
 
 internal sealed record GenerateVideoWebRequest(IReadOnlyList<Guid>? SceneIds);
+
+internal sealed record CreateVoiceProfileDraftWebRequest(
+    string Scope,
+    Guid? CharacterId,
+    string VoiceCode,
+    decimal SpeakingRate);
+
+internal sealed record VoiceProfileActionWebRequest(
+    Guid VoiceProfileVersionId,
+    string ExpectedVoiceSnapshotHash,
+    bool PlaybackConfirmed = false);
+
+internal sealed record ContentRepairWebRequest(Guid FailedProviderRequestId);
 
 internal sealed record UpdateSceneWebRequest(
     Guid SceneId,
@@ -69,7 +97,12 @@ internal sealed record UpdateSceneWebRequest(
     string? AmbientAudio = null,
     string? SoundEffects = null);
 
-internal sealed record SceneActionWebRequest(Guid SceneId, bool PlaybackConfirmed = false);
+internal sealed record SceneActionWebRequest(
+    Guid SceneId,
+    bool PlaybackConfirmed = false,
+    Guid? SpeechVerificationReportId = null,
+    string? SpeechReviewReason = null,
+    string? SpeechVerificationRowVersion = null);
 
 internal sealed record SceneFirstFrameActionWebRequest(
     Guid SceneId,
@@ -86,7 +119,9 @@ internal sealed record UpdateCharacterWebRequest(
     string VisualIdentity,
     string Wardrobe,
     IReadOnlyList<string> ImmutableTraits,
-    IReadOnlyList<string> ForbiddenChanges);
+    IReadOnlyList<string> ForbiddenChanges,
+    string? VoiceCode = null,
+    decimal? VoiceSpeakingRate = null);
 
 internal sealed record CreateProjectAssetWebRequest(
     string AssetType,

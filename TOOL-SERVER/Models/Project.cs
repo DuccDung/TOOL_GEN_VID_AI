@@ -27,7 +27,13 @@ public partial class Project
 
     public decimal? VoiceSpeakingRate { get; set; }
 
+    public string SpeechProductionPolicy { get; set; } = "ProviderNativeVerified";
+
+    public Guid? ApprovedNarratorVoiceProfileVersionId { get; set; }
+
     public string? VideoProviderCode { get; set; }
+
+    public virtual VoiceProfileVersion? ApprovedNarratorVoiceProfileVersion { get; set; }
 
     public string? VideoModelCode { get; set; }
 

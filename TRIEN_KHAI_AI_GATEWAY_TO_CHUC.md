@@ -1,428 +1,345 @@
-# Triển khai AI Gateway theo tổ chức
+# Runbook triển khai VideoMaker
 
-> Cập nhật ngữ cảnh: 2026-09-05. Đây là runbook vận hành hiện hành cho VideoMaker 4.x. Nghiệp vụ nằm tại `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`; trạng thái source và việc còn mở nằm tại `KE_HOACH_SERVER_AI_GATEWAY.md`.
+Tài liệu này dành cho database, credential, pricing, provider, thanh toán và release. Không thực hiện trên production nếu chưa có người chịu trách nhiệm phê duyệt môi trường, backup, chi phí và cửa sổ thay đổi.
 
-Các lệnh thay đổi database phải được chạy trong cửa sổ bảo trì và sau khi đã có backup kiểm tra phục hồi được. Có migration trong repository không đồng nghĩa migration đã chạy trên database của bất kỳ môi trường nào.
+## 1. Nguyên tắc vận hành
 
-## 1. Chuẩn bị
+- Dùng staging tách biệt trước production.
+- Không đưa secret vào source, command history, ticket, ảnh chụp hoặc log.
+- Không gọi provider có phí khi chưa có budget cap và phê duyệt.
+- Không tự suy đoán đơn giá. Lấy từ hợp đồng/dashboard chính tài khoản tại thời điểm cấu hình.
+- Migration có trong source không đồng nghĩa đã chạy.
+- Trước SQL thay đổi dữ liệu phải xác nhận đúng instance/database và backup đã restore thử.
+- Dùng `sqlcmd -b -f 65001` để lỗi trả exit code và file tiếng Việt được đọc UTF-8.
 
-- SQL Server đang chứa database `VideoFactory`.
-- Tài khoản chạy migration có quyền DDL và tạo role.
-- Server có HTTPS hợp lệ và outbound HTTPS đến `api.openai.com:443`, `api-singapore.klingai.com:443`; nếu rollout Seedance, mở thêm `ark.ap-southeast.bytepluses.com:443` và các host output đã duyệt trong `Generation:VideoOutputs:AllowedHostSuffixes`.
-- Server và desktop dùng hai tài khoản database khác nhau.
-- Có một tài khoản VideoMaker mang global role `Admin`.
-- Có API key OpenAI/Kling và, nếu rollout, BytePlus/Fal do doanh nghiệp sở hữu; không gửi key qua chat, email hoặc file cấu hình desktop.
+## 2. Chuẩn bị môi trường
 
-## 2. Nâng cấp database
+Yêu cầu tối thiểu:
 
-Kiểm tra đúng instance/database, sao lưu, sau đó chạy:
+- Windows x64 cho desktop/setup/updater.
+- .NET SDK/runtime 10 phù hợp project.
+- SQL Server và login triển khai có quyền tạo/đổi schema cần thiết.
+- HTTPS certificate hợp lệ cho server ngoài localhost.
+- Secret store hoặc environment variables cho JWT, SMTP, webhook và bootstrap admin.
+- Storage có quyền ghi cho Data Protection keys, provider outputs và release artifacts.
+- Egress firewall chỉ cho host provider được duyệt.
 
-```powershell
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.Initial.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.0.OrganizationAiGateway.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.1.VietnameseSeedTextRepair.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.2.GptImageCharacterReference.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.3.SceneVoiceTts.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.4.BytePlusSeedance.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.5.SceneNativeAudioStatuses.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.1.SceneFirstFrames.sql
-sqlcmd -S <sql-server> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.DesktopLeastPrivilege.sql
-```
-
-`-b` làm `sqlcmd` trả exit code lỗi khi migration thất bại; `-f 65001` buộc công cụ đọc file theo UTF-8 để giữ đúng tiếng Việt. Các script là idempotent và không tự bật Seedance/Fal, tự nhập giá hoặc tự bật thanh toán. Script 4.0.4 backfill project cũ về Kling, thêm policy/snapshot video và cache output; 4.0.5 mở rộng trạng thái của `vf.Scenes`; 4.0.6 hoàn thiện cả `vf.Scenes` và `vf.VideoGenerations` cho `PromptInvalid`, `AudioReviewRequired`, `NativeAudioInvalid`; 4.0.7–4.0.8 thêm thư viện continuity và snapshot version; 4.0.9 tách policy `Default`/`LongForm`; 4.0.10–4.0.11 thêm payment SePay và seat provisioning; 4.1.1 thêm `vf.SceneFirstFrames` cùng `ProviderRequests.InputSceneFirstFrameId` và không backfill ảnh identity vuông cũ. Phải chạy các migration trước script least privilege.
-
-Luồng xác nhận tài sản trực tiếp trên card cảnh, endpoint `/confirm` và phép phân tích prompt bắt buộc sử dụng các bảng/cột của migration 4.0.7–4.0.8; không có file SQL mới riêng cho cải tiến UI này. Không chạy lại `VideoFactory.Initial.sql` trên database thật nếu chưa xác minh đúng quy trình nâng cấp, backup và khả năng restore.
-
-Gán đúng database user của desktop:
-
-```sql
-USE [VideoFactory];
-ALTER ROLE [VideoMakerDesktopRole] ADD MEMBER [VideoMakerDesktopUser];
-```
-
-Không thêm server user vào role này. Server cần quyền đọc/ghi `auth`, `ai`, `vf`, bảng Data Protection keys và Identity.
-
-Kiểm tra migration:
-
-```sql
-SELECT TOP (10) [Version], [AppliedAtUtc]
-FROM [ai].[SchemaVersions]
-ORDER BY [SchemaVersionId] DESC;
-
-SELECT [Code], [Name], [MonthlyBudgetLimit], [CurrencyCode]
-FROM [ai].[Organizations];
-```
-
-Phải thấy đủ version từ `4.0.0-organization-ai-gateway` đến `4.0.11-organization-seat-provisioning`, cùng `4.1.1-scene-first-frames`. Xác minh `vf.SceneFirstFrames` rỗng ngay sau migration nếu hệ thống chỉ có dữ liệu ảnh nhân vật cũ, desktop role bị deny và chạy lại 4.1.1 không thêm schema version lần hai. Chỉ tiếp tục rollout sau khi chạy lại migration trên database clone và xác minh lần chạy thứ hai không thay đổi dữ liệu ngoài ý muốn.
-
-## 3. Cấu hình server
-
-Dùng secret store của môi trường; ví dụ development:
+Trước triển khai:
 
 ```powershell
-dotnet user-secrets set --project TOOL-SERVER "ConnectionStrings:VideoFactory" "<server-database-connection-string>"
-dotnet user-secrets set --project TOOL-SERVER "Jwt:SigningKey" "<random-secret-at-least-32-bytes>"
+git status --short
+dotnet restore TOOL_GEN_POST_VIDEO.slnx
+dotnet build TOOL_GEN_POST_VIDEO.slnx -c Release --no-restore
+dotnet test TOOL-TESTS\TOOL-TESTS.csproj -c Release --no-build
+
+Set-Location TOOL-LOCAL\Web
+npm ci --no-audit --no-fund
+npm run build
+npm test
 ```
 
-Để gửi OTP quên mật khẩu qua Gmail, bật xác minh hai bước, tạo App Password mới rồi cấu hình bằng secret store:
+Ghi lại commit, timestamp, SDK, số test và kết quả thực tế. Không dùng mốc từ tài liệu cũ thay cho lần chạy này.
+
+## 3. Database
+
+### 3.1 Thứ tự migration chuẩn
+
+Chạy trên database mới hoặc clone theo đúng thứ tự:
 
 ```powershell
-dotnet user-secrets set --project TOOL-SERVER "Smtp:Host" "smtp.gmail.com"
-dotnet user-secrets set --project TOOL-SERVER "Smtp:Port" "587"
-dotnet user-secrets set --project TOOL-SERVER "Smtp:UseStartTls" "true"
-dotnet user-secrets set --project TOOL-SERVER "Smtp:User" "<gmail-address>"
-dotnet user-secrets set --project TOOL-SERVER "Smtp:Pass" "<new-gmail-app-password>"
-dotnet user-secrets set --project TOOL-SERVER "Smtp:TimeoutSeconds" "30"
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.Initial.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.0.OrganizationAiGateway.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.1.VietnameseSeedTextRepair.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.2.GptImageCharacterReference.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.3.SceneVoiceTts.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.4.BytePlusSeedance.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.5.SceneNativeAudioStatuses.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.0.VietsubProjectRegistry.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.1.SceneFirstFrames.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.2.ProviderRequestFailureDetails.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.3.SpeechSynchronization.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.4.VoiceProfileApproval.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.4.1.5.SpeechVerificationReview.sql
+sqlcmd -S <instance> -d VideoFactory -E -b -f 65001 -i database\VideoFactory.DesktopLeastPrivilege.sql
 ```
 
-Không lưu App Password trong source. Có thể chỉnh `PasswordReset:OtpLifetimeMinutes` trong khoảng 5–30 phút và `PasswordReset:MaxFailedAttempts` trong khoảng 3–10; mặc định lần lượt là 10 phút và 5 lần.
+Không bỏ qua `4.1.0`; đây là registry `vs.Projects`. Script least-privilege luôn chạy sau migration cuối để áp deny cho bảng mới.
 
-Không thêm OpenAI/Kling/BytePlus/Fal key vào `appsettings.json`. ASP.NET Core Data Protection dùng application name `VideoMaker.Server` và lưu key ring trong database. Khi scale nhiều server, tất cả instance phải dùng cùng database key ring và cùng application name.
+### 3.2 Kiểm tra clone
 
-Thanh toán SePay mặc định tắt. Chỉ bật `Payments:Sepay:Enabled` sau khi migration 4.0.10 đã được rehearsal, gói bán đã cấu hình và webhook staging đã kiểm tra. Tài khoản nhận phải nằm ngoài source; lệnh và checklist chi tiết ở `HUONG_DAN_CAU_HINH_SEPAY_LICENSE.md`. Webhook MVP không dùng API key và chỉ đối soát tài khoản, transfer code cùng số tiền, vì vậy phải chấp nhận rủi ro giả mạo trước khi public endpoint. Nếu tắt tạo payment nhưng còn giao dịch pending, giữ nguyên cấu hình tài khoản nhận hợp lệ để webhook cũ tiếp tục được đối soát.
+Trên database clone:
 
-Cache video và polling dùng cấu hình không chứa secret. Giá trị mặc định trong source là retention 48 giờ, tối đa 1 GiB/file, 20 GiB tổng; polling có lease 35 phút và dừng ở 3.000 lần hoặc 72 giờ. Chỉ đổi sau khi đã kiểm tra dung lượng đĩa, timeout mạng và chính sách lưu trữ của môi trường:
+1. Chạy toàn bộ chuỗi hai lần để chứng minh idempotency.
+2. Kiểm tra `ai.SchemaVersions` có đủ version.
+3. Kiểm tra schema `auth`, `ai`, `vf`, `vs` và các FK/index/unique constraint.
+4. Kiểm tra project cũ được backfill an toàn, đặc biệt organization, video policy và speech policy.
+5. Kiểm tra budget legacy bằng `0`, không vô tình mở AI.
+6. Kiểm tra `VideoMakerDesktopRole` không đọc credential, provider request, usage ledger hoặc auth secret.
+7. So sánh row count trước/sau cho bảng quan trọng.
+8. Thực hiện rollback bằng restore backup, không dựa vào script down tự chế.
+9. Kiểm tra `CK_SpeechVerificationReports_Review`: chỉ `NeedsReview` có đủ lý do, reviewer và thời điểm mới được đánh dấu chấp nhận.
 
-```json
-{
-  "Generation": {
-    "VideoOutputs": {
-      "StorageRoot": "data/video-outputs",
-      "RetentionHours": 48,
-      "MaximumFileBytes": 1073741824,
-      "MaximumStorageBytes": 21474836480,
-      "AllowedHostSuffixes": {
-        "kling": [ "klingai.com", "kwaicdn.com", "kwimgs.com" ],
-        "byteplus": [ "bytepluses.com", "volces.com" ]
-      }
-    },
-    "VideoPolling": {
-      "MaximumAttempts": 3000,
-      "MaximumAgeHours": 72,
-      "ClaimLeaseMinutes": 35
-    }
-  }
-}
-```
+Có thể dùng `database/Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql` cho phần seat provisioning; vẫn phải kiểm tra toàn schema mới bằng truy vấn read-only phù hợp môi trường.
 
-Khởi động server sau khi migration hoàn tất:
+## 4. Cấu hình server
+
+Không đặt production secret trực tiếp trong `appsettings.json`. Dùng environment variables, secret manager hoặc deployment secret store.
+
+Các nhóm cấu hình cần có:
+
+- `ConnectionStrings` cho account/workflow/governance/Data Protection theo source hiện hành.
+- `Jwt` signing secret/issuer/audience và thời hạn phù hợp.
+- `Admin` bootstrap chỉ dùng lần đầu; xoá hoặc rotate bootstrap secret sau khi hoàn tất.
+- `PasswordReset` và `Smtp`; password SMTP phải nằm trong secret store.
+- `DesktopReleases` storage và base URL.
+- `Generation:OpenAiImage`, `OpenAiSpeech`, `OpenAiTranscription`.
+- `Generation:SpeechSynchronization` feature flags.
+- `Generation:VideoOutputs` storage/retention/size/allowlist.
+- `Generation:VideoPolling` attempts/age/claim lease.
+- `Payments:Sepay` khi rollout thanh toán.
+
+Data Protection phải có key ring bền vững và dùng cùng application name của source. Mất key ring có thể làm credential cũ không giải mã được.
+
+## 5. Network allowlist
+
+Runtime provider hiện hành chỉ chấp nhận HTTPS/443:
+
+| Mục đích | Host |
+|---|---|
+| OpenAI API | `api.openai.com` |
+| Kling API | `api-singapore.klingai.com` |
+| BytePlus ModelArk | `ark.ap-southeast.bytepluses.com` |
+| Fal Queue runtime | `queue.fal.run` |
+| Fal credential test | `api.fal.ai` |
+
+Provider output dùng suffix/exact-host allowlist riêng trong `Generation:VideoOutputs`. Không mở rộng wildcard chung như toàn bộ `googleapis.com`. Mọi thay đổi phải có test chặn private/loopback/link-local/reserved/multicast, DNS rebinding và redirect sang host khác.
+
+## 6. Thiết lập organization
+
+Thứ tự trong Admin Setup Center:
+
+1. Tạo organization bằng Global Admin.
+2. Thêm Owner Active; xác nhận không thể làm mất Owner cuối cùng.
+3. Cấu hình budget tháng. Giá trị `0` giữ organization ở trạng thái khóa AI.
+4. Bật provider/model cần dùng trong catalog.
+5. Nhập credential qua HTTPS. Server phải test thành công rồi mới rotate.
+6. Nhập rate Active đúng model/usage type/metadata.
+7. Chọn video policy `Default` và `LongForm` rõ ràng.
+8. Gọi readiness/status không tạo chi phí.
+9. Chỉ sau đó mới dùng staging project để smoke test.
+
+Không cấp Global Admin chỉ để user dùng AI. Quyền dùng AI đến từ membership organization và license.
+
+## 7. Pricing
+
+Không ghi giá mẫu trong tài liệu. Mỗi lần rollout:
+
+1. Lấy giá từ hợp đồng/dashboard chính thức của credential đang dùng.
+2. Xác định đúng currency, unit và effective time.
+3. Tạo rate mới; không sửa rate snapshot lịch sử.
+4. Đảm bảo mọi usage type bắt buộc của model đều có Active rate.
+5. Kiểm tra quote bằng request read-only trước outbound.
+
+Usage type chính:
+
+- OpenAI text/image: `InputToken`, `OutputToken` theo unit cấu hình.
+- OpenAI TTS: rate theo output/ước lượng được source yêu cầu.
+- OpenAI transcription: `AudioSecond`.
+- Kling/Fal: `VideoSecond` với metadata variant/resolution/audio/model chính xác.
+- BytePlus: `OutputToken` và unit/model chính xác.
+
+Thiếu rate phải fail closed bằng `pricing_not_configured`.
+
+## 8. Credential rotation
+
+1. Xác nhận organization/provider chính xác.
+2. Nhập key mới qua HTTPS Admin/API; không gửi qua chat hoặc lưu file tạm trong repository.
+3. Server gọi credential test được duyệt, không tạo render có phí.
+4. Chỉ khi test đạt mới ghi version mới Active và chuyển key cũ Retiring.
+5. Theo dõi task đang chạy tham chiếu key cũ.
+6. Worker retirement chỉ revoke khi không còn task cần version đó hoặc đã qua policy an toàn.
+7. Kiểm tra response chỉ có hint, không có plaintext/encrypted payload.
+
+Rollback credential là rotate sang một key đã được test, không sửa ciphertext bằng SQL.
+
+## 9. Smoke test AI/video
+
+Chỉ chạy khi người dùng chỉ rõ staging và chấp thuận chi phí tối đa.
+
+### Không tạo chi phí
+
+- Login/refresh/logout và device/license.
+- Organization list, membership role, budget snapshot.
+- Provider readiness, model/policy và rate visibility.
+- Credential test theo endpoint không tạo generation.
+- Cross-user/cross-organization/Viewer bị chặn.
+- Thiếu rate/budget/credential bị chặn trước outbound.
+
+### Có thể tạo chi phí
+
+Đặt budget thấp và chạy lần lượt:
+
+1. Một content plan tiếng Việt nhỏ.
+2. Replay cùng idempotency để chứng minh không gọi/tính phí lần hai.
+3. Một character image hoặc first-frame khi provider cần.
+4. Một clip ngắn theo đúng provider/policy.
+5. Đóng desktop sau submit, xác nhận worker hoàn tất và settlement đúng.
+6. Tải output qua proxy; xác nhận không có provider URL trong response/log.
+7. Đối chiếu reservation, actual, release và dashboard provider.
+
+Không bật fallback provider/model để “cứ chạy được”.
+
+## 10. Rollout Fal/Veo hoặc BytePlus
+
+- Giữ provider/model Disabled cho tới khi migration, credential, rate, policy và staging smoke test đều đạt.
+- Fal Standard/Fast là endpoint độc lập; không fallback qua lại.
+- Fal yêu cầu approved current first-frame đúng ratio và tối đa dung lượng capability.
+- Kiểm tra Queue submit/status/result route, output cache và privacy header.
+- BytePlus phải đối chiếu output token billing với provider dashboard.
+- Chạy test credential retirement trong lúc task đang polling.
+- Sau canary, tăng budget/traffic từng bước và theo dõi 401/403/422/429/5xx.
+
+## 11. Rollout Canonical Voice và speech verification
+
+Điều kiện Canonical Voice:
+
+- Migration 4.1.3–4.1.4 đã kiểm tra trên clone và áp đúng môi trường.
+- OpenAI TTS credential và rate Active.
+- Storage/retention cho voice output đủ dung lượng.
+- Voice preview, approval, scene WAV, kiểm tra kỹ thuật, duration guard và render đều smoke test.
+- Rollback đã thử bằng cách tắt flags.
+
+Thứ tự bật:
+
+1. Bật `CanonicalVoiceEnabled` trên staging. `SpeechVerificationEnabled` là cờ độc lập cho Provider Native và không phải điều kiện của Canonical Voice.
+2. Bật desktop feature flag trên nhóm canary.
+3. Tạo voice draft -> preview -> nghe -> approve.
+4. Tạo scene WAV, tải qua proxy và kiểm tra MIME, SHA-256, sample rate, duration, audibility cùng tỷ lệ thời lượng cảnh.
+5. Xác nhận readiness `CanonicalVoiceReady`; kiểm tra TTS model/credential, rate và budget trước outbound. Transcription không được làm Canonical Voice mất readiness.
+6. Phát nghe WAV, xác nhận checklist và duyệt đúng voice generation/speech hash/voice snapshot; xác nhận không có request Transcription hoặc `SpeechVerificationReport` mới.
+7. Với `NativeVoiceOver`, tạo video nền không lời rồi ghép toàn bộ WAV, chỉ điều chỉnh tempo trong giới hạn và pad theo thời lượng cảnh; kiểm tra timeline gồm lẫn scene có/không audio.
+8. Xác nhận `OnCameraDialogue` dừng ở `SpeechReadyForLipSync` và không bị render giả.
+
+Nếu rollout speech verification cho `ProviderNativeVerified`, cấu hình riêng `SpeechVerificationEnabled`, transcription model/credential/rate và migration 4.1.5. Kiểm tra `Passed` đi tiếp; `NeedsReview` bắt nhập lý do và lưu audit; stale row version và `Failed` đều bị chặn.
+
+Tắt flag phải giữ project cũ đọc được theo `ProviderNativeVerified`.
+
+## 12. Rollout SePay và organization seat
+
+Điều kiện:
+
+- Migration 4.0.10–4.0.11 và verify script đã đạt trên clone.
+- Receiver bank/account/name, webhook secret và QR URL được cấu hình qua secret/config deployment.
+- License plan map vào pool Active có organization readiness/capacity hợp lệ.
+- User thử nghiệm không có payment/license xung đột.
+
+Trước giao dịch thật, dùng harness chỉ trên localhost hoặc staging cô lập:
 
 ```powershell
-dotnet run --project TOOL-SERVER --configuration Release
+.\scripts\Test-SepayOrganizationProvisioning.ps1 `
+  -BaseUrl https://localhost:7202/ `
+  -LicensePlanId <guid> `
+  -Confirmation SEPAY_TEST_ONLY
 ```
 
-Server bootstrap catalog OpenAI/Kling và hai model Seedance đã duyệt trong source. Provider/model BytePlus vẫn disabled mặc định; server không tự gán đơn giá, credential hoặc policy tổ chức.
+Token test lấy từ environment variables theo script. Không dùng `-AllowRemote` nếu chưa xác nhận đây là staging cô lập.
 
-## 4. Chuẩn bị bearer token quản trị
+Acceptance:
 
-Đăng nhập qua luồng auth sẵn có của hệ thống và lấy access token của global Admin. Các ví dụ sau giả định:
+- webhook sai chiều/tài khoản/code/amount không fulfill;
+- webhook hợp lệ đồng thời/replay chỉ fulfill một lần;
+- seat reserved chuyển Active và membership managed đúng;
+- expiry/reconciliation giải phóng reservation an toàn;
+- admin response không lộ snapshot/idempotency/reference không cần thiết.
+
+## 13. Release desktop
+
+### FFmpeg
+
+Bundle bắt buộc có:
+
+- `ffmpeg.exe`;
+- `ffprobe.exe`;
+- `LICENSE.txt`;
+- `PROVENANCE.md`;
+- `checksums.sha256`.
+
+Kiểm tra:
 
 ```powershell
-$server = "https://server.example.com/"
-$adminToken = "<admin-access-token>"
-$adminHeaders = @{ Authorization = "Bearer $adminToken" }
+.\scripts\Test-FfmpegBundle.ps1 `
+  -BundlePath .\third_party\ffmpeg\win-x64 `
+  -RequireReleaseApproval
 ```
 
-Không ghi token thật vào source control hoặc lịch sử shell dùng chung.
+Profile hiện hành là Development-only; lệnh trên phải fail cho tới khi product owner hoàn tất redistribution/license review và tạo provenance `Approval scope: Release`.
 
-## 5. Tạo tổ chức
+### Publish
+
+Sau khi FFmpeg được duyệt:
 
 ```powershell
-$organization = Invoke-RestMethod `
-  -Method Post `
-  -Uri "${server}api/organizations" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{
-    name = "Nhóm Sản xuất Nội dung"
-    code = "content-team"
-    monthlyBudgetLimit = 500
-    currencyCode = "USD"
-  } | ConvertTo-Json)
-
-$organizationId = $organization.organizationId
+.\scripts\Publish-DesktopRelease.ps1 `
+  -Version <version> `
+  -BuildNumber <number> `
+  -Channel Stable `
+  -ServerBaseUrl https://<server>/
 ```
 
-Người tạo trở thành Owner. `monthlyBudgetLimit = 0` sẽ khóa AI.
+Publish tạo package/setup trong `artifacts`; không sửa artifact bằng tay. Trước khi upload:
 
-## 6. Thêm thành viên và hạn mức
+- xác minh SHA-256/size/version/build/channel;
+- clean-machine install;
+- update từ version trước;
+- rollback khi package hỏng;
+- giữ user settings/workspace;
+- kiểm tra FFmpeg/OCR runtime và WebView2;
+- kiểm tra launcher/download Range và mandatory update policy.
 
-```powershell
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "${server}api/organizations/$organizationId/members" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{
-    email = "member@example.com"
-    role = "Member"
-    monthlyBudgetLimit = 50
-  } | ConvertTo-Json)
-```
+## 14. Monitoring và reconciliation
 
-Role hợp lệ: `Owner`, `OrganizationAdmin`, `BillingManager`, `Member`, `Viewer`.
+Theo dõi tối thiểu:
 
-Cập nhật thành viên:
+- auth/session/device/license failure rate;
+- provider 401/403/422/429/5xx và timeout;
+- polling age/count/claim lease;
+- reservation quá hạn, settlement/release/reconciliation;
+- video/image/voice output storage và cleanup;
+- SePay unmatched/duplicate/fulfillment failure;
+- organization seat reserved/active/expired;
+- update/download/install failure.
 
-```powershell
-Invoke-RestMethod `
-  -Method Put `
-  -Uri "${server}api/organizations/$organizationId/members/<user-id>" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{
-    role = "BillingManager"
-    status = "Active"
-    monthlyBudgetLimit = 100
-  } | ConvertTo-Json)
-```
+Log chỉ dùng ID kỹ thuật và mã lỗi cần thiết; không log prompt, transcript, Base64, key, token, local path hoặc provider output URL.
 
-## 7. Cấu hình đơn giá
+## 15. Rollback
 
-Lấy catalog và model ID:
+- App: triển khai lại artifact đã ký/kiểm tra trước đó.
+- Feature: tắt provider/model/policy hoặc feature flag, không xóa dữ liệu lịch sử.
+- Credential: rotate sang key đã test.
+- Database: restore backup đã chứng minh; không chạy script down chưa được kiểm thử.
+- Worker: dừng nhận request mới nếu cần nhưng phải bảo toàn request/ledger để reconcile.
+- Payment: tắt `Payments:Sepay:Enabled`; không sửa trạng thái payment/license trực tiếp nếu chưa có quy trình đối soát.
 
-```powershell
-$catalog = Invoke-RestMethod `
-  -Method Get `
-  -Uri "${server}api/admin/ai-pricing" `
-  -Headers $adminHeaders
+Sau rollback, xác minh request không bị submit lại, reservation không bị release/settle trùng và desktop cũ vẫn đọc được dữ liệu tương thích.
 
-$models = @($catalog | ForEach-Object { $_.models })
-$openAiModel = $models | Where-Object { $_.modelCode -eq "gpt-5.6-luna" }
-$openAiImageModel = $models | Where-Object { $_.modelCode -eq "gpt-image-2" }
-$klingModel = $models | Where-Object { $_.modelCode -eq "kling-3.0" }
-$bytePlusModel = $models | Where-Object { $_.modelCode -eq "dreamina-seedance-2-5-260628" }
-```
+## 16. Checklist trước production
 
-Đọc đơn giá hiện hành trực tiếp từ tài khoản/hợp đồng provider tại thời điểm triển khai. Không sao chép một giá cũ từ tài liệu dự án. Nhập giá OpenAI theo USD/1 triệu token:
-
-```powershell
-$inputPrice = [decimal](Read-Host "OpenAI input USD per 1M tokens")
-$outputPrice = [decimal](Read-Host "OpenAI output USD per 1M tokens")
-
-foreach ($rate in @(
-  @{ usageType = "InputToken"; unit = "MillionTokens"; unitPrice = $inputPrice },
-  @{ usageType = "OutputToken"; unit = "MillionTokens"; unitPrice = $outputPrice }
-)) {
-  Invoke-RestMethod `
-    -Method Post `
-    -Uri "${server}api/admin/ai-pricing/models/$($openAiModel.providerModelId)/rates" `
-    -Headers $adminHeaders `
-    -ContentType "application/json" `
-    -Body ((@{
-      currencyCode = "USD"
-      metadataJson = '{"source":"provider-contract"}'
-    } + $rate) | ConvertTo-Json)
-}
-```
-
-Nhập riêng rate GPT-Image-2 theo bảng giá/hợp đồng hiện hành. Không sao chép rate của model Text và không hard-code giá trong source:
-
-```powershell
-$imageInputPrice = [decimal](Read-Host "GPT-Image-2 input USD per 1M tokens")
-$imageOutputPrice = [decimal](Read-Host "GPT-Image-2 image output USD per 1M tokens")
-
-foreach ($rate in @(
-  @{ usageType = "InputToken"; unit = "MillionTokens"; unitPrice = $imageInputPrice },
-  @{ usageType = "OutputToken"; unit = "MillionTokens"; unitPrice = $imageOutputPrice }
-)) {
-  Invoke-RestMethod `
-    -Method Post `
-    -Uri "${server}api/admin/ai-pricing/models/$($openAiImageModel.providerModelId)/rates" `
-    -Headers $adminHeaders `
-    -ContentType "application/json" `
-    -Body ((@{
-      currencyCode = "USD"
-      metadataJson = '{"source":"provider-contract","size":"1024x1024","quality":"medium","outputFormat":"png"}'
-    } + $rate) | ConvertTo-Json)
-}
-```
-
-Trước smoke test ảnh, xác nhận organization OpenAI đã được phép dùng `gpt-image-2`; một số tài khoản có thể bị provider yêu cầu organization verification.
-
-Nhập Kling theo USD/giây:
-
-```powershell
-$klingPricePerSecond = [decimal](Read-Host "Kling USD per video second")
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "${server}api/admin/ai-pricing/models/$($klingModel.providerModelId)/rates" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{
-    usageType = "VideoSecond"
-    unit = "Second"
-    unitPrice = $klingPricePerSecond
-    currencyCode = "USD"
-    metadataJson = '{"source":"provider-contract","resolution":"720p","nativeAudio":true}'
-  } | ConvertTo-Json)
-```
-
-Nếu rollout Seedance, nhập đúng rate `OutputToken` lấy từ hợp đồng/dashboard BytePlus của tài khoản và region đang dùng. Estimator dự kiến token theo công thức video 720p/24fps; settlement dùng `usage.completion_tokens` do provider trả về. Không sao chép giá tham khảo vào production:
-
-```powershell
-$bytePlusOutputPrice = [decimal](Read-Host "BytePlus Seedance output USD per 1M completion tokens")
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "${server}api/admin/ai-pricing/models/$($bytePlusModel.providerModelId)/rates" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{
-    usageType = "OutputToken"
-    unit = "MillionTokens"
-    unitPrice = $bytePlusOutputPrice
-    currencyCode = "USD"
-    metadataJson = '{"source":"provider-contract","resolution":"720p","fps":24,"nativeAudio":true}'
-  } | ConvertTo-Json)
-```
-
-Rate mới phải có ngày hiệu lực sau rate active cùng usage type. Phiên bản hiện tại không nhận ngày hiệu lực tương lai; bỏ trống trường này để dùng giờ UTC của server. Request đang chạy vẫn dùng snapshot cũ.
-
-## 8. Lưu hoặc rotate credential
-
-Dùng token của Owner hoặc OrganizationAdmin. Đọc key vào bộ nhớ tiến trình thay vì ghi vào file:
-
-```powershell
-$openAiKey = Read-Host "OpenAI API key"
-Invoke-RestMethod `
-  -Method Put `
-  -Uri "${server}api/organizations/$organizationId/providers/openai/credential" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{ apiKey = $openAiKey; name = "OpenAI production" } | ConvertTo-Json)
-$openAiKey = $null
-
-$klingKey = Read-Host "Kling API key"
-Invoke-RestMethod `
-  -Method Put `
-  -Uri "${server}api/organizations/$organizationId/providers/kling/credential" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{ apiKey = $klingKey; name = "Kling production" } | ConvertTo-Json)
-$klingKey = $null
-
-# Chỉ thực hiện khi rollout BytePlus cho tổ chức thử nghiệm.
-$bytePlusKey = Read-Host "BytePlus ModelArk API key"
-Invoke-RestMethod `
-  -Method Put `
-  -Uri "${server}api/organizations/$organizationId/providers/byteplus/credential" `
-  -Headers $adminHeaders `
-  -ContentType "application/json" `
-  -Body (@{ apiKey = $bytePlusKey; name = "BytePlus production" } | ConvertTo-Json)
-$bytePlusKey = $null
-```
-
-Server kiểm tra key trước khi rotate. Nếu provider từ chối, API trả lỗi và credential cũ vẫn Active.
-
-Xác nhận trạng thái không lộ secret:
-
-```powershell
-Invoke-RestMethod `
-  -Method Get `
-  -Uri "${server}api/organizations/$organizationId/providers" `
-  -Headers $adminHeaders
-```
-
-Trong Admin Console, Global Admin chỉ bật provider/model Seedance sau khi rate và credential đã được kiểm tra. Sau đó Owner/OrganizationAdmin chọn model tại **Tổ chức & AI → Policy tạo video**. Policy chỉ áp dụng khi project được snapshot lần đầu; project đang dùng Kling không tự chuyển sang BytePlus. Workflow BytePlus chỉ nhận ảnh nhân vật `SourceType=Generated`, do OpenAI trong hệ thống tạo và đã được người dùng duyệt; ảnh tải lên/người thật bị chặn trước outbound.
-
-Nếu rollout Fal/Veo, nhập `FAL_KEY` qua cùng màn hình credential tổ chức; server kiểm tra quyền đọc hai endpoint đã allowlist bằng Fal Platform API và lưu credential với auth scheme `Key`. Tạo rate `VideoSecond` riêng cho Standard/Fast từ đúng dashboard/hợp đồng của tài khoản, sau đó chỉ bật provider/model trên staging và chọn model trong policy **Video dài (`LongForm`)**. Không chọn Fal cho policy `Default`. Request Veo bị khóa ở I2V 720p, Native Audio, 4/6/8 giây, 16:9/9:16 và `auto_fix=false`; mọi scene phải có first-frame đã duyệt, đúng tỷ lệ, tối đa 8 MB. B-roll thiếu first-frame bị chặn trước budget/outbound và không fallback sang T2V, Kling hoặc model tier khác.
-
-Fal Queue client gửi `X-Fal-No-Retry: 1`, `X-Fal-Store-IO: 0` và lifecycle object đủ cho cửa sổ polling/cache. Worker server polling `request_id`, đọc result URL chỉ trong bộ nhớ, kiểm tra allowlist `fal.media` hoặc exact `storage.googleapis.com`, rồi cache output trước khi desktop tải qua proxy tương đối. Không bật Fal production trước khi smoke test có phê duyệt chi phí xác nhận queue, audio tiếng Việt, crop/khẩu hình và đối soát ledger.
-
-## 9. Cấu hình và phát hành desktop
-
-Desktop `appsettings.json` chỉ cần URL server, connection string workflow với user ít quyền, workspace và media tools. Không thêm provider key.
-
-Ở lần chạy đầu sau nâng cấp:
-
-- `provider-secrets.bin` và `provider-secrets.bin.tmp` bị xóa vĩnh viễn;
-- workspace, `appsettings.json` và `appsettings.user.json` được giữ;
-- người dùng chọn tổ chức trên thanh đầu trang;
-- dự án mới được gắn vào tổ chức đang chọn.
-
-## 10. Smoke test
-
-Trước smoke test AI, kiểm tra riêng luồng license SePay trên staging theo `HUONG_DAN_CAU_HINH_SEPAY_LICENSE.md`: user hết hạn phải mở được app ở trạng thái locked, QR phải quét ra đúng tài khoản/số tiền/nội dung, webhook sai không cấp license và webhook hợp lệ/lặp chỉ fulfillment một lần. Không dùng webhook hoặc giao dịch production cho kiểm thử tự động.
-
-Thực hiện bằng một tài khoản Member có license và device lease hợp lệ:
-
-1. Đăng nhập desktop và xác nhận thấy đúng tổ chức.
-2. Trang “API AI tổ chức” hiển thị OpenAI Text, GPT-Image-2 và Kling sẵn sàng.
-3. Tạo dự án và tạo content.
-4. Kiểm tra usage tăng theo token và user.
-5. Với project video dài Kling, xác nhận content plan, scene prompt, lời nói, nhân vật/tài sản và metadata speech đều là tiếng Việt/`vi-VN`; thử sửa một scene bằng tiếng Anh và xác nhận bị chặn trước request Kling. Kiểm tra riêng màn hình video ngắn và BytePlus để bảo đảm policy này không bị áp dụng nhầm.
-6. Xác nhận tài sản AI xuất hiện đúng card cảnh với loại/tên rõ ràng và trạng thái `Chờ xác nhận`; assignment có tài sản phải có đúng một `Background`, còn `Prop`/`Item` là tùy chọn.
-7. Bấm **Xác nhận tài sản cảnh** và xác nhận card chuyển `Đã sẵn sàng`; đúng các tài sản đang gắn được khóa, tài sản ngoài scene vẫn giữ nguyên, không có provider request/reservation/usage mới.
-8. Thay assignment từ một phiên desktop khác trước khi xác nhận để kiểm tra `scene_asset_confirmation_stale`; desktop phải tải lại và yêu cầu xác nhận lại, không khóa một phần dữ liệu cũ.
-9. Tạo assignment sai để xác nhận card chuyển `Cần chỉnh sửa`; kiểm tra chỉ phần prompt bắt buộc vượt giới hạn mới bị `kling_prompt_too_long`, còn phần scene/negative tùy chọn được server tự co trong giới hạn.
-10. Tạo ảnh AI cho một nhân vật Draft, xác nhận preview PNG 1024×1024 được lưu trong workspace nhưng nhân vật chưa tự khóa.
-11. Sinh lại ảnh, xác nhận reference mới trở thành primary; sau đó khóa nhân vật và xác nhận Kling dùng primary này.
-12. Gửi lại cùng idempotency key tạo ảnh, xác nhận không có outbound call hoặc chi phí thứ hai; kiểm tra API không trả URL OpenAI/Base64.
-13. Tạo một clip Kling từ scene đã sẵn sàng, xác nhận prompt outbound chứa continuity text nhưng `ProviderRequests.RequestJson` không chứa mô tả đầy đủ và request snapshot đúng `ProjectAssetVersion`.
-14. Đóng desktop khi Kling đang chạy, chờ worker server polling hoàn tất; mở lại desktop và tải clip qua URL server.
-15. Mở khóa một tài sản đang gắn, xác nhận lần tạo clip mới bị `scene_asset_not_locked` trước resolver/budget/outbound; xác nhận lại trên card để tạo version mới rồi kiểm tra request mới snapshot đúng version.
-16. Giảm hạn mức thành viên đến sát mức đã dùng, xác nhận request tiếp theo bị chặn trước provider.
-17. Đổi user sang Viewer, xác nhận request trả `organization_generation_denied`.
-18. Gửi lại cùng idempotency key/payload, xác nhận không phát sinh provider request thứ hai.
-19. Với video dài Kling, kiểm tra mọi scene có presenter + lời hiển thị **Nhân vật nói trực tiếp**; B-roll voice-over không có nhân vật. Thử lưu voice-over khi scene còn character và xác nhận bị chặn trước request/reservation Kling.
-20. Tạo một on-camera clip và đối chiếu safe `RequestJson`: có `kling-native-audio-v4-vietnamese-speech-first`, language/speech policy version và speech hash nhưng không có full speech. Nghe đủ câu tiếng Việt, xác nhận đúng nhân vật nói và khẩu hình rồi mới duyệt.
-21. Nếu có `NativeAudioInvalid`, bấm **Tạo lại với prompt ưu tiên lời thoại**, xác nhận hộp thoại nêu thời lượng/chi phí request mới, rồi kiểm tra request mới có `speech-recovery-v1`, đúng một reservation/submit và không auto retry. Không cố tình tạo request Kling chỉ để ép lỗi audio nếu chưa được phê duyệt thêm chi phí.
-
-Với rollout Fal/Veo, chỉ thực hiện sau khi migration 4.1.1, credential/rate/budget staging và hạn mức chi phí đã được phê duyệt:
-
-1. Tạo scene on-camera một nhân vật đã khóa; tạo first-frame và xác nhận OpenAI dùng editing từ primary reference nhưng request log chỉ có ID/version/hash, không có prompt đầy đủ hoặc Base64.
-2. Tạo scene B-roll không nhân vật; xác nhận generation không gửi ảnh giả và output không có người. Cả hai ảnh phải đúng `1280x720` hoặc `720x1280`, không quá 8 MB.
-3. Kiểm tra quote provider/model/kích thước/chi phí trước khi xác nhận; replay cùng idempotency key không tạo reservation mới, còn **Sinh lại** tạo attempt và chi phí mới.
-4. Ngắt download một lần rồi bấm **Tải lại output** trong retention; xác nhận dùng cùng `ProviderRequestId`, không tạo image request hoặc usage thứ hai.
-5. Preview, từ chối một bản và duyệt bản khác; sửa prompt/nhân vật/primary reference/asset/aspect ratio rồi xác nhận frame chuyển **Đã lỗi thời** và Veo bị chặn trước resolver/budget/outbound.
-6. Chỉ sau các bước trên mới xin phép chạy một Veo Fast 4 giây. Đối chiếu `InputSceneFirstFrameId`, rate snapshot, reservation/settlement, audio tiếng Việt và proxy output; không dùng key hoặc dữ liệu production cho smoke test nếu chưa có phê duyệt riêng.
-
-Với rollout Seedance, tạo một tổ chức thử nghiệm riêng và thực hiện thêm: chọn policy Seedance, tạo clip ngắn nhất được model hỗ trợ ở 720p/Native Audio, đóng desktop khi task chạy, mở lại và tải từ `/api/generation/videos/{providerRequestId}/content`. Xác minh `ProviderRequests.ResponseJson` không chứa signed URL, `GeneratedVideoOutputs` có hash/MIME/size, audio nghe được, actual `completion_tokens` được quyết toán theo rate snapshot và cleanup xóa output sau retention. Đây là smoke test có phí, chỉ chạy khi đã được phê duyệt.
-
-Theo dõi usage:
-
-```powershell
-Invoke-RestMethod `
-  -Method Get `
-  -Uri "${server}api/organizations/$organizationId/usage?take=100" `
-  -Headers $adminHeaders
-```
-
-Nếu rollout SePay, cấu hình metrics exporter thu meter `VideoMaker.Payments`/counter `videomaker.license_payment.events`. Global Admin có thể đối soát exact order code hoặc provider transaction ID bằng `GET /api/admin/licenses/payments?search=<VALUE>&take=100`; dùng thêm `status=Paid` để phát hiện bản ghi đã nhận tiền nhưng chưa fulfillment. Response quản trị đã loại snapshot tài khoản nhận, idempotency, entitlement, provider reference và raw webhook; không bổ sung các dữ liệu này vào log/dashboard.
-
-## 11. Rollback ứng dụng
-
-Không xóa schema/bảng 4.0 khi rollback binary. Dữ liệu credential, usage và audit phải được giữ để đối soát. Khi rollback Seedance, ngừng tạo project mới, chuyển policy của tổ chức thử nghiệm về Kling cho project mới, chờ task BytePlus đang chạy về terminal rồi mới disable model/credential; project đã snapshot BytePlus không tự đổi provider. Nếu cần quay lại binary trước, chặn quyền AI và đặt budget tổ chức về `0` trước; không tái phát API key xuống desktop.
-
-## 12. Checklist production
-
-- [ ] Backup và thử restore database.
-- [ ] Migration 4.0.0 đến 4.0.11 và 4.1.1 có trong `ai.SchemaVersions`; các migration đã chạy idempotent trên database clone.
-- [ ] Server/desktop dùng database user khác nhau.
-- [ ] HTTPS hợp lệ; không cho HTTP public.
-- [ ] JWT signing key nằm trong secret manager.
-- [ ] Gmail App Password nằm trong secret manager; gửi thử OTP và xác nhận email nhận đúng mã 6 số.
-- [ ] Reset mật khẩu thành công làm các phiên cũ bị từ chối ngay.
-- [ ] Data Protection key ring dùng chung giữa các server instance.
-- [ ] Tổ chức, role, budget và member limit đúng.
-- [ ] Có đủ rate bắt buộc cho provider/model thực sự bật; Seedance dùng `OutputToken/MillionTokens` lấy từ hợp đồng hiện hành, không dùng giá tham khảo.
-- [ ] Xác nhận workflow Kling Native Audio không phụ thuộc model/rate OpenAI Voice; chỉ cấu hình `gpt-4o-mini-tts` khi chủ động mở lại tính năng TTS tương lai.
-- [ ] Organization OpenAI dùng được GPT-Image-2; đã hoàn tất organization verification nếu provider yêu cầu.
-- [ ] Credential test thành công; API chỉ trả secret hint.
-- [ ] Worker video đa provider, dọn output ảnh/video tạm, credential retirement và budget reconciliation đang chạy.
-- [ ] Dung lượng cache, retention, output-host allowlist và quyền ghi thư mục `Generation:VideoOutputs:StorageRoot` đã được kiểm tra.
-- [ ] Log/telemetry không chứa Authorization header, prompt nhạy cảm hoặc provider key.
-- [ ] Tài khoản nhận SePay nằm trong secret store; QR và webhook không API key đã qua staging, payload không bị ghi đầy đủ vào log và rủi ro giả mạo đã được chấp nhận.
-- [ ] Desktop mới không còn UI/mã BYOK và đã dọn credential cũ.
-- [ ] Storyboard hiển thị ba trạng thái tài sản `Chờ xác nhận`/`Cần chỉnh sửa`/`Đã sẵn sàng`; xác nhận theo cảnh không tạo provider request hoặc usage.
-- [ ] Video dài Kling có content/prompt/speech/character/asset tiếng Việt và metadata `vi-VN`; video ngắn direct prompt cùng BytePlus vẫn giữ hành vi riêng.
-- [ ] Video dài Kling dùng policy on-camera/B-roll đúng quan hệ nhân vật; template speech-first và recovery profile chỉ xuất hiện trong safe snapshot, không log full speech.
-- [ ] `NativeAudioInvalid` không tự retry; UI nêu rõ chi phí attempt mới và checklist duyệt yêu cầu đủ câu/đúng người nói/khẩu hình.
-- [ ] Fal/Veo chỉ nhận `SceneFirstFrame` Approved/current đúng tỷ lệ; ảnh identity vuông không bị gửi trực tiếp, frame stale bị chặn và retry download không tăng chi phí.
-- [ ] Build Release và toàn bộ test đạt trước khi publish.
+- [ ] Commit/tag cần phát hành đã được chốt; worktree sạch hoặc mọi thay đổi đều được giải thích.
+- [ ] Restore, Release build, xUnit và web test đạt trên commit đó.
+- [ ] Backup database đã restore thử.
+- [ ] Migration chạy lặp trên clone và schema/version/row count đúng.
+- [ ] Secret nằm ngoài source; HTTPS/certificate/Data Protection key ring đúng.
+- [ ] Organization/Owner/budget/provider/model/credential/rate/policy đã sẵn sàng.
+- [ ] Viewer/cross-tenant/thiếu pricing/budget bị chặn trước outbound.
+- [ ] Worker polling, idempotency, settlement và output proxy đã smoke test.
+- [ ] Paid smoke test nằm trong budget được duyệt.
+- [ ] SePay/speech/provider mới chỉ bật nếu checklist riêng đạt.
+- [ ] FFmpeg có Release approval; OCR/transitive notices đã review.
+- [ ] Clean-machine install/update/rollback đạt.
+- [ ] Monitoring, alert và người chịu trách nhiệm rollback đã sẵn sàng.

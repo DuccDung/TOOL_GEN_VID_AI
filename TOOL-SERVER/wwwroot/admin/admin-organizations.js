@@ -1339,16 +1339,17 @@
   }
 
   function allowedRateUsageTypes(providerCode) {
-    if (providerCode === 'openai') return ['InputToken', 'OutputToken'];
+    if (providerCode === 'openai') return ['InputToken', 'OutputToken', 'AudioSecond'];
     if (providerCode === 'byteplus') return ['OutputToken'];
     return ['VideoSecond'];
   }
 
   function syncRateUnit() {
-    const video = byId('aiRateUsageType').value === 'VideoSecond';
+    const usageType = byId('aiRateUsageType').value;
+    const perSecond = usageType === 'VideoSecond' || usageType === 'AudioSecond';
     const unit = byId('aiRateUnit');
-    if (video || unit.value === 'Second') unit.value = video ? 'Second' : 'MillionTokens';
-    [...unit.options].forEach(option => option.disabled = video ? option.value !== 'Second' : option.value === 'Second');
+    if (perSecond || unit.value === 'Second') unit.value = perSecond ? 'Second' : 'MillionTokens';
+    [...unit.options].forEach(option => option.disabled = perSecond ? option.value !== 'Second' : option.value === 'Second');
     updateRatePreview();
   }
 
@@ -1361,10 +1362,16 @@
       root.innerHTML = '<span>Nhập đơn giá để xem ví dụ chi phí trước khi lưu.</span>';
       return;
     }
-    const quantity = usageType === 'VideoSecond' ? 8 : usageType === 'InputToken' ? 10000 : 2000;
+    const quantity = usageType === 'VideoSecond' ? 8 : usageType === 'AudioSecond' ? 30 : usageType === 'InputToken' ? 10000 : 2000;
     const divisor = unit === 'MillionTokens' ? 1000000 : unit === '1KTokens' ? 1000 : 1;
     const cost = price * quantity / divisor;
-    const label = usageType === 'VideoSecond' ? 'clip 8 giây' : usageType === 'InputToken' ? '10.000 input token' : '2.000 output token';
+    const label = usageType === 'VideoSecond'
+        ? 'clip 8 giây'
+        : usageType === 'AudioSecond'
+            ? '30 giây audio'
+            : usageType === 'InputToken'
+                ? '10.000 input token'
+                : '2.000 output token';
     root.innerHTML = `<span>Ví dụ ${escapeHtml(label)}</span><strong>${escapeHtml(formatMoney(cost, 'USD'))}</strong><small>Đây là phép tính minh họa từ đơn giá bạn vừa nhập.</small>`;
   }
 

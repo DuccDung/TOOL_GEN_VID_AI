@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TOOL_LOCAL.Data;
@@ -51,7 +53,7 @@ public sealed class NativeAudioApprovalTests
                     true,
                     CancellationToken.None));
 
-            Assert.Contains("chưa có Native Audio nghe được", exception.Message);
+            Assert.Contains("chưa có audio đã kiểm tra vật lý", exception.Message);
             await using var verification = fixture.Factory.CreateDbContext();
             var scene = await verification.Scenes.SingleAsync(x => x.SceneId == fixture.SceneId);
             Assert.Null(scene.ApprovedGenerationId);
@@ -77,7 +79,7 @@ public sealed class NativeAudioApprovalTests
                     false,
                     CancellationToken.None));
 
-            Assert.Contains("phát và nghe clip", exception.Message);
+            Assert.Contains("phát và nghe audio của cảnh", exception.Message);
             await using var verification = fixture.Factory.CreateDbContext();
             Assert.Null((await verification.Scenes.SingleAsync()).ApprovedGenerationId);
         }
@@ -87,7 +89,86 @@ public sealed class NativeAudioApprovalTests
         }
     }
 
-    private static async Task<Fixture> CreateFixtureAsync(bool nativeAudioAudible)
+    [Fact]
+    public async Task FeatureDisabled_PreservesLegacyNativeAudioManualApprovalWithoutAsrReport()
+    {
+        var fixture = await CreateFixtureAsync(
+            nativeAudioAudible: true,
+            includeVerification: false,
+            speechVerificationEnabled: false);
+        try
+        {
+            var dashboard = await fixture.Service.GetDashboardAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                CancellationToken.None);
+
+            Assert.True(Assert.Single(dashboard!.Scenes).CanApproveNativeAudio);
+
+            await fixture.Service.ApproveSceneNativeAudioAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                fixture.SceneId,
+                true,
+                CancellationToken.None);
+
+            await using var verification = fixture.Factory.CreateDbContext();
+            Assert.Equal(
+                "Approved",
+                (await verification.Scenes.SingleAsync(x => x.SceneId == fixture.SceneId)).Status);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task UnapproveSceneAudio_ClearsApprovedPointersAndReturnsSceneToReview()
+    {
+        var fixture = await CreateFixtureAsync(nativeAudioAudible: true);
+        try
+        {
+            await fixture.Service.ApproveSceneNativeAudioAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                fixture.SceneId,
+                true,
+                CancellationToken.None);
+
+            await fixture.Service.UnapproveSceneAudioAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                fixture.SceneId,
+                CancellationToken.None);
+
+            await using var verification = fixture.Factory.CreateDbContext();
+            var scene = await verification.Scenes.SingleAsync(x => x.SceneId == fixture.SceneId);
+            var generation = await verification.VideoGenerations.SingleAsync();
+            var project = await verification.Projects.SingleAsync(x => x.ProjectId == fixture.ProjectId);
+            Assert.Null(scene.ApprovedGenerationId);
+            Assert.Null(scene.ApprovedRenderMediaAssetId);
+            Assert.Equal("AudioReviewRequired", scene.Status);
+            Assert.Equal("SpeechReviewRequired", scene.SpeechStatus);
+            Assert.Equal("Completed", generation.Status);
+            Assert.Equal("ScenePlanning", project.Status);
+
+            var dashboard = await fixture.Service.GetDashboardAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                CancellationToken.None);
+            Assert.True(Assert.Single(dashboard!.Scenes).CanApproveNativeAudio);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    private static async Task<Fixture> CreateFixtureAsync(
+        bool nativeAudioAudible,
+        bool includeVerification = true,
+        bool speechVerificationEnabled = true)
     {
         var databaseName = $"native-audio-approval-{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
@@ -101,6 +182,7 @@ public sealed class NativeAudioApprovalTests
         var styleId = Guid.NewGuid();
         var scenePromptId = Guid.NewGuid();
         var providerRequestId = Guid.NewGuid();
+        var verificationRequestId = Guid.NewGuid();
         var assetId = Guid.NewGuid();
         const string userId = "native-audio-user";
         var now = DateTime.UtcNow;
@@ -206,6 +288,25 @@ public sealed class NativeAudioApprovalTests
                 UpdatedAtUtc = now,
                 RowVersion = new byte[8]
             });
+            if (includeVerification)
+            {
+                dbContext.ProviderRequests.Add(new ProviderRequest
+                {
+                    ProviderRequestId = verificationRequestId,
+                    ProjectId = projectId,
+                    SceneId = sceneId,
+                    RequestKind = "Transcription",
+                    ProviderCode = "openai",
+                    ModelCode = "whisper-1",
+                    IdempotencyKey = "native-audio-verification-test",
+                    Status = "Completed",
+                    RequestJson = "{}",
+                    CurrencyCode = "USD",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                    RowVersion = new byte[8]
+                });
+            }
             dbContext.MediaAssets.Add(new MediaAsset
             {
                 MediaAssetId = assetId,
@@ -238,11 +339,39 @@ public sealed class NativeAudioApprovalTests
                 CompletedAtUtc = now,
                 RowVersion = new byte[8]
             });
+            if (includeVerification)
+            {
+                dbContext.SpeechVerificationReports.Add(new SpeechVerificationReport
+                {
+                    SpeechVerificationReportId = Guid.NewGuid(),
+                    ProjectId = projectId,
+                    SceneId = sceneId,
+                    SourceMediaAssetId = assetId,
+                    ProviderRequestId = verificationRequestId,
+                    ExpectedSpeechHash = Convert.ToHexString(
+                        SHA256.HashData(Encoding.UTF8.GetBytes("Xin chào bạn."))).ToLowerInvariant(),
+                    MediaSha256 = new string('b', 64),
+                    Transcript = "Xin chào bạn.",
+                    NormalizedTranscript = "xin chào bạn",
+                    WordErrorRate = 0,
+                    CharacterErrorRate = 0,
+                    RequiredTermRecall = 1,
+                    RequiredTermsJson = "[]",
+                    MissingTermsJson = "[]",
+                    Status = "Passed",
+                    CreatedAtUtc = now,
+                    CompletedAtUtc = now,
+                    RowVersion = new byte[8]
+                });
+            }
             await dbContext.SaveChangesAsync();
         }
 
         var workspaceRoot = Path.Combine(Path.GetTempPath(), $"videomaker-native-audio-{Guid.NewGuid():N}");
-        var service = new ProjectService(factory, new ProjectWorkspaceService(workspaceRoot));
+        var service = new ProjectService(
+            factory,
+            new ProjectWorkspaceService(workspaceRoot),
+            speechVerificationEnabled);
         return new Fixture(factory, service, projectId, sceneId, userId, workspaceRoot);
     }
 

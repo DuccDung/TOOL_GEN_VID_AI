@@ -22,7 +22,14 @@ public sealed class NativeAudioWorkflowTests
         var workflowStart = source.IndexOf("public async Task<int> GenerateVideosAsync", StringComparison.Ordinal);
         var generateSceneStart = source.IndexOf("private async Task GenerateSceneAsync", StringComparison.Ordinal);
         Assert.True(workflowStart >= 0 && generateSceneStart > workflowStart);
-        Assert.DoesNotContain("EnsureSceneNarrationAsync", source[workflowStart..generateSceneStart]);
+        Assert.Contains("SpeechProductionPolicies.CanonicalVoice", source[workflowStart..generateSceneStart]);
+        Assert.Contains("EnsureSceneNarrationAsync", source[workflowStart..generateSceneStart]);
+        Assert.Contains("var reusedExistingVoice = false", source);
+        Assert.Contains("currentVoice.Status = \"Approved\"", source);
+        Assert.Contains("currentScene.SpeechStatus = SceneSpeechStatuses.SpeechApproved", source);
+        Assert.Contains("GetSceneSpeechVerificationQuoteAsync", source);
+        Assert.Contains("VerifySceneSpeechAsync", source);
+        Assert.Contains("SpeechVerificationRequired", source);
     }
 
     [Fact]

@@ -34,7 +34,7 @@ internal sealed class GeneratedVoiceContentService(
             .AsNoTracking()
             .SingleOrDefaultAsync(
                 x => x.ProviderRequestId == providerRequestId &&
-                     x.RequestKind == "Voice" &&
+                     (x.RequestKind == "Voice" || x.RequestKind == "VoicePreview") &&
                      x.ProviderCode == ProviderCodes.OpenAi,
                 cancellationToken)
             ?? throw NotFound();
@@ -45,13 +45,20 @@ internal sealed class GeneratedVoiceContentService(
             request.OrganizationId,
             request.ProjectId,
             cancellationToken);
+        var validSource = request.RequestKind == "Voice"
+            ? request.SceneId is not null &&
+              await dbContext.Scenes.AsNoTracking().AnyAsync(
+                  x => x.SceneId == request.SceneId && x.ProjectId == request.ProjectId,
+                  cancellationToken)
+            : request.SceneId is null &&
+              await dbContext.VoiceProfileVersions.AsNoTracking().AnyAsync(
+                  x => x.PreviewProviderRequestId == providerRequestId &&
+                       x.VoiceProfile.ProjectId == request.ProjectId,
+                  cancellationToken);
         if (request.OrganizationId != access.OrganizationId ||
             request.RequestedByUserId != userId ||
-            request.SceneId is null ||
             access.Project?.RemoteUserId != userId ||
-            !await dbContext.Scenes.AsNoTracking().AnyAsync(
-                x => x.SceneId == request.SceneId && x.ProjectId == request.ProjectId,
-                cancellationToken))
+            !validSource)
         {
             throw NotFound();
         }
