@@ -1251,6 +1251,12 @@ function App() {
             onUpdateOcrSettings={vietsub.updateOcrSettings}
             onPreviewOcr={vietsub.previewOcr}
             onStartOcr={vietsub.startOcr}
+            onStartTranslation={vietsub.startTranslation}
+            onInstallTranslationRuntime={vietsub.installTranslationRuntime}
+            onStartVoice={vietsub.startVoice}
+            onInstallVoiceRuntime={vietsub.installVoiceRuntime}
+            onDismissTranslationResourceAlert={vietsub.dismissTranslationResourceAlert}
+            onContinueTranslationAfterResourceWarning={vietsub.continueTranslationAfterResourceWarning}
             onPauseJob={vietsub.pauseJob}
             onResumeJob={vietsub.resumeJob}
             onRetryJob={vietsub.retryJob}

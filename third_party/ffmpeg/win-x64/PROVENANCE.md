@@ -1,5 +1,7 @@
 ﻿# FFmpeg bundle provenance
 
+> Hồ sơ nguồn/pháp lý của bundle; trạng thái phát hành toàn hệ thống nằm tại [Bối cảnh hiện hành](../../../BOI_CANH_HE_THONG_HIEN_HANH.md). Không suy ra `Approval scope: Release` nếu hồ sơ vẫn ghi Development.
+
 - Version: 9.0.1-essentials_build-www.gyan.dev
 - Architecture: win-x64
 - Source: https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.7z#sha256=49a73bdf0850092a252ac4641d922f3048d63ed113e196cc65ce1e4f7fb33e85

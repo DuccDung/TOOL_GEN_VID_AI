@@ -1,11 +1,17 @@
 # Hướng dẫn AI agent — database
 
+> Ngữ cảnh hệ thống và danh sách migration hiện hành: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-06.
+
 Áp dụng thêm `../AGENTS.md`.
 
 ## Vai trò các script
 
 - `VideoFactory.Initial.sql`: bootstrap đầy đủ cho database mới và chứa các bước nâng cấp lịch sử cần thiết.
 - `VideoFactory.4.0.0.OrganizationAiGateway.sql`: migration idempotent sang AI Gateway theo tổ chức.
+- `VideoFactory.4.0.1` đến `4.0.11`: sửa seed tiếng Việt, ảnh/voice, video đa provider, trạng thái Native Audio, continuity asset, Fal/Veo LongForm, SePay và seat provisioning.
+- `VideoFactory.4.1.0.VietsubProjectRegistry.sql`: registry metadata project Vietsub trên server; không lưu subtitle/media/path local.
+- `VideoFactory.4.1.1.SceneFirstFrames.sql`: first-frame theo scene và snapshot vào provider request.
+- `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql`: script kiểm tra riêng, không phải migration cần chạy như một bước version mới.
 - `VideoFactory.DesktopLeastPrivilege.sql`: tạo role quyền tối thiểu cho desktop trong giai đoạn còn truy cập workflow trực tiếp.
 
 Schema chính:
@@ -13,6 +19,7 @@ Schema chính:
 - `auth`: Identity, session, device, license và Data Protection keys.
 - `ai`: organization, membership, credential version, budget period, reservation, usage ledger và audit.
 - `vf`: project/workflow, provider catalog/model/rate và provider request log.
+- `vs`: registry metadata project Vietsub; desktop không được dùng schema này để thay đường API server.
 
 ## Bất biến dữ liệu
 
@@ -40,6 +47,19 @@ AI không được tự chạy các script này trên database thật. Trước 
 ```powershell
 sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.Initial.sql
 sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.0.OrganizationAiGateway.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.1.VietnameseSeedTextRepair.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.2.GptImageCharacterReference.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.3.SceneVoiceTts.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.4.BytePlusSeedance.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.5.SceneNativeAudioStatuses.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.1.0.VietsubProjectRegistry.sql
+sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.1.1.SceneFirstFrames.sql
 sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.DesktopLeastPrivilege.sql
 ```
 

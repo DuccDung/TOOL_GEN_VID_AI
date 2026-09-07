@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Storage;
+using TOOL_LOCAL.Vietsub.Translation;
 
 namespace TOOL_LOCAL.Vietsub.Subtitles;
 
@@ -432,8 +433,39 @@ internal sealed partial class VietsubSubtitleService(
         if (translationChanged)
         {
             cue.TranslationLocked = translated.Length > 0;
-            cue.QualityStatus = translated.Length > 0 ? "MANUAL_REVIEWED" : null;
+            cue.QualityStatus = translated.Length > 0
+                ? VietsubTranslationQualityStatuses.ManualReviewed
+                : null;
             cue.Warnings.Clear();
+            cue.TranslationSource = translated.Length > 0 ? VietsubTranslationSources.Manual : null;
+            cue.TranslationEngineId = null;
+            cue.TranslationEngineVersion = null;
+            cue.TranslationSourceFingerprint = null;
+            cue.TranslationConfidence = null;
+            cue.TranslationReviewedAtUtc = translated.Length > 0 ? DateTime.UtcNow : null;
+        }
+        else if (originalChanged || speakerChanged)
+        {
+            if (cue.TranslationLocked || cue.TranslationSource == VietsubTranslationSources.Manual)
+            {
+                if (translated.Length > 0
+                    && !cue.Warnings.Contains("SOURCE_CONTEXT_CHANGED_AFTER_MANUAL", StringComparer.Ordinal))
+                {
+                    cue.Warnings.Add("SOURCE_CONTEXT_CHANGED_AFTER_MANUAL");
+                }
+            }
+            else if (cue.TranslationSource == VietsubTranslationSources.LocalAuto)
+            {
+                cue.TranslatedText = string.Empty;
+                cue.QualityStatus = null;
+                cue.Warnings.Clear();
+                cue.TranslationSource = null;
+                cue.TranslationEngineId = null;
+                cue.TranslationEngineVersion = null;
+                cue.TranslationSourceFingerprint = null;
+                cue.TranslationConfidence = null;
+                cue.TranslationReviewedAtUtc = null;
+            }
         }
         cue.UpdatedAtUtc = DateTime.UtcNow;
         await SaveMutationAsync(project.ProjectId, track, cancellationToken);

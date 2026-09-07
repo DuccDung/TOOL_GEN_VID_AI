@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "componentId": "piper-vi-vais1000-medium",
+  "engineId": "PIPER_LOCAL",
+  "engineVersion": "piper-tts-1.6.0",
+  "architecture": "win-x64-cpu",
+  "protocolVersion": 1,
+  "runtime": {
+    "python": "3.11 x64 managed by uv",
+    "package": "piper-tts",
+    "version": "1.6.0",
+    "license": "GPL-3.0"
+  },
+  "installer": {
+    "name": "uv",
+    "version": "0.12.3",
+    "archiveSizeBytes": 19013455,
+    "archiveSha256": "b23350c79e8ad0192b8124af13a0f17e8d4e4549524785e1aef389ae5a06990e",
+    "executableSizeBytes": 48024064,
+    "executableSha256": "68a22cbab1674647bcda32120b214e6480f875414e3333f49f87ae99b4b0e0fa"
+  },
+  "model": {
+    "fileName": "vi_VN-vais1000-medium.onnx",
+    "configFileName": "vi_VN-vais1000-medium.onnx.json",
+    "sizeBytes": 63201294,
+    "sha256": "ec7c89e2c85f4d1edc24b6120c18aaf1bda614f06b511567eb9c7c0de15e2dab",
+    "configSizeBytes": 4860,
+    "configSha256": "fafb9da1354ed4b77c31af228ed41fb41cd825c14cffa105454b25e6ae751ee0",
+    "sourceRepository": "rhasspy/piper-voices",
+    "sourceRevision": "ea046e8458f6acd997706d6e6066a022b42f6fb1",
+    "license": "CC BY 4.0"
+  },
+  "resourcePolicy": {
+    "operatingSystem": "Windows x64",
+    "gpuRequired": false,
+    "minimumFreeDiskBytesForInstall": 805306368,
+    "hardRamGate": false,
+    "maximumConcurrentLocalAiJobs": 1
+  }
+}

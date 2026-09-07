@@ -885,7 +885,11 @@ public sealed class VietsubMediaTests
                 indices = new[] { 4, 4 }
             }
         }));
-        await WaitUntilAsync(() => runner.ThumbnailCalls == 1 && runner.WaveformCalls == 1);
+        await WaitUntilAsync(() =>
+            runner.ThumbnailCalls == 1
+            && runner.WaveformCalls == 1
+            && thumbnails.GetExistingTimelineThumbnails(manifest).Count == 1
+            && waveforms.GetExistingArtifact(manifest).Status == VietsubWaveformStatuses.Ready);
         await bridge.TryHandleAsync(
             """{"type":"vietsub.state.get","requestId":"state-after-ready","payload":{}}""");
         var readyState = responses

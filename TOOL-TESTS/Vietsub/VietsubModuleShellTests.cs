@@ -115,6 +115,7 @@ public sealed class VietsubModuleShellTests
 
             Assert.True(options.Features.VietsubEnabled);
             Assert.False(options.Features.VietsubOcrEnabled);
+            Assert.True(options.Features.VietsubLocalVoiceEnabled);
             Assert.Equal("https://localhost:7202/", options.Server.BaseUrl);
             Assert.Equal("Stable", options.Update.Channel);
         }
@@ -178,7 +179,10 @@ public sealed class VietsubModuleShellTests
         Assert.Contains("calculateViewportRange", timeline);
         Assert.Contains("timelineThumbnails", timeline);
         Assert.Contains("waveformUrl", timeline);
-        Assert.Contains("Voice gốc", timeline);
+        Assert.Contains("Âm gốc", timeline);
+        Assert.Contains("data-vietsub-generated-voice-track=\"true\"", timeline);
+        Assert.Contains("Giọng Việt", timeline);
+        Assert.Contains("voiceAudioRef", editor);
         Assert.Contains("cue.previewText", timeline);
         Assert.Contains("vietsub-timeline-grid", timeline);
         Assert.Contains("flushPendingEdits", editor);
@@ -188,6 +192,33 @@ public sealed class VietsubModuleShellTests
         Assert.Contains("\"test\": \"vitest run\"", package);
         Assert.Contains("keepsCurrentEditor", hook);
         Assert.Contains("invalidatesEditor", hook);
+    }
+
+    [Fact]
+    public void Ui_ExposesVietnameseTranslationCtaAndKeepsMissingOcrAsClickFeedback()
+    {
+        var settings = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubSettingsPanel.tsx");
+        var hook = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "useVietsubModule.ts");
+        var preflight = ReadRepositoryFile(
+            "TOOL-LOCAL", "Web", "src", "features", "vietsub", "vietsubTranslation.ts");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "Vietsub", "VietsubWebBridge.cs");
+        var program = ReadRepositoryFile("TOOL-LOCAL", "Program.cs");
+
+        Assert.Contains("Dịch tiếng Việt", settings);
+        Assert.Contains("getVietsubTranslationRuntimeConfirmation", settings);
+        Assert.Contains("ưu tiên tái sử dụng model 2,50 GB hợp lệ đã có trên máy", preflight);
+        Assert.DoesNotContain("Dịch tự động", settings, StringComparison.Ordinal);
+        Assert.Contains("disabled={translationDisabled}", settings);
+        Assert.DoesNotContain("disabled={!activeTrack", settings, StringComparison.Ordinal);
+        Assert.Contains("Bạn cần quét OCR nhận dạng phụ đề trước khi dịch.", preflight);
+        Assert.Contains("activeTrack.source !== 'PADDLE_OCR_LOCAL'", preflight);
+        Assert.Contains("if (!payload)", hook);
+        Assert.Contains("runProjectOperation('vietsub.job.translate', payload)", hook);
+        Assert.Contains("case \"vietsub.job.translate\"", bridge);
+        Assert.Contains("catch (VietsubTranslationException exception)", bridge);
+        Assert.Contains("new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, voiceExecutor])", program);
     }
 
     [Fact]

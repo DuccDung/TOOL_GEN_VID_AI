@@ -35,13 +35,13 @@ type VietsubResizeState = {
 const defaultVietsubEditorLayout: VietsubEditorLayout = {
   settingsWidth: 280,
   inspectorWidth: 420,
-  timelineHeight: 196
+  timelineHeight: 250
 };
 
 const vietsubEditorLayoutStoragePrefix = 'videomaker.vietsub.editor-layout';
 const settingsWidthBounds = { min: 220, max: 420 };
 const inspectorWidthBounds = { min: 320, max: 620 };
-const timelineHeightBounds = { min: 190, max: 500 };
+const timelineHeightBounds = { min: 235, max: 500 };
 
 function clampVietsubEditorLayout(layout: VietsubEditorLayout): VietsubEditorLayout {
   return {
@@ -74,6 +74,10 @@ export function VietsubEditorWorkspace({
   onUpdateOcrSettings,
   onPreviewOcr,
   onStartOcr,
+  onStartTranslation,
+  onInstallTranslationRuntime,
+  onStartVoice,
+  onInstallVoiceRuntime,
   onPauseJob,
   onResumeJob,
   onRetryJob,
@@ -102,6 +106,10 @@ export function VietsubEditorWorkspace({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(Boolean(
+    state.voiceWorkspace?.timeline?.status === 'READY'
+    && state.voiceWorkspace.timelinePlaybackUrl
+  ));
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [, setSaveState] = useState<VietsubSaveState>('saved');
@@ -111,13 +119,20 @@ export function VietsubEditorWorkspace({
   const [editorLayout, setEditorLayout] = useState<VietsubEditorLayout>(() => readVietsubEditorLayout(project.projectId));
   const [resizeState, setResizeState] = useState<VietsubResizeState | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const playheadRef = useRef(0);
   const subtitleEditorRef = useRef<VietsubSubtitleEditorHandle | null>(null);
   const layoutHydratedRef = useRef(false);
   const busy = state.loading || state.busy || closing;
+  const voicePlaybackUrl = state.voiceWorkspace?.timelinePlaybackUrl ?? null;
+  const voiceAvailable = Boolean(
+    state.voiceWorkspace?.timeline?.status === 'READY'
+    && voicePlaybackUrl
+  );
 
   useEffect(() => {
     videoRef.current?.pause();
+    voiceAudioRef.current?.pause();
     playheadRef.current = 0;
     setPlayheadMilliseconds(0);
     setDurationMilliseconds(Math.max(0, Math.round((project.sourceVideo?.durationSeconds ?? 0) * 1000)));
@@ -125,6 +140,7 @@ export function VietsubEditorWorkspace({
     setPlaybackRate(1);
     setVolume(1);
     setMuted(false);
+    setVoiceEnabled(false);
     setSubtitlesVisible(true);
     setSelectedCueId(null);
     setSaveState('saved');
@@ -132,6 +148,12 @@ export function VietsubEditorWorkspace({
     setSettingsDrawerOpen(false);
     setCompactPanel('preview');
   }, [project.projectId, project.sourceVideo?.mediaId]);
+
+  useEffect(() => {
+    const audio = voiceAudioRef.current;
+    audio?.pause();
+    setVoiceEnabled(voiceAvailable);
+  }, [voiceAvailable, voicePlaybackUrl]);
 
   useEffect(() => {
     layoutHydratedRef.current = false;
@@ -269,6 +291,21 @@ export function VietsubEditorWorkspace({
     if (!closed) setClosing(false);
   }, [busy, flushPendingEdits, onCloseProject]);
 
+  const alignVoicePlayback = useCallback((positionMilliseconds: number, toleranceMilliseconds = 10) => {
+    const audio = voiceAudioRef.current;
+    if (!audio) return;
+    const nextSeconds = Math.max(0, positionMilliseconds / 1000);
+    const boundedSeconds = Number.isFinite(audio.duration) && audio.duration > 0
+      ? Math.min(nextSeconds, audio.duration)
+      : nextSeconds;
+    if (Math.abs(audio.currentTime - boundedSeconds) * 1000 < toleranceMilliseconds) return;
+    try {
+      audio.currentTime = boundedSeconds;
+    } catch {
+      // Metadata may not be ready yet; onLoadedMetadata aligns it again.
+    }
+  }, []);
+
   const seek = useCallback((positionMilliseconds: number) => {
     const next = Math.max(
       0,
@@ -282,12 +319,18 @@ export function VietsubEditorWorkspace({
     if (video && Math.abs(video.currentTime * 1000 - next) >= 10) {
       video.currentTime = next / 1000;
     }
-  }, [durationMilliseconds]);
+    alignVoicePlayback(next);
+    const voiceAudio = voiceAudioRef.current;
+    if (playing && voiceEnabled && voiceAudio?.paused) {
+      void voiceAudio.play().catch(() => { });
+    }
+  }, [alignVoicePlayback, durationMilliseconds, playing, voiceEnabled]);
 
   const updatePlayhead = useCallback((positionMilliseconds: number) => {
     playheadRef.current = positionMilliseconds;
     setPlayheadMilliseconds(positionMilliseconds);
-  }, []);
+    if (playing && voiceEnabled) alignVoicePlayback(positionMilliseconds, 250);
+  }, [alignVoicePlayback, playing, voiceEnabled]);
 
   const getPlayheadMilliseconds = useCallback(() => playheadRef.current, []);
 
@@ -296,19 +339,29 @@ export function VietsubEditorWorkspace({
     if (!video) return;
     if (!video.paused && !video.ended) {
       video.pause();
+      voiceAudioRef.current?.pause();
       return;
+    }
+    const voiceAudio = voiceAudioRef.current;
+    if (voiceEnabled && voicePlaybackUrl && voiceAudio) {
+      alignVoicePlayback(playheadRef.current);
+      voiceAudio.playbackRate = playbackRate;
+      voiceAudio.muted = false;
+      void voiceAudio.play().catch(() => { });
     }
     try {
       await video.play();
     } catch {
+      voiceAudio?.pause();
       setPlaying(false);
     }
-  }, []);
+  }, [alignVoicePlayback, playbackRate, voiceEnabled, voicePlaybackUrl]);
 
   const changePlaybackRate = useCallback((value: number) => {
     const next = Math.max(0.5, Math.min(2, value));
     setPlaybackRate(next);
     if (videoRef.current) videoRef.current.playbackRate = next;
+    if (voiceAudioRef.current) voiceAudioRef.current.playbackRate = next;
   }, []);
 
   const changeVolume = useCallback((value: number) => {
@@ -327,6 +380,29 @@ export function VietsubEditorWorkspace({
       if (videoRef.current) videoRef.current.muted = next;
       return next;
     });
+  }, []);
+
+  const toggleVoice = useCallback(() => {
+    if (!voiceAvailable) return;
+    setVoiceEnabled((current) => {
+      const next = !current;
+      const audio = voiceAudioRef.current;
+      if (!audio) return next;
+      if (!next) {
+        audio.pause();
+        return next;
+      }
+      alignVoicePlayback(playheadRef.current);
+      audio.playbackRate = playbackRate;
+      audio.muted = false;
+      if (playing) void audio.play().catch(() => { });
+      return next;
+    });
+  }, [alignVoicePlayback, playbackRate, playing, voiceAvailable]);
+
+  const updatePlaying = useCallback((next: boolean) => {
+    setPlaying(next);
+    if (!next) voiceAudioRef.current?.pause();
   }, []);
 
   const selectCue = useCallback((cueId: string, positionMilliseconds: number) => {
@@ -380,6 +456,19 @@ export function VietsubEditorWorkspace({
 
   return (
     <div className="vietsub-editor-workspace">
+      {voicePlaybackUrl && (
+        <audio
+          ref={voiceAudioRef}
+          className="vietsub-voice-playback-engine"
+          preload="auto"
+          src={voicePlaybackUrl}
+          aria-hidden="true"
+          onLoadedMetadata={(event) => {
+            event.currentTarget.playbackRate = playbackRate;
+            alignVoicePlayback(playheadRef.current);
+          }}
+        />
+      )}
       {project.needsRecovery && (
         <section className="vietsub-editor-recovery" role="status">
           <TriangleAlert size={17} />
@@ -419,12 +508,23 @@ export function VietsubEditorWorkspace({
             ocrSettings={state.ocrSettings}
             ocrRuntime={state.ocrRuntime}
             ocrPreview={state.ocrPreview}
+            translationRuntime={state.translationRuntime}
+            translationInstallProgress={state.translationInstallProgress}
+            translationNotice={state.translationNotice}
+            voiceWorkspace={state.voiceWorkspace}
+            voiceRuntime={state.voiceRuntime}
+            voiceInstallProgress={state.voiceInstallProgress}
+            voiceNotice={state.voiceNotice}
             activeJob={state.activeJob}
             activationRequest={state.ocrActivationRequest}
             playheadMilliseconds={playheadMilliseconds}
             onUpdateOcrSettings={onUpdateOcrSettings}
             onPreviewOcr={onPreviewOcr}
             onStartOcr={onStartOcr}
+            onStartTranslation={onStartTranslation}
+            onInstallTranslationRuntime={onInstallTranslationRuntime}
+            onStartVoice={onStartVoice}
+            onInstallVoiceRuntime={onInstallVoiceRuntime}
             onPauseJob={onPauseJob}
             onResumeJob={onResumeJob}
             onRetryJob={onRetryJob}
@@ -458,7 +558,7 @@ export function VietsubEditorWorkspace({
             onImportMedia={onImportMedia}
             onPlayheadChange={updatePlayhead}
             onDurationChange={setDurationMilliseconds}
-            onPlayingChange={setPlaying}
+            onPlayingChange={updatePlaying}
             onTogglePlaying={togglePlaying}
             onSeek={seek}
             onPlaybackRateChange={changePlaybackRate}
@@ -518,6 +618,8 @@ export function VietsubEditorWorkspace({
         window={state.timelineWindow}
         playheadMilliseconds={playheadMilliseconds}
         playing={playing}
+        voiceWorkspace={state.voiceWorkspace}
+        voiceEnabled={voiceEnabled}
         busy={busy}
         selectedCueId={selectedCueId}
         onSeek={seek}
@@ -526,6 +628,7 @@ export function VietsubEditorWorkspace({
         onRequestThumbnails={onRequestTimelineThumbnails}
         onRequestWaveform={onRequestTimelineWaveform}
         onUpdateCue={onUpdateTimelineCue}
+        onToggleVoice={toggleVoice}
       />
       </div>
     </div>

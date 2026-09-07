@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "componentId": "qwen3-4b-q4-k-m-cpu",
+  "engineId": "qwen3-4b-q4-k-m-cpu",
+  "engineVersion": "bc64014-llamasharp-0.27.0-adapter-1",
+  "architecture": "win-x64-cpu",
+  "runtime": {
+    "package": "LLamaSharp.Backend.Cpu",
+    "version": "0.27.0",
+    "license": "MIT"
+  },
+  "model": {
+    "fileName": "Qwen3-4B-Q4_K_M.gguf",
+    "sizeBytes": 2497280256,
+    "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+    "sourceRepository": "Qwen/Qwen3-4B-GGUF",
+    "sourceRevision": "bc640142c66e1fdd12af0bd68f40445458f3869b",
+    "license": "Apache-2.0"
+  },
+  "capabilities": {
+    "sourceLanguages": ["en", "zh"],
+    "targetLanguage": "vi",
+    "sceneContext": true,
+    "reviewPass": false,
+    "maximumTargetCues": 12,
+    "maximumContextCues": 3,
+    "maximumSourceCharacters": 6000,
+    "maximumOutputCharacters": 8000
+  },
+  "minimumHardware": {
+    "operatingSystem": "Windows x64",
+    "ramBytes": 6442450944,
+    "freeDiskBytesForInstall": 3302586624,
+    "gpuRequired": false
+  },
+  "runtimeProfiles": [
+    {
+      "profileId": "qwen3-cpu-safe-v2",
+      "minimumTotalPhysicalBytes": 8589934592,
+      "minimumAvailablePhysicalBytes": 4294967296,
+      "minimumAvailableCommitBytes": 6442450944,
+      "contextSize": 4096,
+      "maximumGeneratedTokens": 1024,
+      "batchSize": 256,
+      "maximumTargetCues": 12
+    },
+    {
+      "profileId": "qwen3-cpu-low-memory-v1",
+      "minimumTotalPhysicalBytes": 6442450944,
+      "minimumAvailablePhysicalBytes": 3221225472,
+      "minimumAvailableCommitBytes": 4294967296,
+      "contextSize": 4096,
+      "maximumGeneratedTokens": 768,
+      "batchSize": 128,
+      "maximumTargetCues": 6
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # OCR local provenance
 
+> Hồ sơ nguồn/pháp lý của OCR local; trạng thái feature/release gate nằm tại [Bối cảnh hiện hành](../../BOI_CANH_HE_THONG_HIEN_HANH.md).
+
 VideoMaker uses the following pinned NuGet packages for local OCR on Windows x64:
 
 | Package | Version | Declared license | Upstream |

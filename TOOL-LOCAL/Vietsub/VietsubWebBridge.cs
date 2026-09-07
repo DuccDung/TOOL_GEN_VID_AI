@@ -9,6 +9,8 @@ using TOOL_LOCAL.Vietsub.Storage;
 using TOOL_LOCAL.Vietsub.Subtitles;
 using TOOL_LOCAL.Vietsub.Jobs;
 using TOOL_LOCAL.Vietsub.Ocr;
+using TOOL_LOCAL.Vietsub.Translation;
+using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.WebView;
 
 namespace TOOL_LOCAL.Vietsub;
@@ -95,12 +97,16 @@ internal sealed class VietsubWebBridge : IDisposable
     private readonly Func<string?>? _subtitleExportSelector;
     private readonly VietsubJobManager? _jobManager;
     private readonly VietsubOcrService? _ocrService;
+    private readonly VietsubTranslationService? _translationService;
+    private readonly VietsubVoiceService? _voiceService;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
     };
     private readonly object _operationSync = new();
     private readonly ConcurrentDictionary<Guid, byte> _ocrCompletionInFlight = new();
+    private readonly ConcurrentDictionary<Guid, byte> _translationCompletionHandled = new();
+    private readonly ConcurrentDictionary<Guid, byte> _voiceCompletionHandled = new();
     private readonly ConcurrentDictionary<string, byte> _waveformFailures = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _timelineArtifactTasks = new(StringComparer.Ordinal);
     private CancellationTokenSource? _activeOperation;
@@ -124,7 +130,9 @@ internal sealed class VietsubWebBridge : IDisposable
         Func<string?>? subtitleExportSelector = null,
         VietsubJobManager? jobManager = null,
         VietsubOcrService? ocrService = null,
-        VietsubTimelineWaveformService? waveformService = null)
+        VietsubTimelineWaveformService? waveformService = null,
+        VietsubTranslationService? translationService = null,
+        VietsubVoiceService? voiceService = null)
     {
         _enabled = enabled;
         _postJson = postJson;
@@ -141,6 +149,8 @@ internal sealed class VietsubWebBridge : IDisposable
         _jobManager = jobManager;
         _ocrService = ocrService;
         _waveformService = waveformService;
+        _translationService = translationService;
+        _voiceService = voiceService;
         if (_jobManager is not null)
         {
             _jobManager.JobChanged += JobManagerOnChanged;
@@ -317,6 +327,26 @@ internal sealed class VietsubWebBridge : IDisposable
                 case "vietsub.ocr.runtime.status":
                     await PostOcrRuntimeStatusAsync(request.RequestId, cancellationToken);
                     break;
+                case "vietsub.translation.runtime.status":
+                    PostTranslationRuntimeStatus(request.RequestId);
+                    break;
+                case "vietsub.translation.runtime.install":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => InstallTranslationRuntimeAsync(request, request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
+                    break;
+                case "vietsub.voice.runtime.status":
+                    PostVoiceRuntimeStatus(request.RequestId);
+                    break;
+                case "vietsub.voice.runtime.install":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => InstallVoiceRuntimeAsync(request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
+                    break;
                 case "vietsub.ocr.region.update":
                     await RunProjectOperationAsync(
                         request.RequestId,
@@ -334,6 +364,18 @@ internal sealed class VietsubWebBridge : IDisposable
                     await RunProjectOperationAsync(
                         request.RequestId,
                         token => StartOcrAsync(request, request.RequestId, token),
+                        cancellationToken);
+                    break;
+                case "vietsub.job.translate":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => StartTranslationAsync(request, request.RequestId, token),
+                        cancellationToken);
+                    break;
+                case "vietsub.job.voice":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => StartVoiceAsync(request, request.RequestId, token),
                         cancellationToken);
                     break;
                 case "vietsub.ocr.track.activate":
@@ -371,6 +413,14 @@ internal sealed class VietsubWebBridge : IDisposable
             PostError(request.RequestId, exception.Code, exception.Message);
         }
         catch (VietsubOcrException exception)
+        {
+            PostError(request.RequestId, exception.Code, exception.Message);
+        }
+        catch (VietsubTranslationException exception)
+        {
+            PostError(request.RequestId, exception.Code, exception.Message);
+        }
+        catch (VietsubVoiceException exception)
         {
             PostError(request.RequestId, exception.Code, exception.Message);
         }
@@ -1079,6 +1129,75 @@ internal sealed class VietsubWebBridge : IDisposable
         Post(new WebMessageResponse("vietsub.ocr.runtime.status", requestId, status));
     }
 
+    private void PostTranslationRuntimeStatus(string requestId)
+    {
+        var status = RequireTranslationService().GetRuntimeStatus();
+        Post(new WebMessageResponse("vietsub.translation.runtime.status", requestId, status));
+    }
+
+    private async Task InstallTranslationRuntimeAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var input = request.Payload.Deserialize<VietsubInstallTranslationRuntimeInput>(_jsonOptions)
+            ?? new VietsubInstallTranslationRuntimeInput();
+        var progress = new Progress<VietsubTranslationRuntimeInstallProgress>(update =>
+            Post(new WebMessageResponse(
+                "vietsub.translation.runtime.install.progress",
+                requestId,
+                update)));
+        try
+        {
+            var status = await RequireTranslationService().InstallRuntimeAsync(
+                session,
+                context.UserId,
+                context.OrganizationId,
+                input,
+                progress,
+                cancellationToken);
+            Post(new WebMessageResponse("vietsub.translation.runtime.status", requestId, status));
+        }
+        catch (VietsubTranslationException)
+        {
+            PostTranslationRuntimeStatus(requestId);
+            throw;
+        }
+    }
+
+    private void PostVoiceRuntimeStatus(string requestId)
+    {
+        var status = RequireVoiceService().GetRuntimeStatus();
+        Post(new WebMessageResponse("vietsub.voice.runtime.status", requestId, status));
+    }
+
+    private async Task InstallVoiceRuntimeAsync(
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var progress = new Progress<VietsubVoiceRuntimeInstallProgress>(update =>
+            Post(new WebMessageResponse("vietsub.voice.runtime.install.progress", requestId, update)));
+        try
+        {
+            var status = await RequireVoiceService().InstallRuntimeAsync(
+                session,
+                context.UserId,
+                context.OrganizationId,
+                progress,
+                cancellationToken);
+            Post(new WebMessageResponse("vietsub.voice.runtime.status", requestId, status));
+        }
+        catch (VietsubVoiceException)
+        {
+            PostVoiceRuntimeStatus(requestId);
+            throw;
+        }
+    }
+
     private async Task UpdateOcrSettingsAsync(
         WebMessageRequest request,
         string requestId,
@@ -1126,6 +1245,42 @@ internal sealed class VietsubWebBridge : IDisposable
         var input = request.Payload.Deserialize<VietsubOcrSettingsInput>(_jsonOptions)
             ?? throw new JsonException();
         var job = await RequireOcrService().StartAsync(
+            session,
+            userContext.UserId,
+            userContext.OrganizationId,
+            input,
+            cancellationToken);
+        Post(new WebMessageResponse("vietsub.job.changed", requestId, job));
+    }
+
+    private async Task StartTranslationAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var userContext = RequireContext();
+        var input = request.Payload.Deserialize<VietsubStartTranslationInput>(_jsonOptions)
+            ?? throw new JsonException();
+        var job = await RequireTranslationService().StartAsync(
+            session,
+            userContext.UserId,
+            userContext.OrganizationId,
+            input,
+            cancellationToken);
+        Post(new WebMessageResponse("vietsub.job.changed", requestId, job));
+    }
+
+    private async Task StartVoiceAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var userContext = RequireContext();
+        var input = request.Payload.Deserialize<VietsubStartVoiceInput>(_jsonOptions)
+            ?? throw new JsonException();
+        var job = await RequireVoiceService().StartAsync(
             session,
             userContext.UserId,
             userContext.OrganizationId,
@@ -1226,12 +1381,142 @@ internal sealed class VietsubWebBridge : IDisposable
         {
             _ = CompleteOcrJobOnceAsync(eventArgs.Job);
         }
+        if (eventArgs.Job.Type == VietsubJobTypes.TranslateLocal
+            && eventArgs.Job.Status is VietsubJobStatusNames.Completed
+                or VietsubJobStatusNames.Failed
+                or VietsubJobStatusNames.Cancelled)
+        {
+            _ = CompleteTranslationJobOnceAsync(eventArgs.Job);
+        }
+        if (eventArgs.Job.Type == VietsubJobTypes.SynthesizeVoiceLocal
+            && eventArgs.Job.Status is VietsubJobStatusNames.Completed
+                or VietsubJobStatusNames.Failed
+                or VietsubJobStatusNames.Cancelled)
+        {
+            _ = CompleteVoiceJobOnceAsync(eventArgs.Job);
+        }
 
         TryPostJobNotification(
             new WebMessageResponse("vietsub.job.changed", null, eventArgs.Job),
             eventArgs.Job.ProjectId,
             eventArgs.Job.Id,
             "JOB_NOTIFICATION_FAILED");
+    }
+
+    private async Task CompleteTranslationJobOnceAsync(VietsubJobSummary job)
+    {
+        if (!_translationCompletionHandled.TryAdd(job.Id, 0))
+        {
+            return;
+        }
+
+        try
+        {
+            var session = _projectSession;
+            if (_disposed || session?.Manifest.ProjectId != job.ProjectId)
+            {
+                return;
+            }
+
+            var projectStatus = job.Status switch
+            {
+                VietsubJobStatusNames.Completed => VietsubProjectStatuses.Completed,
+                VietsubJobStatusNames.Failed => VietsubProjectStatuses.Failed,
+                _ => VietsubProjectStatuses.Ready
+            };
+            if (session.Manifest.Status != projectStatus)
+            {
+                await session.UpdateAsync(
+                    manifest => manifest.Status = projectStatus,
+                    CancellationToken.None);
+                await session.FlushAsync(CancellationToken.None);
+            }
+
+            TryPostJobNotification(
+                new WebMessageResponse(
+                    "vietsub.subtitle.changed",
+                    null,
+                    new
+                    {
+                        resetPage = false,
+                        trackId = job.OutputTrackId,
+                        trackRevision = (int?)null
+                    }),
+                job.ProjectId,
+                job.Id,
+                "TRANSLATION_SUBTITLE_NOTIFICATION_FAILED");
+            if (job.Status == VietsubJobStatusNames.Completed)
+            {
+                TryPostJobNotification(
+                    new WebMessageResponse(
+                        "vietsub.translation.completed",
+                        null,
+                        new { jobId = job.Id, trackId = job.OutputTrackId }),
+                    job.ProjectId,
+                    job.Id,
+                    "TRANSLATION_COMPLETED_NOTIFICATION_FAILED");
+            }
+            await PostStateAsync(job.Id.ToString("N"), CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _jobManager?.RecordDiagnostic(
+                job.ProjectId,
+                job.Id,
+                "TRANSLATION_COMPLETION_FAILED",
+                $"Không thể hoàn tất trạng thái dịch local ({exception.GetType().Name}).");
+            TryPostJobNotification(
+                new WebMessageResponse(
+                    "vietsub.error",
+                    null,
+                    Error: new WebMessageError(
+                        "vietsub_translation_completion_update_failed",
+                        "Tác vụ dịch đã kết thúc nhưng chưa thể làm mới phụ đề.")),
+                job.ProjectId,
+                job.Id,
+                "TRANSLATION_COMPLETION_NOTIFICATION_FAILED");
+        }
+    }
+
+    private async Task CompleteVoiceJobOnceAsync(VietsubJobSummary job)
+    {
+        if (!_voiceCompletionHandled.TryAdd(job.Id, 0)) return;
+        try
+        {
+            var session = _projectSession;
+            if (_disposed || session?.Manifest.ProjectId != job.ProjectId) return;
+            var status = job.Status switch
+            {
+                VietsubJobStatusNames.Completed => VietsubProjectStatuses.Completed,
+                VietsubJobStatusNames.Failed => VietsubProjectStatuses.Failed,
+                _ => VietsubProjectStatuses.Ready
+            };
+            if (session.Manifest.Status != status)
+            {
+                await session.UpdateAsync(manifest => manifest.Status = status, CancellationToken.None);
+                await session.FlushAsync(CancellationToken.None);
+            }
+            if (job.Status == VietsubJobStatusNames.Completed)
+            {
+                TryPostJobNotification(
+                    new WebMessageResponse(
+                        "vietsub.voice.completed",
+                        null,
+                        new { jobId = job.Id, trackId = job.OutputTrackId }),
+                    job.ProjectId,
+                    job.Id,
+                    "VOICE_COMPLETED_NOTIFICATION_FAILED");
+            }
+            await PostStateAsync(job.Id.ToString("N"), CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _jobManager?.RecordDiagnostic(
+                job.ProjectId,
+                job.Id,
+                "VOICE_COMPLETION_FAILED",
+                $"Không thể làm mới trạng thái voice ({exception.GetType().Name}).");
+        }
     }
 
     private async Task CompleteOcrJobOnceAsync(VietsubJobSummary job)
@@ -1547,6 +1832,7 @@ internal sealed class VietsubWebBridge : IDisposable
         IReadOnlyList<VietsubProjectSummary> projects = [];
         VietsubProjectSummary? selectedProject = null;
         VietsubSubtitleWorkspaceSummary? subtitleWorkspace = null;
+        VietsubVoiceWorkspaceSummary? voiceWorkspace = null;
         IReadOnlyList<VietsubJobSummary> jobs = [];
         if (_projectStore is not null && _contextProvider is not null)
         {
@@ -1574,6 +1860,12 @@ internal sealed class VietsubWebBridge : IDisposable
                     _projectSession.Manifest,
                     cancellationToken);
             }
+            if (_projectSession is not null && _voiceService is not null)
+            {
+                voiceWorkspace = await _voiceService.GetWorkspaceAsync(
+                    _projectSession.Manifest,
+                    cancellationToken);
+            }
             if (_projectSession is not null && _jobManager is not null)
             {
                 jobs = await _jobManager.ListAsync(
@@ -1594,7 +1886,9 @@ internal sealed class VietsubWebBridge : IDisposable
                 projects,
                 selectedProject,
                 subtitleWorkspace,
+                voiceWorkspace,
                 ocrSettings = _projectSession?.Manifest.OcrSettings,
+                voiceRuntime = _voiceService?.GetRuntimeStatus(),
                 jobs,
                 activeJob = jobs.FirstOrDefault(job => job.Status is
                     VietsubJobStatusNames.Pending or
@@ -1730,6 +2024,14 @@ internal sealed class VietsubWebBridge : IDisposable
 
     private VietsubOcrService RequireOcrService() =>
         _ocrService ?? throw new InvalidOperationException("Dịch vụ OCR Vietsub chưa được cấu hình.");
+
+    private VietsubTranslationService RequireTranslationService() =>
+        _translationService
+        ?? throw new InvalidOperationException("Dịch vụ dịch local Vietsub chưa được cấu hình.");
+
+    private VietsubVoiceService RequireVoiceService() =>
+        _voiceService
+        ?? throw new InvalidOperationException("Dịch vụ giọng local Vietsub chưa được cấu hình.");
 
     private VietsubUserContext RequireContext() =>
         _contextProvider?.Invoke() is { } context

@@ -121,4 +121,8 @@ public sealed class DesktopFeatureOptions
     public bool VietsubEnabled { get; init; }
 
     public bool VietsubOcrEnabled { get; init; }
+
+    public bool VietsubLocalTranslationEnabled { get; init; }
+
+    public bool VietsubLocalVoiceEnabled { get; init; } = true;
 }

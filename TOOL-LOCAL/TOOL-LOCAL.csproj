@@ -34,6 +34,7 @@
     <ProjectReference Include="..\TOOL-SHARED.Contracts\TOOL-SHARED.Contracts.csproj" />
     <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
     <ProjectReference Include="..\TOOL-UPDATER\TOOL-UPDATER.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\TOOL-VIETSUB-TRANSLATION-WORKER\TOOL-VIETSUB-TRANSLATION-WORKER.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -48,6 +49,14 @@
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="appsettings.user.json" Condition="Exists('appsettings.user.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Vietsub\Voice\Workers\piper_worker.py" Link="workers\piper_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -55,6 +64,8 @@
     <DashboardWebDist>$(DashboardWebDirectory)\dist</DashboardWebDist>
     <FfmpegBundleDirectory Condition="'$(FfmpegBundleDirectory)' == ''">$(MSBuildProjectDirectory)\..\third_party\ffmpeg\win-x64</FfmpegBundleDirectory>
     <OcrNoticeDirectory>$(MSBuildProjectDirectory)\..\third_party\ocr</OcrNoticeDirectory>
+    <TranslationNoticeDirectory>$(MSBuildProjectDirectory)\..\third_party\translation</TranslationNoticeDirectory>
+    <VoiceNoticeDirectory>$(MSBuildProjectDirectory)\..\third_party\voice</VoiceNoticeDirectory>
     <RequireMediaToolBundle Condition="'$(RequireMediaToolBundle)' == ''">false</RequireMediaToolBundle>
   </PropertyGroup>
 
@@ -72,10 +83,42 @@
     <Content Include="$(OcrNoticeDirectory)\NUGET_HASHES.sha512" Link="third_party\ocr\NUGET_HASHES.sha512" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(TranslationNoticeDirectory)\PROVENANCE.md') And Exists('$(TranslationNoticeDirectory)\COMPONENT_MANIFEST.json') And Exists('$(TranslationNoticeDirectory)\checksums.sha256')">
+    <Content Include="$(TranslationNoticeDirectory)\PROVENANCE.md" Link="third_party\translation\PROVENANCE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TranslationNoticeDirectory)\COMPONENT_MANIFEST.json" Link="third_party\translation\COMPONENT_MANIFEST.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TranslationNoticeDirectory)\checksums.sha256" Link="third_party\translation\checksums.sha256" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TranslationNoticeDirectory)\NUGET_HASHES.sha512" Link="third_party\translation\NUGET_HASHES.sha512" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TranslationNoticeDirectory)\LICENSE-LLAMASHARP-AND-LLAMA.CPP-MIT.txt" Link="third_party\translation\LICENSE-LLAMASHARP-AND-LLAMA.CPP-MIT.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt" Link="third_party\translation\LICENSE-QWEN3-APACHE-2.0.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(VoiceNoticeDirectory)\PROVENANCE.md') And Exists('$(VoiceNoticeDirectory)\COMPONENT_MANIFEST.json') And Exists('$(VoiceNoticeDirectory)\checksums.sha256') And Exists('$(VoiceNoticeDirectory)\LICENSES.md')">
+    <Content Include="$(VoiceNoticeDirectory)\PROVENANCE.md" Link="third_party\voice\PROVENANCE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(VoiceNoticeDirectory)\COMPONENT_MANIFEST.json" Link="third_party\voice\COMPONENT_MANIFEST.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(VoiceNoticeDirectory)\checksums.sha256" Link="third_party\voice\checksums.sha256" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(VoiceNoticeDirectory)\LICENSES.md" Link="third_party\voice\LICENSES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <Target Name="ValidateOcrNotices" BeforeTargets="Publish">
     <Error Condition="!Exists('$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt')" Text="OCR third-party license is missing: $(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt" />
     <Error Condition="!Exists('$(OcrNoticeDirectory)\PROVENANCE.md')" Text="OCR provenance is missing: $(OcrNoticeDirectory)\PROVENANCE.md" />
     <Error Condition="!Exists('$(OcrNoticeDirectory)\NUGET_HASHES.sha512')" Text="OCR NuGet hashes are missing: $(OcrNoticeDirectory)\NUGET_HASHES.sha512" />
+  </Target>
+
+  <Target Name="ValidateTranslationNotices" BeforeTargets="Publish">
+    <Error Condition="!Exists('$(TranslationNoticeDirectory)\PROVENANCE.md')" Text="Translation provenance is missing: $(TranslationNoticeDirectory)\PROVENANCE.md" />
+    <Error Condition="!Exists('$(TranslationNoticeDirectory)\COMPONENT_MANIFEST.json')" Text="Translation component manifest is missing: $(TranslationNoticeDirectory)\COMPONENT_MANIFEST.json" />
+    <Error Condition="!Exists('$(TranslationNoticeDirectory)\checksums.sha256')" Text="Translation model checksum is missing: $(TranslationNoticeDirectory)\checksums.sha256" />
+    <Error Condition="!Exists('$(TranslationNoticeDirectory)\NUGET_HASHES.sha512')" Text="Translation NuGet hashes are missing: $(TranslationNoticeDirectory)\NUGET_HASHES.sha512" />
+    <Error Condition="!Exists('$(TranslationNoticeDirectory)\LICENSE-LLAMASHARP-AND-LLAMA.CPP-MIT.txt')" Text="Translation runtime license is missing: $(TranslationNoticeDirectory)\LICENSE-LLAMASHARP-AND-LLAMA.CPP-MIT.txt" />
+    <Error Condition="!Exists('$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt')" Text="Qwen3 Apache license is missing: $(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt" />
+  </Target>
+
+  <Target Name="ValidateVoiceNotices" BeforeTargets="Publish">
+    <Error Condition="!Exists('$(VoiceNoticeDirectory)\PROVENANCE.md')" Text="Voice provenance is missing: $(VoiceNoticeDirectory)\PROVENANCE.md" />
+    <Error Condition="!Exists('$(VoiceNoticeDirectory)\COMPONENT_MANIFEST.json')" Text="Voice component manifest is missing: $(VoiceNoticeDirectory)\COMPONENT_MANIFEST.json" />
+    <Error Condition="!Exists('$(VoiceNoticeDirectory)\checksums.sha256')" Text="Voice component checksums are missing: $(VoiceNoticeDirectory)\checksums.sha256" />
+    <Error Condition="!Exists('$(VoiceNoticeDirectory)\LICENSES.md')" Text="Voice license notice is missing: $(VoiceNoticeDirectory)\LICENSES.md" />
   </Target>
 
   <Target Name="ValidateMediaToolBundle" BeforeTargets="Publish" Condition="'$(RequireMediaToolBundle)' == 'true'">
@@ -132,6 +175,13 @@
     <Copy SourceFiles="@(UpdaterBuildFile)" DestinationFiles="@(UpdaterBuildFile->'$(TargetDir)_updater\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
+  <Target Name="CopyTranslationWorkerForBuild" AfterTargets="Build">
+    <ItemGroup>
+      <TranslationWorkerBuildFile Include="$(MSBuildThisFileDirectory)..\TOOL-VIETSUB-TRANSLATION-WORKER\bin\$(Configuration)\net10.0-windows\win-x64\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(TranslationWorkerBuildFile)" DestinationFiles="@(TranslationWorkerBuildFile->'$(TargetDir)_translation_worker\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
   <Target Name="PublishUpdater" BeforeTargets="ComputeFilesToPublish">
     <PropertyGroup>
       <UpdaterPublishDirectory>$(MSBuildProjectDirectory)\obj\$(Configuration)\updater-publish\</UpdaterPublishDirectory>
@@ -143,6 +193,22 @@
       <UpdaterPublishedFile Include="$(UpdaterPublishDirectory)VideoMaker.Updater.exe" />
       <ResolvedFileToPublish Include="@(UpdaterPublishedFile)">
         <RelativePath>_updater\VideoMaker.Updater.exe</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="PublishTranslationWorker" BeforeTargets="ComputeFilesToPublish">
+    <PropertyGroup>
+      <TranslationWorkerPublishDirectory>$(MSBuildProjectDirectory)\obj\$(Configuration)\translation-worker-publish\</TranslationWorkerPublishDirectory>
+    </PropertyGroup>
+    <MSBuild Projects="..\TOOL-VIETSUB-TRANSLATION-WORKER\TOOL-VIETSUB-TRANSLATION-WORKER.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=false;PublishDir=$(TranslationWorkerPublishDirectory)" />
+    <ItemGroup>
+      <TranslationWorkerPublishedFile Include="$(TranslationWorkerPublishDirectory)**\*" />
+      <ResolvedFileToPublish Include="@(TranslationWorkerPublishedFile)">
+        <RelativePath>_translation_worker\%(TranslationWorkerPublishedFile.RecursiveDir)%(TranslationWorkerPublishedFile.Filename)%(TranslationWorkerPublishedFile.Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
     </ItemGroup>

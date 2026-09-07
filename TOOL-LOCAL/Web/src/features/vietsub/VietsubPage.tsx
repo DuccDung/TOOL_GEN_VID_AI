@@ -9,6 +9,8 @@ import type {
 } from './types';
 import { VietsubEditorWorkspace } from './VietsubEditorWorkspace';
 import { VietsubProjectLibrary } from './VietsubProjectLibrary';
+import { VietsubTranslationResourceModal } from './VietsubTranslationResourceModal';
+import type { VietsubTranslationRunMode } from './vietsubTranslation';
 
 export type VietsubPageProps = {
   state: VietsubModuleState;
@@ -21,6 +23,12 @@ export type VietsubPageProps = {
   onUpdateOcrSettings: (settings: VietsubOcrSettings) => Promise<boolean>;
   onPreviewOcr: (settings: VietsubOcrSettings, timestampMilliseconds: number) => void;
   onStartOcr: (settings: VietsubOcrSettings) => void;
+  onStartTranslation: (runMode?: VietsubTranslationRunMode) => void;
+  onInstallTranslationRuntime: () => void;
+  onStartVoice: () => void;
+  onInstallVoiceRuntime: () => void;
+  onDismissTranslationResourceAlert: () => void;
+  onContinueTranslationAfterResourceWarning: () => void;
   onPauseJob: (jobId: string) => void;
   onResumeJob: (jobId: string) => void;
   onRetryJob: (jobId: string) => void;
@@ -64,6 +72,14 @@ export function VietsubPage(props: VietsubPageProps) {
           onCreateProject={props.onCreateProject}
           onOpenProject={props.onOpenProject}
           onRenameProject={props.onRenameProject}
+        />
+      )}
+
+      {state.translationResourceAlert && (
+        <VietsubTranslationResourceModal
+          alert={state.translationResourceAlert}
+          onDismiss={props.onDismissTranslationResourceAlert}
+          onContinue={props.onContinueTranslationAfterResourceWarning}
         />
       )}
     </div>

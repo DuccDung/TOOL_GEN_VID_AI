@@ -23,24 +23,52 @@ internal sealed record VietsubTimelineWindowRecord(
 
 internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
 {
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 5;
 
     public async Task InitializeAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
         paths.CreateProjectDirectories(projectId);
         await using var connection = await OpenAsync(projectId, cancellationToken);
+        int? existingSchemaVersion = null;
+        await using (var preflightCommand = connection.CreateCommand())
+        {
+            preflightCommand.CommandText = """
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+                PRAGMA foreign_keys=ON;
+                CREATE TABLE IF NOT EXISTS schema_info (
+                    schema_version INTEGER NOT NULL
+                );
+                """;
+            await preflightCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var preflightVersionCommand = connection.CreateCommand())
+        {
+            preflightVersionCommand.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
+            var existingVersion = await preflightVersionCommand.ExecuteScalarAsync(cancellationToken);
+            if (existingVersion is not null and not DBNull)
+            {
+                existingSchemaVersion = Convert.ToInt32(existingVersion);
+                if (existingSchemaVersion is < 1 or > SchemaVersion)
+                {
+                    throw new InvalidDataException("Phiên bản database Vietsub chưa được hỗ trợ.");
+                }
+            }
+        }
+
+        if (existingSchemaVersion == SchemaVersion)
+        {
+            await ValidateVersion5SchemaAsync(connection, cancellationToken);
+            return;
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            PRAGMA foreign_keys=ON;
-
-            CREATE TABLE IF NOT EXISTS schema_info (
-                schema_version INTEGER NOT NULL
-            );
+            BEGIN IMMEDIATE;
 
             INSERT INTO schema_info(schema_version)
-            SELECT 3
+            SELECT 5
             WHERE NOT EXISTS (SELECT 1 FROM schema_info);
 
             CREATE TABLE IF NOT EXISTS subtitle_tracks (
@@ -66,6 +94,12 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 translation_locked INTEGER NOT NULL,
                 quality_status TEXT NULL,
                 warning_json TEXT NOT NULL DEFAULT '[]',
+                translation_source TEXT NULL,
+                translation_engine_id TEXT NULL,
+                translation_engine_version TEXT NULL,
+                translation_source_fingerprint TEXT NULL,
+                translation_confidence REAL NULL,
+                translation_reviewed_at_utc TEXT NULL,
                 updated_at_utc TEXT NOT NULL,
                 CONSTRAINT fk_subtitle_cues_track
                     FOREIGN KEY(track_id) REFERENCES subtitle_tracks(track_id) ON DELETE CASCADE
@@ -153,6 +187,138 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
 
             CREATE INDEX IF NOT EXISTS ix_local_job_events_job_created
                 ON local_job_events(job_id, created_at_utc DESC);
+
+            CREATE TABLE IF NOT EXISTS translation_memory (
+                entry_id TEXT NOT NULL PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                source_language_code TEXT NOT NULL,
+                target_language_code TEXT NOT NULL,
+                normalized_source_hash TEXT NOT NULL,
+                source_text TEXT NOT NULL,
+                translated_text TEXT NOT NULL,
+                context_fingerprint TEXT NULL,
+                source_kind TEXT NOT NULL,
+                use_count INTEGER NOT NULL DEFAULT 0,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_translation_memory_lookup
+                ON translation_memory(
+                    project_id, source_language_code, target_language_code,
+                    normalized_source_hash, updated_at_utc DESC);
+
+            CREATE TABLE IF NOT EXISTS translation_cache (
+                cache_key TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                engine_id TEXT NOT NULL,
+                engine_version TEXT NOT NULL,
+                configuration_fingerprint TEXT NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                last_used_at_utc TEXT NOT NULL,
+                PRIMARY KEY(project_id, cache_key)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_translation_cache_project_used
+                ON translation_cache(project_id, last_used_at_utc DESC);
+
+            CREATE TABLE IF NOT EXISTS translation_job_items (
+                job_id TEXT NOT NULL,
+                cue_id TEXT NOT NULL,
+                scene_number INTEGER NOT NULL,
+                chapter_number INTEGER NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                translated_text TEXT NULL,
+                confidence REAL NULL,
+                warning_json TEXT NOT NULL DEFAULT '[]',
+                error_code TEXT NULL,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                completed_at_utc TEXT NULL,
+                PRIMARY KEY(job_id, cue_id),
+                CONSTRAINT fk_translation_job_items_job
+                    FOREIGN KEY(job_id) REFERENCES local_jobs(id) ON DELETE CASCADE,
+                CONSTRAINT fk_translation_job_items_cue
+                    FOREIGN KEY(cue_id) REFERENCES subtitle_cues(cue_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_translation_job_items_status
+                ON translation_job_items(job_id, status, scene_number);
+
+            CREATE TABLE IF NOT EXISTS voice_artifacts (
+                artifact_id TEXT NOT NULL PRIMARY KEY,
+                track_id TEXT NOT NULL,
+                track_revision INTEGER NOT NULL,
+                artifact_kind TEXT NOT NULL,
+                phrase_id TEXT NULL,
+                relative_path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                content_fingerprint TEXT NOT NULL,
+                engine_id TEXT NOT NULL,
+                engine_version TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                voice_id TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                sample_rate INTEGER NOT NULL,
+                channels INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                timing_status TEXT NULL,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                CONSTRAINT fk_voice_artifacts_track
+                    FOREIGN KEY(track_id) REFERENCES subtitle_tracks(track_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_voice_artifacts_fingerprint
+                ON voice_artifacts(content_fingerprint, artifact_kind, status, updated_at_utc DESC);
+            CREATE INDEX IF NOT EXISTS ix_voice_artifacts_track_revision
+                ON voice_artifacts(track_id, track_revision, artifact_kind, status);
+
+            CREATE TABLE IF NOT EXISTS voice_artifact_cues (
+                artifact_id TEXT NOT NULL,
+                cue_id TEXT NOT NULL,
+                cue_order INTEGER NOT NULL,
+                PRIMARY KEY(artifact_id, cue_id),
+                CONSTRAINT fk_voice_artifact_cues_artifact
+                    FOREIGN KEY(artifact_id) REFERENCES voice_artifacts(artifact_id) ON DELETE CASCADE,
+                CONSTRAINT fk_voice_artifact_cues_cue
+                    FOREIGN KEY(cue_id) REFERENCES subtitle_cues(cue_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS voice_phrase_boundaries (
+                track_id TEXT NOT NULL,
+                cue_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(track_id, cue_id),
+                CONSTRAINT fk_voice_phrase_boundaries_track
+                    FOREIGN KEY(track_id) REFERENCES subtitle_tracks(track_id) ON DELETE CASCADE,
+                CONSTRAINT fk_voice_phrase_boundaries_cue
+                    FOREIGN KEY(cue_id) REFERENCES subtitle_cues(cue_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS voice_cue_timings (
+                track_id TEXT NOT NULL,
+                track_revision INTEGER NOT NULL,
+                phrase_id TEXT NOT NULL,
+                natural_duration_ms INTEGER NOT NULL,
+                target_duration_ms INTEGER NOT NULL,
+                borrowed_gap_ms INTEGER NOT NULL,
+                tempo REAL NOT NULL,
+                status TEXT NOT NULL,
+                suggested_max_characters INTEGER NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(track_id, track_revision, phrase_id),
+                CONSTRAINT fk_voice_cue_timings_track
+                    FOREIGN KEY(track_id) REFERENCES subtitle_tracks(track_id) ON DELETE CASCADE
+            );
+            COMMIT;
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
 
@@ -167,12 +333,23 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         if (version == 2)
         {
             await MigrateFromVersion2Async(connection, cancellationToken);
+            version = 3;
+        }
+        if (version == 3)
+        {
+            await MigrateFromVersion3Async(connection, cancellationToken);
+            version = 4;
+        }
+        if (version == 4)
+        {
+            await MigrateFromVersion4Async(connection, cancellationToken);
             version = SchemaVersion;
         }
         if (version != SchemaVersion)
         {
             throw new InvalidDataException("Phiên bản database Vietsub chưa được hỗ trợ.");
         }
+        await ValidateVersion5SchemaAsync(connection, cancellationToken);
     }
 
     public Task SaveTrackAsync(
@@ -407,7 +584,11 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         cueCommand.CommandText = """
             SELECT cue_id, track_id, start_ms, end_ms, speaker,
                    original_text, translated_text, original_locked,
-                   translation_locked, quality_status, warning_json, updated_at_utc
+                   translation_locked, quality_status, warning_json,
+                   translation_source, translation_engine_id,
+                   translation_engine_version, translation_source_fingerprint,
+                   translation_confidence, translation_reviewed_at_utc,
+                   updated_at_utc
             FROM subtitle_cues
             ORDER BY track_id, cue_index;
             """;
@@ -432,7 +613,15 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 TranslationLocked = cueReader.GetBoolean(8),
                 QualityStatus = cueReader.IsDBNull(9) ? null : cueReader.GetString(9),
                 Warnings = DeserializeWarnings(cueReader.GetString(10)),
-                UpdatedAtUtc = DateTime.Parse(cueReader.GetString(11), null, System.Globalization.DateTimeStyles.RoundtripKind)
+                TranslationSource = cueReader.IsDBNull(11) ? null : cueReader.GetString(11),
+                TranslationEngineId = cueReader.IsDBNull(12) ? null : cueReader.GetString(12),
+                TranslationEngineVersion = cueReader.IsDBNull(13) ? null : cueReader.GetString(13),
+                TranslationSourceFingerprint = cueReader.IsDBNull(14) ? null : cueReader.GetString(14),
+                TranslationConfidence = cueReader.IsDBNull(15) ? null : cueReader.GetDouble(15),
+                TranslationReviewedAtUtc = cueReader.IsDBNull(16)
+                    ? null
+                    : DateTime.Parse(cueReader.GetString(16), null, System.Globalization.DateTimeStyles.RoundtripKind),
+                UpdatedAtUtc = DateTime.Parse(cueReader.GetString(17), null, System.Globalization.DateTimeStyles.RoundtripKind)
             });
         }
 
@@ -539,6 +728,60 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         return new VietsubTimelineWindowRecord(trackRevision.Value, truncated, cues);
     }
 
+    public async Task<bool> TrySaveArtifactAsync(
+        Guid projectId,
+        Guid trackId,
+        int expectedTrackRevision,
+        VietsubSubtitleArtifact artifact,
+        CancellationToken cancellationToken = default)
+    {
+        if (trackId == Guid.Empty || expectedTrackRevision < 1)
+        {
+            throw new ArgumentException("Track/revision của subtitle artifact không hợp lệ.");
+        }
+        ValidateArtifact(artifact);
+        await InitializeAsync(projectId, cancellationToken);
+        await using var connection = await OpenAsync(projectId, cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = """
+            INSERT INTO subtitle_artifacts(
+                artifact_id, track_id, artifact_type, track_revision,
+                relative_path, sha256, status, created_at_utc, updated_at_utc)
+            SELECT $artifactId, track_id, $artifactType, revision,
+                   $relativePath, $sha256, $status, $createdAtUtc, $updatedAtUtc
+            FROM subtitle_tracks
+            WHERE track_id = $trackId AND revision = $expectedRevision
+            ON CONFLICT(artifact_id) DO UPDATE SET
+                artifact_type = excluded.artifact_type,
+                track_revision = excluded.track_revision,
+                relative_path = excluded.relative_path,
+                sha256 = excluded.sha256,
+                status = excluded.status,
+                updated_at_utc = excluded.updated_at_utc;
+            """;
+        command.Parameters.AddWithValue("$artifactId", artifact.ArtifactId.ToString("D"));
+        command.Parameters.AddWithValue("$artifactType", artifact.ArtifactType);
+        command.Parameters.AddWithValue("$relativePath", artifact.WorkspaceRelativePath);
+        command.Parameters.AddWithValue("$sha256", artifact.Sha256);
+        command.Parameters.AddWithValue("$status", artifact.Status);
+        command.Parameters.AddWithValue("$createdAtUtc", artifact.CreatedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$updatedAtUtc", artifact.UpdatedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
+        command.Parameters.AddWithValue("$expectedRevision", expectedTrackRevision);
+        var saved = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        if (saved)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
+        else
+        {
+            await transaction.RollbackAsync(cancellationToken);
+        }
+        return saved;
+    }
+
     private async Task<SqliteConnection> OpenAsync(Guid projectId, CancellationToken cancellationToken)
     {
         var builder = new SqliteConnectionStringBuilder
@@ -568,10 +811,16 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
             INSERT INTO subtitle_cues(
                 cue_id, track_id, cue_index, start_ms, end_ms, speaker,
                 original_text, translated_text, original_locked,
-                translation_locked, quality_status, warning_json, updated_at_utc)
+                translation_locked, quality_status, warning_json,
+                translation_source, translation_engine_id,
+                translation_engine_version, translation_source_fingerprint,
+                translation_confidence, translation_reviewed_at_utc, updated_at_utc)
             VALUES($cueId, $trackId, $cueIndex, $startMs, $endMs, $speaker,
                 $originalText, $translatedText, $originalLocked,
-                $translationLocked, $qualityStatus, $warningJson, $updatedAtUtc)
+                $translationLocked, $qualityStatus, $warningJson,
+                $translationSource, $translationEngineId,
+                $translationEngineVersion, $translationSourceFingerprint,
+                $translationConfidence, $translationReviewedAtUtc, $updatedAtUtc)
             ON CONFLICT(cue_id) DO UPDATE SET
                 track_id = excluded.track_id,
                 cue_index = excluded.cue_index,
@@ -584,6 +833,12 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 translation_locked = excluded.translation_locked,
                 quality_status = excluded.quality_status,
                 warning_json = excluded.warning_json,
+                translation_source = excluded.translation_source,
+                translation_engine_id = excluded.translation_engine_id,
+                translation_engine_version = excluded.translation_engine_version,
+                translation_source_fingerprint = excluded.translation_source_fingerprint,
+                translation_confidence = excluded.translation_confidence,
+                translation_reviewed_at_utc = excluded.translation_reviewed_at_utc,
                 updated_at_utc = excluded.updated_at_utc;
             """;
         command.Parameters.AddWithValue("$cueId", cue.CueId.ToString("D"));
@@ -598,6 +853,18 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         command.Parameters.AddWithValue("$translationLocked", cue.TranslationLocked);
         command.Parameters.AddWithValue("$qualityStatus", (object?)cue.QualityStatus ?? DBNull.Value);
         command.Parameters.AddWithValue("$warningJson", JsonSerializer.Serialize(cue.Warnings));
+        command.Parameters.AddWithValue("$translationSource", (object?)cue.TranslationSource ?? DBNull.Value);
+        command.Parameters.AddWithValue("$translationEngineId", (object?)cue.TranslationEngineId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$translationEngineVersion", (object?)cue.TranslationEngineVersion ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$translationSourceFingerprint",
+            (object?)cue.TranslationSourceFingerprint ?? DBNull.Value);
+        command.Parameters.AddWithValue("$translationConfidence", (object?)cue.TranslationConfidence ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$translationReviewedAtUtc",
+            cue.TranslationReviewedAtUtc is DateTime reviewedAtUtc
+                ? reviewedAtUtc.ToString("O")
+                : DBNull.Value);
         command.Parameters.AddWithValue("$updatedAtUtc", cue.UpdatedAtUtc.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -681,6 +948,194 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         await transaction.CommitAsync(cancellationToken);
     }
 
+    private static async Task MigrateFromVersion3Async(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var sqliteTransaction = (SqliteTransaction)transaction;
+        await AddColumnIfMissingAsync(
+            connection,
+            sqliteTransaction,
+            "translation_source",
+            "ALTER TABLE subtitle_cues ADD COLUMN translation_source TEXT NULL;",
+            cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            sqliteTransaction,
+            "translation_engine_id",
+            "ALTER TABLE subtitle_cues ADD COLUMN translation_engine_id TEXT NULL;",
+            cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            sqliteTransaction,
+            "translation_engine_version",
+            "ALTER TABLE subtitle_cues ADD COLUMN translation_engine_version TEXT NULL;",
+            cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            sqliteTransaction,
+            "translation_source_fingerprint",
+            "ALTER TABLE subtitle_cues ADD COLUMN translation_source_fingerprint TEXT NULL;",
+            cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            sqliteTransaction,
+            "translation_confidence",
+            "ALTER TABLE subtitle_cues ADD COLUMN translation_confidence REAL NULL;",
+            cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            sqliteTransaction,
+            "translation_reviewed_at_utc",
+            "ALTER TABLE subtitle_cues ADD COLUMN translation_reviewed_at_utc TEXT NULL;",
+            cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = sqliteTransaction;
+        command.CommandText = "UPDATE schema_info SET schema_version = 4;";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task MigrateFromVersion4Async(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS voice_artifacts (
+                artifact_id TEXT NOT NULL PRIMARY KEY,
+                track_id TEXT NOT NULL,
+                track_revision INTEGER NOT NULL,
+                artifact_kind TEXT NOT NULL,
+                phrase_id TEXT NULL,
+                relative_path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                content_fingerprint TEXT NOT NULL,
+                engine_id TEXT NOT NULL,
+                engine_version TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                voice_id TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                sample_rate INTEGER NOT NULL,
+                channels INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                timing_status TEXT NULL,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                CONSTRAINT fk_voice_artifacts_track
+                    FOREIGN KEY(track_id) REFERENCES subtitle_tracks(track_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS ix_voice_artifacts_fingerprint
+                ON voice_artifacts(content_fingerprint, artifact_kind, status, updated_at_utc DESC);
+            CREATE INDEX IF NOT EXISTS ix_voice_artifacts_track_revision
+                ON voice_artifacts(track_id, track_revision, artifact_kind, status);
+
+            CREATE TABLE IF NOT EXISTS voice_artifact_cues (
+                artifact_id TEXT NOT NULL,
+                cue_id TEXT NOT NULL,
+                cue_order INTEGER NOT NULL,
+                PRIMARY KEY(artifact_id, cue_id),
+                CONSTRAINT fk_voice_artifact_cues_artifact
+                    FOREIGN KEY(artifact_id) REFERENCES voice_artifacts(artifact_id) ON DELETE CASCADE,
+                CONSTRAINT fk_voice_artifact_cues_cue
+                    FOREIGN KEY(cue_id) REFERENCES subtitle_cues(cue_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS voice_phrase_boundaries (
+                track_id TEXT NOT NULL,
+                cue_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(track_id, cue_id),
+                CONSTRAINT fk_voice_phrase_boundaries_track
+                    FOREIGN KEY(track_id) REFERENCES subtitle_tracks(track_id) ON DELETE CASCADE,
+                CONSTRAINT fk_voice_phrase_boundaries_cue
+                    FOREIGN KEY(cue_id) REFERENCES subtitle_cues(cue_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS voice_cue_timings (
+                track_id TEXT NOT NULL,
+                track_revision INTEGER NOT NULL,
+                phrase_id TEXT NOT NULL,
+                natural_duration_ms INTEGER NOT NULL,
+                target_duration_ms INTEGER NOT NULL,
+                borrowed_gap_ms INTEGER NOT NULL,
+                tempo REAL NOT NULL,
+                status TEXT NOT NULL,
+                suggested_max_characters INTEGER NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(track_id, track_revision, phrase_id),
+                CONSTRAINT fk_voice_cue_timings_track
+                    FOREIGN KEY(track_id) REFERENCES subtitle_tracks(track_id) ON DELETE CASCADE
+            );
+
+            UPDATE schema_info SET schema_version = 5;
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task AddColumnIfMissingAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string columnName,
+        string alterSql,
+        CancellationToken cancellationToken)
+    {
+        await using var existsCommand = connection.CreateCommand();
+        existsCommand.Transaction = transaction;
+        existsCommand.CommandText = "SELECT COUNT(*) FROM pragma_table_info('subtitle_cues') WHERE name = $name;";
+        existsCommand.Parameters.AddWithValue("$name", columnName);
+        if (Convert.ToInt32(await existsCommand.ExecuteScalarAsync(cancellationToken)) > 0)
+        {
+            return;
+        }
+
+        await using var alterCommand = connection.CreateCommand();
+        alterCommand.Transaction = transaction;
+        alterCommand.CommandText = alterSql;
+        await alterCommand.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task ValidateVersion5SchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var columns = connection.CreateCommand();
+        columns.CommandText = """
+            SELECT COUNT(*) FROM pragma_table_info('subtitle_cues')
+            WHERE name IN (
+                'translation_source',
+                'translation_engine_id',
+                'translation_engine_version',
+                'translation_source_fingerprint',
+                'translation_confidence',
+                'translation_reviewed_at_utc');
+            """;
+        var columnCount = Convert.ToInt32(await columns.ExecuteScalarAsync(cancellationToken));
+
+        await using var tables = connection.CreateCommand();
+        tables.CommandText = """
+            SELECT COUNT(*) FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN (
+                  'translation_memory', 'translation_cache', 'translation_job_items',
+                  'voice_artifacts', 'voice_artifact_cues',
+                  'voice_phrase_boundaries', 'voice_cue_timings');
+            """;
+        var tableCount = Convert.ToInt32(await tables.ExecuteScalarAsync(cancellationToken));
+        if (columnCount != 6 || tableCount != 7)
+        {
+            throw new InvalidDataException("Database Vietsub schema 5 thiếu cấu trúc dịch hoặc giọng local bắt buộc.");
+        }
+    }
+
     private static List<string> DeserializeWarnings(string json)
     {
         try
@@ -722,21 +1177,29 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         var artifactIds = new HashSet<Guid>();
         foreach (var artifact in track.Artifacts)
         {
-            if (artifact.ArtifactId == Guid.Empty
-                || !artifactIds.Add(artifact.ArtifactId)
-                || artifact.TrackRevision < 1
-                || string.IsNullOrWhiteSpace(artifact.ArtifactType)
-                || string.IsNullOrWhiteSpace(artifact.WorkspaceRelativePath)
-                || Path.IsPathFullyQualified(artifact.WorkspaceRelativePath)
-                || artifact.WorkspaceRelativePath
-                    .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar])
-                    .Any(part => part == "..")
-                || artifact.Sha256.Length != 64
-                || !artifact.Sha256.All(Uri.IsHexDigit)
-                || artifact.Status is not (VietsubSubtitleArtifactStatuses.Ready or VietsubSubtitleArtifactStatuses.Stale))
+            if (!artifactIds.Add(artifact.ArtifactId))
             {
                 throw new ArgumentException("Subtitle artifact không hợp lệ.", nameof(track));
             }
+            ValidateArtifact(artifact);
+        }
+    }
+
+    private static void ValidateArtifact(VietsubSubtitleArtifact artifact)
+    {
+        if (artifact.ArtifactId == Guid.Empty
+            || artifact.TrackRevision < 1
+            || string.IsNullOrWhiteSpace(artifact.ArtifactType)
+            || string.IsNullOrWhiteSpace(artifact.WorkspaceRelativePath)
+            || Path.IsPathFullyQualified(artifact.WorkspaceRelativePath)
+            || artifact.WorkspaceRelativePath
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar])
+                .Any(part => part == "..")
+            || artifact.Sha256.Length != 64
+            || !artifact.Sha256.All(Uri.IsHexDigit)
+            || artifact.Status is not (VietsubSubtitleArtifactStatuses.Ready or VietsubSubtitleArtifactStatuses.Stale))
+        {
+            throw new ArgumentException("Subtitle artifact không hợp lệ.", nameof(artifact));
         }
     }
 }

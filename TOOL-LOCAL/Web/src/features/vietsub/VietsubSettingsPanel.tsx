@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -9,7 +10,9 @@ import {
   Captions,
   CheckCircle2,
   Copy,
+  Download,
   FileVideo2,
+  Info,
   Languages,
   Link2,
   Pause,
@@ -29,8 +32,21 @@ import type {
   VietsubOcrRuntimeStatus,
   VietsubOcrSettings,
   VietsubProjectSummary,
-  VietsubSubtitleWorkspace
+  VietsubSubtitleWorkspace,
+  VietsubTranslationRuntimeInstallProgress,
+  VietsubTranslationRuntimeStatus,
+  VietsubVoiceRuntimeInstallProgress,
+  VietsubVoiceRuntimeStatus,
+  VietsubVoiceWorkspace
 } from './types';
+import {
+  getVietsubTranslationInstallStageLabel,
+  getVietsubTranslationRuntimeActionLabel,
+  getVietsubTranslationRuntimeConfirmation,
+  getVietsubTranslationRuntimeView,
+  type VietsubTranslationRunMode
+} from './vietsubTranslation';
+import { VietsubVoiceInstallModal } from './VietsubVoiceInstallModal';
 
 type VietsubSettingsPanelProps = {
   project: VietsubProjectSummary;
@@ -40,6 +56,13 @@ type VietsubSettingsPanelProps = {
   ocrSettings: VietsubOcrSettings;
   ocrRuntime?: VietsubOcrRuntimeStatus | null;
   ocrPreview?: VietsubOcrPreviewResult | null;
+  translationRuntime?: VietsubTranslationRuntimeStatus | null;
+  translationInstallProgress?: VietsubTranslationRuntimeInstallProgress | null;
+  translationNotice?: string | null;
+  voiceWorkspace?: VietsubVoiceWorkspace | null;
+  voiceRuntime?: VietsubVoiceRuntimeStatus | null;
+  voiceInstallProgress?: VietsubVoiceRuntimeInstallProgress | null;
+  voiceNotice?: string | null;
   activeJob?: VietsubJobSummary | null;
   activationRequest?: VietsubOcrActivationRequest | null;
   playheadMilliseconds: number;
@@ -47,6 +70,10 @@ type VietsubSettingsPanelProps = {
   onUpdateOcrSettings: (settings: VietsubOcrSettings) => Promise<boolean>;
   onPreviewOcr: (settings: VietsubOcrSettings, timestampMilliseconds: number) => void;
   onStartOcr: (settings: VietsubOcrSettings) => void;
+  onStartTranslation: (runMode?: VietsubTranslationRunMode) => void;
+  onInstallTranslationRuntime: () => void;
+  onStartVoice: () => void;
+  onInstallVoiceRuntime: () => void;
   onPauseJob: (jobId: string) => void;
   onResumeJob: (jobId: string) => void;
   onRetryJob: (jobId: string) => void;
@@ -62,6 +89,13 @@ export function VietsubSettingsPanel({
   ocrSettings,
   ocrRuntime,
   ocrPreview,
+  translationRuntime,
+  translationInstallProgress,
+  translationNotice,
+  voiceWorkspace,
+  voiceRuntime,
+  voiceInstallProgress,
+  voiceNotice,
   activeJob,
   activationRequest,
   playheadMilliseconds,
@@ -69,6 +103,10 @@ export function VietsubSettingsPanel({
   onUpdateOcrSettings,
   onPreviewOcr,
   onStartOcr,
+  onStartTranslation,
+  onInstallTranslationRuntime,
+  onStartVoice,
+  onInstallVoiceRuntime,
   onPauseJob,
   onResumeJob,
   onRetryJob,
@@ -79,6 +117,13 @@ export function VietsubSettingsPanel({
   const activeTrack = subtitleWorkspace?.tracks.find((track) => track.trackId === subtitleWorkspace.activeTrackId);
   const [draft, setDraft] = useState<VietsubOcrSettings>(ocrSettings);
   const [savingOcr, setSavingOcr] = useState(false);
+  const [voiceInstallDialogOpen, setVoiceInstallDialogOpen] = useState(false);
+
+  const closeVoiceInstallDialog = useCallback(() => setVoiceInstallDialogOpen(false), []);
+  const confirmVoiceRuntimeInstall = useCallback(() => {
+    setVoiceInstallDialogOpen(false);
+    onInstallVoiceRuntime();
+  }, [onInstallVoiceRuntime]);
 
   useEffect(() => setDraft(ocrSettings), [ocrSettings]);
 
@@ -120,6 +165,21 @@ export function VietsubSettingsPanel({
 
   const runtimeReady = Boolean(ocrRuntime?.ready);
   const ocrDisabled = busy || savingOcr || !sourceReady || !runtimeReady || Boolean(activeJob);
+  const ocrJob = activeJob?.type === 'OCR_LOCAL' ? activeJob : null;
+  const translationJob = activeJob?.type === 'TRANSLATE_LOCAL' ? activeJob : null;
+  const voiceJob = activeJob?.type === 'SYNTHESIZE_VOICE_LOCAL' ? activeJob : null;
+  const translationRuntimeView = getVietsubTranslationRuntimeView(translationRuntime);
+  const translationDisabled = busy || Boolean(activeJob) || !translationRuntimeView.canTranslate;
+  const voiceReady = Boolean(voiceRuntime?.ready);
+  const voiceEligible = Boolean(
+    activeTrack
+    && activeTrack.cueCount > 0
+    && activeTrack.translatedCueCount === activeTrack.cueCount
+  );
+  const voiceDisabled = busy || Boolean(activeJob) || !voiceReady || !voiceEligible;
+  const reviewTimingCount = voiceWorkspace?.timingDiagnostics.filter(
+    (item) => item.status === 'REVIEW_REQUIRED'
+  ).length ?? 0;
   const thumbnailUrls = project.sourceVideo?.thumbnailUrls ?? [];
   const durationMilliseconds = (project.sourceVideo?.durationSeconds ?? 0) * 1000;
   const previewThumbnailIndex = thumbnailUrls.length > 1 && durationMilliseconds > 0
@@ -244,8 +304,9 @@ export function VietsubSettingsPanel({
           </div>
         )}
 
-        {activeJob && <VietsubOcrJobStatus
-          job={activeJob}
+        {ocrJob && <VietsubLocalJobStatus
+          job={ocrJob}
+          title="Nhận dạng OCR"
           onPause={onPauseJob}
           onResume={onResumeJob}
           onRetry={onRetryJob}
@@ -275,30 +336,212 @@ export function VietsubSettingsPanel({
         </div>
       </section>
 
-      <section className="vietsub-settings-section is-upcoming" aria-label="Các công cụ sẽ được bật theo từng giai đoạn">
-        <div><Languages size={16} /><span><strong>Dịch tự động</strong><small>Hiện có thể nhập và chỉnh bản dịch thủ công theo cue.</small></span></div>
-        <div><Volume2 size={16} /><span><strong>Giọng đọc & xuất video</strong><small>Sẽ được bật khi artifact và export pipeline sẵn sàng.</small></span></div>
+      <section className="vietsub-settings-section vietsub-translation-section" aria-label="Dịch phụ đề sang tiếng Việt">
+        <div className="vietsub-settings-section-title"><Languages size={16} /><strong>Dịch tiếng Việt</strong></div>
+        <div className={`vietsub-settings-state ${translationRuntimeView.tone}`}>
+          {translationRuntimeView.tone === 'ready'
+            ? <CheckCircle2 size={15} />
+            : translationRuntimeView.tone === 'info'
+              ? <Info size={15} />
+              : <TriangleAlert size={15} />}
+          <div>
+            <strong>{translationRuntimeView.title}</strong>
+            {translationRuntimeView.badge && (
+              <span className="vietsub-translation-availability-badge">{translationRuntimeView.badge}</span>
+            )}
+            <small>
+              {translationRuntime?.requiresResourceConfirmation
+                ? translationRuntime.resourceWarningMessage
+                : translationRuntime?.message ?? 'Đang kiểm tra engine dịch local…'}
+            </small>
+          </div>
+        </div>
+
+        {translationRuntime?.supportsSceneContext && (
+          <small className="vietsub-translation-helper">
+            Qwen3 dịch local theo scene · English/Chinese → Vietnamese · không gửi phụ đề lên Cloud.
+          </small>
+        )}
+
+        {translationInstallProgress && (
+          <div className="vietsub-import-progress compact" role="status" aria-live="polite">
+            <div><strong>{getVietsubTranslationInstallStageLabel(translationInstallProgress.stage)}</strong><span>{translationInstallProgress.percent.toFixed(0)}%</span></div>
+            <div className="vietsub-progress-track"><span style={{ width: `${translationInstallProgress.percent}%` }} /></div>
+            <small>{translationInstallProgress.message}</small>
+            {translationInstallProgress.totalBytes > 2 && (
+              <small>{formatBytes(translationInstallProgress.bytesProcessed)} / {formatBytes(translationInstallProgress.totalBytes)}</small>
+            )}
+          </div>
+        )}
+
+        {translationRuntimeView.canInstall && !translationInstallProgress && (
+          <div className="vietsub-settings-actions vietsub-translation-install-actions">
+            <button
+              type="button"
+              disabled={busy || Boolean(activeJob)}
+              aria-label="Tìm, kiểm tra và cài engine dịch local Qwen3 dung lượng 2,50 GB"
+              onClick={() => {
+                if (window.confirm(getVietsubTranslationRuntimeConfirmation(translationRuntime))) {
+                  onInstallTranslationRuntime();
+                }
+              }}
+            >
+              <Download size={14} /> {getVietsubTranslationRuntimeActionLabel(translationRuntime)}
+            </button>
+          </div>
+        )}
+
+        {translationJob && <VietsubLocalJobStatus
+          job={translationJob}
+          title="Dịch tiếng Việt"
+          onPause={onPauseJob}
+          onResume={onResumeJob}
+          onRetry={onRetryJob}
+          onCancel={onCancelJob}
+        />}
+
+        {translationNotice && (
+          <div
+            className="vietsub-translation-notice"
+            role={translationNotice === 'Đã hoàn thành dịch tiếng Việt.' ? 'status' : 'alert'}
+            aria-live="polite"
+          >
+            <TriangleAlert size={14} />
+            <span>{translationNotice}</span>
+          </div>
+        )}
+
+        <div className="vietsub-settings-actions vietsub-translation-actions">
+          <button
+            type="button"
+            className={`vietsub-translation-action ${translationRuntimeView.canTranslate ? '' : 'unavailable'}`}
+            disabled={translationDisabled}
+            aria-label={translationRuntimeView.canTranslate
+              ? translationDisabled
+                ? 'Dịch tiếng Việt đang tạm khóa vì dự án có tác vụ khác đang xử lý'
+                : 'Bắt đầu dịch phụ đề OCR sang tiếng Việt'
+              : translationRuntimeView.translationActionLabel}
+            onClick={() => onStartTranslation('CONTINUE')}
+          >
+            <Languages size={14} /> {translationRuntimeView.translationActionLabel}
+          </button>
+        </div>
+        {translationRuntimeView.canTranslate && translationDisabled && (
+          <small className="vietsub-translation-helper">Hoàn tất hoặc dừng tác vụ hiện tại trước khi dịch.</small>
+        )}
       </section>
+
+      <section className="vietsub-settings-section" aria-label="Tạo giọng tiếng Việt local">
+        <div className="vietsub-settings-section-title"><Volume2 size={16} /><strong>Giọng đọc tiếng Việt</strong></div>
+        <div className={`vietsub-settings-state ${voiceReady ? 'ready' : 'warning'}`}>
+          {voiceReady ? <CheckCircle2 size={15} /> : <TriangleAlert size={15} />}
+          <div>
+            <strong>{voiceReady ? 'Piper local sẵn sàng' : voiceRuntime?.status === 'DISABLED' ? 'Tính năng đang tắt' : 'Chưa cài Piper local'}</strong>
+            <small>{voiceRuntime?.message ?? 'Đang kiểm tra runtime tạo giọng…'}</small>
+          </div>
+        </div>
+
+        <small className="vietsub-translation-helper">
+          Một giọng nữ tiếng Việt · chạy CPU trong worker riêng · không gửi phụ đề lên Cloud.
+        </small>
+
+        {voiceInstallProgress && (
+          <div className="vietsub-import-progress compact" role="status" aria-live="polite">
+            <div><strong>{voiceInstallProgress.stage}</strong><span>{voiceInstallProgress.percent.toFixed(0)}%</span></div>
+            <div className="vietsub-progress-track"><span style={{ width: `${voiceInstallProgress.percent}%` }} /></div>
+            <small>{voiceInstallProgress.message}</small>
+            {voiceInstallProgress.totalBytes > 1 && (
+              <small>{formatBytes(voiceInstallProgress.bytesProcessed)} / {formatBytes(voiceInstallProgress.totalBytes)}</small>
+            )}
+          </div>
+        )}
+
+        {!voiceReady && voiceRuntime?.status !== 'DISABLED' && !voiceInstallProgress && (
+          <div className="vietsub-settings-actions">
+            <button
+              type="button"
+              disabled={busy || Boolean(activeJob)}
+              aria-haspopup="dialog"
+              aria-expanded={voiceInstallDialogOpen}
+              aria-controls="vietsub-voice-install-dialog"
+              onClick={() => setVoiceInstallDialogOpen(true)}
+            >
+              <Download size={14} /> Cài Piper local
+            </button>
+          </div>
+        )}
+
+        {voiceJob && <VietsubLocalJobStatus
+          job={voiceJob}
+          title="Tạo giọng tiếng Việt"
+          onPause={onPauseJob}
+          onResume={onResumeJob}
+          onRetry={onRetryJob}
+          onCancel={onCancelJob}
+        />}
+
+        {voiceWorkspace?.timeline && (
+          <div className="vietsub-settings-state ready">
+            <CheckCircle2 size={15} />
+            <div>
+              <strong>Timeline giọng Việt đã sẵn sàng</strong>
+              <small>{(voiceWorkspace.timeline.durationMilliseconds / 1000).toFixed(1)} giây · 48 kHz · revision {voiceWorkspace.timeline.trackRevision}</small>
+            </div>
+          </div>
+        )}
+        {reviewTimingCount > 0 && (
+          <div className="vietsub-translation-notice" role="status">
+            <TriangleAlert size={14} />
+            <span>{reviewTimingCount} phrase dài đã được giới hạn ở tốc độ 1,20x; timeline vẫn được tạo và một số đoạn có thể chồng âm.</span>
+          </div>
+        )}
+
+        {voiceNotice && (
+          <div className="vietsub-translation-notice" role="status" aria-live="polite">
+            <Info size={14} /><span>{voiceNotice}</span>
+          </div>
+        )}
+
+        <div className="vietsub-settings-actions">
+          <button type="button" disabled={voiceDisabled} onClick={onStartVoice}>
+            <Volume2 size={14} /> Tạo giọng Việt
+          </button>
+        </div>
+        {!voiceEligible && (
+          <small className="vietsub-translation-helper">Hãy hoàn thành bản dịch tiếng Việt của toàn bộ cue trước khi tạo giọng.</small>
+        )}
+      </section>
+
+      {voiceInstallDialogOpen && (
+        <VietsubVoiceInstallModal
+          requiredBytes={voiceRuntime?.requiredBytes ?? 0}
+          modelVersion={voiceRuntime?.modelVersion}
+          onDismiss={closeVoiceInstallDialog}
+          onConfirm={confirmVoiceRuntimeInstall}
+        />
+      )}
     </aside>
   );
 }
 
-function VietsubOcrJobStatus({
+function VietsubLocalJobStatus({
   job,
+  title,
   onPause,
   onResume,
   onRetry,
   onCancel
 }: {
   job: VietsubJobSummary;
+  title: string;
   onPause: (jobId: string) => void;
   onResume: (jobId: string) => void;
   onRetry: (jobId: string) => void;
   onCancel: (jobId: string) => void;
 }) {
   return (
-    <div className="vietsub-ocr-job" role="status">
-      <div><strong>{formatJobStatus(job.status)}</strong><span>{job.progressPercent.toFixed(0)}%</span></div>
+    <div className="vietsub-local-job" role="status">
+      <div><strong>{title} · {formatJobStatus(job.status, job.type)}</strong><span>{job.progressPercent.toFixed(0)}%</span></div>
       <div className="vietsub-progress-track"><span style={{ width: `${job.progressPercent}%` }} /></div>
       <small>{job.statusMessage ?? job.errorMessage ?? `Lần chạy ${job.attemptCount}/${job.maxAttempts}`}</small>
       <div className="vietsub-settings-actions">
@@ -459,10 +702,14 @@ function VietsubOcrRegionSelector({
   );
 }
 
-function formatJobStatus(status: VietsubJobSummary['status']): string {
+function formatJobStatus(status: VietsubJobSummary['status'], jobType: string): string {
   return ({
     PENDING: 'Đang chờ',
-    RUNNING: 'Đang OCR',
+    RUNNING: jobType === 'TRANSLATE_LOCAL'
+      ? 'Đang dịch'
+      : jobType === 'SYNTHESIZE_VOICE_LOCAL'
+        ? 'Đang tạo giọng'
+        : 'Đang OCR',
     PAUSING: 'Đang tạm dừng',
     PAUSED: 'Đã tạm dừng',
     INTERRUPTED: 'Bị gián đoạn',

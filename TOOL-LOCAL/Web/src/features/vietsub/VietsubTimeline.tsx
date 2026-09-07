@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
+  AudioLines,
   Captions,
   Film,
   Focus,
   LockKeyhole,
   Play,
   Volume2,
+  VolumeX,
   ZoomIn,
   ZoomOut
 } from 'lucide-react';
@@ -15,7 +17,8 @@ import type {
   VietsubTimelineCue,
   VietsubTimelineCueUpdate,
   VietsubTimelineWindow,
-  VietsubTimelineWindowQuery
+  VietsubTimelineWindowQuery,
+  VietsubVoiceWorkspace
 } from './types';
 import {
   calculateViewportRange,
@@ -49,6 +52,8 @@ type VietsubTimelineProps = {
   window?: VietsubTimelineWindow | null;
   playheadMilliseconds: number;
   playing: boolean;
+  voiceWorkspace?: VietsubVoiceWorkspace | null;
+  voiceEnabled: boolean;
   busy: boolean;
   selectedCueId?: string | null;
   onSeek: (milliseconds: number) => void;
@@ -57,6 +62,7 @@ type VietsubTimelineProps = {
   onRequestThumbnails: (sourceSha256: string, indices: number[]) => void;
   onRequestWaveform: (sourceSha256: string) => void;
   onUpdateCue: (update: VietsubTimelineCueUpdate) => Promise<boolean>;
+  onToggleVoice: () => void;
 };
 
 type CueDrag = {
@@ -77,6 +83,8 @@ export function VietsubTimeline({
   window: timelineWindow,
   playheadMilliseconds,
   playing,
+  voiceWorkspace,
+  voiceEnabled,
   busy,
   selectedCueId,
   onSeek,
@@ -84,9 +92,14 @@ export function VietsubTimeline({
   onLoadWindow,
   onRequestThumbnails,
   onRequestWaveform,
-  onUpdateCue
+  onUpdateCue,
+  onToggleVoice
 }: VietsubTimelineProps) {
   const durationMilliseconds = Math.max(0, Math.round((media?.durationSeconds ?? 0) * 1000));
+  const generatedVoiceAvailable = Boolean(
+    voiceWorkspace?.timeline?.status === 'READY'
+    && voiceWorkspace.timelinePlaybackUrl
+  );
   const [pixelsPerSecond, setPixelsPerSecond] = useState(40);
   const [autoFollow, setAutoFollow] = useState(true);
   const [viewportWidth, setViewportWidth] = useState(1);
@@ -498,11 +511,28 @@ export function VietsubTimeline({
         </div>
       </div>
       <div className={`vietsub-timeline-canvas ${media ? '' : 'is-empty'}`}>
-        <div className="vietsub-timeline-track-labels" aria-hidden="true">
+        <div className="vietsub-timeline-track-labels">
           <span>Thời gian</span>
           <span><Film size={13} /> Video</span>
-          <span><Volume2 size={13} /> Voice gốc</span>
+          <span><Volume2 size={13} /> Âm gốc</span>
           <span><Captions size={13} /> Phụ đề</span>
+          <span className={`${generatedVoiceAvailable ? '' : 'is-unavailable'} ${voiceEnabled ? '' : 'is-muted'}`}>
+            <button
+              type="button"
+              className="vietsub-timeline-track-toggle"
+              disabled={!generatedVoiceAvailable}
+              aria-label={voiceEnabled ? 'Tắt Giọng Việt' : 'Bật Giọng Việt'}
+              aria-pressed={voiceEnabled}
+              title={generatedVoiceAvailable
+                ? voiceEnabled ? 'Tắt Giọng Việt' : 'Bật Giọng Việt'
+                : 'Hãy tạo giọng Việt trước'}
+              onClick={onToggleVoice}
+            >
+              {voiceEnabled ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            </button>
+            <AudioLines size={13} />
+            <b>Giọng Việt</b>
+          </span>
         </div>
         <div
           className="vietsub-timeline-viewport"
@@ -698,6 +728,34 @@ export function VietsubTimeline({
                 );
               })}
             </div>
+            <div
+              className={`vietsub-timeline-generated-voice-track ${generatedVoiceAvailable ? 'is-ready' : 'is-empty'} ${voiceEnabled ? '' : 'is-muted'}`}
+              data-vietsub-generated-voice-track="true"
+            >
+              {generatedVoiceAvailable ? (
+                <div
+                  className="vietsub-timeline-generated-voice-clip"
+                  style={{
+                    width: `${Math.max(1, Math.min(
+                      contentWidth,
+                      timeToPixel(
+                        Math.min(
+                          durationMilliseconds,
+                          voiceWorkspace?.timeline?.durationMilliseconds ?? durationMilliseconds
+                        ),
+                        effectivePixelsPerSecond
+                      )
+                    ))}px`
+                  }}
+                  title={`Timeline Giọng Việt · ${formatTimeline(voiceWorkspace?.timeline?.durationMilliseconds ?? 0)}`}
+                >
+                  <GeneratedVoiceWaveform />
+                  <strong>Giọng Việt · Piper local</strong>
+                </div>
+              ) : (
+                <span>Chưa có timeline Giọng Việt</span>
+              )}
+            </div>
             {media && (
               <button
                 type="button"
@@ -732,6 +790,16 @@ export function VietsubTimeline({
         </div>
       </div>
     </section>
+  );
+}
+
+function GeneratedVoiceWaveform() {
+  return (
+    <span className="vietsub-generated-voice-waveform" aria-hidden="true" data-vietsub-voice-waveform="true">
+      {Array.from({ length: 64 }, (_, index) => (
+        <i key={index} style={{ height: `${22 + ((index * 29) % 68)}%` }} />
+      ))}
+    </span>
   );
 }
 

@@ -1,5 +1,7 @@
 # FFmpeg bundle for VideoMaker
 
+> Tài liệu bundle; trạng thái phát hành toàn hệ thống nằm tại [Bối cảnh hiện hành](../../../BOI_CANH_HE_THONG_HIEN_HANH.md). Source/provenance/checksum hiện hành được ưu tiên hơn build output đã sao chép.
+
 Release packaging expects an approved Windows x64 FFmpeg distribution in this directory:
 
 - `ffmpeg.exe`

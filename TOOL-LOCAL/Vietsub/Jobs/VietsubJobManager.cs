@@ -118,7 +118,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
             "Đang lưu checkpoint để tạm dừng.",
             cancellationToken: cancellationToken);
         execution.Request(ExecutionStopReason.Pause);
-        execution.Cancellation.Cancel();
+        TryCancel(execution.Cancellation);
         RaiseChanged(job);
         await execution.Task.WaitAsync(cancellationToken);
         return VietsubJobSummary.From(await GetRequiredAsync(projectId, jobId, cancellationToken));
@@ -173,7 +173,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         if (_active.TryGetValue(jobId, out var execution))
         {
             execution.Request(ExecutionStopReason.Cancel);
-            execution.Cancellation.Cancel();
+            TryCancel(execution.Cancellation);
             await execution.Task.WaitAsync(cancellationToken);
             return VietsubJobSummary.From(await GetRequiredAsync(projectId, jobId, cancellationToken));
         }
@@ -250,7 +250,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         foreach (var execution in executions)
         {
             execution.Request(ExecutionStopReason.Shutdown);
-            execution.Cancellation.Cancel();
+            TryCancel(execution.Cancellation);
         }
         await Task.WhenAll(executions.Select(item => item.Task));
         _shutdown.Dispose();
@@ -330,6 +330,18 @@ internal sealed class VietsubJobManager : IAsyncDisposable
             }
             _active.TryRemove(jobId, out _);
             execution.Cancellation.Dispose();
+        }
+    }
+
+    private static void TryCancel(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Execution may have completed between the active snapshot and cancellation.
         }
     }
 

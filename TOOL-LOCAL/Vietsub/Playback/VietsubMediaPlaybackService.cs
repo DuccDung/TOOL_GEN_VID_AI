@@ -1,6 +1,7 @@
 using System.Globalization;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Media;
+using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_LOCAL.Vietsub.Playback;
 
@@ -23,6 +24,7 @@ internal static class VietsubPlaybackResourceTypes
     public const string Video = "video";
     public const string Thumbnail = "thumbnail";
     public const string Waveform = "waveform";
+    public const string Voice = "voice";
 }
 
 internal static class VietsubLocalMediaRange
@@ -106,15 +108,18 @@ internal sealed class VietsubMediaPlaybackService
     private readonly VietsubMediaImportService _mediaImportService;
     private readonly VietsubTimelineThumbnailService? _thumbnailService;
     private readonly VietsubTimelineWaveformService? _waveformService;
+    private readonly VietsubVoicePlaybackRegistry? _voiceRegistry;
 
     public VietsubMediaPlaybackService(
         VietsubMediaImportService mediaImportService,
         VietsubTimelineThumbnailService? thumbnailService = null,
-        VietsubTimelineWaveformService? waveformService = null)
+        VietsubTimelineWaveformService? waveformService = null,
+        VietsubVoicePlaybackRegistry? voiceRegistry = null)
     {
         _mediaImportService = mediaImportService;
         _thumbnailService = thumbnailService;
         _waveformService = waveformService;
+        _voiceRegistry = voiceRegistry;
     }
 
     public const string HostName = "vietsub-media.app.local";
@@ -135,7 +140,9 @@ internal sealed class VietsubMediaPlaybackService
         $"v{VietsubTimelineWaveformService.ProfileVersion}/{NormalizeSha256(sourceSha256)}/source.png";
 
     internal static string ClassifyResource(Uri requestUri) =>
-        TryParseThumbnailUrl(requestUri, out _, out _, out _, out _, out _)
+        TryParseVoiceUrl(requestUri, out _, out _, out _)
+            ? VietsubPlaybackResourceTypes.Voice
+            : TryParseThumbnailUrl(requestUri, out _, out _, out _, out _, out _)
             ? VietsubPlaybackResourceTypes.Thumbnail
             : TryParseWaveformUrl(requestUri, out _, out _, out _, out _)
                 ? VietsubPlaybackResourceTypes.Waveform
@@ -159,6 +166,11 @@ internal sealed class VietsubMediaPlaybackService
                 "vietsub_media_method_invalid",
                 VietsubPlaybackResourceTypes.Unknown,
                 "Allow: GET, HEAD\r\n");
+        }
+
+        if (TryParseVoiceUrl(requestUri, out var voiceProjectId, out var voiceArtifactId, out var voiceSha256))
+        {
+            return OpenVoice(method, rangeHeader, activeProject, voiceProjectId, voiceArtifactId, voiceSha256);
         }
 
         if (TryParseWaveformUrl(
@@ -354,6 +366,113 @@ internal sealed class VietsubMediaPlaybackService
                 CultureInfo.InvariantCulture,
                 out index)
             && index is >= 0 and < VietsubTimelineThumbnailService.ThumbnailCount;
+    }
+
+    internal static bool TryParseVoiceUrl(
+        Uri uri,
+        out Guid projectId,
+        out Guid artifactId,
+        out string sha256)
+    {
+        projectId = Guid.Empty;
+        artifactId = Guid.Empty;
+        sha256 = string.Empty;
+        if (!uri.IsAbsoluteUri
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uri.Host, HostName, StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+        {
+            return false;
+        }
+        var unescapedPath = uri.GetComponents(UriComponents.Path, UriFormat.Unescaped);
+        if (unescapedPath.Contains('\\') || unescapedPath.Contains("..", StringComparison.Ordinal)) return false;
+        var parts = unescapedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 5
+            || !string.Equals(parts[0], "projects", StringComparison.Ordinal)
+            || !Guid.TryParseExact(parts[1], "N", out projectId)
+            || !string.Equals(parts[2], "voice", StringComparison.Ordinal)
+            || !Guid.TryParseExact(parts[3], "N", out artifactId)
+            || !parts[4].EndsWith(".wav", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var hash = parts[4][..^4];
+        if (!IsSha256(hash)) return false;
+        sha256 = hash.ToLowerInvariant();
+        return true;
+    }
+
+    private VietsubPlaybackResponse OpenVoice(
+        string method,
+        string? rangeHeader,
+        VietsubProjectManifest activeProject,
+        Guid projectId,
+        Guid artifactId,
+        string sha256)
+    {
+        if (_voiceRegistry is null
+            || !_voiceRegistry.TryResolve(activeProject, projectId, artifactId, sha256, out var entry))
+        {
+            return Error(403, "Forbidden", "vietsub_voice_context_mismatch", VietsubPlaybackResourceTypes.Voice);
+        }
+
+        FileStream source;
+        try
+        {
+            source = new FileStream(
+                entry.AbsolutePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                1024 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            Span<byte> header = stackalloc byte[12];
+            if (source.Read(header) != header.Length
+                || !header[..4].SequenceEqual("RIFF"u8)
+                || !header[8..].SequenceEqual("WAVE"u8))
+            {
+                source.Dispose();
+                return Error(409, "Conflict", "vietsub_voice_artifact_invalid", VietsubPlaybackResourceTypes.Voice);
+            }
+            source.Position = 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Error(409, "Conflict", "vietsub_voice_artifact_unavailable", VietsubPlaybackResourceTypes.Voice);
+        }
+
+        var totalLength = source.Length;
+        if (!VietsubLocalMediaRange.TryParse(rangeHeader, totalLength, out var range))
+        {
+            source.Dispose();
+            return Error(
+                416,
+                "Range Not Satisfiable",
+                "vietsub_voice_range_invalid",
+                VietsubPlaybackResourceTypes.Voice,
+                $"Accept-Ranges: bytes\r\nContent-Range: bytes */{totalLength}\r\n");
+        }
+        var partial = !string.IsNullOrWhiteSpace(rangeHeader);
+        var content = string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase)
+            ? DisposeAndReturnEmpty(source)
+            : partial
+                ? new VietsubBoundedReadStream(source, range.Start, range.Length)
+                : source;
+        var headers =
+            "Content-Type: audio/wav\r\n" +
+            "Accept-Ranges: bytes\r\n" +
+            "Cache-Control: private, no-store\r\n" +
+            "Access-Control-Allow-Origin: https://app.local\r\n" +
+            "Cross-Origin-Resource-Policy: same-site\r\n" +
+            $"Content-Length: {range.Length}\r\n" +
+            (partial ? $"Content-Range: bytes {range.Start}-{range.End}/{totalLength}\r\n" : string.Empty);
+        return new(
+            partial ? 206 : 200,
+            partial ? "Partial Content" : "OK",
+            headers,
+            content,
+            VietsubPlaybackResourceTypes.Voice);
     }
 
     internal static bool TryParseWaveformUrl(

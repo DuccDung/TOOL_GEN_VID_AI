@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using TOOL_LOCAL.Vietsub.Ocr;
+using TOOL_LOCAL.Vietsub.Translation;
+using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_LOCAL.Vietsub.Domain;
 
@@ -14,7 +16,7 @@ internal static class VietsubProjectStatuses
 
 internal sealed class VietsubProjectManifest
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -49,6 +51,10 @@ internal sealed class VietsubProjectManifest
     public VietsubMediaReference? SourceVideo { get; set; }
 
     public VietsubOcrSettings OcrSettings { get; set; } = new();
+
+    public VietsubTranslationSettings TranslationSettings { get; set; } = new();
+
+    public VietsubVoiceSettings VoiceSettings { get; set; } = new();
 
     [JsonIgnore]
     public bool RecoveryRequired { get; set; }
@@ -201,6 +207,18 @@ internal sealed class VietsubSubtitleCue
     public bool TranslationLocked { get; set; }
 
     public string? QualityStatus { get; set; }
+
+    public string? TranslationSource { get; set; }
+
+    public string? TranslationEngineId { get; set; }
+
+    public string? TranslationEngineVersion { get; set; }
+
+    public string? TranslationSourceFingerprint { get; set; }
+
+    public double? TranslationConfidence { get; set; }
+
+    public DateTime? TranslationReviewedAtUtc { get; set; }
 
     public List<string> Warnings { get; set; } = [];
 

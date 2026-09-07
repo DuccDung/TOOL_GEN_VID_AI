@@ -26,12 +26,20 @@
     <ProjectReference Include="..\TOOL-SERVER\TOOL-SERVER.csproj" />
     <ProjectReference Include="..\TOOL-UPDATER\TOOL-UPDATER.csproj" />
     <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
+    <ProjectReference Include="..\TOOL-VIETSUB-TRANSLATION-WORKER\TOOL-VIETSUB-TRANSLATION-WORKER.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
     <ItemGroup>
       <Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
     </ItemGroup>
+  </Target>
+
+  <Target Name="CopyTranslationWorkerForTests" AfterTargets="Build">
+    <ItemGroup>
+      <TranslationWorkerTestFile Include="$(MSBuildThisFileDirectory)..\TOOL-VIETSUB-TRANSLATION-WORKER\bin\$(Configuration)\net10.0-windows\win-x64\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(TranslationWorkerTestFile)" DestinationFiles="@(TranslationWorkerTestFile->'$(TargetDir)_translation_worker\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

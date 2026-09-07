@@ -35,3 +35,6 @@ appsettings.user.json
 provider-secrets.bin
 provider-secrets.bin.tmp
 *.log
+
+# Optional local translation model/runtime artifacts (downloaded and hash-verified)
+third_party/translation/runtime-test/

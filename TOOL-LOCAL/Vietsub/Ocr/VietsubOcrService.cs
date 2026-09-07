@@ -32,7 +32,7 @@ internal sealed class VietsubOcrService(
         string userId,
         Guid organizationId,
         CancellationToken cancellationToken) =>
-        authorizer.AuthorizeAsync(
+        AuthorizeForOcrAsync(
             userId,
             organizationId,
             session.Manifest,
@@ -46,7 +46,7 @@ internal sealed class VietsubOcrService(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(input);
-        await authorizer.AuthorizeAsync(
+        await AuthorizeForOcrAsync(
             userId,
             organizationId,
             session.Manifest,
@@ -68,7 +68,7 @@ internal sealed class VietsubOcrService(
         CancellationToken cancellationToken)
     {
         var project = session.Manifest;
-        await authorizer.AuthorizeAsync(userId, organizationId, project, cancellationToken);
+        await AuthorizeForOcrAsync(userId, organizationId, project, cancellationToken);
         var media = RequireMedia(project);
         if (timestampMilliseconds < 0
             || timestampMilliseconds > (long)Math.Ceiling(media.Metadata.DurationSeconds * 1000))
@@ -119,7 +119,7 @@ internal sealed class VietsubOcrService(
         CancellationToken cancellationToken)
     {
         var project = session.Manifest;
-        await authorizer.AuthorizeAsync(userId, organizationId, project, cancellationToken);
+        await AuthorizeForOcrAsync(userId, organizationId, project, cancellationToken);
         var media = RequireMedia(project);
         var settings = NormalizeSettings(input);
         var runtime = await recognizer.GetRuntimeStatusAsync(cancellationToken);
@@ -208,6 +208,27 @@ internal sealed class VietsubOcrService(
         };
         settings.Normalize();
         return settings;
+    }
+
+    private async Task AuthorizeForOcrAsync(
+        string userId,
+        Guid organizationId,
+        VietsubProjectManifest project,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await authorizer.AuthorizeAsync(userId, organizationId, project, cancellationToken);
+        }
+        catch (VietsubLocalJobAuthorizationException exception)
+        {
+            throw new VietsubOcrException(
+                exception.Code == VietsubLocalJobAuthorizationErrorCodes.LicenseRequired
+                    ? VietsubOcrErrorCodes.LicenseRequired
+                    : VietsubOcrErrorCodes.AccessDenied,
+                exception.Message,
+                exception);
+        }
     }
 
     private static VietsubMediaReference RequireMedia(VietsubProjectManifest project)

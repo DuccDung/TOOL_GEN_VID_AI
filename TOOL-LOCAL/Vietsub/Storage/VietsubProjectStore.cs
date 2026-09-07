@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Ocr;
+using TOOL_LOCAL.Vietsub.Translation;
+using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_LOCAL.Vietsub.Storage;
 
@@ -243,13 +245,14 @@ internal sealed class VietsubProjectStore
                     continue;
                 }
 
+                var manifestMigrated = MigrateManifest(manifest);
                 ValidateManifest(manifest);
                 var recoveredFromAlternateManifest = !string.Equals(
                     candidate,
                     manifestPath,
                     StringComparison.OrdinalIgnoreCase);
                 manifest.RecoveryRequired = !manifest.LastCleanShutdown || recoveredFromAlternateManifest;
-                if (recoveredFromAlternateManifest)
+                if (recoveredFromAlternateManifest || manifestMigrated)
                 {
                     await SaveCoreAsync(manifest, cancellationToken);
                 }
@@ -400,5 +403,44 @@ internal sealed class VietsubProjectStore
         manifest.TargetLanguageCode = "vi";
         manifest.OcrSettings ??= new VietsubOcrSettings();
         manifest.OcrSettings.Normalize();
+        manifest.TranslationSettings ??= new VietsubTranslationSettings();
+        manifest.TranslationSettings.Normalize(manifest.SourceLanguageCode, manifest.TargetLanguageCode);
+        manifest.VoiceSettings ??= new VietsubVoiceSettings();
+        manifest.VoiceSettings.Normalize();
+    }
+
+    private static bool MigrateManifest(VietsubProjectManifest manifest)
+    {
+        if (manifest.SchemaVersion < 1
+            || manifest.SchemaVersion > VietsubProjectManifest.CurrentSchemaVersion)
+        {
+            throw new InvalidDataException("Phiên bản manifest dự án Vietsub chưa được hỗ trợ.");
+        }
+
+        var changed = false;
+        if (manifest.SchemaVersion == 1)
+        {
+            manifest.TranslationSettings = new VietsubTranslationSettings
+            {
+                SourceLanguageCode = manifest.SourceLanguageCode?.Trim().ToLowerInvariant() switch
+                {
+                    "en" => "en",
+                    "zh" or "zh-cn" or "zh-hans" => "zh",
+                    _ => string.Empty
+                },
+                TargetLanguageCode = "vi"
+            };
+            manifest.SchemaVersion = 2;
+            changed = true;
+        }
+
+        if (manifest.SchemaVersion == 2)
+        {
+            manifest.VoiceSettings = new VietsubVoiceSettings();
+            manifest.SchemaVersion = 3;
+            changed = true;
+        }
+
+        return changed;
     }
 }

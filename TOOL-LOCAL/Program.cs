@@ -13,6 +13,8 @@ using TOOL_LOCAL.Vietsub.Media;
 using TOOL_LOCAL.Vietsub.Subtitles;
 using TOOL_LOCAL.Vietsub.Jobs;
 using TOOL_LOCAL.Vietsub.Ocr;
+using TOOL_LOCAL.Vietsub.Translation;
+using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.Payments;
 
 namespace TOOL_LOCAL;
@@ -144,6 +146,10 @@ internal static class Program
                 VietsubSubtitleService? vietsubSubtitleService = null;
                 VietsubJobManager? vietsubJobManager = null;
                 VietsubOcrService? vietsubOcrService = null;
+                VietsubTranslationService? vietsubTranslationService = null;
+                QwenGgufVietsubTranslationProvider? vietsubTranslationProvider = null;
+                VietsubVoiceService? vietsubVoiceService = null;
+                VietsubVoiceComponentStore? vietsubVoiceComponents = null;
                 if (options.Features.VietsubEnabled)
                 {
                     var vietsubPaths = new VietsubAppPaths(options.Storage.WorkspaceRoot);
@@ -175,18 +181,70 @@ internal static class Program
                         vietsubSubtitleStore,
                         vietsubJobStore,
                         vietsubPaths);
+                    var translationStore = new VietsubTranslationStore(
+                        vietsubPaths,
+                        vietsubSubtitleStore);
+                    if (options.Features.VietsubLocalTranslationEnabled)
+                    {
+                        vietsubTranslationProvider = new QwenGgufVietsubTranslationProvider(
+                            new VietsubTranslationComponentStore(
+                                VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km));
+                    }
+                    var translationProviderRegistry = new VietsubTranslationProviderRegistry(
+                        vietsubTranslationProvider is null ? [] : [vietsubTranslationProvider],
+                        featureEnabled: options.Features.VietsubLocalTranslationEnabled);
+                    var translationExecutor = new VietsubTranslationJobExecutor(
+                        vietsubProjectStore,
+                        vietsubSubtitleStore,
+                        translationStore,
+                        translationProviderRegistry,
+                        vietsubJobStore,
+                        vietsubPaths);
+                    var voiceStore = new VietsubVoiceStore(vietsubPaths, vietsubSubtitleStore);
+                    var voicePlaybackRegistry = new VietsubVoicePlaybackRegistry(voiceStore.IsTrackRevisionCurrent);
+                    vietsubVoiceComponents = new VietsubVoiceComponentStore(
+                        vietsubPaths,
+                        options.Features.VietsubLocalVoiceEnabled);
+                    var voiceSynthesizer = new VietsubPiperVoiceSynthesizer(vietsubVoiceComponents);
+                    var voiceTimelineRenderer = new VietsubVoiceTimelineRenderer(
+                        vietsubPaths,
+                        mediaToolPreflight,
+                        mediaToolPaths.FfmpegPath,
+                        mediaProcessRunner);
+                    var voiceExecutor = new VietsubVoiceJobExecutor(
+                        vietsubProjectStore,
+                        vietsubSubtitleStore,
+                        voiceStore,
+                        voiceSynthesizer,
+                        voiceTimelineRenderer,
+                        vietsubJobStore,
+                        vietsubPaths);
                     vietsubJobManager = new VietsubJobManager(
                         vietsubJobStore,
-                        new VietsubJobExecutorRegistry([ocrExecutor]));
+                        new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, voiceExecutor]));
+                    var localJobAuthorizer = new VietsubLocalJobAuthorizer(
+                        new DesktopVietsubLocalAccessContext(
+                            sessionManager,
+                            licenseManager,
+                            generationClient));
                     vietsubOcrService = new VietsubOcrService(
-                        new VietsubLocalJobAuthorizer(
-                            new DesktopVietsubLocalAccessContext(
-                                sessionManager,
-                                licenseManager,
-                                generationClient)),
+                        localJobAuthorizer,
                         vietsubMediaImportService,
                         ocrFrameReader,
                         ocrRecognizer,
+                        vietsubJobManager);
+                    vietsubTranslationService = new VietsubTranslationService(
+                        localJobAuthorizer,
+                        vietsubSubtitleStore,
+                        translationProviderRegistry,
+                        vietsubJobManager);
+                    vietsubVoiceService = new VietsubVoiceService(
+                        localJobAuthorizer,
+                        vietsubSubtitleStore,
+                        voiceStore,
+                        vietsubPaths,
+                        vietsubVoiceComponents,
+                        voicePlaybackRegistry,
                         vietsubJobManager);
                     vietsubThumbnailService = new VietsubTimelineThumbnailService(
                         vietsubPaths,
@@ -222,6 +280,8 @@ internal static class Program
                     vietsubSubtitleService,
                     vietsubJobManager,
                     vietsubOcrService,
+                    vietsubTranslationService,
+                    vietsubVoiceService,
                     licensePaymentClient);
                 try
                 {
@@ -231,6 +291,8 @@ internal static class Program
                 {
                     vietsubThumbnailService?.DisposeAsync().AsTask().GetAwaiter().GetResult();
                     vietsubJobManager?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    vietsubTranslationProvider?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    vietsubVoiceComponents?.Dispose();
                     licenseManager.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }
 

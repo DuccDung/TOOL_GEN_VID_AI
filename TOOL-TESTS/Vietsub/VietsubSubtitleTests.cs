@@ -5,6 +5,7 @@ using TOOL_LOCAL.Vietsub;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Storage;
 using TOOL_LOCAL.Vietsub.Subtitles;
+using TOOL_LOCAL.Vietsub.Translation;
 
 namespace TOOL_TESTS.Vietsub;
 
@@ -71,6 +72,10 @@ public sealed class VietsubSubtitleTests : IDisposable
         Assert.Equal(2, updated.Revision);
         Assert.True(updatedCue.TranslationLocked);
         Assert.Equal("MANUAL_REVIEWED", updatedCue.QualityStatus);
+        Assert.Equal(VietsubTranslationSources.Manual, updatedCue.TranslationSource);
+        Assert.NotNull(updatedCue.TranslationReviewedAtUtc);
+        Assert.Null(updatedCue.TranslationEngineId);
+        Assert.Null(updatedCue.TranslationSourceFingerprint);
         Assert.Equal(VietsubSubtitleArtifactStatuses.Stale, Assert.Single(updated.Artifacts).Status);
 
         var destination = Path.Combine(_root, "output.srt");
@@ -424,13 +429,17 @@ public sealed class VietsubSubtitleTests : IDisposable
         await verify.OpenAsync();
         await using var version = verify.CreateCommand();
         version.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
-        Assert.Equal(3L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+        Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
         await using var columns = verify.CreateCommand();
         columns.CommandText = """
             SELECT COUNT(*) FROM pragma_table_info('subtitle_cues')
-            WHERE name IN ('quality_status', 'warning_json');
+            WHERE name IN (
+                'quality_status', 'warning_json',
+                'translation_source', 'translation_engine_id',
+                'translation_engine_version', 'translation_source_fingerprint',
+                'translation_confidence', 'translation_reviewed_at_utc');
             """;
-        Assert.Equal(2L, Convert.ToInt64(await columns.ExecuteScalarAsync()));
+        Assert.Equal(8L, Convert.ToInt64(await columns.ExecuteScalarAsync()));
         await using var artifacts = verify.CreateCommand();
         artifacts.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subtitle_artifacts';";
         Assert.Equal(1L, Convert.ToInt64(await artifacts.ExecuteScalarAsync()));

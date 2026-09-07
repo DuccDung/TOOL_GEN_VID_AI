@@ -18,6 +18,8 @@ using TOOL_LOCAL.Vietsub.Playback;
 using TOOL_LOCAL.Vietsub.Subtitles;
 using TOOL_LOCAL.Vietsub.Jobs;
 using TOOL_LOCAL.Vietsub.Ocr;
+using TOOL_LOCAL.Vietsub.Translation;
+using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.Payments;
 using System.Runtime.InteropServices;
 
@@ -51,6 +53,8 @@ public partial class Form1 : Form
     private readonly VietsubSubtitleService? _vietsubSubtitleService;
     private readonly VietsubJobManager? _vietsubJobManager;
     private readonly VietsubOcrService? _vietsubOcrService;
+    private readonly VietsubTranslationService? _vietsubTranslationService;
+    private readonly VietsubVoiceService? _vietsubVoiceService;
     private readonly LicensePaymentApiClient? _licensePaymentClient;
     private readonly VietsubMediaRuntimeLog _vietsubMediaLog = VietsubMediaRuntimeLog.CreateDefault();
     private WebView2? _webView;
@@ -95,6 +99,8 @@ public partial class Form1 : Form
         VietsubSubtitleService? vietsubSubtitleService,
         VietsubJobManager? vietsubJobManager,
         VietsubOcrService? vietsubOcrService,
+        VietsubTranslationService? vietsubTranslationService,
+        VietsubVoiceService? vietsubVoiceService,
         LicensePaymentApiClient licensePaymentClient) : this()
     {
         _sessionManager = sessionManager;
@@ -117,6 +123,8 @@ public partial class Form1 : Form
         _vietsubSubtitleService = vietsubSubtitleService;
         _vietsubJobManager = vietsubJobManager;
         _vietsubOcrService = vietsubOcrService;
+        _vietsubTranslationService = vietsubTranslationService;
+        _vietsubVoiceService = vietsubVoiceService;
         _licensePaymentClient = licensePaymentClient;
         _updateTimer.Interval = Math.Max(30, updateOptions.CheckIntervalSeconds) * 1000;
         ConfigureWindow();
@@ -223,14 +231,18 @@ public partial class Form1 : Form
                     : new VietsubMediaPlaybackService(
                         _vietsubMediaImportService,
                         _vietsubThumbnailService,
-                        _vietsubWaveformService),
+                        _vietsubWaveformService,
+                        _vietsubVoiceService?.PlaybackRegistry),
                 _vietsubThumbnailService,
                 _vietsubSubtitleService,
                 SelectVietsubSrtFile,
                 SelectVietsubSrtDestination,
                 _vietsubJobManager,
                 _vietsubOcrService,
-                _vietsubWaveformService);
+                _vietsubWaveformService,
+                _vietsubTranslationService,
+                _vietsubVoiceService);
+
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
             _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;
             var webVersion = File.GetLastWriteTimeUtc(indexPath).Ticks;

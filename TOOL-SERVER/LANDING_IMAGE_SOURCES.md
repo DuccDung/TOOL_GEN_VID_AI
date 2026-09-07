@@ -1,5 +1,7 @@
 # Nguồn ảnh trang chủ VideoMaker
 
+> Hồ sơ nguồn asset của landing page; ngữ cảnh source/rollout toàn hệ thống nằm tại [Bối cảnh hiện hành](../BOI_CANH_HE_THONG_HIEN_HANH.md).
+
 Các ảnh dưới đây được tải về và tối ưu để phục vụ trực tiếp cho trang chủ. Trang không hotlink ảnh từ bên ngoài.
 
 - Nguồn: Unsplash.

@@ -41,14 +41,14 @@ public sealed class VietsubOcrAuthorizationTests
         var authorizer = new VietsubLocalJobAuthorizer(
             new FakeAccessContext("user-1", organizationId, role, status));
 
-        var exception = await Assert.ThrowsAsync<VietsubOcrException>(() =>
+        var exception = await Assert.ThrowsAsync<VietsubLocalJobAuthorizationException>(() =>
             authorizer.AuthorizeAsync(
                 "user-1",
                 organizationId,
                 CreateProject("user-1", organizationId),
                 CancellationToken.None));
 
-        Assert.Equal(VietsubOcrErrorCodes.AccessDenied, exception.Code);
+        Assert.Equal(VietsubLocalJobAuthorizationErrorCodes.AccessDenied, exception.Code);
     }
 
     [Fact]
@@ -62,14 +62,14 @@ public sealed class VietsubOcrAuthorizationTests
             "Active");
         var authorizer = new VietsubLocalJobAuthorizer(context);
 
-        var exception = await Assert.ThrowsAsync<VietsubOcrException>(() =>
+        var exception = await Assert.ThrowsAsync<VietsubLocalJobAuthorizationException>(() =>
             authorizer.AuthorizeAsync(
                 "user-1",
                 organizationId,
                 CreateProject("user-1", organizationId),
                 CancellationToken.None));
 
-        Assert.Equal(VietsubOcrErrorCodes.AccessDenied, exception.Code);
+        Assert.Equal(VietsubLocalJobAuthorizationErrorCodes.AccessDenied, exception.Code);
         Assert.Equal(0, context.AccessChecks);
         Assert.Equal(0, context.MembershipChecks);
     }
@@ -85,14 +85,14 @@ public sealed class VietsubOcrAuthorizationTests
             "Active");
         var authorizer = new VietsubLocalJobAuthorizer(context);
 
-        var exception = await Assert.ThrowsAsync<VietsubOcrException>(() =>
+        var exception = await Assert.ThrowsAsync<VietsubLocalJobAuthorizationException>(() =>
             authorizer.AuthorizeAsync(
                 "user-1",
                 organizationId,
                 CreateProject("user-2", organizationId),
                 CancellationToken.None));
 
-        Assert.Equal(VietsubOcrErrorCodes.AccessDenied, exception.Code);
+        Assert.Equal(VietsubLocalJobAuthorizationErrorCodes.AccessDenied, exception.Code);
         Assert.Equal(0, context.AccessChecks);
     }
 

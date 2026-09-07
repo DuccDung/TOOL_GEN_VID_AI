@@ -12,7 +12,7 @@ public sealed class VietsubJobTests : IDisposable
         $"videomaker-vietsub-jobs-{Guid.NewGuid():N}");
 
     [Fact]
-    public async Task Store_InitializesSchema3_AndRejectsSecondActiveJobForProject()
+    public async Task Store_InitializesSchema5_AndRejectsSecondActiveJobForProject()
     {
         var (paths, store) = CreateStore();
         var projectId = Guid.NewGuid();
@@ -38,7 +38,7 @@ public sealed class VietsubJobTests : IDisposable
         await connection.OpenAsync();
         await using var version = connection.CreateCommand();
         version.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
-        Assert.Equal(3L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+        Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
         await using var tables = connection.CreateCommand();
         tables.CommandText = """
             SELECT COUNT(*) FROM sqlite_master
@@ -49,7 +49,7 @@ public sealed class VietsubJobTests : IDisposable
     }
 
     [Fact]
-    public async Task Store_MigratesSchema2DatabaseToSchema3()
+    public async Task Store_MigratesSchema2DatabaseToCurrentSchema()
     {
         var paths = new VietsubAppPaths(_root);
         var projectId = Guid.NewGuid();
@@ -79,7 +79,7 @@ public sealed class VietsubJobTests : IDisposable
         await verify.OpenAsync();
         await using var version = verify.CreateCommand();
         version.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
-        Assert.Equal(3L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+        Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
         await using var index = verify.CreateCommand();
         index.CommandText = """
             SELECT COUNT(*) FROM sqlite_master

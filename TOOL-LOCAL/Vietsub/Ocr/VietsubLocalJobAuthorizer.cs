@@ -14,6 +14,20 @@ internal interface IVietsubLocalJobAuthorizer
         CancellationToken cancellationToken);
 }
 
+internal static class VietsubLocalJobAuthorizationErrorCodes
+{
+    public const string AccessDenied = "vietsub_local_access_denied";
+    public const string LicenseRequired = "vietsub_local_license_required";
+}
+
+internal sealed class VietsubLocalJobAuthorizationException(
+    string code,
+    string message,
+    Exception? innerException = null) : Exception(message, innerException)
+{
+    public string Code { get; } = code;
+}
+
 internal interface IVietsubLocalAccessContext
 {
     string? CurrentUserId { get; }
@@ -69,9 +83,9 @@ internal sealed class VietsubLocalJobAuthorizer(
             || project.OrganizationId != organizationId
             || !string.Equals(project.OwnerUserId, userId, StringComparison.Ordinal))
         {
-            throw new VietsubOcrException(
-                VietsubOcrErrorCodes.AccessDenied,
-                "Phiên đăng nhập, tổ chức hoặc dự án OCR không còn khớp.");
+            throw new VietsubLocalJobAuthorizationException(
+                VietsubLocalJobAuthorizationErrorCodes.AccessDenied,
+                "Phiên đăng nhập, tổ chức hoặc dự án local job không còn khớp.");
         }
 
         try
@@ -80,8 +94,8 @@ internal sealed class VietsubLocalJobAuthorizer(
         }
         catch (AccountClientException exception)
         {
-            throw new VietsubOcrException(
-                VietsubOcrErrorCodes.LicenseRequired,
+            throw new VietsubLocalJobAuthorizationException(
+                VietsubLocalJobAuthorizationErrorCodes.LicenseRequired,
                 "License hoặc phiên thiết bị không còn hiệu lực.",
                 exception);
         }
@@ -93,9 +107,9 @@ internal sealed class VietsubLocalJobAuthorizer(
         }
         catch (AccountClientException exception)
         {
-            throw new VietsubOcrException(
-                VietsubOcrErrorCodes.AccessDenied,
-                "Không thể xác minh quyền thành viên tổ chức để chạy OCR.",
+            throw new VietsubLocalJobAuthorizationException(
+                VietsubLocalJobAuthorizationErrorCodes.AccessDenied,
+                "Không thể xác minh quyền thành viên tổ chức để chạy local job.",
                 exception);
         }
         var membership = organizations.SingleOrDefault(item => item.OrganizationId == organizationId);
@@ -103,9 +117,9 @@ internal sealed class VietsubLocalJobAuthorizer(
             || !string.Equals(membership.Status, "Active", StringComparison.OrdinalIgnoreCase)
             || !AllowedRoles.Contains(membership.Role))
         {
-            throw new VietsubOcrException(
-                VietsubOcrErrorCodes.AccessDenied,
-                "Vai trò hiện tại không được phép phát sinh OCR local.");
+            throw new VietsubLocalJobAuthorizationException(
+                VietsubLocalJobAuthorizationErrorCodes.AccessDenied,
+                "Vai trò hiện tại không được phép phát sinh local job.");
         }
     }
 }

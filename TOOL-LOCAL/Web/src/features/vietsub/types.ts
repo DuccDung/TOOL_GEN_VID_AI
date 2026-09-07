@@ -14,9 +14,17 @@ export type VietsubModuleState = {
   subtitlePage?: VietsubSubtitlePage | null;
   timelineWindow?: VietsubTimelineWindow | null;
   subtitleNotice?: string | null;
+  translationNotice?: string | null;
+  translationResourceAlert?: VietsubTranslationResourceAlert | null;
   ocrSettings: VietsubOcrSettings;
   ocrRuntime?: VietsubOcrRuntimeStatus | null;
   ocrPreview?: VietsubOcrPreviewResult | null;
+  translationRuntime?: VietsubTranslationRuntimeStatus | null;
+  translationInstallProgress?: VietsubTranslationRuntimeInstallProgress | null;
+  voiceWorkspace?: VietsubVoiceWorkspace | null;
+  voiceRuntime?: VietsubVoiceRuntimeStatus | null;
+  voiceInstallProgress?: VietsubVoiceRuntimeInstallProgress | null;
+  voiceNotice?: string | null;
   jobs: VietsubJobSummary[];
   activeJob?: VietsubJobSummary | null;
   ocrActivationRequest?: VietsubOcrActivationRequest | null;
@@ -49,6 +57,117 @@ export type VietsubOcrPreviewResult = {
   confidence: number;
   frameWidth: number;
   frameHeight: number;
+};
+
+export type VietsubTranslationRuntimeStatus = {
+  status: 'READY' | 'DISABLED' | 'NOT_INSTALLED' | 'INVALID' | 'UNSUPPORTED_HARDWARE' | 'BUSY';
+  ready: boolean;
+  engineId?: string | null;
+  engineVersion?: string | null;
+  sourceLanguages: string[];
+  supportsSceneContext: boolean;
+  supportsReviewPass: boolean;
+  message: string;
+  errorCode?: string | null;
+  runtimeProfileId?: string | null;
+  lowMemoryMode?: boolean;
+  requiresResourceConfirmation?: boolean;
+  resourceWarningCode?: string | null;
+  resourceWarningMessage?: string | null;
+};
+
+export type VietsubTranslationRuntimeInstallProgress = {
+  stage: string;
+  percent: number;
+  message: string;
+  bytesProcessed: number;
+  totalBytes: number;
+};
+
+export type VietsubTranslationResourceAlert = {
+  errorCode: 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED';
+  title: string;
+  message: string;
+  action: 'TRANSLATE' | 'INSTALL';
+  runMode?: 'CONTINUE' | 'RETRY_FAILED' | 'RESTART_UNLOCKED';
+};
+
+export type VietsubVoiceRuntimeStatus = {
+  status: 'READY' | 'DISABLED' | 'NOT_INSTALLED' | 'INVALID' | 'BUSY';
+  ready: boolean;
+  engineId: string;
+  engineVersion: string;
+  modelId: string;
+  modelVersion: string;
+  voiceId: string;
+  installedBytes: number;
+  requiredBytes: number;
+  message: string;
+  errorCode?: string | null;
+};
+
+export type VietsubVoiceRuntimeInstallProgress = {
+  stage: string;
+  percent: number;
+  message: string;
+  bytesProcessed: number;
+  totalBytes: number;
+};
+
+export type VietsubVoiceSettings = {
+  engineId: string;
+  modelId: string;
+  voiceId: string;
+  maximumPhraseGapMilliseconds: number;
+  maximumPhraseDurationMilliseconds: number;
+  maximumPhraseCharacters: number;
+  maximumBorrowedGapMilliseconds: number;
+  preferredMaximumTempo: number;
+  maximumTempo: number;
+  trimSilence: boolean;
+};
+
+export type VietsubVoiceCatalogItem = {
+  voiceId: string;
+  engineId: string;
+  modelId: string;
+  displayName: string;
+  languageCode: string;
+  gender: string;
+  license: string;
+};
+
+export type VietsubVoiceArtifact = {
+  artifactId: string;
+  trackId: string;
+  trackRevision: number;
+  artifactKind: 'PHRASE' | 'TIMELINE';
+  sizeBytes: number;
+  sha256: string;
+  durationMilliseconds: number;
+  sampleRate: number;
+  channels: number;
+  status: string;
+  timingStatus?: string | null;
+  updatedAtUtc: string;
+};
+
+export type VietsubVoiceTimingDiagnostic = {
+  phraseId: string;
+  naturalDurationMilliseconds: number;
+  targetDurationMilliseconds: number;
+  borrowedGapMilliseconds: number;
+  tempo: number;
+  status: 'NATURAL' | 'BORROWED_GAP' | 'COMPRESSED' | 'REVIEW_REQUIRED';
+  suggestedMaximumCharacters: number;
+};
+
+export type VietsubVoiceWorkspace = {
+  settings: VietsubVoiceSettings;
+  voices: VietsubVoiceCatalogItem[];
+  timeline?: VietsubVoiceArtifact | null;
+  timelinePlaybackUrl?: string | null;
+  timingDiagnostics: VietsubVoiceTimingDiagnostic[];
 };
 
 export type VietsubJobStepSummary = {

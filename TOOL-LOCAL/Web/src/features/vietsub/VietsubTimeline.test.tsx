@@ -12,7 +12,7 @@ import {
   selectTimelineThumbnailIndices,
   shouldResetTimelineMediaState
 } from './timelineMediaState';
-import type { VietsubMediaSummary } from './types';
+import type { VietsubMediaSummary, VietsubVoiceWorkspace } from './types';
 
 const createMedia = (
   waveformStatus: VietsubMediaSummary['waveformStatus'] = 'READY',
@@ -52,7 +52,42 @@ const createMedia = (
   waveformRevision: 200
 });
 
-const renderTimeline = (media: VietsubMediaSummary) => renderToStaticMarkup(createElement(
+const createVoiceWorkspace = (): VietsubVoiceWorkspace => ({
+  settings: {
+    engineId: 'PIPER_LOCAL',
+    modelId: 'piper-vi-vais1000-medium',
+    voiceId: 'piper:vi-vn-vais1000',
+    maximumPhraseGapMilliseconds: 500,
+    maximumPhraseDurationMilliseconds: 8000,
+    maximumPhraseCharacters: 4500,
+    maximumBorrowedGapMilliseconds: 600,
+    preferredMaximumTempo: 1.12,
+    maximumTempo: 1.2,
+    trimSilence: true
+  },
+  voices: [],
+  timeline: {
+    artifactId: 'voice-timeline',
+    trackId: 'track',
+    trackRevision: 4,
+    artifactKind: 'TIMELINE',
+    sizeBytes: 4096,
+    sha256: 'b'.repeat(64),
+    durationMilliseconds: 12_000,
+    sampleRate: 48_000,
+    channels: 2,
+    status: 'READY',
+    updatedAtUtc: new Date(0).toISOString()
+  },
+  timelinePlaybackUrl: 'https://vietsub-media.app.local/projects/p/voice/timeline.wav',
+  timingDiagnostics: []
+});
+
+const renderTimeline = (
+  media: VietsubMediaSummary,
+  voiceWorkspace: VietsubVoiceWorkspace | null = null,
+  voiceEnabled = false
+) => renderToStaticMarkup(createElement(
   VietsubTimeline,
   {
     media,
@@ -60,6 +95,8 @@ const renderTimeline = (media: VietsubMediaSummary) => renderToStaticMarkup(crea
     window: null,
     playheadMilliseconds: 0,
     playing: false,
+    voiceWorkspace,
+    voiceEnabled,
     busy: false,
     selectedCueId: null,
     onSeek: () => { },
@@ -67,7 +104,8 @@ const renderTimeline = (media: VietsubMediaSummary) => renderToStaticMarkup(crea
     onLoadWindow: () => { },
     onRequestThumbnails: () => { },
     onRequestWaveform: () => { },
-    onUpdateCue: async () => true
+    onUpdateCue: async () => true,
+    onToggleVoice: () => { }
   }
 ));
 
@@ -100,6 +138,18 @@ describe('VietsubTimeline media artifacts', () => {
     expect(html).toContain('aria-label="Dạng sóng âm thanh gốc"');
     expect(html).not.toContain('crossorigin="anonymous"');
     expect(html).not.toContain('alt="Dạng sóng âm thanh gốc"');
+  });
+
+  it('renders the generated Vietnamese voice as a timeline track below subtitles', () => {
+    const html = renderTimeline(createMedia('READY'), createVoiceWorkspace(), true);
+    const subtitleTrackPosition = html.indexOf('vietsub-timeline-subtitle-track');
+    const voiceTrackPosition = html.indexOf('data-vietsub-generated-voice-track="true"');
+
+    expect(voiceTrackPosition).toBeGreaterThan(subtitleTrackPosition);
+    expect(html).toContain('Giọng Việt · Piper local');
+    expect(html).toContain('data-vietsub-voice-waveform="true"');
+    expect(html).toContain('aria-label="Tắt Giọng Việt"');
+    expect(html).not.toContain('<audio');
   });
 
   it('uses bounded recovery and keeps a temporary error retryable', () => {
