@@ -1,4 +1,5 @@
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
@@ -36,6 +37,7 @@ import {
   Package,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -75,6 +77,8 @@ import { VietsubPage } from './features/vietsub/VietsubPage';
 import { useVietsubModule } from './features/vietsub/useVietsubModule';
 import { getSceneFirstFrameAssetBlocker } from './sceneAssetValidation';
 import { buildSpeechTranscriptDiff, type SpeechDiffSegment } from './speechTranscriptDiff';
+import { assessSpeechPacing } from './speechPacing';
+import { getAvailableVoiceOptions, resolveVoiceOption, voiceDisplayName } from './voiceCatalog';
 import {
   getCanonicalVoiceJourney,
   getStoryboardActionSummary,
@@ -100,6 +104,7 @@ import type {
   LicensePaymentCheckout,
   LicensePaymentStatus,
   MediaToolStatus,
+  OpenAiVoiceOption,
   OrganizationSummary,
   PipelineStage,
   ProjectDashboard,
@@ -115,6 +120,8 @@ import type {
   CanonicalVoiceQuote,
   VoiceProfilePreviewQuote,
   VoiceProfileSummary,
+  VoiceCatalogPreviewPlayback,
+  VoiceCatalogPreviewQuote,
   UpdateScenePayload,
   UpdateCharacterPayload,
   UpdateProjectAssetPayload,
@@ -156,6 +163,18 @@ type PendingSceneSave = {
   sceneId: string;
 };
 type LicenseRequestKind = 'offers' | 'current' | 'create' | 'status' | 'refresh';
+type PendingVoiceCatalogPreview = {
+  voiceCode: string;
+  speakingRate: number;
+  previewKey: string;
+};
+type VoiceCatalogPreviewControls = {
+  speakingRate: number;
+  previews: Record<string, VoiceCatalogPreviewPlayback>;
+  pendingKey: string | null;
+  onPreview: (voiceCode: string, speakingRate: number) => void;
+  contextProjectName?: string;
+};
 
 function resolveSelectedProjectPage(workflowStructureType?: string | null): Extract<Page, 'shortVideo' | 'longVideo'> {
   return workflowStructureType === 'DirectShortVideo' ? 'shortVideo' : 'longVideo';
@@ -213,6 +232,7 @@ const emptyState: DashboardState = {
   providerStatus: {
     openAiReady: false,
     openAiModel: null,
+    openAiVoiceOptions: [],
     klingReady: false,
     klingModel: null,
     videoReady: false,
@@ -387,12 +407,16 @@ function App() {
   const [licensePaymentError, setLicensePaymentError] = useState<string | null>(null);
   const [firstFramePreview, setFirstFramePreview] = useState<SceneFirstFrameSummary | null>(null);
   const [firstFrameOperation, setFirstFrameOperation] = useState<SceneFirstFrameOperation | null>(null);
+  const [voiceCatalogPreviews, setVoiceCatalogPreviews] = useState<Record<string, VoiceCatalogPreviewPlayback>>({});
+  const [voiceCatalogPreviewPendingKey, setVoiceCatalogPreviewPendingKey] = useState<string | null>(null);
   const pendingSceneSaveRef = useRef<PendingSceneSave | null>(null);
   const pendingFirstFrameQuoteRef = useRef(new Map<string, PendingFirstFrameQuote>());
   const pendingFirstFrameOperationRef = useRef(new Map<string, string>());
   const pendingContentRepairQuoteRef = useRef(new Map<string, string>());
   const pendingSpeechVerificationQuoteRef = useRef(new Map<string, SceneSummary>());
   const pendingVoicePreviewQuoteRef = useRef(new Map<string, VoiceProfileSummary>());
+  const pendingVoiceCatalogPreviewQuoteRef = useRef(new Map<string, PendingVoiceCatalogPreview>());
+  const pendingVoiceCatalogPreviewOperationRef = useRef(new Map<string, PendingVoiceCatalogPreview>());
   const pendingVideoVoiceQuoteRef = useRef(new Map<string, string[]>());
   const vietsub = useVietsubModule(
     dashboard.features.vietsubEnabled,
@@ -418,6 +442,13 @@ function App() {
     setContentLanguageFailure(restored);
     setContentGenerationError(restored ? restored.message : null);
   }, [dashboard.selectedProject?.project.projectId, dashboard.contentLanguageFailure]);
+
+  useEffect(() => {
+    setVoiceCatalogPreviews({});
+    setVoiceCatalogPreviewPendingKey(null);
+    pendingVoiceCatalogPreviewQuoteRef.current.clear();
+    pendingVoiceCatalogPreviewOperationRef.current.clear();
+  }, [dashboard.selectedOrganizationId, dashboard.selectedProject?.project.projectId]);
 
   const postLicenseRequest = <T,>(kind: LicenseRequestKind, type: string, payload?: T) => {
     const requestId = postToHost(type, payload);
@@ -572,7 +603,7 @@ function App() {
         setConfirmation({
           eyebrow: 'XÁC NHẬN NGHE THỬ GIỌNG',
           title: `Tạo preview voice version ${version.version}?`,
-          description: `${quote.providerCode}/${quote.modelCode} sẽ đọc một câu mẫu tiếng Việt bằng ${voiceName(version.voiceCode)}, tốc độ ${version.speakingRate}×.`,
+          description: `${quote.providerCode}/${quote.modelCode} sẽ đọc một câu mẫu tiếng Việt bằng ${voiceDisplayName(version.voiceCode)}, tốc độ ${version.speakingRate}×.`,
           note: `Đây là request AI có phí. Server sẽ giữ khoảng ${formatMoney(quote.estimatedCost, quote.currencyCode)} theo rate Active trước outbound.`,
           confirmLabel: 'Tạo audio preview',
           onConfirm: () => {
@@ -581,6 +612,39 @@ function App() {
               voiceProfileVersionId: version.voiceProfileVersionId,
               expectedVoiceSnapshotHash: version.snapshotHash
             });
+          }
+        });
+        return;
+      }
+
+
+      if (message.type === 'voice-catalog.preview.quote' && message.payload && message.requestId) {
+        const pending = pendingVoiceCatalogPreviewQuoteRef.current.get(message.requestId);
+        pendingVoiceCatalogPreviewQuoteRef.current.delete(message.requestId);
+        setBusy(false);
+        setVoiceCatalogPreviewPendingKey(null);
+        if (!pending) return;
+        const quote = message.payload as VoiceCatalogPreviewQuote;
+        if (!quote.contextProjectId ||
+            voiceCatalogPreviewKey(quote.voiceCode, quote.speakingRate) !== pending.previewKey) {
+          notify('Báo giá nghe thử không khớp giọng đã chọn.', true);
+          return;
+        }
+        setConfirmation({
+          eyebrow: 'XÁC NHẬN NGHE THỬ GIỌNG',
+          title: `Tạo mẫu giọng ${voiceDisplayName(pending.voiceCode)}?`,
+          description: `${quote.providerCode}/${quote.modelCode} sẽ đọc một câu mẫu tiếng Việt ngắn bằng tốc độ ${pending.speakingRate}×. Sau khi tải về, bạn có thể phát lại mẫu này trong modal mà không gọi AI thêm.`,
+          note: `Đây là request AI có phí. Server sẽ giữ khoảng ${formatMoney(quote.estimatedCost, quote.currencyCode)} theo rate Active trước khi gọi OpenAI.`,
+          confirmLabel: 'Tạo và nghe thử',
+          onConfirm: () => {
+            setBusy(true);
+            setVoiceCatalogPreviewPendingKey(pending.previewKey);
+            const operationRequestId = postToHost('voice-catalog.preview', {
+              voiceCode: pending.voiceCode,
+              speakingRate: pending.speakingRate,
+              contextProjectId: quote.contextProjectId
+            });
+            pendingVoiceCatalogPreviewOperationRef.current.set(operationRequestId, pending);
           }
         });
         return;
@@ -609,7 +673,7 @@ function App() {
         setConfirmation({
           eyebrow: 'XÁC NHẬN SỬA CONTENT PLAN',
           title: `Sửa ${quote.violations.length} trường bằng AI?`,
-          description: `${quote.providerCode}/${quote.modelCode} sẽ sửa các trường bị rỗng hoặc chưa đạt tiếng Việt. Cấu trúc, thứ tự cảnh, thời lượng và mapping tài sản/nhân vật phải được giữ nguyên.`,
+          description: `${quote.providerCode}/${quote.modelCode} sẽ sửa các trường bị rỗng, chưa đạt tiếng Việt hoặc chưa khớp nhịp lời. Cấu trúc, thứ tự cảnh, thời lượng và mapping tài sản/nhân vật phải được giữ nguyên.`,
           note: `Đây là một request OpenAI riêng có phí. Server sẽ giữ khoảng ${formatMoney(quote.estimatedCost, quote.currencyCode)} theo rate Active trước khi gọi provider. Mỗi failed plan chỉ có tối đa một lượt sửa.`,
           confirmLabel: 'Sửa các trường bằng AI',
           onConfirm: () => {
@@ -626,6 +690,21 @@ function App() {
         return;
       }
 
+      if (message.type === 'voice-catalog.previewed' && message.payload && message.requestId) {
+        const pending = pendingVoiceCatalogPreviewOperationRef.current.get(message.requestId);
+        pendingVoiceCatalogPreviewOperationRef.current.delete(message.requestId);
+        setBusy(false);
+        setVoiceCatalogPreviewPendingKey(null);
+        if (!pending) return;
+        const preview = message.payload as VoiceCatalogPreviewPlayback;
+        if (voiceCatalogPreviewKey(preview.voiceCode, preview.speakingRate) !== pending.previewKey) {
+          notify('Audio nghe thử không khớp giọng đã chọn.', true);
+          return;
+        }
+        setVoiceCatalogPreviews((current) => ({ ...current, [pending.previewKey]: preview }));
+        return;
+      }
+
       if (message.type === 'operation.error') {
         const operationErrorMessage = formatContentLanguageError(message.error);
         const recoverableContentFailure = parseContentLanguageFailure(message.error);
@@ -637,6 +716,13 @@ function App() {
         if (message.requestId) pendingContentRepairQuoteRef.current.delete(message.requestId);
         if (message.requestId) pendingSpeechVerificationQuoteRef.current.delete(message.requestId);
         if (message.requestId) pendingVoicePreviewQuoteRef.current.delete(message.requestId);
+        const failedVoiceCatalogPreview = message.requestId
+          ? pendingVoiceCatalogPreviewQuoteRef.current.get(message.requestId) ??
+            pendingVoiceCatalogPreviewOperationRef.current.get(message.requestId)
+          : undefined;
+        if (message.requestId) pendingVoiceCatalogPreviewQuoteRef.current.delete(message.requestId);
+        if (message.requestId) pendingVoiceCatalogPreviewOperationRef.current.delete(message.requestId);
+        if (failedVoiceCatalogPreview) setVoiceCatalogPreviewPendingKey(null);
         if (message.requestId) pendingVideoVoiceQuoteRef.current.delete(message.requestId);
         const failedFirstFrameSceneId = message.requestId
           ? pendingFirstFrameOperationRef.current.get(message.requestId)
@@ -1277,7 +1363,9 @@ function App() {
     const verification = scene?.speechVerification;
     const canonicalSpeech = dashboard.selectedProject.speechProductionPolicy === 'CanonicalVoice' &&
       scene?.speechMode !== 'None';
-    const needsReviewOverride = !canonicalSpeech &&
+    const longFormProject = dashboard.selectedProject.workflowStructureType === 'OpenAiStructuredPlan';
+    const needsReviewOverride = !longFormProject &&
+      !canonicalSpeech &&
       verification?.status === 'NeedsReview' &&
       !verification.reviewApproved;
     if (needsReviewOverride && (!verification?.rowVersion || (speechReviewReason?.trim().length ?? 0) < 10)) {
@@ -1330,6 +1418,17 @@ function App() {
       expectedVoiceSnapshotHash: version.snapshotHash
     });
     pendingVoicePreviewQuoteRef.current.set(requestId, version);
+  };
+
+  const requestVoiceCatalogPreview = (voiceCode: string, speakingRate: number) => {
+    if (dashboard.generationRunning || busy) return;
+    const previewKey = voiceCatalogPreviewKey(voiceCode, speakingRate);
+    if (voiceCatalogPreviews[previewKey]) return;
+    const pending = { voiceCode, speakingRate, previewKey };
+    setBusy(true);
+    setVoiceCatalogPreviewPendingKey(previewKey);
+    const requestId = postToHost('voice-catalog.preview.quote', { voiceCode, speakingRate });
+    pendingVoiceCatalogPreviewQuoteRef.current.set(requestId, pending);
   };
 
   const approveVoiceProfile = (version: VoiceProfileSummary, playbackConfirmed: boolean) => {
@@ -1759,6 +1858,9 @@ function App() {
             onVerifySceneSpeech={requestSceneSpeechVerification}
             onCreateVoiceProfile={createVoiceProfileDraft}
             onPreviewVoiceProfile={requestVoiceProfilePreview}
+            voiceCatalogPreviews={voiceCatalogPreviews}
+            voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+            onPreviewCatalogVoice={requestVoiceCatalogPreview}
             onApproveVoiceProfile={approveVoiceProfile}
             onSupersedeVoiceProfile={supersedeVoiceProfile}
             onInstallMediaTools={requestMediaToolInstall}
@@ -1793,6 +1895,9 @@ function App() {
             providerStatus={dashboard.providerStatus}
             mediaTools={dashboard.mediaTools}
             speechSynchronizationEnabled={dashboard.features.speechSynchronizationEnabled}
+            voiceCatalogPreviews={voiceCatalogPreviews}
+            voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+            onPreviewCatalogVoice={requestVoiceCatalogPreview}
             busy={generationBusy}
             onCreate={createProject}
             onGenerateContent={generateContent}
@@ -2883,6 +2988,9 @@ function DashboardPage({
   providerStatus,
   mediaTools,
   speechSynchronizationEnabled,
+  voiceCatalogPreviews,
+  voiceCatalogPreviewPendingKey,
+  onPreviewCatalogVoice,
   busy,
   onCreate,
   onGenerateContent,
@@ -2914,6 +3022,9 @@ function DashboardPage({
   providerStatus: GenerationProviderStatus;
   mediaTools: MediaToolStatus;
   speechSynchronizationEnabled: boolean;
+  voiceCatalogPreviews: Record<string, VoiceCatalogPreviewPlayback>;
+  voiceCatalogPreviewPendingKey: string | null;
+  onPreviewCatalogVoice: (voiceCode: string, speakingRate: number) => void;
   busy: boolean;
   onCreate: (payload: CreateProjectPayload) => void;
   onGenerateContent: () => void;
@@ -2947,6 +3058,11 @@ function DashboardPage({
           <CreateVideoCard
             busy={busy}
             speechSynchronizationEnabled={speechSynchronizationEnabled}
+            voiceOptions={getAvailableVoiceOptions(providerStatus.openAiVoiceOptions)}
+            voiceCatalogPreviews={voiceCatalogPreviews}
+            voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+            onPreviewCatalogVoice={onPreviewCatalogVoice}
+            voicePreviewProjectName={project?.project.name}
             onCreate={onCreate}
           />
           <GenerationActions
@@ -3039,6 +3155,9 @@ function LongVideoPage({
   onVerifySceneSpeech,
   onCreateVoiceProfile,
   onPreviewVoiceProfile,
+  voiceCatalogPreviews,
+  voiceCatalogPreviewPendingKey,
+  onPreviewCatalogVoice,
   onApproveVoiceProfile,
   onSupersedeVoiceProfile,
   onInstallMediaTools,
@@ -3091,6 +3210,9 @@ function LongVideoPage({
   onVerifySceneSpeech: (scene: SceneSummary) => void;
   onCreateVoiceProfile: (scope: 'ProjectNarrator' | 'Character', characterId: string | null, voiceCode: string, speakingRate: number) => void;
   onPreviewVoiceProfile: (version: VoiceProfileSummary) => void;
+  voiceCatalogPreviews: Record<string, VoiceCatalogPreviewPlayback>;
+  voiceCatalogPreviewPendingKey: string | null;
+  onPreviewCatalogVoice: (voiceCode: string, speakingRate: number) => void;
   onApproveVoiceProfile: (version: VoiceProfileSummary, playbackConfirmed: boolean) => void;
   onSupersedeVoiceProfile: (version: VoiceProfileSummary) => void;
   onInstallMediaTools: () => void;
@@ -3118,6 +3240,7 @@ function LongVideoPage({
 }) {
   const suggestedStep = getSuggestedLongVideoStep(project);
   const projectId = project?.project.projectId ?? '';
+  const voiceOptions = getAvailableVoiceOptions(providerStatus.openAiVoiceOptions);
   const [activeStep, setActiveStep] = useState<LongVideoStepId>(suggestedStep);
   const [assetTab, setAssetTab] = useState<'characters' | ProjectAssetType>('characters');
 
@@ -3145,6 +3268,11 @@ function LongVideoPage({
         <CreateVideoCard
           busy={busy}
           speechSynchronizationEnabled={speechSynchronizationEnabled}
+          voiceOptions={voiceOptions}
+          voiceCatalogPreviews={voiceCatalogPreviews}
+          voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+          onPreviewCatalogVoice={onPreviewCatalogVoice}
+          voicePreviewProjectName={project?.project.name}
           onCreate={onCreate}
         />
       </>;
@@ -3183,6 +3311,10 @@ function LongVideoPage({
               <VoiceProfilesSection
                 project={project}
                 busy={busy}
+                voiceOptions={voiceOptions}
+                voiceCatalogPreviews={voiceCatalogPreviews}
+                voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+                onPreviewCatalogVoice={onPreviewCatalogVoice}
                 onCreateDraft={onCreateVoiceProfile}
                 onPreview={onPreviewVoiceProfile}
                 onApprove={onApproveVoiceProfile}
@@ -3192,6 +3324,9 @@ function LongVideoPage({
             <CharacterSection
               project={project}
               providerStatus={providerStatus}
+              voiceCatalogPreviews={voiceCatalogPreviews}
+              voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+              onPreviewCatalogVoice={onPreviewCatalogVoice}
               busy={busy}
               imageBusyId={characterImageBusyId}
               onRegenerateContent={onRegenerateContent}
@@ -3542,6 +3677,7 @@ function LongVideoContentScenes({ scenes }: { scenes: SceneSummary[] }) {
                       {spokenText
                         ? <ExpandableSceneText text={spokenText} collapseAt={260} />
                         : <p className="content-scene-placeholder">Cảnh không có lời nói; chỉ sử dụng âm thanh môi trường và hiệu ứng phù hợp.</p>}
+                      {spokenText && <SpeechPacingIndicator scene={scene} />}
                     </section>
 
                     <section className="content-scene-copy-block visual">
@@ -3705,9 +3841,301 @@ function GenerationActions({
   );
 }
 
+function voiceCatalogPreviewKey(voiceCode: string, speakingRate: number): string {
+  return `${voiceCode.trim().toLowerCase()}@${speakingRate.toFixed(3)}`;
+}
+
+function VoicePickerField({
+  value,
+  options,
+  disabled = false,
+  allowInherited = false,
+  previewControls,
+  onChange
+}: {
+  value: string;
+  options: OpenAiVoiceOption[];
+  disabled?: boolean;
+  allowInherited?: boolean;
+  previewControls?: VoiceCatalogPreviewControls;
+  onChange: (voiceCode: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = resolveVoiceOption(value, options);
+  const unavailable = disabled || options.length === 0;
+  const displayName = value
+    ? selected?.displayName ?? voiceDisplayName(value, options)
+    : 'Dùng giọng narrator của dự án';
+
+  return (
+    <>
+      <button
+        type="button"
+        className="voice-picker-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        disabled={unavailable}
+        onClick={() => setOpen(true)}
+      >
+        <span className="voice-picker-trigger-icon"><Volume2 size={15} /></span>
+        <span className="voice-picker-trigger-copy">
+          <strong>{displayName}</strong>
+          <small>{options.length > 0 ? `${options.length} giọng OpenAI` : 'Chưa có catalog giọng'}</small>
+        </span>
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <VoicePickerModal
+          selectedVoiceCode={value}
+          options={options}
+          allowInherited={allowInherited}
+          previewControls={previewControls}
+          onApply={(voiceCode) => {
+            onChange(voiceCode);
+            setOpen(false);
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function VoicePickerModal({
+  selectedVoiceCode,
+  options,
+  allowInherited,
+  previewControls,
+  onApply,
+  onClose
+}: {
+  selectedVoiceCode: string;
+  options: OpenAiVoiceOption[];
+  allowInherited: boolean;
+  previewControls?: VoiceCatalogPreviewControls;
+  onApply: (voiceCode: string) => void;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const selectedOption = resolveVoiceOption(selectedVoiceCode, options);
+  const [pendingVoiceCode, setPendingVoiceCode] = useState(
+    selectedVoiceCode === '' && allowInherited
+      ? ''
+      : selectedOption?.voiceCode ?? options[0]?.voiceCode ?? ''
+  );
+  const [requestedPreviewKey, setRequestedPreviewKey] = useState<string | null>(null);
+  const [activePreviewKey, setActivePreviewKey] = useState<string | null>(null);
+  const [playingPreviewKey, setPlayingPreviewKey] = useState<string | null>(null);
+  const activePreview = activePreviewKey && previewControls
+    ? previewControls.previews[activePreviewKey] ?? null
+    : null;
+
+  useEffect(() => {
+    if (!requestedPreviewKey || !previewControls?.previews[requestedPreviewKey]) return;
+    setActivePreviewKey(requestedPreviewKey);
+    setRequestedPreviewKey(null);
+  }, [previewControls?.previews, requestedPreviewKey]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !activePreview?.previewUrl) return;
+    audio.load();
+    void audio.play().catch(() => setPlayingPreviewKey(null));
+  }, [activePreview?.previewUrl]);
+
+  const toggleVoicePreview = (option: OpenAiVoiceOption) => {
+    if (!previewControls) return;
+    const previewKey = voiceCatalogPreviewKey(option.voiceCode, previewControls.speakingRate);
+    const cachedPreview = previewControls.previews[previewKey];
+    if (!cachedPreview) {
+      setRequestedPreviewKey(previewKey);
+      previewControls.onPreview(option.voiceCode, previewControls.speakingRate);
+      return;
+    }
+    const audio = audioRef.current;
+    if (activePreviewKey === previewKey && audio) {
+      if (audio.paused) {
+        void audio.play().catch(() => setPlayingPreviewKey(null));
+      } else {
+        audio.pause();
+      }
+      return;
+    }
+    setActivePreviewKey(previewKey);
+  };
+
+  useLayoutEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const dialog = dialogRef.current;
+    const preferred = dialog?.querySelector<HTMLElement>('[aria-checked="true"]');
+    (preferred ?? dialog)?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="voice-picker-overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        className="voice-picker-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
+      >
+        <header className="voice-picker-header">
+          <div>
+            <span>OPENAI · TEXT TO SPEECH</span>
+            <h2 id={titleId}>Chọn giọng đọc</h2>
+            <p id={descriptionId}>Chọn một giọng dựng sẵn. Chọn giọng là miễn phí; tạo audio nghe thử sẽ báo giá trước.</p>
+          </div>
+          <button type="button" className="voice-picker-close" aria-label="Đóng danh sách giọng" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="voice-picker-grid" role="radiogroup" aria-label="Danh sách giọng OpenAI">
+          {allowInherited && (
+            <div className={`voice-picker-option inherited${pendingVoiceCode === '' ? ' selected' : ''}`}>
+              <button
+                type="button"
+                className="voice-picker-option-select"
+                role="radio"
+                aria-checked={pendingVoiceCode === ''}
+                onClick={() => setPendingVoiceCode('')}
+              >
+                <span className="voice-picker-option-icon"><Users size={17} /></span>
+                <span><strong>Dùng giọng narrator</strong><small>Kế thừa giọng chung của dự án</small></span>
+                {pendingVoiceCode === '' && <CircleCheck size={18} />}
+              </button>
+            </div>
+          )}
+          {options.map((option) => {
+            const selected = pendingVoiceCode === option.voiceCode;
+            const previewKey = previewControls
+              ? voiceCatalogPreviewKey(option.voiceCode, previewControls.speakingRate)
+              : null;
+            const previewReady = Boolean(previewKey && previewControls?.previews[previewKey]);
+            const previewBusy = Boolean(previewKey && previewControls?.pendingKey === previewKey);
+            const previewPlaying = Boolean(previewKey && playingPreviewKey === previewKey);
+            return (
+              <div className={`voice-picker-option${selected ? ' selected' : ''}`} key={option.voiceCode}>
+                <button
+                  type="button"
+                  className="voice-picker-option-select"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setPendingVoiceCode(option.voiceCode)}
+                >
+                  <span className="voice-picker-option-icon"><Volume2 size={17} /></span>
+                  <span><strong>{option.displayName}</strong><small>{option.voiceCode} · OpenAI built-in</small></span>
+                  {selected && <CircleCheck size={18} />}
+                </button>
+                {previewControls && (
+                  <button
+                    type="button"
+                    className={`voice-picker-preview${previewReady ? ' ready' : ''}`}
+                    aria-label={`${previewPlaying ? 'Tạm dừng' : 'Nghe thử'} giọng ${option.displayName}`}
+                    disabled={previewBusy || (previewControls.pendingKey !== null && !previewBusy)}
+                    onClick={() => toggleVoicePreview(option)}
+                  >
+                    {previewBusy
+                      ? <LoaderCircle className="spin" size={14} />
+                      : previewPlaying
+                        ? <Pause size={14} fill="currentColor" />
+                        : <Play size={14} fill="currentColor" />}
+                    <span>{previewBusy ? 'Đang tạo' : previewPlaying ? 'Tạm dừng' : previewReady ? 'Phát lại' : 'Nghe thử'}</span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {activePreview && (
+          <audio
+            ref={audioRef}
+            className="voice-picker-audio"
+            preload="metadata"
+            src={activePreview.previewUrl}
+            onPlay={() => setPlayingPreviewKey(activePreviewKey)}
+            onPause={() => setPlayingPreviewKey(null)}
+            onEnded={() => setPlayingPreviewKey(null)}
+          />
+        )}
+
+        <footer className="voice-picker-footer">
+          <p><CircleHelp size={14} /> {previewControls?.contextProjectName
+            ? `Nghe thử dùng câu mẫu tiếng Việt ngắn, luôn báo giá trước và ghi nhận chi phí vào dự án đang chọn: ${previewControls.contextProjectName}.`
+            : 'Có thể nghe thử trước khi tạo dự án. Mẫu audio mới luôn được báo giá trước và ghi nhận qua ngữ cảnh hệ thống ẩn.'}</p>
+          <div>
+            <button type="button" className="voice-picker-cancel" onClick={onClose}>Hủy</button>
+            <button
+              type="button"
+              className="voice-picker-apply"
+              disabled={!allowInherited && !pendingVoiceCode}
+              onClick={() => onApply(pendingVoiceCode)}
+            >
+              <Check size={16} /> Áp dụng giọng
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function VoiceProfilesSection({
   project,
   busy,
+  voiceOptions,
+  voiceCatalogPreviews,
+  voiceCatalogPreviewPendingKey,
+  onPreviewCatalogVoice,
   onCreateDraft,
   onPreview,
   onApprove,
@@ -3715,6 +4143,10 @@ function VoiceProfilesSection({
 }: {
   project: ProjectDashboard;
   busy: boolean;
+  voiceOptions: OpenAiVoiceOption[];
+  voiceCatalogPreviews: Record<string, VoiceCatalogPreviewPlayback>;
+  voiceCatalogPreviewPendingKey: string | null;
+  onPreviewCatalogVoice: (voiceCode: string, speakingRate: number) => void;
   onCreateDraft: (scope: 'ProjectNarrator' | 'Character', characterId: string | null, voiceCode: string, speakingRate: number) => void;
   onPreview: (version: VoiceProfileSummary) => void;
   onApprove: (version: VoiceProfileSummary, playbackConfirmed: boolean) => void;
@@ -3768,6 +4200,10 @@ function VoiceProfilesSection({
               characterId={target.characterId}
               defaultVoiceCode={target.defaultVoiceCode}
               defaultRate={target.defaultRate}
+              voiceOptions={voiceOptions}
+              voiceCatalogPreviews={voiceCatalogPreviews}
+              voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+              onPreviewCatalogVoice={onPreviewCatalogVoice}
               versions={versions.filter((version) =>
                 version.scope === target.scope &&
                 (target.characterId === null
@@ -3792,6 +4228,10 @@ function VoiceProfileTargetCard({
   characterId,
   defaultVoiceCode,
   defaultRate,
+  voiceOptions,
+  voiceCatalogPreviews,
+  voiceCatalogPreviewPendingKey,
+  onPreviewCatalogVoice,
   versions,
   busy,
   onCreateDraft,
@@ -3804,6 +4244,10 @@ function VoiceProfileTargetCard({
   characterId: string | null;
   defaultVoiceCode: string;
   defaultRate: number;
+  voiceOptions: OpenAiVoiceOption[];
+  voiceCatalogPreviews: Record<string, VoiceCatalogPreviewPlayback>;
+  voiceCatalogPreviewPendingKey: string | null;
+  onPreviewCatalogVoice: (voiceCode: string, speakingRate: number) => void;
   versions: VoiceProfileSummary[];
   busy: boolean;
   onCreateDraft: (scope: 'ProjectNarrator' | 'Character', characterId: string | null, voiceCode: string, speakingRate: number) => void;
@@ -3833,10 +4277,21 @@ function VoiceProfileTargetCard({
         </span>
       </div>
       <div className="voice-profile-controls">
-        <label>Giọng<select disabled={busy || Boolean(draft)} value={voiceCode} onChange={(event) => setVoiceCode(event.target.value)}>
-          <option value="female-sweet">Nữ · dịu, rõ</option>
-          <option value="male-warm">Nam · ấm, rõ</option>
-        </select></label>
+        <div className="voice-profile-control">
+          <span>Giọng</span>
+          <VoicePickerField
+            value={voiceCode}
+            options={voiceOptions}
+            disabled={busy || Boolean(draft)}
+            previewControls={{
+              speakingRate,
+              previews: voiceCatalogPreviews,
+              pendingKey: voiceCatalogPreviewPendingKey,
+              onPreview: onPreviewCatalogVoice
+            }}
+            onChange={setVoiceCode}
+          />
+        </div>
         <label>Tốc độ<select disabled={busy || Boolean(draft)} value={speakingRate} onChange={(event) => setSpeakingRate(Number(event.target.value))}>
           <option value={0.9}>Chậm · 0,9×</option>
           <option value={1}>Tự nhiên · 1,0×</option>
@@ -3873,7 +4328,7 @@ function VoiceProfileTargetCard({
       )}
       {approved && (
         <div className="voice-approved-summary">
-          <CircleCheck size={14} /> {voiceName(approved.voiceCode)} · {approved.speakingRate}× · v{approved.version} · {approved.snapshotHash.slice(0, 12)}
+          <CircleCheck size={14} /> {voiceDisplayName(approved.voiceCode, voiceOptions)} · {approved.speakingRate}× · v{approved.version} · {approved.snapshotHash.slice(0, 12)}
         </div>
       )}
     </article>
@@ -3883,6 +4338,9 @@ function VoiceProfileTargetCard({
 function CharacterSection({
   project,
   providerStatus,
+  voiceCatalogPreviews = {},
+  voiceCatalogPreviewPendingKey = null,
+  onPreviewCatalogVoice,
   busy,
   imageBusyId,
   onRegenerateContent,
@@ -3894,6 +4352,9 @@ function CharacterSection({
 }: {
   project: ProjectDashboard | null;
   providerStatus: GenerationProviderStatus;
+  voiceCatalogPreviews?: Record<string, VoiceCatalogPreviewPlayback>;
+  voiceCatalogPreviewPendingKey?: string | null;
+  onPreviewCatalogVoice?: (voiceCode: string, speakingRate: number) => void;
   busy: boolean;
   imageBusyId: string | null;
   onRegenerateContent: () => void;
@@ -3948,6 +4409,9 @@ function CharacterSection({
               key={character.characterId}
               character={character}
               providerStatus={providerStatus}
+              voiceCatalogPreviews={voiceCatalogPreviews}
+              voiceCatalogPreviewPendingKey={voiceCatalogPreviewPendingKey}
+              onPreviewCatalogVoice={onPreviewCatalogVoice}
               busy={busy}
               imageBusy={imageBusyId === character.characterId}
               onUpdate={onUpdate}
@@ -3966,6 +4430,9 @@ function CharacterSection({
 function CharacterCard({
   character,
   providerStatus,
+  voiceCatalogPreviews,
+  voiceCatalogPreviewPendingKey,
+  onPreviewCatalogVoice,
   busy,
   imageBusy,
   onUpdate,
@@ -3976,6 +4443,9 @@ function CharacterCard({
 }: {
   character: CharacterSummary;
   providerStatus: GenerationProviderStatus;
+  voiceCatalogPreviews: Record<string, VoiceCatalogPreviewPlayback>;
+  voiceCatalogPreviewPendingKey: string | null;
+  onPreviewCatalogVoice?: (voiceCode: string, speakingRate: number) => void;
   busy: boolean;
   imageBusy: boolean;
   onUpdate: (payload: UpdateCharacterPayload) => void;
@@ -3984,6 +4454,7 @@ function CharacterCard({
   onApprove: (characterId: string) => void;
   onOpenImageSetup: () => void;
 }) {
+  const voiceOptions = getAvailableVoiceOptions(providerStatus.openAiVoiceOptions);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(character.name);
   const [role, setRole] = useState(character.role ?? '');
@@ -4087,14 +4558,22 @@ function CharacterCard({
             <label className="wide">Trang phục và phụ kiện<textarea maxLength={4000} value={wardrobe} onChange={(event) => setWardrobe(event.target.value)} /></label>
             <label>Đặc điểm cố định<textarea value={immutableTraits} onChange={(event) => setImmutableTraits(event.target.value)} /></label>
             <label>Không được thay đổi<textarea value={forbiddenChanges} onChange={(event) => setForbiddenChanges(event.target.value)} /></label>
-            <label>
-              Giọng nhân vật
-              <select value={voiceCode} onChange={(event) => setVoiceCode(event.target.value)}>
-                <option value="">Dùng giọng narrator của dự án</option>
-                <option value="female-sweet">Nữ · dịu, rõ</option>
-                <option value="male-warm">Nam · ấm, rõ</option>
-              </select>
-            </label>
+            <div className="character-edit-control">
+              <span>Giọng nhân vật</span>
+              <VoicePickerField
+                value={voiceCode}
+                options={voiceOptions}
+                disabled={busy}
+                allowInherited
+                previewControls={onPreviewCatalogVoice ? {
+                  speakingRate: voiceSpeakingRate,
+                  previews: voiceCatalogPreviews,
+                  pendingKey: voiceCatalogPreviewPendingKey,
+                  onPreview: onPreviewCatalogVoice
+                } : undefined}
+                onChange={setVoiceCode}
+              />
+            </div>
             <label>
               Tốc độ giọng
               <select disabled={!voiceCode} value={voiceSpeakingRate} onChange={(event) => setVoiceSpeakingRate(Number(event.target.value))}>
@@ -4113,7 +4592,7 @@ function CharacterCard({
             <div className="character-profile-grid">
               <div><span>Nhận diện cố định</span><p>{character.visualIdentity}</p></div>
               <div><span>Trang phục</span><p>{character.wardrobe}</p></div>
-              <div><span>Giọng nhân vật</span><p>{character.voiceCode ? `${character.voiceCode} · ${character.voiceSpeakingRate ?? 1}×` : 'Dùng giọng narrator của dự án'}</p></div>
+              <div><span>Giọng nhân vật</span><p>{character.voiceCode ? `${voiceDisplayName(character.voiceCode, voiceOptions)} · ${character.voiceSpeakingRate ?? 1}×` : 'Dùng giọng narrator của dự án'}</p></div>
             </div>
             <div className="character-rule-row">
               <div><span>Đặc điểm khóa</span>{character.immutableTraits.map((trait) => <small key={trait}>{trait}</small>)}</div>
@@ -4439,6 +4918,7 @@ function StoryboardSection({
   const selectableKey = selectableScenes.map((scene) => `${scene.sceneId}:${scene.status}:${hasReadyFirstFrame(scene.sceneId)}`).join('|');
   const enforceKlingLongFormSpeechPolicy = project?.workflowStructureType === 'OpenAiStructuredPlan' &&
     ['kling', 'fal'].includes(project?.videoProviderCode?.toLowerCase() ?? '');
+  const speechVerificationRequired = project?.workflowStructureType !== 'OpenAiStructuredPlan';
 
   useEffect(() => {
     if (!project) {
@@ -4623,6 +5103,7 @@ function StoryboardSection({
             mediaToolsReady={mediaTools.ready}
             speechProductionPolicy={project.speechProductionPolicy}
             enforceKlingLongFormSpeechPolicy={enforceKlingLongFormSpeechPolicy}
+            speechVerificationRequired={speechVerificationRequired}
             onToggle={() => toggleScene(scene.sceneId)}
             onGenerate={() => onGenerateVideo([scene.sceneId])}
             onRequestFirstFrame={(regenerate) => onRequestSceneFirstFrame(scene, regenerate)}
@@ -4659,6 +5140,7 @@ function SceneCard({
   mediaToolsReady,
   speechProductionPolicy,
   enforceKlingLongFormSpeechPolicy,
+  speechVerificationRequired,
   onToggle,
   onGenerate,
   onRequestFirstFrame,
@@ -4687,6 +5169,7 @@ function SceneCard({
   mediaToolsReady: boolean;
   speechProductionPolicy: string;
   enforceKlingLongFormSpeechPolicy: boolean;
+  speechVerificationRequired: boolean;
   onToggle: () => void;
   onGenerate: () => void;
   onRequestFirstFrame: (regenerate: boolean) => void;
@@ -4787,7 +5270,8 @@ function SceneCard({
     (speechContentConfirmed && speakerConfirmed && lipSyncConfirmed);
   const audioReviewBlocker = !scene.requiresAudioReview
     ? null
-    : !canonicalVoiceOnlyReview &&
+    : speechVerificationRequired &&
+        !canonicalVoiceOnlyReview &&
         scene.speechVerification?.status === 'NeedsReview' &&
             !scene.speechVerification.reviewApproved &&
             speechReviewReason.trim().length < 10
@@ -4795,7 +5279,9 @@ function SceneCard({
           : !scene.canApproveNativeAudio
             ? canonicalVoiceOnlyReview
               ? 'Canonical WAV hiện hành chưa vượt qua kiểm tra kỹ thuật hoặc không còn khớp phiên bản cảnh.'
-              : 'Audio hiện hành chưa đủ điều kiện duyệt. Hãy hoàn tất bước kiểm tra transcript.'
+              : speechVerificationRequired
+                ? 'Audio hiện hành chưa đủ điều kiện duyệt. Hãy hoàn tất bước kiểm tra transcript.'
+                : 'Audio hiện hành chưa vượt qua kiểm tra kỹ thuật để nghe duyệt.'
             : !requiredPlaybackConfirmed
               ? canonicalVoiceOnlyReview
                 ? 'Hãy phát Canonical WAV ít nhất một lần.'
@@ -4934,6 +5420,7 @@ function SceneCard({
                   ? ` · ${(scene.canonicalVoicePreview.durationMs / 1000).toFixed(1)} giây`
                   : ''}
               </small>
+              <SpeechPacingIndicator scene={scene} compact />
             </div>
           )}
         </div>
@@ -5102,6 +5589,9 @@ function SceneCard({
                 {enforceKlingLongFormSpeechPolicy && speechMode === 'NativeVoiceOver' && scene.characters.length !== 0 && (
                   <small className="scene-validation-message invalid">Lời dẫn ngoài khung hình chỉ dùng cho cảnh B-roll không có nhân vật.</small>
                 )}
+                {speechMode !== 'None' && (
+                  <SpeechPacingIndicator scene={scene} draftText={narration} compact />
+                )}
               </label>
               {speechMode === 'OnCameraDialogue' && (
                 <div className="scene-speaker-lock">
@@ -5194,7 +5684,7 @@ function SceneCard({
               <p><CircleHelp size={13} /> {canonicalVoiceJourney.nextAction}</p>
             </div>
           )}
-          {scene.speechMode !== 'None' && !canonicalVoiceWorkflow && (
+          {speechVerificationRequired && scene.speechMode !== 'None' && !canonicalVoiceWorkflow && (
             <div className={`scene-speech-verification ${(scene.speechVerification?.status ?? 'pending').toLowerCase()}`}>
               <div>
                 <strong><Languages size={14} /> Kiểm tra transcript</strong>
@@ -5298,7 +5788,7 @@ function SceneCard({
                   title={audioReviewBlocker ?? undefined}
                   disabled={busy || !scene.canApproveNativeAudio || !requiredPlaybackConfirmed ||
                     !reviewChecklistComplete ||
-                    (!canonicalVoiceOnlyReview && scene.speechVerification?.status === 'NeedsReview' && !scene.speechVerification.reviewApproved && speechReviewReason.trim().length < 10)}
+                    (speechVerificationRequired && !canonicalVoiceOnlyReview && scene.speechVerification?.status === 'NeedsReview' && !scene.speechVerification.reviewApproved && speechReviewReason.trim().length < 10)}
                   onClick={() => onApproveNativeAudio(
                     requiredPlaybackConfirmed && reviewChecklistComplete,
                     speechReviewReason)}
@@ -5375,6 +5865,74 @@ function ExpandableSceneText({ text, collapseAt }: { text: string; collapseAt: n
       )}
     </div>
   );
+}
+
+function SpeechPacingIndicator({
+  scene,
+  draftText,
+  compact = false
+}: {
+  scene: SceneSummary;
+  draftText?: string;
+  compact?: boolean;
+}) {
+  const sceneDurationSeconds = scene.durationMs / 1000;
+  const speakingRate = scene.speechPacing?.speakingRate ?? 1;
+  const calculated = draftText === undefined
+    ? scene.speechPacing ?? assessSpeechPacing(
+      scene.narration ?? '',
+      sceneDurationSeconds,
+      speakingRate
+    )
+    : assessSpeechPacing(
+      draftText,
+      sceneDurationSeconds,
+      speakingRate
+    );
+  if (!calculated) return null;
+
+  const useActual = draftText === undefined &&
+    scene.speechPacing?.actualDurationSeconds != null &&
+    scene.speechPacing.actualStatus != null;
+  const measuredSeconds = useActual
+    ? scene.speechPacing!.actualDurationSeconds!
+    : calculated.estimatedDurationSeconds;
+  const status = useActual
+    ? scene.speechPacing!.actualStatus!
+    : calculated.estimatedStatus;
+  const statusLabel = status === 'TooShort'
+    ? 'Quá ngắn'
+    : status === 'Short'
+      ? 'Hơi ngắn'
+      : status === 'OnTarget'
+        ? 'Phù hợp'
+        : status === 'Long'
+          ? 'Hơi dài'
+          : 'Quá dài';
+  const tone = status === 'OnTarget'
+    ? 'ready'
+    : status === 'TooShort' || status === 'TooLong'
+      ? 'danger'
+      : 'warning';
+
+  return (
+    <div className={`speech-pacing-indicator ${tone} ${compact ? 'compact' : ''}`}>
+      <Clock3 size={13} />
+      <span>
+        <strong>{useActual ? 'WAV thực tế' : 'Ước tính'}: {formatPacingSeconds(measuredSeconds)} / {formatPacingSeconds(sceneDurationSeconds)} · {statusLabel}</strong>
+        {!compact && (
+          <small>Mục tiêu {formatPacingSeconds(calculated.targetMinimumSeconds)}–{formatPacingSeconds(calculated.targetMaximumSeconds)} để lời bám sát cảnh.</small>
+        )}
+        {useActual && status === 'TooShort' && (
+          <small>WAV vẫn được dùng để tạo video; hệ thống không tự sinh lại giọng.</small>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function formatPacingSeconds(value: number): string {
+  return `${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(value)}s`;
 }
 
 function firstFrameStatusLabel(frame: SceneFirstFrameSummary): string {
@@ -5483,12 +6041,6 @@ function speechModeLabel(mode: SceneSummary['speechMode'], enforceKlingLongFormS
   return 'Không có lời nói';
 }
 
-function voiceName(voiceCode: string): string {
-  if (voiceCode === 'female-sweet') return 'Nữ · dịu, rõ';
-  if (voiceCode === 'male-warm') return 'Nam · ấm, rõ';
-  return voiceCode;
-}
-
 function formatTimeline(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -5504,23 +6056,40 @@ function sceneDisplayTitle(scene: SceneSummary): string {
 function CreateVideoCard({
   busy,
   speechSynchronizationEnabled,
+  voiceOptions,
+  voiceCatalogPreviews,
+  voiceCatalogPreviewPendingKey,
+  onPreviewCatalogVoice,
+  voicePreviewProjectName,
   onCreate
 }: {
   busy: boolean;
   speechSynchronizationEnabled: boolean;
+  voiceOptions: OpenAiVoiceOption[];
+  voiceCatalogPreviews: Record<string, VoiceCatalogPreviewPlayback>;
+  voiceCatalogPreviewPendingKey: string | null;
+  onPreviewCatalogVoice: (voiceCode: string, speakingRate: number) => void;
+  voicePreviewProjectName?: string;
   onCreate: (payload: CreateProjectPayload) => void;
 }) {
   const [topic, setTopic] = useState('');
   const [aspectRatio, setAspectRatio] = useState('16:9');
   const [speechProductionPolicy, setSpeechProductionPolicy] =
     useState<CreateProjectPayload['speechProductionPolicy']>('ProviderNativeVerified');
-  const [voiceCode, setVoiceCode] =
-    useState<NonNullable<CreateProjectPayload['voiceCode']>>('female-sweet');
+  const [voiceCode, setVoiceCode] = useState('');
   const [voiceSpeakingRate, setVoiceSpeakingRate] = useState(1);
+
+  useEffect(() => {
+    if (resolveVoiceOption(voiceCode, voiceOptions) || voiceOptions.length === 0) return;
+    setVoiceCode(
+      voiceOptions.find((option) => option.voiceCode === 'shimmer')?.voiceCode ??
+      voiceOptions[0].voiceCode
+    );
+  }, [voiceCode, voiceOptions]);
 
   const submit = () => {
     const normalizedTopic = topic.trim();
-    if (!normalizedTopic || busy) return;
+    if (!normalizedTopic || busy || (speechProductionPolicy === 'CanonicalVoice' && !voiceCode)) return;
     onCreate({
       topic: normalizedTopic,
       aspectRatio,
@@ -5564,13 +6133,22 @@ function CreateVideoCard({
         </label>
         {speechProductionPolicy === 'CanonicalVoice' && (
           <>
-            <label className="select-group">
-              Giọng narrator
-              <select value={voiceCode} onChange={(event) => setVoiceCode(event.target.value as typeof voiceCode)}>
-                <option value="female-sweet">Nữ · dịu, rõ</option>
-                <option value="male-warm">Nam · ấm, rõ</option>
-              </select>
-            </label>
+            <div className="select-group">
+              <span>Giọng narrator</span>
+              <VoicePickerField
+                value={voiceCode}
+                options={voiceOptions}
+                disabled={busy}
+                previewControls={{
+                  speakingRate: voiceSpeakingRate,
+                  previews: voiceCatalogPreviews,
+                  pendingKey: voiceCatalogPreviewPendingKey,
+                  onPreview: onPreviewCatalogVoice,
+                  contextProjectName: voicePreviewProjectName
+                }}
+                onChange={setVoiceCode}
+              />
+            </div>
             <label className="select-group">
               Tốc độ đọc
               <select value={voiceSpeakingRate} onChange={(event) => setVoiceSpeakingRate(Number(event.target.value))}>
@@ -5588,7 +6166,11 @@ function CreateVideoCard({
             ? 'Lời dẫn được tạo thành WAV có version và ghép sau khi clip nền hoàn tất. Cảnh thấy miệng sẽ chờ bước lip-sync.'
             : 'Giọng nói, âm thanh môi trường và hiệu ứng được provider tạo cùng clip.'}</small>
         </div>
-        <button className="start-button" disabled={!topic.trim() || busy} onClick={submit}>
+        <button
+          className="start-button"
+          disabled={!topic.trim() || busy || (speechProductionPolicy === 'CanonicalVoice' && !voiceCode)}
+          onClick={submit}
+        >
           {busy ? <LoaderCircle className="spin" size={18} /> : <Play size={17} fill="currentColor" />} Bắt đầu tạo
         </button>
       </div>

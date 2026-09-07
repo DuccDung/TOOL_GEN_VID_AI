@@ -148,6 +148,26 @@ export type VoiceProfilePreviewQuote = {
   previewTextCharacters: number;
 };
 
+export type VoiceCatalogPreviewQuote = {
+  voiceCode: string;
+  speakingRate: number;
+  providerCode: string;
+  modelCode: string;
+  estimatedCost: number;
+  currencyCode: string;
+  previewTextCharacters: number;
+  contextProjectId: string;
+};
+
+export type VoiceCatalogPreviewPlayback = {
+  voiceCode: string;
+  speakingRate: number;
+  previewUrl: string;
+  durationMs: number;
+  actualCost: number;
+  currencyCode: string;
+};
+
 export type SceneVoiceQuote = {
   sceneId: string;
   voiceProfileVersionId: string;
@@ -202,6 +222,20 @@ export type SceneSummary = {
   speechVerification?: SceneSpeechVerification | null;
   voiceProfileVersionId?: string | null;
   voiceSnapshotHash?: string | null;
+  speechPacing?: SceneSpeechPacingSummary | null;
+};
+
+export type SceneSpeechPacingSummary = {
+  speechUnitCount: number;
+  speakingRate: number;
+  estimatedDurationSeconds: number;
+  estimatedDurationRatio: number;
+  targetMinimumSeconds: number;
+  targetMaximumSeconds: number;
+  estimatedStatus: 'TooShort' | 'Short' | 'OnTarget' | 'Long' | 'TooLong';
+  actualDurationSeconds?: number | null;
+  actualDurationRatio?: number | null;
+  actualStatus?: 'TooShort' | 'Short' | 'OnTarget' | 'Long' | 'TooLong' | null;
 };
 
 export type SceneFirstFrameStatus = 'PendingReview' | 'Approved' | 'Rejected' | 'Superseded' | 'Invalidated';
@@ -465,6 +499,11 @@ export type ProviderSettings = {
   videoModel: string;
 };
 
+export type OpenAiVoiceOption = {
+  voiceCode: string;
+  displayName: string;
+};
+
 export type GenerationProviderStatus = {
   openAiReady: boolean;
   openAiModel?: string | null;
@@ -488,6 +527,7 @@ export type GenerationProviderStatus = {
   canonicalVoiceReady?: boolean;
   canonicalVoiceUnavailableCode?: string | null;
   canonicalVoiceUnavailableMessage?: string | null;
+  openAiVoiceOptions?: OpenAiVoiceOption[] | null;
   klingReady: boolean;
   klingModel?: string | null;
   klingUnavailableCode?: string | null;
@@ -520,7 +560,10 @@ export type HostMessage<T = unknown> = {
 
 export type ContentLanguageViolation = {
   field: string;
-  reason: 'required' | 'language_invalid';
+  reason: 'required' | 'language_invalid' | 'speech_too_short' | 'speech_too_long';
+  estimatedDurationSeconds?: number | null;
+  targetMinimumSeconds?: number | null;
+  targetMaximumSeconds?: number | null;
 };
 
 export type ContentLanguageFailureSummary = {
@@ -545,7 +588,7 @@ export type CreateProjectPayload = {
   aspectRatio: string;
   languageCode: string;
   speechProductionPolicy: 'ProviderNativeVerified' | 'CanonicalVoice';
-  voiceCode?: 'female-sweet' | 'male-warm' | null;
+  voiceCode?: string | null;
   voiceSpeakingRate?: number | null;
 };
 

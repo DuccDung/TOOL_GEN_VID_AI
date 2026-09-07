@@ -86,6 +86,24 @@ public interface IGenerationService
         Guid deviceId,
         CancellationToken cancellationToken);
 
+    Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewQuoteAsync(
+        VoiceCatalogPreviewQuoteRequest request,
+        string userId,
+        Guid deviceId,
+        CancellationToken cancellationToken);
+
+    Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewContextQuoteAsync(
+        VoiceCatalogPreviewContextQuoteRequest request,
+        string userId,
+        Guid deviceId,
+        CancellationToken cancellationToken);
+
+    Task<VoiceCatalogPreviewResponse> GenerateVoiceCatalogPreviewAsync(
+        GenerateVoiceCatalogPreviewRequest request,
+        string userId,
+        Guid deviceId,
+        CancellationToken cancellationToken);
+
     Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(
         ApproveVoiceProfileVersionRequest request,
         string userId,
@@ -484,7 +502,8 @@ internal sealed class GenerationService(
             SpeechVerificationEnabled = _speechSynchronizationOptions.SpeechVerificationEnabled,
             CanonicalVoiceReady = canonicalVoiceReady,
             CanonicalVoiceUnavailableCode = canonicalVoiceUnavailableCode,
-            CanonicalVoiceUnavailableMessage = canonicalVoiceUnavailableMessage
+            CanonicalVoiceUnavailableMessage = canonicalVoiceUnavailableMessage,
+            OpenAiVoiceOptions = OpenAiBuiltInVoiceCatalog.Voices
         };
     }
 
@@ -521,12 +540,18 @@ internal sealed class GenerationService(
             GenerationWorkflowTypes.OpenAiStructuredPlan);
         var requiresLongFormVietnamese = requiresKlingVietnamese || requiresFalVietnamese;
         var enforceLongFormSpeechPolicy = requiresLongFormVietnamese;
+        var enforceContentSpeechPacing = requiresLongFormVietnamese &&
+                                         string.Equals(
+                                             project.SpeechProductionPolicy,
+                                             SpeechProductionPolicies.CanonicalVoice,
+                                             StringComparison.Ordinal);
         var effectiveGenerationLanguageCode = requiresFalVietnamese
             ? FalVeoPolicy.VietnameseLanguageCode
             : KlingLongFormLanguagePolicy.Resolve(
                 longFormVideoProviderCode,
                 project.LanguageCode,
                 GenerationWorkflowTypes.OpenAiStructuredPlan);
+        var contentSpeakingRate = project.VoiceSpeakingRate ?? 1m;
         var requestJson = JsonSerializer.Serialize(new
         {
             project.ProjectId,
@@ -540,6 +565,8 @@ internal sealed class GenerationService(
             project.VideoPolicyVersion,
             project.VideoResolution,
             project.VideoNativeAudio,
+            ContentSpeakingRate = contentSpeakingRate,
+            EnforceContentSpeechPacing = enforceContentSpeechPacing,
             EffectiveGenerationLanguageCode = effectiveGenerationLanguageCode,
             GenerationLanguagePolicyVersion = requiresFalVietnamese
                 ? FalVeoPolicy.LanguagePolicyVersion
@@ -645,6 +672,7 @@ internal sealed class GenerationService(
                 Sha256Hex(userId),
                 videoSnapshot?.Capabilities ?? VideoModelCapabilities.KlingDefault,
                 enforceLongFormSpeechPolicy,
+                contentSpeakingRate,
                 cancellationToken);
             var result = providerResult;
             var response = new GeneratedContentResponse(
@@ -663,29 +691,44 @@ internal sealed class GenerationService(
             if (requiresLongFormVietnamese)
             {
                 var languageViolations = KlingVietnameseContentValidator.FindPlanViolations(result.Plan);
-                if (languageViolations.Count > 0)
+                var languageViolationFields = languageViolations
+                    .Select(x => x.Field)
+                    .ToHashSet(StringComparer.Ordinal);
+                var contentViolations = languageViolations
+                    .Select(x => new ContentLanguageViolation(x.Field, x.Reason))
+                    .Concat(enforceContentSpeechPacing
+                        ? ContentSpeechPacingValidator
+                            .FindPlanViolations(result.Plan, contentSpeakingRate)
+                            .Where(x => !languageViolationFields.Contains(x.Field))
+                        : [])
+                    .ToArray();
+                if (contentViolations.Length > 0)
                 {
-                    var languageErrorCode = requiresFalVietnamese
-                        ? "fal_content_language_invalid"
-                        : "kling_content_language_invalid";
+                    var contentErrorCode = languageViolations.Count > 0
+                        ? requiresFalVietnamese
+                            ? "fal_content_language_invalid"
+                            : "kling_content_language_invalid"
+                        : ContentPlanErrorCodes.SpeechPacingInvalid;
                     requestLog.ResponseJson = JsonSerializer.Serialize(response, JsonOptions);
                     requestLog.ErrorDetailsJson = SerializeContentLanguageFailure(
                         requestLog.ProviderRequestId,
-                        languageViolations,
+                        contentViolations,
                         canRepair: true);
                     logger.LogInformation(
-                        "OpenAI content plan {ProviderRequestId} was rejected with error {ErrorCode} and {ViolationCount} safe language field violations: {ViolationReasons}",
+                        "OpenAI content plan {ProviderRequestId} was rejected with error {ErrorCode} and {ViolationCount} safe content violations: {ViolationReasons}",
                         requestLog.ProviderRequestId,
-                        languageErrorCode,
-                        languageViolations.Count,
-                        string.Join(",", languageViolations.Select(SerializeViolationReason)));
+                        contentErrorCode,
+                        contentViolations.Length,
+                        string.Join(",", contentViolations.Select(SerializeViolationReason)));
                     throw new ProviderHttpException(
                         ProviderCodes.OpenAi,
-                        languageErrorCode,
-                        "OpenAI trả về nội dung chưa hoàn toàn bằng tiếng Việt. Hãy thử sinh lại nội dung.",
+                        contentErrorCode,
+                        languageViolations.Count > 0
+                            ? "OpenAI trả về nội dung chưa đạt yêu cầu tiếng Việt hoặc nhịp lời. Bạn có thể sửa một lượt có xác nhận chi phí."
+                            : "OpenAI trả về lời đọc chưa khớp thời lượng cảnh. Bạn có thể sửa một lượt có xác nhận chi phí.",
                         errors: BuildContentLanguageErrors(
                             requestLog.ProviderRequestId,
-                            languageViolations,
+                            contentViolations,
                             canRepair: true));
                 }
             }
@@ -847,7 +890,7 @@ internal sealed class GenerationService(
                         !repairAttempted;
         var message = latest.RequestKind == "TextRepair" && !IsContentLanguageError(latest.ErrorCode)
             ? "Lượt sửa content plan không hoàn tất. Hãy tạo lại toàn bộ nội dung."
-            : diagnosticRequest.ErrorMessage ?? "Content plan chưa hoàn toàn bằng tiếng Việt.";
+            : diagnosticRequest.ErrorMessage ?? "Content plan chưa đạt yêu cầu tiếng Việt hoặc nhịp lời.";
         return new ContentLanguageFailureResponse(
             diagnosticRequest.ProviderRequestId,
             diagnosticRequest.ErrorCode!,
@@ -944,6 +987,20 @@ internal sealed class GenerationService(
                 "content_repair_policy_changed",
                 "Policy video hiện tại không còn dùng quy tắc tiếng Việt của request đã lỗi. Hãy tạo lại content plan.");
         }
+        var sourceHasSpeechPacingViolation = source.Violations.Any(x =>
+            x.Reason is ContentPlanViolationReasons.SpeechTooShort or
+                ContentPlanViolationReasons.SpeechTooLong);
+        var repairSpeechPacing = string.Equals(
+            project.SpeechProductionPolicy,
+            SpeechProductionPolicies.CanonicalVoice,
+            StringComparison.Ordinal);
+        if (sourceHasSpeechPacingViolation && !repairSpeechPacing)
+        {
+            throw Conflict(
+                "content_repair_policy_changed",
+                "Project không còn dùng Canonical Voice của request nhịp lời đã lỗi. Hãy tạo lại content plan.");
+        }
+        var contentSpeakingRate = project.VoiceSpeakingRate ?? 1m;
 
         var requestJson = JsonSerializer.Serialize(new
         {
@@ -951,6 +1008,9 @@ internal sealed class GenerationService(
             SourceProviderRequestId = source.Request.ProviderRequestId,
             RepairAttempt = 1,
             ViolationFields = source.Violations.Select(x => x.Field).ToArray(),
+            ViolationReasons = source.Violations.Select(x => x.Reason).ToArray(),
+            ContentSpeakingRate = contentSpeakingRate,
+            RepairSpeechPacing = repairSpeechPacing,
             policy.EffectiveLanguageCode,
             policy.LanguagePolicyVersion,
             project.Platform,
@@ -1053,7 +1113,8 @@ internal sealed class GenerationService(
                 Sha256Hex(userId),
                 policy.VideoCapabilities,
                 enforceKlingLongFormSpeechPolicy: true,
-                cancellationToken);
+                speakingRate: contentSpeakingRate,
+                cancellationToken: cancellationToken);
             var result = providerResult;
             var response = new GeneratedContentResponse(
                 requestLog.ProviderRequestId,
@@ -1067,29 +1128,42 @@ internal sealed class GenerationService(
             requestLog.ResponseJson = JsonSerializer.Serialize(response, JsonOptions);
             ValidateContentRepairInvariants(source.Response.Plan, result.Plan);
             var languageViolations = KlingVietnameseContentValidator.FindPlanViolations(result.Plan);
-            if (languageViolations.Count > 0)
+            var languageViolationFields = languageViolations
+                .Select(x => x.Field)
+                .ToHashSet(StringComparer.Ordinal);
+            var contentViolations = languageViolations
+                .Select(x => new ContentLanguageViolation(x.Field, x.Reason))
+                .Concat(repairSpeechPacing
+                    ? ContentSpeechPacingValidator
+                        .FindPlanViolations(result.Plan, contentSpeakingRate)
+                        .Where(x => !languageViolationFields.Contains(x.Field))
+                    : [])
+                .ToArray();
+            if (contentViolations.Length > 0)
             {
-                var languageErrorCode = policy.IsFal
-                    ? "fal_content_language_invalid"
-                    : "kling_content_language_invalid";
+                var contentErrorCode = languageViolations.Count > 0
+                    ? policy.IsFal
+                        ? "fal_content_language_invalid"
+                        : "kling_content_language_invalid"
+                    : ContentPlanErrorCodes.SpeechPacingInvalid;
                 requestLog.ErrorDetailsJson = SerializeContentLanguageFailure(
                     requestLog.ProviderRequestId,
-                    languageViolations,
+                    contentViolations,
                     canRepair: false);
                 logger.LogInformation(
-                    "OpenAI repaired content plan {ProviderRequestId} was rejected with error {ErrorCode} and {ViolationCount} safe language field violations: {ViolationReasons}",
+                    "OpenAI repaired content plan {ProviderRequestId} was rejected with error {ErrorCode} and {ViolationCount} safe content violations: {ViolationReasons}",
                     requestLog.ProviderRequestId,
-                    languageErrorCode,
-                    languageViolations.Count,
-                    string.Join(",", languageViolations.Select(SerializeViolationReason)));
+                    contentErrorCode,
+                    contentViolations.Length,
+                    string.Join(",", contentViolations.Select(SerializeViolationReason)));
                 throw new ProviderHttpException(
                     ProviderCodes.OpenAi,
-                    languageErrorCode,
-                    "OpenAI vẫn còn nội dung chưa hoàn toàn bằng tiếng Việt sau một lượt sửa. Hãy tạo lại content plan.",
+                    contentErrorCode,
+                    "Content plan vẫn chưa đạt yêu cầu tiếng Việt hoặc nhịp lời sau một lượt sửa. Hãy tạo lại content plan.",
                     statusCode: HttpStatusCode.UnprocessableEntity,
                     errors: BuildContentLanguageErrors(
                         requestLog.ProviderRequestId,
-                        languageViolations,
+                        contentViolations,
                         canRepair: false));
             }
 
@@ -1826,6 +1900,337 @@ internal sealed class GenerationService(
         }
     }
 
+    public async Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewQuoteAsync(
+        VoiceCatalogPreviewQuoteRequest request,
+        string userId,
+        Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanonicalVoiceEnabled();
+        var voiceCode = ValidateVoiceCatalogPreviewInput(
+            request.ProjectId,
+            request.VoiceCode,
+            request.SpeakingRate);
+        var access = await accessService.RequireAsync(
+            userId,
+            deviceId,
+            request.OrganizationId,
+            request.ProjectId,
+            cancellationToken);
+        var provider = await ResolveVoiceProviderAsync(access.OrganizationId, cancellationToken);
+        _ = _speechOptions.ResolveProviderVoice(voiceCode);
+        var previewText = VoiceCatalogPreviewText(access.Project!.LanguageCode);
+        var quote = await costEstimator.QuoteOpenAiVoiceAsync(
+            provider.ProviderModelId,
+            previewText.Length,
+            _speechOptions.EstimatedCharactersPerSecond,
+            _speechOptions.EstimatedOutputTokensPerSecond,
+            cancellationToken);
+        RequirePositiveVoiceQuote(quote);
+        return new VoiceCatalogPreviewQuoteResponse(
+            voiceCode,
+            CanonicalizeVoiceSpeakingRate(request.SpeakingRate),
+            provider.ProviderCode,
+            provider.ModelCode,
+            quote.EstimatedCost,
+            quote.CurrencyCode,
+            previewText.Length,
+            request.ProjectId);
+    }
+
+    public async Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewContextQuoteAsync(
+        VoiceCatalogPreviewContextQuoteRequest request,
+        string userId,
+        Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanonicalVoiceEnabled();
+        _ = ValidateVoiceCatalogPreviewSelection(request.VoiceCode, request.SpeakingRate);
+        var access = await accessService.RequireAsync(
+            userId,
+            deviceId,
+            request.OrganizationId,
+            null,
+            cancellationToken);
+        var contextProjectId = await RequireVoiceCatalogPreviewContextProjectAsync(
+            access.OrganizationId,
+            userId,
+            cancellationToken);
+        return await GetVoiceCatalogPreviewQuoteAsync(
+            new VoiceCatalogPreviewQuoteRequest(
+                contextProjectId,
+                request.VoiceCode,
+                request.SpeakingRate,
+                access.OrganizationId),
+            userId,
+            deviceId,
+            cancellationToken);
+    }
+
+    private async Task<Guid> RequireVoiceCatalogPreviewContextProjectAsync(
+        Guid organizationId,
+        string userId,
+        CancellationToken cancellationToken)
+    {
+        var projectId = CreateVoiceCatalogPreviewContextProjectId(organizationId, userId);
+        var workspaceRelativePath = $"{VoiceCatalogPreviewContexts.WorkspacePrefix}{projectId:N}";
+        var existing = await dbContext.Projects.SingleOrDefaultAsync(
+            x => x.ProjectId == projectId,
+            cancellationToken);
+        if (existing is not null)
+        {
+            EnsureVoiceCatalogPreviewContextOwnership(
+                existing,
+                organizationId,
+                userId,
+                workspaceRelativePath);
+            if (existing.DeletedAtUtc is not null)
+            {
+                existing.DeletedAtUtc = null;
+                existing.UpdatedAtUtc = UtcNow();
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            return existing.ProjectId;
+        }
+
+        var now = UtcNow();
+        var project = new Project
+        {
+            ProjectId = projectId,
+            OrganizationId = organizationId,
+            CreatedByUserId = userId,
+            RemoteUserId = userId,
+            RemoteDeviceId = null,
+            Name = VoiceCatalogPreviewContexts.ProjectName,
+            Topic = VoiceCatalogPreviewContexts.ProjectTopic,
+            LanguageCode = "vi-VN",
+            SpeechProductionPolicy = SpeechProductionPolicies.ProviderNativeVerified,
+            Platform = "System",
+            AspectRatio = "16:9",
+            TargetDurationSeconds = 5,
+            OutputWidth = 1920,
+            OutputHeight = 1080,
+            OutputFrameRate = 30,
+            Status = "Draft",
+            EstimatedCost = 0,
+            ActualCost = 0,
+            CurrencyCode = "USD",
+            WorkspaceRelativePath = workspaceRelativePath,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            RowVersion = new byte[8]
+        };
+        dbContext.Projects.Add(project);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return project.ProjectId;
+        }
+        catch (DbUpdateException)
+        {
+            dbContext.Entry(project).State = EntityState.Detached;
+            existing = await dbContext.Projects.SingleOrDefaultAsync(
+                x => x.ProjectId == projectId,
+                cancellationToken);
+            if (existing is null)
+            {
+                throw;
+            }
+            EnsureVoiceCatalogPreviewContextOwnership(
+                existing,
+                organizationId,
+                userId,
+                workspaceRelativePath);
+            return existing.ProjectId;
+        }
+    }
+
+    public async Task<VoiceCatalogPreviewResponse> GenerateVoiceCatalogPreviewAsync(
+        GenerateVoiceCatalogPreviewRequest request,
+        string userId,
+        Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanonicalVoiceEnabled();
+        ValidateIdempotencyKey(request.IdempotencyKey);
+        var voiceCode = ValidateVoiceCatalogPreviewInput(
+            request.ProjectId,
+            request.VoiceCode,
+            request.SpeakingRate);
+        var access = await accessService.RequireAsync(
+            userId,
+            deviceId,
+            request.OrganizationId,
+            request.ProjectId,
+            cancellationToken);
+        var project = access.Project!;
+        var provider = await ResolveVoiceProviderAsync(access.OrganizationId, cancellationToken);
+        var providerVoiceCode = _speechOptions.ResolveProviderVoice(voiceCode);
+        var speakingRate = CanonicalizeVoiceSpeakingRate(request.SpeakingRate);
+        var instructions = _speechOptions.ResolveInstructions(project.LanguageCode);
+        var previewText = VoiceCatalogPreviewText(project.LanguageCode);
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            request.ProjectId,
+            PreviewKind = "Catalog",
+            VoiceCode = voiceCode,
+            ProviderVoiceCode = providerVoiceCode,
+            project.LanguageCode,
+            SpeakingRate = speakingRate,
+            VoiceInstructionsHash = Sha256Hex(instructions),
+            PreviewTextHash = Sha256Hex(previewText),
+            ResponseFormat = "wav"
+        }, JsonOptions);
+        var requestHash = Sha256Hex(requestJson);
+        var existing = await dbContext.ProviderRequests.AsNoTracking().SingleOrDefaultAsync(
+            x => x.OrganizationId == access.OrganizationId && x.IdempotencyKey == request.IdempotencyKey,
+            cancellationToken);
+        if (existing is not null)
+        {
+            EnsureRequestOwnership(existing, request.ProjectId, requestHash);
+            if (existing.RequestKind != "VoicePreview")
+            {
+                throw Conflict("idempotency_key_conflict", "Idempotency key đã được dùng cho một yêu cầu khác.");
+            }
+            if (existing.Status == "Completed" && !string.IsNullOrWhiteSpace(existing.ResponseJson))
+            {
+                return JsonSerializer.Deserialize<VoiceCatalogPreviewResponse>(existing.ResponseJson, JsonOptions)
+                    ?? throw Conflict("generation_result_invalid", "Metadata nghe thử giọng đã lưu không hợp lệ.");
+            }
+            throw ExistingRequestError(existing);
+        }
+
+        var quote = await costEstimator.QuoteOpenAiVoiceAsync(
+            provider.ProviderModelId,
+            previewText.Length,
+            _speechOptions.EstimatedCharactersPerSecond,
+            _speechOptions.EstimatedOutputTokensPerSecond,
+            cancellationToken);
+        RequirePositiveVoiceQuote(quote);
+        var now = UtcNow();
+        var requestLog = CreateRequestLog(
+            access.OrganizationId,
+            userId,
+            request.ProjectId,
+            null,
+            null,
+            provider,
+            "VoicePreview",
+            request.IdempotencyKey,
+            requestJson,
+            requestHash,
+            now);
+        requestLog.EstimatedCost = quote.EstimatedCost;
+        requestLog.CurrencyCode = quote.CurrencyCode;
+        requestLog.RateSnapshotJson = quote.RateSnapshotJson;
+        var reservation = await budgetService.ReserveAsync(
+            access.OrganizationId,
+            userId,
+            request.ProjectId,
+            requestLog.ProviderRequestId,
+            request.IdempotencyKey,
+            provider.ProviderCode,
+            provider.ModelCode,
+            quote.EstimatedCost,
+            cancellationToken);
+        requestLog.BudgetReservationId = reservation.ReservationId;
+        dbContext.ProviderRequests.Add(requestLog);
+        project.EstimatedCost += quote.EstimatedCost;
+        project.UpdatedAtUtc = now;
+        var providerCompleted = false;
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            await budgetService.ReleaseAsync(reservation.ReservationId, CancellationToken.None);
+            throw;
+        }
+
+        try
+        {
+            requestLog.Status = "Submitting";
+            requestLog.SubmittedAtUtc = UtcNow();
+            requestLog.UpdatedAtUtc = requestLog.SubmittedAtUtc.Value;
+            await dbContext.SaveChangesAsync(cancellationToken);
+            var result = await openAiSpeechClient.GenerateAsync(
+                provider,
+                previewText,
+                providerVoiceCode,
+                instructions,
+                speakingRate,
+                cancellationToken);
+            providerCompleted = true;
+            var completedAt = UtcNow();
+            var expiresAt = completedAt.AddHours(_speechOptions.RetentionHours);
+            var response = new VoiceCatalogPreviewResponse(
+                voiceCode,
+                speakingRate,
+                requestLog.ProviderRequestId,
+                provider.ProviderCode,
+                provider.ModelCode,
+                $"/api/generation/scene-voices/{requestLog.ProviderRequestId:D}/content",
+                result.Voice.MimeType,
+                result.Voice.Sha256,
+                result.Voice.Bytes.LongLength,
+                result.Voice.DurationMs,
+                result.Voice.SampleRate,
+                result.Voice.Channels,
+                quote.EstimatedCost,
+                quote.CurrencyCode,
+                expiresAt);
+            dbContext.GeneratedVoiceOutputs.Add(new GeneratedVoiceOutput
+            {
+                ProviderRequestId = requestLog.ProviderRequestId,
+                Payload = result.Voice.Bytes,
+                MimeType = result.Voice.MimeType,
+                Sha256 = result.Voice.Sha256,
+                SizeBytes = result.Voice.Bytes.LongLength,
+                DurationMs = result.Voice.DurationMs,
+                SampleRate = result.Voice.SampleRate,
+                Channels = result.Voice.Channels,
+                CreatedAtUtc = completedAt,
+                ExpiresAtUtc = expiresAt,
+                RowVersion = new byte[8]
+            });
+            requestLog.ExternalRequestId = NullIfEmpty(result.ProviderRequestId);
+            requestLog.Status = "Completed";
+            requestLog.ResponseJson = JsonSerializer.Serialize(response, JsonOptions);
+            requestLog.InputTokens = quote.EstimatedInputTokens;
+            requestLog.OutputTokens = quote.EstimatedOutputTokens;
+            requestLog.ActualCost = quote.EstimatedCost;
+            requestLog.CompletedAtUtc = completedAt;
+            requestLog.UpdatedAtUtc = completedAt;
+            project.ActualCost += quote.EstimatedCost;
+            project.UpdatedAtUtc = completedAt;
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await TrySettleBudgetAsync(
+                reservation.ReservationId,
+                quote.EstimatedCost,
+                provider.OrganizationProviderCredentialId,
+                new
+                {
+                    inputTokens = quote.EstimatedInputTokens,
+                    outputTokens = quote.EstimatedOutputTokens,
+                    durationMs = result.Voice.DurationMs
+                },
+                JsonSerializer.Deserialize<JsonElement>(quote.RateSnapshotJson),
+                cancellationToken);
+            return response;
+        }
+        catch (Exception exception)
+        {
+            await RecordFailureAsync(
+                requestLog,
+                null,
+                exception,
+                cancellationToken,
+                releaseReservation: !providerCompleted);
+            throw ToApiException(exception);
+        }
+    }
+
     public async Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(
         ApproveVoiceProfileVersionRequest request,
         string userId,
@@ -2371,7 +2776,10 @@ internal sealed class GenerationService(
             request.OrganizationId,
             request.ProjectId,
             cancellationToken);
-        EnsureSpeechVerificationApplies(access.Project!);
+        await EnsureSpeechVerificationAppliesAsync(
+            access.Project!,
+            request.SceneId,
+            cancellationToken);
         var scene = await RequireCurrentSpeechSceneAsync(
             request.ProjectId,
             request.SceneId,
@@ -2426,7 +2834,10 @@ internal sealed class GenerationService(
             request.OrganizationId,
             request.ProjectId,
             cancellationToken);
-        EnsureSpeechVerificationApplies(access.Project!);
+        await EnsureSpeechVerificationAppliesAsync(
+            access.Project!,
+            request.SceneId,
+            cancellationToken);
         var scene = await RequireCurrentSpeechSceneAsync(
             request.ProjectId,
             request.SceneId,
@@ -2772,7 +3183,10 @@ internal sealed class GenerationService(
             request.OrganizationId,
             request.ProjectId,
             cancellationToken);
-        EnsureSpeechVerificationApplies(access.Project!);
+        await EnsureSpeechVerificationAppliesAsync(
+            access.Project!,
+            request.SceneId,
+            cancellationToken);
         var report = await dbContext.SpeechVerificationReports.SingleOrDefaultAsync(
             x => x.SpeechVerificationReportId == request.SpeechVerificationReportId &&
                  x.ProjectId == request.ProjectId &&
@@ -5003,7 +5417,7 @@ internal sealed class GenerationService(
         {
             throw Conflict(
                 "content_repair_source_invalid",
-                "Chỉ có thể sửa request tạo content plan đã thất bại vì chính sách tiếng Việt.");
+                "Chỉ có thể sửa request tạo content plan đã thất bại vì chính sách tiếng Việt hoặc nhịp lời.");
         }
         if (string.IsNullOrWhiteSpace(request.ResponseJson) || string.IsNullOrWhiteSpace(request.ErrorDetailsJson))
         {
@@ -5229,7 +5643,7 @@ internal sealed class GenerationService(
             return new AccountApiException(
                 StatusCodes.Status422UnprocessableEntity,
                 request.ErrorCode!,
-                request.ErrorMessage ?? "Content plan chưa hoàn toàn bằng tiếng Việt.",
+                request.ErrorMessage ?? "Content plan chưa đạt yêu cầu tiếng Việt hoặc nhịp lời.",
                 RestoreContentLanguageErrors(request));
         }
 
@@ -5254,7 +5668,10 @@ internal sealed class GenerationService(
         }
     }
 
-    private static void EnsureSpeechVerificationApplies(Project project)
+    private async Task EnsureSpeechVerificationAppliesAsync(
+        Project project,
+        Guid sceneId,
+        CancellationToken cancellationToken)
     {
         if (string.Equals(
                 project.SpeechProductionPolicy,
@@ -5264,6 +5681,21 @@ internal sealed class GenerationService(
             throw Conflict(
                 SpeechSynchronizationErrorCodes.SpeechVerificationNotRequired,
                 "Canonical Voice dùng kiểm tra kỹ thuật và duyệt nghe WAV; không chạy kiểm tra transcript ASR.");
+        }
+
+        var structureType = await dbContext.Scenes
+            .AsNoTracking()
+            .Where(x => x.SceneId == sceneId && x.ProjectId == project.ProjectId)
+            .Select(x => x.Script.StructureType)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (string.Equals(
+                structureType,
+                GenerationWorkflowTypes.OpenAiStructuredPlan,
+                StringComparison.Ordinal))
+        {
+            throw Conflict(
+                SpeechSynchronizationErrorCodes.SpeechVerificationNotRequired,
+                "Video dài dùng Native Audio được nghe và duyệt trực tiếp; không chạy kiểm tra transcript ASR.");
         }
     }
 
@@ -5532,6 +5964,27 @@ internal sealed class GenerationService(
         return provider;
     }
 
+    private async Task<ProviderRuntimeConfiguration> ResolveVoiceProviderAsync(
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        var provider = await providerResolver.ResolveAsync(
+            organizationId,
+            ProviderCodes.OpenAi,
+            "Voice",
+            null,
+            cancellationToken);
+        if (!string.Equals(provider.ProviderCode, ProviderCodes.OpenAi, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(provider.ModelCode, "gpt-4o-mini-tts", StringComparison.Ordinal))
+        {
+            throw new AccountApiException(
+                StatusCodes.Status503ServiceUnavailable,
+                "openai_voice_model_not_configured",
+                "Model giọng đọc đang hoạt động phải là gpt-4o-mini-tts.");
+        }
+        return provider;
+    }
+
     private async Task PointProfileAtApprovedVersionAsync(
         VoiceProfileVersion version,
         CancellationToken cancellationToken)
@@ -5774,6 +6227,61 @@ internal sealed class GenerationService(
             ? "Xin chào, đây là bản nghe thử giọng nhân vật. Tôi sẽ giữ cách nói này nhất quán trong các cảnh."
             : "Xin chào, đây là bản nghe thử giọng người dẫn chuyện. Tôi sẽ giữ cách nói này nhất quán trong toàn bộ video.";
 
+    private static string VoiceCatalogPreviewText(string languageCode) =>
+        languageCode.StartsWith("vi", StringComparison.OrdinalIgnoreCase)
+            ? "Xin chào, đây là giọng đọc mẫu để bạn lựa chọn cho video."
+            : "Hello, this is a short voice sample to help you choose a voice for your video.";
+
+    private string ValidateVoiceCatalogPreviewInput(
+        Guid projectId,
+        string? requestedVoiceCode,
+        decimal speakingRate)
+    {
+        if (projectId == Guid.Empty)
+        {
+            throw new ArgumentException("Project ID của bản nghe thử không hợp lệ.");
+        }
+        return ValidateVoiceCatalogPreviewSelection(requestedVoiceCode, speakingRate);
+    }
+
+    private string ValidateVoiceCatalogPreviewSelection(
+        string? requestedVoiceCode,
+        decimal speakingRate)
+    {
+        var voiceCode = requestedVoiceCode?.Trim() ?? string.Empty;
+        if (!OpenAiBuiltInVoiceCatalog.IsSupported(voiceCode) ||
+            speakingRate < _speechOptions.MinimumSpeakingRate ||
+            speakingRate > _speechOptions.MaximumSpeakingRate)
+        {
+            throw new ArgumentException("Giọng hoặc tốc độ của bản nghe thử không hợp lệ.");
+        }
+        return OpenAiBuiltInVoiceCatalog.NormalizeSelection(voiceCode);
+    }
+
+    private static Guid CreateVoiceCatalogPreviewContextProjectId(Guid organizationId, string userId)
+    {
+        var identity = $"voice-catalog-preview|{organizationId:N}|{userId.Trim()}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
+        return new Guid(hash.AsSpan(0, 16));
+    }
+
+    private static void EnsureVoiceCatalogPreviewContextOwnership(
+        Project project,
+        Guid organizationId,
+        string userId,
+        string workspaceRelativePath)
+    {
+        if (project.OrganizationId != organizationId ||
+            !string.Equals(project.RemoteUserId, userId, StringComparison.Ordinal) ||
+            !string.Equals(project.CreatedByUserId, userId, StringComparison.Ordinal) ||
+            !string.Equals(project.WorkspaceRelativePath, workspaceRelativePath, StringComparison.Ordinal))
+        {
+            throw Conflict(
+                "voice_catalog_preview_context_conflict",
+                "Không thể cấp ngữ cảnh an toàn để nghe thử giọng.");
+        }
+    }
+
     private static void RequirePositiveVoiceQuote(AiCostQuote quote)
     {
         if (quote.EstimatedCost <= 0)
@@ -5864,16 +6372,38 @@ internal sealed class GenerationService(
     }
 
     private static bool IsContentLanguageError(string? code) =>
-        code is "kling_content_language_invalid" or "fal_content_language_invalid";
+        code is "kling_content_language_invalid" or "fal_content_language_invalid" or
+            ContentPlanErrorCodes.SpeechPacingInvalid;
 
     private static Dictionary<string, string[]> BuildContentLanguageErrors(
         Guid providerRequestId,
         IReadOnlyList<VietnameseContentViolation> violations,
         bool canRepair) =>
+        BuildContentLanguageErrors(
+            providerRequestId,
+            violations.Select(x => new ContentLanguageViolation(x.Field, x.Reason)).ToArray(),
+            canRepair);
+
+    private static Dictionary<string, string[]> BuildContentLanguageErrors(
+        Guid providerRequestId,
+        IReadOnlyList<ContentLanguageViolation> violations,
+        bool canRepair) =>
         new(StringComparer.Ordinal)
         {
             ["fields"] = violations.Select(x => x.Field).ToArray(),
             ["reasons"] = violations.Select(SerializeViolationReason).ToArray(),
+            ["estimatedDurations"] = violations
+                .Where(x => x.EstimatedDurationSeconds.HasValue)
+                .Select(x => SerializeViolationMetric(x.Field, x.EstimatedDurationSeconds!.Value))
+                .ToArray(),
+            ["targetMinimumDurations"] = violations
+                .Where(x => x.TargetMinimumSeconds.HasValue)
+                .Select(x => SerializeViolationMetric(x.Field, x.TargetMinimumSeconds!.Value))
+                .ToArray(),
+            ["targetMaximumDurations"] = violations
+                .Where(x => x.TargetMaximumSeconds.HasValue)
+                .Select(x => SerializeViolationMetric(x.Field, x.TargetMaximumSeconds!.Value))
+                .ToArray(),
             ["providerRequestId"] = [providerRequestId.ToString("D")],
             ["canRepair"] = [canRepair ? "true" : "false"]
         };
@@ -5901,6 +6431,12 @@ internal sealed class GenerationService(
     private static string SerializeViolationReason(VietnameseContentViolation violation) =>
         $"{violation.Field}|{violation.Reason}";
 
+    private static string SerializeViolationReason(ContentLanguageViolation violation) =>
+        $"{violation.Field}|{violation.Reason}";
+
+    private static string SerializeViolationMetric(string field, decimal value) =>
+        $"{field}|{value.ToString("0.##", CultureInfo.InvariantCulture)}";
+
     private static ContentLanguageFailureDetails? TryReadContentLanguageFailureDetails(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -5920,10 +6456,8 @@ internal sealed class GenerationService(
             }
 
             var violations = details.Violations
-                .Where(x => IsSafeContentFieldPath(x.Field) &&
-                            x.Reason is KlingVietnameseContentValidator.RequiredReason or
-                                KlingVietnameseContentValidator.LanguageInvalidReason)
-                .DistinctBy(x => x.Field, StringComparer.Ordinal)
+                .Where(IsSafeContentViolation)
+                .DistinctBy(x => $"{x.Field}|{x.Reason}", StringComparer.Ordinal)
                 .ToArray();
             return details with { Violations = violations };
         }
@@ -5939,17 +6473,37 @@ internal sealed class GenerationService(
         field.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '_' or '.' or '[' or ']' or '-');
 
+    private static bool IsSafeContentViolation(ContentLanguageViolation violation)
+    {
+        if (!IsSafeContentFieldPath(violation.Field))
+        {
+            return false;
+        }
+
+        if (violation.Reason is KlingVietnameseContentValidator.RequiredReason or
+            KlingVietnameseContentValidator.LanguageInvalidReason)
+        {
+            return violation.EstimatedDurationSeconds is null &&
+                   violation.TargetMinimumSeconds is null &&
+                   violation.TargetMaximumSeconds is null;
+        }
+
+        return (violation.Reason is ContentPlanViolationReasons.SpeechTooShort or
+                    ContentPlanViolationReasons.SpeechTooLong) &&
+               violation.EstimatedDurationSeconds is >= 0m and <= 360m &&
+               violation.TargetMinimumSeconds is > 0m and <= 360m &&
+               violation.TargetMaximumSeconds is > 0m and <= 360m &&
+               violation.TargetMinimumSeconds <= violation.TargetMaximumSeconds;
+    }
+
     private static IReadOnlyDictionary<string, string[]> RestoreContentLanguageErrors(ProviderRequest request)
     {
         var details = TryReadContentLanguageFailureDetails(request.ErrorDetailsJson);
         if (details is not null && details.ProviderRequestId == request.ProviderRequestId)
         {
-            var violations = details.Violations
-                .Select(x => new VietnameseContentViolation(x.Field, x.Reason))
-                .ToArray();
             return BuildContentLanguageErrors(
                 request.ProviderRequestId,
-                violations,
+                details.Violations,
                 details.CanRepair && !string.IsNullOrWhiteSpace(request.ResponseJson));
         }
 
@@ -6055,7 +6609,8 @@ internal sealed class GenerationService(
         {
             if (providerException.Code is "openai_invalid_speech_intent" or
                 "kling_content_language_invalid" or
-                "fal_content_language_invalid")
+                "fal_content_language_invalid" or
+                ContentPlanErrorCodes.SpeechPacingInvalid)
             {
                 return new AccountApiException(
                     StatusCodes.Status422UnprocessableEntity,

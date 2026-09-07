@@ -26,7 +26,10 @@ public sealed class ProjectService(
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await dbContext.Projects
             .AsNoTracking()
-            .Where(x => x.RemoteUserId == remoteUserId && x.DeletedAtUtc == null)
+            .Where(x =>
+                x.RemoteUserId == remoteUserId &&
+                x.DeletedAtUtc == null &&
+                !x.WorkspaceRelativePath.StartsWith(VoiceCatalogPreviewContexts.WorkspacePrefix))
             .OrderByDescending(x => x.UpdatedAtUtc)
             .Select(x => new ProjectSummary(
                 x.ProjectId,
@@ -54,7 +57,8 @@ public sealed class ProjectService(
             .Where(x =>
                 x.ProjectId == projectId &&
                 x.RemoteUserId == remoteUserId &&
-                x.DeletedAtUtc == null)
+                x.DeletedAtUtc == null &&
+                !x.WorkspaceRelativePath.StartsWith(VoiceCatalogPreviewContexts.WorkspacePrefix))
             .Select(x => new
             {
                 x.ProjectId,
@@ -523,7 +527,12 @@ public sealed class ProjectService(
                                                        voice?.Status == "Completed";
                 var requiresAudioReview = scene.Status == "AudioReviewRequired" &&
                                           !canonicalNarrationReadyForVideo;
-                var requiresSpeechVerification = !canonicalSpeech && speechVerificationEnabled;
+                var requiresSpeechVerification = !canonicalSpeech &&
+                                                 speechVerificationEnabled &&
+                                                 !string.Equals(
+                                                     workflowStructureType,
+                                                     KlingLongFormVietnameseValidator.OpenAiStructuredPlan,
+                                                     StringComparison.Ordinal);
                 var speechVerified = speechMode == KlingSpeechModes.None ||
                                      !requiresSpeechVerification ||
                                      verification?.Status == SpeechVerificationStatuses.Passed ||
@@ -547,6 +556,46 @@ public sealed class ProjectService(
                 var speakerCharacterName = speechMode == KlingSpeechModes.OnCameraDialogue
                     ? sceneCharacters.SingleOrDefault()?.Name
                     : null;
+                SceneSpeechPacingSummary? speechPacing = null;
+                if (speechMode != KlingSpeechModes.None &&
+                    !string.IsNullOrWhiteSpace(spokenText) &&
+                    scene.DurationMs > 0)
+                {
+                    var speakingRate = speechMode == KlingSpeechModes.OnCameraDialogue
+                        ? characterIdsByScene[scene.SceneId].Count == 1 &&
+                          characterById.TryGetValue(characterIdsByScene[scene.SceneId][0], out var speakingCharacter)
+                            ? speakingCharacter.VoiceSpeakingRate ?? 1m
+                            : 1m
+                        : project.VoiceSpeakingRate ?? 1m;
+                    var assessment = SpeechPacingPolicy.Assess(
+                        spokenText,
+                        scene.DurationMs / 1000m,
+                        speakingRate);
+                    var actualDurationSeconds = canonicalSpeech && voice?.DurationMs is > 0
+                        ? voice.DurationMs.Value / 1000m
+                        : (decimal?)null;
+                    var actualDurationRatio = actualDurationSeconds.HasValue
+                        ? decimal.Round(
+                            actualDurationSeconds.Value / (scene.DurationMs / 1000m),
+                            3,
+                            MidpointRounding.AwayFromZero)
+                        : (decimal?)null;
+                    speechPacing = new SceneSpeechPacingSummary(
+                        assessment.SpeechUnitCount,
+                        speakingRate,
+                        assessment.EstimatedDurationSeconds,
+                        assessment.DurationRatio,
+                        assessment.TargetMinimumSeconds,
+                        assessment.TargetMaximumSeconds,
+                        assessment.Status,
+                        actualDurationSeconds,
+                        actualDurationRatio,
+                        actualDurationSeconds.HasValue
+                            ? SpeechPacingPolicy.ClassifyActualDuration(
+                                actualDurationSeconds.Value,
+                                scene.DurationMs / 1000m)
+                            : null);
+                }
                 var providerVideoCompleted =
                     scene.Status == "WaitingProvider" &&
                     scene.LatestVideoRequestStatus == "Completed";
@@ -624,7 +673,8 @@ public sealed class ProjectService(
                             verification.ReviewedAtUtc,
                             Convert.ToBase64String(verification.RowVersion ?? [])),
                     voice?.VoiceProfileVersionId,
-                    voice?.VoiceSnapshotHash);
+                    voice?.VoiceSnapshotHash,
+                    speechPacing);
             })
             .ToArray();
 
@@ -863,7 +913,8 @@ public sealed class ProjectService(
         {
             throw new ArgumentException("Cảnh đã được gửi sang provider video nên không thể sửa prompt hiện hành.");
         }
-        var characterCount = ParseGuidList(scene.CharacterIdsJson).Count;
+        var sceneCharacterIds = ParseGuidList(scene.CharacterIdsJson);
+        var characterCount = sceneCharacterIds.Count;
         if (speechMode == KlingSpeechModes.OnCameraDialogue && characterCount != 1)
         {
             throw new ArgumentException("Thoại trực tiếp cần đúng một nhân vật trong cảnh.", nameof(command));
@@ -902,6 +953,38 @@ public sealed class ProjectService(
                     previousPrompt.NegativePrompt
                 ],
                 "Nội dung cảnh của video dài dùng provider Native Audio phải bằng tiếng Việt. Hãy nhập tiếng Việt hoặc sinh lại nội dung tiếng Việt.");
+        }
+        if (string.Equals(
+                project.SpeechProductionPolicy,
+                SpeechProductionPolicies.CanonicalVoice,
+                StringComparison.Ordinal) &&
+            speechMode != KlingSpeechModes.None &&
+            scene.ContentDurationMs > 0)
+        {
+            var speakingRate = project.VoiceSpeakingRate ?? 1m;
+            if (speechMode == KlingSpeechModes.OnCameraDialogue && characterCount == 1)
+            {
+                speakingRate = await dbContext.Characters
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.ProjectId == projectId &&
+                        x.CharacterId == sceneCharacterIds[0] &&
+                        (!project.CurrentCharacterVersion.HasValue ||
+                         x.Version == project.CurrentCharacterVersion.Value))
+                    .Select(x => x.VoiceSpeakingRate)
+                    .SingleOrDefaultAsync(cancellationToken) ?? 1m;
+            }
+            var pacing = SpeechPacingPolicy.Assess(
+                narration,
+                scene.ContentDurationMs / 1000m,
+                speakingRate);
+            if (pacing.Status == SpeechPacingStatuses.TooLong)
+            {
+                throw new ArgumentException(
+                    $"Lời đọc ước tính {pacing.EstimatedDurationSeconds:0.#} giây, vượt khả năng ghép an toàn của cảnh {scene.ContentDurationMs / 1000m:0.#} giây. " +
+                    $"Hãy rút gọn về khoảng {pacing.TargetMinimumSeconds:0.#}–{pacing.TargetMaximumSeconds:0.#} giây.",
+                    nameof(command));
+            }
         }
         var currentSpeechMode = !string.IsNullOrWhiteSpace(scene.Dialogue)
             ? KlingSpeechModes.OnCameraDialogue
@@ -975,7 +1058,12 @@ public sealed class ProjectService(
                 ? SceneSpeechStatuses.SpeechNotRequired
                 : project.SpeechProductionPolicy == SpeechProductionPolicies.CanonicalVoice
                     ? SceneSpeechStatuses.SpeechMissing
-                    : SceneSpeechStatuses.SpeechVerificationRequired;
+                    : string.Equals(
+                        structureType,
+                        KlingLongFormVietnameseValidator.OpenAiStructuredPlan,
+                        StringComparison.Ordinal)
+                        ? SceneSpeechStatuses.SpeechMissing
+                        : SceneSpeechStatuses.SpeechVerificationRequired;
             scene.Status = "PromptReady";
         }
         else if (scene.Status != "AudioReviewRequired")
@@ -1116,8 +1204,20 @@ public sealed class ProjectService(
                 ?? throw new ArgumentException("Cảnh chưa có Canonical WAV hiện hành để duyệt.");
         }
 
+        var structureType = await dbContext.Scripts
+            .AsNoTracking()
+            .Where(x => x.ScriptId == scene.ScriptId && x.ProjectId == projectId)
+            .Select(x => x.StructureType)
+            .SingleOrDefaultAsync(cancellationToken);
+        var requiresSpeechVerification = speechMode != KlingSpeechModes.None &&
+                                         !canonicalSpeech &&
+                                         speechVerificationEnabled &&
+                                         !string.Equals(
+                                             structureType,
+                                             KlingLongFormVietnameseValidator.OpenAiStructuredPlan,
+                                             StringComparison.Ordinal);
         SpeechVerificationReport? verification = null;
-        if (speechMode != KlingSpeechModes.None && !canonicalSpeech && speechVerificationEnabled)
+        if (requiresSpeechVerification)
         {
             var sourceMediaAssetId = canonicalSpeech
                 ? voiceGeneration!.OutputMediaAssetId
@@ -1343,7 +1443,7 @@ public sealed class ProjectService(
         var name = command.Name?.Trim() ?? string.Empty;
         var role = command.Role?.Trim();
         var voiceCode = string.IsNullOrWhiteSpace(command.VoiceCode) ? null : command.VoiceCode.Trim();
-        if (voiceCode is not null && voiceCode is not ("female-sweet" or "male-warm"))
+        if (voiceCode is not null && !OpenAiBuiltInVoiceCatalog.IsSupported(voiceCode))
         {
             throw new ArgumentException("Giọng nhân vật không được hỗ trợ.", nameof(command));
         }
@@ -1885,7 +1985,7 @@ public sealed class ProjectService(
             throw new ArgumentException("Mã ngôn ngữ không hợp lệ.", nameof(command));
         }
 
-        if (command.VoiceCode is not null && command.VoiceCode is not ("female-sweet" or "male-warm"))
+        if (command.VoiceCode is not null && !OpenAiBuiltInVoiceCatalog.IsSupported(command.VoiceCode))
         {
             throw new ArgumentException("Giọng đọc không được hỗ trợ.", nameof(command));
         }

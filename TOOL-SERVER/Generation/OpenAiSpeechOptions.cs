@@ -20,6 +20,19 @@ internal sealed class OpenAiSpeechOptions
 
     public Dictionary<string, string> VoiceAliases { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["alloy"] = "alloy",
+        ["ash"] = "ash",
+        ["ballad"] = "ballad",
+        ["coral"] = "coral",
+        ["echo"] = "echo",
+        ["fable"] = "fable",
+        ["onyx"] = "onyx",
+        ["nova"] = "nova",
+        ["sage"] = "sage",
+        ["shimmer"] = "shimmer",
+        ["verse"] = "verse",
+        ["marin"] = "marin",
+        ["cedar"] = "cedar",
         ["female-sweet"] = "shimmer",
         ["male-warm"] = "onyx"
     };
@@ -70,6 +83,15 @@ internal sealed class OpenAiSpeechOptions
         if (VoiceAliases.Count == 0 || VoiceAliases.Any(x => string.IsNullOrWhiteSpace(x.Key) || string.IsNullOrWhiteSpace(x.Value)))
         {
             throw new InvalidOperationException("Generation:OpenAiSpeech:VoiceAliases chưa được cấu hình hợp lệ.");
+        }
+        foreach (var voice in TOOL_SHARED.Contracts.Generation.OpenAiBuiltInVoiceCatalog.Voices)
+        {
+            if (!VoiceAliases.TryGetValue(voice.VoiceCode, out var providerVoiceCode) ||
+                !string.Equals(providerVoiceCode, voice.VoiceCode, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Generation:OpenAiSpeech:VoiceAliases thiếu giọng dựng sẵn {voice.VoiceCode}.");
+            }
         }
     }
 }

@@ -85,6 +85,11 @@ internal sealed record VoiceProfileActionWebRequest(
     string ExpectedVoiceSnapshotHash,
     bool PlaybackConfirmed = false);
 
+internal sealed record VoiceCatalogPreviewWebRequest(
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid? ContextProjectId = null);
+
 internal sealed record ContentRepairWebRequest(Guid FailedProviderRequestId);
 
 internal sealed record UpdateSceneWebRequest(

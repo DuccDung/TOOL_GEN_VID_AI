@@ -91,6 +91,19 @@ internal sealed class ProjectRenderService(
                 {
                     throw new ArgumentException("Dự án chưa có cảnh để dựng video.");
                 }
+                var workflowStructureType = project.CurrentScriptVersion is null
+                    ? null
+                    : await dbContext.Scripts
+                        .AsNoTracking()
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.Version == project.CurrentScriptVersion.Value)
+                        .Select(x => x.StructureType)
+                        .SingleOrDefaultAsync(cancellationToken);
+                var isLongFormWorkflow = string.Equals(
+                    workflowStructureType,
+                    KlingLongFormVietnameseValidator.OpenAiStructuredPlan,
+                    StringComparison.Ordinal);
 
                 // Cho phép dựng một bản video từ bất kỳ số lượng cảnh đã duyệt nào.
                 // Các cảnh chưa duyệt vẫn ở lại storyboard và không được đưa vào manifest.
@@ -142,7 +155,9 @@ internal sealed class ProjectRenderService(
                     var verificationSourceAssetId = canonicalNarration
                         ? scene.ApprovedVoiceGeneration?.OutputMediaAssetId
                         : generation?.OutputMediaAssetId;
-                    var requiresSpeechVerification = !canonicalSpeech && speechVerificationEnabled;
+                    var requiresSpeechVerification = !canonicalSpeech &&
+                                                     speechVerificationEnabled &&
+                                                     !isLongFormWorkflow;
                     var speechVerified = speechMode == KlingSpeechModes.None ||
                         !requiresSpeechVerification ||
                         await dbContext.SpeechVerificationReports.AsNoTracking().AnyAsync(

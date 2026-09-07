@@ -66,6 +66,23 @@ public sealed class TtsFoundationWorkflowTests
         Assert.Contains("speechProductionPolicy", app);
         Assert.Contains("voiceSpeakingRate", app);
         Assert.Contains("Canonical Voice", app);
+        Assert.Contains("VoicePickerModal", app);
+        Assert.Contains("voice-picker-preview", app);
+        Assert.Contains("voice-catalog.preview.quote", app);
+        Assert.Contains("voice-catalog.previewed", app);
+        Assert.Contains("voice-catalog.preview.quote", bridge);
+        Assert.Contains("voice-catalog.previewed", bridge);
+        Assert.Contains("voicePreviewProjectName={project?.project.name}", app);
+        Assert.Contains("contextProjectName: voicePreviewProjectName", app);
+        Assert.Contains("contextProjectId: quote.contextProjectId", app);
+        Assert.Contains("GetVoiceCatalogPreviewContextQuoteAsync", bridge);
+        Assert.Contains("refreshDashboard: false", bridge);
+        Assert.DoesNotContain("unavailableReason", app, StringComparison.Ordinal);
+        Assert.Contains("Có thể nghe thử trước khi tạo dự án", app);
+        Assert.Contains("getAvailableVoiceOptions(providerStatus.openAiVoiceOptions)", app);
+        Assert.Contains("không phát sinh chi phí", app);
+        Assert.Contains("OpenAiBuiltInVoiceCatalog.IsSupported", bridge);
+        Assert.Contains("OpenAiBuiltInVoiceCatalog.IsSupported", service);
         Assert.Contains("GeneratedVoiceOutputs", leastPrivilege);
         Assert.DoesNotContain("api.openai.com", app, StringComparison.OrdinalIgnoreCase);
     }

@@ -4,6 +4,14 @@ using TOOL_LOCAL.Projects;
 
 namespace TOOL_LOCAL.Generation;
 
+internal sealed record VoiceCatalogPreviewPlayback(
+    string VoiceCode,
+    decimal SpeakingRate,
+    string PreviewUrl,
+    long DurationMs,
+    decimal ActualCost,
+    string CurrencyCode);
+
 internal interface IProjectGenerationService
 {
     Task<GenerationProviderStatusResponse> GetProviderStatusAsync(CancellationToken cancellationToken);
@@ -122,6 +130,26 @@ internal interface IProjectGenerationService
         string remoteUserId,
         Guid voiceProfileVersionId,
         string expectedVoiceSnapshotHash,
+        CancellationToken cancellationToken);
+
+    Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewQuoteAsync(
+        Guid projectId,
+        string remoteUserId,
+        string voiceCode,
+        decimal speakingRate,
+        CancellationToken cancellationToken);
+
+    Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewContextQuoteAsync(
+        string voiceCode,
+        decimal speakingRate,
+        CancellationToken cancellationToken);
+
+    Task<VoiceCatalogPreviewPlayback> GenerateVoiceCatalogPreviewAsync(
+        Guid projectId,
+        string remoteUserId,
+        string voiceCode,
+        decimal speakingRate,
+        string operationRequestId,
         CancellationToken cancellationToken);
 
     Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(

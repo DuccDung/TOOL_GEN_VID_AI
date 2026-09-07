@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -37,6 +38,7 @@ internal interface IOpenAiContentClient
         string safetyIdentifier,
         VideoModelCapabilities videoCapabilities,
         bool enforceKlingLongFormSpeechPolicy,
+        decimal speakingRate,
         CancellationToken cancellationToken) =>
         GenerateAsync(
             provider,
@@ -59,6 +61,7 @@ internal interface IOpenAiContentClient
         string safetyIdentifier,
         VideoModelCapabilities videoCapabilities,
         bool enforceKlingLongFormSpeechPolicy,
+        decimal speakingRate,
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("Content repair is not supported by this OpenAI client.");
 }
@@ -89,6 +92,7 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
             safetyIdentifier,
             VideoModelCapabilities.KlingDefault,
             true,
+            1m,
             cancellationToken);
 
     public async Task<OpenAiContentResult> GenerateWithVideoConstraintsAsync(
@@ -101,6 +105,7 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
         string safetyIdentifier,
         VideoModelCapabilities videoCapabilities,
         bool enforceKlingLongFormSpeechPolicy,
+        decimal speakingRate,
         CancellationToken cancellationToken)
     {
         if (targetDurationSeconds > 360)
@@ -121,7 +126,8 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
             targetDurationSeconds,
             durations,
             generationDurations,
-            enforceKlingLongFormSpeechPolicy);
+            enforceKlingLongFormSpeechPolicy,
+            speakingRate);
         return await SendPlanRequestAsync(
             provider,
             languageCode,
@@ -146,6 +152,7 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
         string safetyIdentifier,
         VideoModelCapabilities videoCapabilities,
         bool enforceKlingLongFormSpeechPolicy,
+        decimal speakingRate,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(rejectedPlan);
@@ -161,21 +168,27 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
         var isVietnamese = IsVietnamese(languageCode);
         var violationLines = string.Join(
             "\n",
-            violations.Select(x => $"- {x.Field}: {x.Reason}"));
+            violations.Select(x => FormatRepairViolation(x, isVietnamese)));
+        var speechContracts = CreateSpeechContracts(
+            durations,
+            enforceKlingLongFormSpeechPolicy,
+            languageCode,
+            speakingRate);
         var instructions = isVietnamese
             ? "Bạn là biên tập viên sửa content plan video có cấu trúc. Trả về duy nhất JSON đúng schema. " +
-              "Chỉ sửa các trường được liệt kê là rỗng hoặc chưa đạt tiếng Việt; giữ nguyên ý nghĩa và mọi trường đã hợp lệ. " +
+              "Chỉ sửa các trường được liệt kê là rỗng, chưa đạt tiếng Việt hoặc chưa khớp nhịp lời; giữ nguyên ý nghĩa và mọi trường đã hợp lệ. " +
               "Tuyệt đối giữ nguyên character_key, asset_key, asset_type, speech_mode, speaker_character_key, thứ tự cảnh, số cảnh, thời lượng, character_keys và asset_keys. " +
               "Mọi giá trị người đọc được phải là tiếng Việt tự nhiên có dấu; tên riêng, thương hiệu và model có thể giữ nguyên. " +
+              "Khi sửa nhịp lời, bổ sung hoặc rút gọn nội dung có ích; không lặp ý, chèn từ đệm hoặc kéo dài bằng dấu câu. " +
               "Trước khi trả kết quả, tự kiểm tra lại toàn bộ chuỗi và không để sót câu mô tả tiếng Anh."
             : "You repair a structured video content plan. Return only JSON matching the schema. " +
-              "Change only the listed invalid fields and preserve every valid field, machine key, enum, scene order, duration and mapping.";
+              "Change only the listed invalid fields, including speech pacing issues, and preserve every valid field, machine key, enum, scene order, duration and mapping.";
         var planJson = JsonSerializer.Serialize(rejectedPlan, JsonOptions);
         var input = isVietnamese
             ? $"Hãy sửa content plan sau cho ngôn ngữ {languageCode}, nền tảng {platform}, tỷ lệ {aspectRatio}.\n" +
-              $"Các trường cần sửa:\n{violationLines}\nContent plan hiện tại:\n{planJson}"
+              $"Các trường cần sửa:\n{violationLines}\nRàng buộc nhịp lời:\n{speechContracts}\nContent plan hiện tại:\n{planJson}"
             : $"Repair this content plan for language {languageCode}, platform {platform}, aspect ratio {aspectRatio}.\n" +
-              $"Invalid fields:\n{violationLines}\nCurrent content plan:\n{planJson}";
+              $"Invalid fields:\n{violationLines}\nSpeech contracts:\n{speechContracts}\nCurrent content plan:\n{planJson}";
 
         return await SendPlanRequestAsync(
             provider,
@@ -393,12 +406,14 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
         int targetDurationSeconds,
         IReadOnlyList<int> durations,
         IReadOnlyList<int> generationDurations,
-        bool enforceKlingLongFormSpeechPolicy)
+        bool enforceKlingLongFormSpeechPolicy,
+        decimal speakingRate)
     {
         var speechContracts = CreateSpeechContracts(
             durations,
             enforceKlingLongFormSpeechPolicy,
-            languageCode);
+            languageCode,
+            speakingRate);
         if (IsVietnamese(languageCode))
         {
             return $"Hãy tạo content plan video hoàn chỉnh. Chủ đề: {topic}\nNgôn ngữ: {languageCode}\nNền tảng: {platform}\nTỷ lệ khung hình: {aspectRatio}\n" +
@@ -406,6 +421,7 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
                    $"Thời lượng nội dung bắt buộc: {string.Join(", ", durations.Select((seconds, index) => $"cảnh {index + 1} = {seconds} giây"))}. " +
                    $"Thời lượng provider cố định: {string.Join(", ", generationDurations.Select((seconds, index) => $"cảnh {index + 1} = {seconds} giây"))}. " +
                    "Hoàn thành spoken_text trước mốc thời lượng nội dung; phần đuôi chỉ dành cho provider sẽ bị cắt. " +
+                   "Với cảnh có lời, ưu tiên lời đọc chiếm 85–95% thời lượng nội dung, đủ ý và tự nhiên; không kéo dài bằng từ đệm, lặp ý hoặc dấu câu giả tạo. " +
                    $"Ràng buộc spoken_text bắt buộc:\n{speechContracts}\n" +
                    "Mỗi visual_prompt phải mô tả chủ thể, môi trường, ánh sáng, hành động, cỡ cảnh và chuyển động máy mà không lặp spoken_text. " +
                    "Nếu có người dẫn lặp lại, giữ nguyên khuôn mặt, tóc, tỷ lệ cơ thể, trang phục và phụ kiện. Khai báo tài sản dùng chung một lần trong assets rồi tham chiếu bằng asset_keys.";
@@ -817,23 +833,49 @@ internal sealed class OpenAiContentClient(IHttpClientFactory httpClientFactory) 
     private static string CreateSpeechContracts(
         IReadOnlyList<int> durations,
         bool enforceKlingLongFormSpeechPolicy,
-        string languageCode) =>
+        string languageCode,
+        decimal speakingRate) =>
         string.Join(
             "\n",
             durations.Select((durationSeconds, index) =>
             {
                 if (IsVietnamese(languageCode))
                 {
+                    var guidance = SpeechPacingPolicy.CreateGuidance(durationSeconds, speakingRate);
+                    var targetMinimum = guidance.TargetMinimumSeconds.ToString("0.##", CultureInfo.InvariantCulture);
+                    var targetMaximum = guidance.TargetMaximumSeconds.ToString("0.##", CultureInfo.InvariantCulture);
+                    var formattedSpeakingRate = speakingRate.ToString("0.##", CultureInfo.InvariantCulture);
                     var vietnameseContract = enforceKlingLongFormSpeechPolicy
                         ? " Một nhân vật cùng spoken_text phải dùng OnCameraDialogue với nhân vật đó là người nói và hiện rõ hành động nói; không có nhân vật cùng spoken_text phải dùng NativeVoiceOver với character_keys=[]."
                         : string.Empty;
-                    return $"- cảnh {index + 1}: đúng {durationSeconds} giây; speech_mode=None yêu cầu spoken_text rỗng; các mode khác yêu cầu spoken_text tiếng Việt tự nhiên, không rỗng và vừa thời lượng cảnh.{vietnameseContract}";
+                    return $"- cảnh {index + 1}: đúng {durationSeconds} giây; speech_mode=None yêu cầu spoken_text rỗng; " +
+                           $"các mode khác yêu cầu spoken_text tiếng Việt tự nhiên, ước tính đọc {targetMinimum}–{targetMaximum} giây " +
+                           $"(khoảng {guidance.SuggestedMinimumSpeechUnits}–{guidance.SuggestedMaximumSpeechUnits} âm tiết/cụm đọc ở tốc độ {formattedSpeakingRate}x), " +
+                           $"không rỗng và không vượt thời lượng cảnh.{vietnameseContract}";
                 }
                 var strictContract = enforceKlingLongFormSpeechPolicy
                     ? " One character plus spoken_text requires OnCameraDialogue with that character as speaker and visible speaking action; zero characters plus spoken_text requires NativeVoiceOver; NativeVoiceOver requires character_keys=[]."
                     : string.Empty;
                 return $"- scene {index + 1}: exactly {durationSeconds}s; speech_mode=None requires empty spoken_text; otherwise spoken_text must be non-empty and natural for the scene duration.{strictContract}";
             }));
+
+    private static string FormatRepairViolation(ContentLanguageViolation violation, bool isVietnamese)
+    {
+        if (violation.Reason is not (ContentPlanViolationReasons.SpeechTooShort or ContentPlanViolationReasons.SpeechTooLong))
+        {
+            return $"- {violation.Field}: {violation.Reason}";
+        }
+
+        var direction = violation.Reason == ContentPlanViolationReasons.SpeechTooShort
+            ? isVietnamese ? "lời quá ngắn" : "speech is too short"
+            : isVietnamese ? "lời quá dài" : "speech is too long";
+        var estimated = violation.EstimatedDurationSeconds?.ToString("0.##", CultureInfo.InvariantCulture) ?? "?";
+        var minimum = violation.TargetMinimumSeconds?.ToString("0.##", CultureInfo.InvariantCulture) ?? "?";
+        var maximum = violation.TargetMaximumSeconds?.ToString("0.##", CultureInfo.InvariantCulture) ?? "?";
+        return isVietnamese
+            ? $"- {violation.Field}: {direction}; ước tính {estimated} giây, mục tiêu {minimum}–{maximum} giây"
+            : $"- {violation.Field}: {direction}; estimated {estimated}s, target {minimum}–{maximum}s";
+    }
 
     private static string NormalizeVietnameseSentinel(string value, string languageCode, string field)
     {

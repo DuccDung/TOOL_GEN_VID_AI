@@ -83,7 +83,10 @@ public sealed record GenerateContentRequest(
 
 public sealed record ContentLanguageViolation(
     string Field,
-    string Reason);
+    string Reason,
+    decimal? EstimatedDurationSeconds = null,
+    decimal? TargetMinimumSeconds = null,
+    decimal? TargetMaximumSeconds = null);
 
 public sealed record ContentRepairQuoteRequest(
     Guid ProjectId,
@@ -304,6 +307,51 @@ public sealed record VoiceProfilePreviewResponse(
     string CurrencyCode,
     DateTime ExpiresAtUtc);
 
+public sealed record VoiceCatalogPreviewQuoteRequest(
+    Guid ProjectId,
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceCatalogPreviewContextQuoteRequest(
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceCatalogPreviewQuoteResponse(
+    string VoiceCode,
+    decimal SpeakingRate,
+    string ProviderCode,
+    string ModelCode,
+    decimal EstimatedCost,
+    string CurrencyCode,
+    int PreviewTextCharacters,
+    Guid ContextProjectId);
+
+public sealed record GenerateVoiceCatalogPreviewRequest(
+    Guid ProjectId,
+    string VoiceCode,
+    decimal SpeakingRate,
+    string IdempotencyKey,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceCatalogPreviewResponse(
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid ProviderRequestId,
+    string ProviderCode,
+    string ModelCode,
+    string ContentUrl,
+    string MimeType,
+    string Sha256,
+    long SizeBytes,
+    long DurationMs,
+    int SampleRate,
+    int Channels,
+    decimal ActualCost,
+    string CurrencyCode,
+    DateTime ExpiresAtUtc);
+
 public sealed record ApproveVoiceProfileVersionRequest(
     Guid ProjectId,
     Guid VoiceProfileVersionId,
@@ -507,4 +555,5 @@ public sealed record GenerationProviderStatusResponse(
     bool SpeechVerificationEnabled = false,
     bool CanonicalVoiceReady = false,
     string? CanonicalVoiceUnavailableCode = null,
-    string? CanonicalVoiceUnavailableMessage = null);
+    string? CanonicalVoiceUnavailableMessage = null,
+    IReadOnlyList<OpenAiVoiceOption>? OpenAiVoiceOptions = null);

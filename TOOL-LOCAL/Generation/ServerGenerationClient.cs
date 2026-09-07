@@ -356,6 +356,42 @@ internal sealed class ServerGenerationClient(
             cancellationToken);
     }
 
+    public async Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewQuoteAsync(
+        VoiceCatalogPreviewQuoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceCatalogPreviewQuoteResponse>(
+            HttpMethod.Post,
+            $"api/generation/projects/{request.ProjectId:D}/voice-catalog-preview/quote",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewContextQuoteAsync(
+        VoiceCatalogPreviewContextQuoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceCatalogPreviewQuoteResponse>(
+            HttpMethod.Post,
+            "api/generation/voice-catalog-preview/quote",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
+    public async Task<VoiceCatalogPreviewResponse> GenerateVoiceCatalogPreviewAsync(
+        GenerateVoiceCatalogPreviewRequest request,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = await GetOrganizationIdAsync(cancellationToken);
+        return await SendAsync<VoiceCatalogPreviewResponse>(
+            HttpMethod.Post,
+            $"api/generation/projects/{request.ProjectId:D}/voice-catalog-preview",
+            request with { OrganizationId = organizationId },
+            cancellationToken);
+    }
+
     public async Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(
         ApproveVoiceProfileVersionRequest request,
         CancellationToken cancellationToken)
@@ -736,6 +772,22 @@ internal sealed class ServerGenerationClient(
 
     public Task DownloadVoiceProfilePreviewAsync(
         VoiceProfilePreviewResponse preview,
+        string destinationPath,
+        CancellationToken cancellationToken) =>
+        DownloadVoiceAsync(
+            preview.ProviderRequestId,
+            preview.ContentUrl,
+            preview.MimeType,
+            preview.Sha256,
+            preview.SizeBytes,
+            preview.DurationMs,
+            preview.SampleRate,
+            preview.Channels,
+            destinationPath,
+            cancellationToken);
+
+    public Task DownloadVoiceCatalogPreviewAsync(
+        VoiceCatalogPreviewResponse preview,
         string destinationPath,
         CancellationToken cancellationToken) =>
         DownloadVoiceAsync(

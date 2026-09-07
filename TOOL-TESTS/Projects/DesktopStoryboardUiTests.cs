@@ -276,14 +276,15 @@ public sealed class DesktopStoryboardUiTests
 
         Assert.Contains("dashboard.providerStatus.canonicalVoiceReady", app);
         Assert.Contains("Canonical Voice không yêu cầu ASR", app);
-        Assert.Contains("const needsReviewOverride = !canonicalSpeech", app);
+        Assert.Contains("const needsReviewOverride = !longFormProject &&", app);
         Assert.Contains("scene.canonicalVoicePreview?.url, scene.speechVerification?.speechVerificationReportId", app);
         Assert.Contains("reviewApproved?: boolean", types);
         Assert.Contains("canonicalVoiceReady?: boolean", types);
         Assert.Contains("ApproveSpeechVerificationReviewAsync", bridge);
         Assert.Contains("RequireCanonicalVoiceReadyAsync", bridge);
         Assert.Contains("if (!status.CanonicalVoiceReady)", bridge);
-        Assert.Contains("var requiresSpeechVerification = !canonicalSpeech && speechVerificationEnabled", projectService);
+        Assert.Contains("var requiresSpeechVerification = !canonicalSpeech &&", projectService);
+        Assert.Contains("workflowStructureType", projectService);
     }
 
     [Fact]
@@ -302,6 +303,9 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("Video chưa được gửi sang provider ở bước này", workflowUx);
         Assert.Contains("WAV hiện hành được dùng lại, không cần bước duyệt riêng", app);
         Assert.Contains("WAV sẵn sàng cho video", app);
+        Assert.Contains("<SpeechPacingIndicator scene={scene} compact />", app);
+        Assert.Contains("WAV vẫn được dùng để tạo video; hệ thống không tự sinh lại giọng.", app);
+        Assert.Contains(".speech-pacing-indicator", styles);
         Assert.Contains("không gọi TTS mới", workflowUx);
         Assert.Contains("Tạo video nền", app);
         Assert.Contains(
@@ -309,6 +313,24 @@ public sealed class DesktopStoryboardUiTests
             app);
         Assert.Contains("Video chưa được gửi tạo cho các cảnh này", bridge);
         Assert.Contains("BuildVideoGenerationCompletionMessage", bridge);
+    }
+
+    [Fact]
+    public void LongFormNativeAudio_HidesAsrAndUsesManualListeningApproval()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+
+        Assert.Contains(
+            "const speechVerificationRequired = project?.workflowStructureType !== 'OpenAiStructuredPlan';",
+            app);
+        Assert.Contains(
+            "{speechVerificationRequired && scene.speechMode !== 'None' && !canonicalVoiceWorkflow && (",
+            app);
+        Assert.Contains(
+            "const longFormProject = dashboard.selectedProject.workflowStructureType === 'OpenAiStructuredPlan';",
+            app);
+        Assert.Contains("!string.Equals(\n                                                     workflowStructureType", projectService);
     }
 
     [Fact]

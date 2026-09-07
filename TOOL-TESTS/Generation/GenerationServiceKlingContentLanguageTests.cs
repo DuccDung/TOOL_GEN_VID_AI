@@ -485,6 +485,73 @@ public sealed class GenerationServiceKlingContentLanguageTests
         Assert.Equal("Completed", (await dbContext.ProviderRequests.SingleAsync()).Status);
     }
 
+    [Fact]
+    public async Task CanonicalVoiceShortNarration_IsRepairableWithoutAnAutomaticSecondProviderCall()
+    {
+        await using var dbContext = CreateContext();
+        var project = SeedProject(dbContext, ProviderCodes.Kling);
+        project.SpeechProductionPolicy = SpeechProductionPolicies.CanonicalVoice;
+        project.VoiceSpeakingRate = 1m;
+        await dbContext.SaveChangesAsync();
+        var shortPlan = CreateVietnameseSpeechPlan("Hít sâu.");
+        var repairedPlan = CreateVietnameseSpeechPlan(
+            "Đứng thẳng, hít sâu rồi vươn hai tay lên cao chậm.");
+        var contentClient = new StubContentClient(shortPlan, repairedPlan);
+        var budget = new StubBudgetService();
+        var service = CreateService(dbContext, project, contentClient, budget);
+
+        var failure = await Assert.ThrowsAsync<AccountApiException>(() => service.GenerateContentAsync(
+            new GenerateContentRequest(project.ProjectId, "content-pacing-source", project.OrganizationId),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None));
+
+        Assert.Equal(ContentPlanErrorCodes.SpeechPacingInvalid, failure.Code);
+        Assert.Contains("scenes[0].spoken_text", failure.Errors!["fields"]);
+        Assert.Contains(
+            "scenes[0].spoken_text|speech_too_short",
+            failure.Errors["reasons"]);
+        Assert.NotEmpty(failure.Errors["estimatedDurations"]);
+        Assert.Equal("true", Assert.Single(failure.Errors["canRepair"]));
+        Assert.Equal(1, contentClient.GenerateCallCount);
+        Assert.Equal(0, contentClient.RepairCallCount);
+        Assert.Equal(1, budget.SettleCount);
+        Assert.Equal(0, budget.ReleaseCount);
+
+        var failedRequestId = Guid.Parse(Assert.Single(failure.Errors["providerRequestId"]));
+        var restored = await service.GetLatestContentLanguageFailureAsync(
+            project.ProjectId,
+            project.OrganizationId,
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+        var restoredViolation = Assert.Single(restored!.Violations);
+        Assert.Equal(ContentPlanViolationReasons.SpeechTooShort, restoredViolation.Reason);
+        Assert.NotNull(restoredViolation.EstimatedDurationSeconds);
+
+        var quote = await service.GetContentRepairQuoteAsync(
+            new ContentRepairQuoteRequest(project.ProjectId, failedRequestId, project.OrganizationId),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+        Assert.Equal(0, contentClient.RepairCallCount);
+        Assert.Equal(ContentPlanViolationReasons.SpeechTooShort, Assert.Single(quote.Violations).Reason);
+
+        var repaired = await service.RepairContentAsync(
+            new RepairContentRequest(
+                project.ProjectId,
+                failedRequestId,
+                "content-pacing-repair",
+                project.OrganizationId),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal(repairedPlan.Scenes[0].Narration, repaired.Plan.Scenes[0].Narration);
+        Assert.Equal(1, contentClient.RepairCallCount);
+        Assert.Equal(2, budget.SettleCount);
+    }
+
     private static GenerationService CreateService(
         VideoFactoryDbContext dbContext,
         Project project,
@@ -621,6 +688,41 @@ public sealed class GenerationServiceKlingContentLanguageTests
                     [1])
             ]);
 
+    private static GeneratedContentPlan CreateVietnameseSpeechPlan(string narration) =>
+        new(
+            "Một thói quen tốt",
+            "Hãy bắt đầu ngay hôm nay",
+            "Cách tiếp cận thực tế",
+            "Người trưởng thành",
+            "Hãy thử một thói quen",
+            narration,
+            "Ánh sáng tự nhiên",
+            "phụ đề, logo, watermark",
+            [],
+            [
+                new GeneratedContentScene(
+                    1,
+                    "Mở đầu thu hút người xem",
+                    narration,
+                    "Một cốc nước đặt cạnh cửa sổ sáng trong căn phòng yên tĩnh.",
+                    5,
+                    [],
+                    KlingSpeechModes.NativeVoiceOver,
+                    null,
+                    "tự nhiên và bình tĩnh",
+                    "âm nền căn phòng yên tĩnh",
+                    "tiếng cốc di chuyển nhẹ",
+                    ["bright-room"])
+            ],
+            [
+                new GeneratedProjectAsset(
+                    "bright-room",
+                    "Background",
+                    "Căn phòng sáng",
+                    "Căn phòng sạch sẽ với một cửa sổ lớn ở bên trái.",
+                    [1])
+            ]);
+
     private sealed class StubContentClient(
         GeneratedContentPlan plan,
         GeneratedContentPlan? repairPlan = null,
@@ -656,6 +758,7 @@ public sealed class GenerationServiceKlingContentLanguageTests
             string safetyIdentifier,
             VideoModelCapabilities videoCapabilities,
             bool enforceKlingLongFormSpeechPolicy,
+            decimal speakingRate,
             CancellationToken cancellationToken)
         {
             RepairCallCount++;

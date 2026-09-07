@@ -90,12 +90,12 @@ public sealed class NativeAudioApprovalTests
     }
 
     [Fact]
-    public async Task FeatureDisabled_PreservesLegacyNativeAudioManualApprovalWithoutAsrReport()
+    public async Task LongForm_FeatureEnabled_AllowsManualApprovalWithoutAsrReport()
     {
         var fixture = await CreateFixtureAsync(
             nativeAudioAudible: true,
             includeVerification: false,
-            speechVerificationEnabled: false);
+            speechVerificationEnabled: true);
         try
         {
             var dashboard = await fixture.Service.GetDashboardAsync(
@@ -103,7 +103,9 @@ public sealed class NativeAudioApprovalTests
                 fixture.UserId,
                 CancellationToken.None);
 
-            Assert.True(Assert.Single(dashboard!.Scenes).CanApproveNativeAudio);
+            var scene = Assert.Single(dashboard!.Scenes);
+            Assert.True(scene.CanApproveNativeAudio);
+            Assert.Null(scene.SpeechVerification);
 
             await fixture.Service.ApproveSceneNativeAudioAsync(
                 fixture.ProjectId,
@@ -116,6 +118,37 @@ public sealed class NativeAudioApprovalTests
             Assert.Equal(
                 "Approved",
                 (await verification.Scenes.SingleAsync(x => x.SceneId == fixture.SceneId)).Status);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task NonLongForm_FeatureEnabled_StillRequiresAsrReport()
+    {
+        var fixture = await CreateFixtureAsync(
+            nativeAudioAudible: true,
+            includeVerification: false,
+            speechVerificationEnabled: true,
+            structureType: "DirectShortVideo");
+        try
+        {
+            var dashboard = await fixture.Service.GetDashboardAsync(
+                fixture.ProjectId,
+                fixture.UserId,
+                CancellationToken.None);
+
+            Assert.False(Assert.Single(dashboard!.Scenes).CanApproveNativeAudio);
+            var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+                fixture.Service.ApproveSceneNativeAudioAsync(
+                    fixture.ProjectId,
+                    fixture.UserId,
+                    fixture.SceneId,
+                    true,
+                    CancellationToken.None));
+            Assert.Contains("kiểm tra transcript", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -167,8 +200,9 @@ public sealed class NativeAudioApprovalTests
 
     private static async Task<Fixture> CreateFixtureAsync(
         bool nativeAudioAudible,
-        bool includeVerification = true,
-        bool speechVerificationEnabled = true)
+        bool includeVerification = false,
+        bool speechVerificationEnabled = true,
+        string structureType = "OpenAiStructuredPlan")
     {
         var databaseName = $"native-audio-approval-{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
@@ -219,7 +253,7 @@ public sealed class NativeAudioApprovalTests
                 ScriptId = scriptId,
                 ProjectId = projectId,
                 Version = 1,
-                StructureType = "Test",
+                StructureType = structureType,
                 FullText = "Test",
                 StoryBeatsJson = "[]",
                 Status = "Approved",
@@ -254,6 +288,7 @@ public sealed class NativeAudioApprovalTests
                 EntryStateJson = "{}",
                 ExitStateJson = "{}",
                 Status = "AudioReviewRequired",
+                SpeechStatus = "SpeechVerificationRequired",
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
                 RowVersion = new byte[8]

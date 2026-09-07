@@ -228,6 +228,34 @@ public sealed class SceneSpeechVerificationServiceTests
     }
 
     [Fact]
+    public async Task VerifySceneSpeechAsync_LongFormStopsBeforePricingAndOutbound()
+    {
+        await using var dbContext = CreateContext();
+        var (project, scene) = SeedProject(dbContext, "OpenAiStructuredPlan");
+        var wav = CreatePcmWav(16_000, 1, 1);
+        var mediaHash = Convert.ToHexString(SHA256.HashData(wav)).ToLowerInvariant();
+        var resolver = new StubProviderResolver();
+        var transcription = new StubTranscriptionClient("Xin chào Việt Nam");
+        var budget = new StubBudgetService();
+        var service = CreateService(dbContext, project, transcription, budget, 0.01m, resolver);
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() =>
+            service.VerifySceneSpeechAsync(
+                CreateRequest(dbContext, project, scene, mediaHash),
+                wav,
+                "user-1",
+                Guid.NewGuid(),
+                CancellationToken.None));
+
+        Assert.Equal(SpeechSynchronizationErrorCodes.SpeechVerificationNotRequired, exception.Code);
+        Assert.Equal(0, resolver.ResolveCount);
+        Assert.Equal(0, budget.ReserveCount);
+        Assert.Equal(0, transcription.CallCount);
+        Assert.Empty(dbContext.SpeechVerificationReports);
+        Assert.Empty(dbContext.ProviderRequests);
+    }
+
+    [Fact]
     public async Task VerifySceneSpeechAsync_BudgetFailureStopsBeforeOutbound()
     {
         await using var dbContext = CreateContext();
@@ -399,7 +427,9 @@ public sealed class SceneSpeechVerificationServiceTests
             .UseInMemoryDatabase($"speech-verification-{Guid.NewGuid():N}")
             .Options);
 
-    private static (Project Project, Scene Scene) SeedProject(VideoFactoryDbContext dbContext)
+    private static (Project Project, Scene Scene) SeedProject(
+        VideoFactoryDbContext dbContext,
+        string structureType = "Narrative")
     {
         var now = DateTime.UtcNow;
         var project = new Project
@@ -412,7 +442,7 @@ public sealed class SceneSpeechVerificationServiceTests
         };
         var script = new Script
         {
-            ScriptId = Guid.NewGuid(), ProjectId = project.ProjectId, Version = 1, StructureType = "Narrative",
+            ScriptId = Guid.NewGuid(), ProjectId = project.ProjectId, Version = 1, StructureType = structureType,
             FullText = "Xin chào Việt Nam", StoryBeatsJson = "[]", Status = "Approved", CreatedAtUtc = now,
             RowVersion = new byte[8]
         };

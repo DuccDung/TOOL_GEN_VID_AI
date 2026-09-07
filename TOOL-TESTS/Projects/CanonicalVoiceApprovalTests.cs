@@ -80,6 +80,28 @@ public sealed class CanonicalVoiceApprovalTests
     }
 
     [Fact]
+    public async Task ShortButTechnicallyValidCanonicalWav_ShowsPacingWarningAndStillAllowsVideo()
+    {
+        using var fixture = await CreateFixtureAsync(
+            onCamera: false,
+            includeNarratedVideo: false,
+            voiceDurationMs: 3_000);
+
+        var dashboard = await fixture.Service.GetDashboardAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        var scene = Assert.Single(dashboard!.Scenes);
+        Assert.True(scene.CanGenerate);
+        Assert.False(scene.RequiresAudioReview);
+        Assert.Equal("PromptReady", scene.Status);
+        Assert.NotNull(scene.SpeechPacing);
+        Assert.Equal(3m, scene.SpeechPacing.ActualDurationSeconds);
+        Assert.Equal("TooShort", scene.SpeechPacing.ActualStatus);
+    }
+
+    [Fact]
     public async Task ApproveSceneVoice_OnCameraStopsAtSpeechReadyForLipSync()
     {
         using var fixture = await CreateFixtureAsync(onCamera: true, includeNarratedVideo: false);
@@ -214,7 +236,8 @@ public sealed class CanonicalVoiceApprovalTests
         string sceneStatus = "AudioReviewRequired",
         string speechStatus = SceneSpeechStatuses.SpeechReviewRequired,
         string? lastErrorCode = null,
-        string? lastErrorMessage = null)
+        string? lastErrorMessage = null,
+        long voiceDurationMs = 4_500)
     {
         var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
             .UseInMemoryDatabase($"canonical-voice-approval-{Guid.NewGuid():N}")
@@ -393,7 +416,7 @@ public sealed class CanonicalVoiceApprovalTests
                 MimeType = "audio/wav",
                 SizeBytes = 1_024,
                 Sha256 = new string('b', 64),
-                DurationMs = 4_500,
+                DurationMs = voiceDurationMs,
                 AudioSampleRate = 24_000,
                 Status = "Ready",
                 SourceType = "Generated",
@@ -419,7 +442,7 @@ public sealed class CanonicalVoiceApprovalTests
                 LanguageCode = "vi-VN",
                 SpeakingRate = 1m,
                 Status = includeNarratedVideo ? "Approved" : "Completed",
-                DurationMs = 4_500,
+                DurationMs = voiceDurationMs,
                 OutputMediaAssetId = voiceAssetId,
                 CreatedAtUtc = now,
                 CompletedAtUtc = now,

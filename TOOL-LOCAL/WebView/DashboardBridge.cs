@@ -167,6 +167,12 @@ internal sealed class DashboardBridge : IDisposable
                 case "voice-profile.draft":
                     await CreateVoiceProfileDraftAsync(request, cancellationToken);
                     break;
+                case "voice-catalog.preview.quote":
+                    await GetVoiceCatalogPreviewQuoteAsync(request, cancellationToken);
+                    break;
+                case "voice-catalog.preview":
+                    await GenerateVoiceCatalogPreviewAsync(request, cancellationToken);
+                    break;
                 case "voice-profile.preview.quote":
                     await GetVoiceProfilePreviewQuoteAsync(request, cancellationToken);
                     break;
@@ -443,13 +449,13 @@ internal sealed class DashboardBridge : IDisposable
         // Workflow Video Dài hiện dùng tiếng Việt xuyên suốt. Video Ngắn có
         // contract riêng và không đi qua nhánh tạo project này.
         const string languageCode = "vi-VN";
-        var voiceCode = payload.VoiceCode?.Trim() switch
+        var voiceCode = string.IsNullOrWhiteSpace(payload.VoiceCode)
+            ? null
+            : payload.VoiceCode.Trim();
+        if (voiceCode is not null && !OpenAiBuiltInVoiceCatalog.IsSupported(voiceCode))
         {
-            null or "" => null,
-            "female-sweet" => "female-sweet",
-            "male-warm" => "male-warm",
-            _ => throw new ArgumentException("Giọng đọc được chọn không hợp lệ.")
-        };
+            throw new ArgumentException("Giọng đọc được chọn không hợp lệ.");
+        }
         var voiceSpeakingRate = payload.VoiceSpeakingRate;
         if (voiceSpeakingRate is { } rate && rate is < 0.5m or > 2m)
         {
@@ -743,7 +749,7 @@ internal sealed class DashboardBridge : IDisposable
         var payload = request.Payload.Deserialize<CreateVoiceProfileDraftWebRequest>(_jsonOptions)
             ?? throw new ArgumentException("Cấu hình bản nháp giọng không hợp lệ.");
         if (payload.Scope is not (VoiceProfileScopes.ProjectNarrator or VoiceProfileScopes.Character) ||
-            payload.VoiceCode is not ("female-sweet" or "male-warm") ||
+            !OpenAiBuiltInVoiceCatalog.IsSupported(payload.VoiceCode) ||
             payload.SpeakingRate is < 0.5m or > 2m)
         {
             throw new ArgumentException("Cấu hình bản nháp giọng không hợp lệ.");
@@ -759,6 +765,66 @@ internal sealed class DashboardBridge : IDisposable
             cancellationToken);
         Post(new WebMessageResponse("voice-profile.drafted", request.RequestId, result));
         await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task GetVoiceCatalogPreviewQuoteAsync(
+        WebMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureSpeechSynchronizationEnabled();
+        var payload = RequireVoiceCatalogPreview(request);
+        VoiceCatalogPreviewQuoteResponse quote;
+        if (_selectedProjectId is { } projectId)
+        {
+            var current = _sessionManager.Current
+                ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
+            quote = await _generationService.GetVoiceCatalogPreviewQuoteAsync(
+                projectId,
+                current.User.UserId,
+                payload.VoiceCode,
+                payload.SpeakingRate,
+                cancellationToken);
+        }
+        else
+        {
+            quote = await _generationService.GetVoiceCatalogPreviewContextQuoteAsync(
+                payload.VoiceCode,
+                payload.SpeakingRate,
+                cancellationToken);
+        }
+        Post(new WebMessageResponse("voice-catalog.preview.quote", request.RequestId, quote));
+    }
+
+    private Task GenerateVoiceCatalogPreviewAsync(
+        WebMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureSpeechSynchronizationEnabled();
+        var payload = RequireVoiceCatalogPreview(request);
+        var operationRequestId = request.RequestId
+            ?? throw new ArgumentException("Yêu cầu nghe thử giọng thiếu mã đối chiếu.");
+        var contextProjectId = payload.ContextProjectId is { } value && value != Guid.Empty
+            ? value
+            : throw new ArgumentException("Yêu cầu nghe thử giọng thiếu ngữ cảnh báo giá hợp lệ.");
+        return RunExclusiveGenerationAsync(
+            request.RequestId,
+            async token =>
+            {
+                var current = _sessionManager.Current
+                    ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
+                var result = await _generationService.GenerateVoiceCatalogPreviewAsync(
+                    contextProjectId,
+                    current.User.UserId,
+                    payload.VoiceCode,
+                    payload.SpeakingRate,
+                    operationRequestId,
+                    token);
+                Post(new WebMessageResponse("voice-catalog.previewed", request.RequestId, result));
+            },
+            cancellationToken,
+            // Catalog audition does not mutate a visible project. Refreshing here can
+            // auto-select an existing project and unmount the picker opened from setup.
+            refreshDashboard: false);
     }
 
     private async Task GetVoiceProfilePreviewQuoteAsync(
@@ -848,6 +914,21 @@ internal sealed class DashboardBridge : IDisposable
             throw new ArgumentException("Phiên bản giọng được chọn không hợp lệ.");
         }
         return payload;
+    }
+
+    private VoiceCatalogPreviewWebRequest RequireVoiceCatalogPreview(WebMessageRequest request)
+    {
+        var payload = request.Payload.Deserialize<VoiceCatalogPreviewWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Yêu cầu nghe thử giọng không hợp lệ.");
+        if (!OpenAiBuiltInVoiceCatalog.IsSupported(payload.VoiceCode) ||
+            payload.SpeakingRate is < 0.5m or > 2m)
+        {
+            throw new ArgumentException("Yêu cầu nghe thử giọng không hợp lệ.");
+        }
+        return payload with
+        {
+            VoiceCode = OpenAiBuiltInVoiceCatalog.NormalizeSelection(payload.VoiceCode)
+        };
     }
 
     private Task GenerateVideosCoreAsync(
@@ -1630,7 +1711,8 @@ internal sealed class DashboardBridge : IDisposable
     private async Task RunExclusiveGenerationAsync(
         string? requestId,
         Func<CancellationToken, Task> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool refreshDashboard = true)
     {
         if (!_generationLock.Wait(0))
         {
@@ -1640,19 +1722,25 @@ internal sealed class DashboardBridge : IDisposable
         try
         {
             _generationRunning = true;
-            await RefreshAsync(requestId, cancellationToken);
+            if (refreshDashboard)
+            {
+                await RefreshAsync(requestId, cancellationToken);
+            }
             await operation(cancellationToken);
         }
         finally
         {
             _generationRunning = false;
             _generationLock.Release();
-            try
+            if (refreshDashboard)
             {
-                await RefreshAsync(requestId, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
+                try
+                {
+                    await RefreshAsync(requestId, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                }
             }
         }
     }

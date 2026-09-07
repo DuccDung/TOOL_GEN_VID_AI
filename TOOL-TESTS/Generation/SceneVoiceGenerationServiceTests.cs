@@ -172,7 +172,7 @@ public sealed class SceneVoiceGenerationServiceTests
             new CreateVoiceProfileDraftRequest(
                 project.ProjectId,
                 VoiceProfileScopes.ProjectNarrator,
-                "male-warm",
+                "marin",
                 1.05m),
             "user-1",
             Guid.NewGuid(),
@@ -180,6 +180,8 @@ public sealed class SceneVoiceGenerationServiceTests
 
         Assert.Equal(2, draft.Version);
         Assert.Equal(VoiceProfileVersionStatuses.Draft, draft.Status);
+        Assert.Equal("marin", draft.VoiceCode);
+        Assert.Equal("marin", draft.ProviderVoiceCode);
         var approvalWithoutPreview = await Assert.ThrowsAsync<AccountApiException>(() =>
             service.ApproveVoiceProfileVersionAsync(
                 new ApproveVoiceProfileVersionRequest(project.ProjectId, draft.VoiceProfileVersionId, draft.SnapshotHash),
@@ -246,6 +248,142 @@ public sealed class SceneVoiceGenerationServiceTests
 
         Assert.Equal(VoiceProfileVersionStatuses.Superseded, superseded.Status);
         Assert.Null(project.ApprovedNarratorVoiceProfileVersionId);
+    }
+
+    [Fact]
+    public async Task VoiceCatalogPreview_UsesAccessibleProjectAsBillingContextWithoutChangingVoiceProfiles()
+    {
+        await using var dbContext = CreateContext();
+        var (project, _) = SeedProject(dbContext);
+        project.SpeechProductionPolicy = SpeechProductionPolicies.ProviderNativeVerified;
+        var initialVersionCount = await dbContext.VoiceProfileVersions.CountAsync();
+        var speech = new StubSpeechClient();
+        var budget = new StubBudgetService();
+        var service = CreateService(dbContext, project, speech, budget, new StubCostEstimator(0.02m));
+
+        var quote = await service.GetVoiceCatalogPreviewQuoteAsync(
+            new VoiceCatalogPreviewQuoteRequest(project.ProjectId, "marin", 1.1m),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+        var request = new GenerateVoiceCatalogPreviewRequest(
+            project.ProjectId,
+            "marin",
+            1.1m,
+            $"voice-catalog-preview:{project.ProjectId:N}:marin:test");
+        var preview = await service.GenerateVoiceCatalogPreviewAsync(
+            request,
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+        var replay = await service.GenerateVoiceCatalogPreviewAsync(
+            request,
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal("marin", quote.VoiceCode);
+        Assert.Equal(project.ProjectId, quote.ContextProjectId);
+        Assert.Equal(0.02m, quote.EstimatedCost);
+        Assert.Equal(preview.ProviderRequestId, replay.ProviderRequestId);
+        Assert.Equal("audio/wav", preview.MimeType);
+        Assert.Equal(1, speech.CallCount);
+        Assert.Equal(1, budget.ReserveCount);
+        Assert.Equal(1, budget.SettleCount);
+        Assert.Equal(initialVersionCount, await dbContext.VoiceProfileVersions.CountAsync());
+        Assert.Equal(
+            "VoicePreview",
+            (await dbContext.ProviderRequests.SingleAsync(x => x.ProviderRequestId == preview.ProviderRequestId)).RequestKind);
+    }
+
+    [Fact]
+    public async Task VoiceCatalogPreviewContextQuote_CreatesAndReusesHiddenOwnedProject()
+    {
+        await using var dbContext = CreateContext();
+        var (visibleProject, _) = SeedProject(dbContext);
+        var access = new ProjectAwareStubAccessService(
+            dbContext,
+            visibleProject.OrganizationId!.Value);
+        var service = CreateService(
+            dbContext,
+            visibleProject,
+            new StubSpeechClient(),
+            new StubBudgetService(),
+            new StubCostEstimator(0.02m),
+            accessService: access);
+        var request = new VoiceCatalogPreviewContextQuoteRequest("cedar", 1m);
+
+        var first = await service.GetVoiceCatalogPreviewContextQuoteAsync(
+            request,
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+        var second = await service.GetVoiceCatalogPreviewContextQuoteAsync(
+            request,
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal(first.ContextProjectId, second.ContextProjectId);
+        Assert.NotEqual(visibleProject.ProjectId, first.ContextProjectId);
+        var contextProject = await dbContext.Projects.SingleAsync(
+            x => x.ProjectId == first.ContextProjectId);
+        Assert.Equal(visibleProject.OrganizationId, contextProject.OrganizationId);
+        Assert.Equal("user-1", contextProject.RemoteUserId);
+        Assert.Equal("user-1", contextProject.CreatedByUserId);
+        Assert.Null(contextProject.RemoteDeviceId);
+        Assert.Equal("Draft", contextProject.Status);
+        Assert.StartsWith(
+            VoiceCatalogPreviewContexts.WorkspacePrefix,
+            contextProject.WorkspaceRelativePath,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            await dbContext.Projects.CountAsync(x =>
+                x.WorkspaceRelativePath.StartsWith(VoiceCatalogPreviewContexts.WorkspacePrefix)));
+    }
+
+    [Fact]
+    public async Task VoiceCatalogPreview_AccessDeniedStopsBeforePricingAndOutbound()
+    {
+        await using var dbContext = CreateContext();
+        var (project, _) = SeedProject(dbContext);
+        var resolver = new StubProviderResolver();
+        var speech = new StubSpeechClient();
+        var service = CreateService(
+            dbContext,
+            project,
+            speech,
+            new StubBudgetService(),
+            new StubCostEstimator(0.02m),
+            resolver,
+            new StubAccessService(new AccountApiException(
+                403,
+                "organization_generation_denied",
+                "Viewer cannot generate AI output.")));
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() =>
+            service.GetVoiceCatalogPreviewQuoteAsync(
+                new VoiceCatalogPreviewQuoteRequest(project.ProjectId, "cedar", 1m),
+                "viewer-1",
+                Guid.NewGuid(),
+                CancellationToken.None));
+        var contextException = await Assert.ThrowsAsync<AccountApiException>(() =>
+            service.GetVoiceCatalogPreviewContextQuoteAsync(
+                new VoiceCatalogPreviewContextQuoteRequest("cedar", 1m),
+                "viewer-1",
+                Guid.NewGuid(),
+                CancellationToken.None));
+
+        Assert.Equal("organization_generation_denied", exception.Code);
+        Assert.Equal("organization_generation_denied", contextException.Code);
+        Assert.Equal(0, resolver.ResolveCount);
+        Assert.Equal(0, speech.CallCount);
+        Assert.DoesNotContain(
+            await dbContext.Projects.ToListAsync(),
+            x => x.WorkspaceRelativePath.StartsWith(
+                VoiceCatalogPreviewContexts.WorkspacePrefix,
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -470,6 +608,39 @@ public sealed class SceneVoiceGenerationServiceTests
             _exception is null
                 ? Task.FromResult(_context!)
                 : Task.FromException<GenerationAccessContext>(_exception);
+    }
+
+    private sealed class ProjectAwareStubAccessService(
+        VideoFactoryDbContext dbContext,
+        Guid organizationId) : IGenerationAccessService
+    {
+        public async Task<GenerationAccessContext> RequireAsync(
+            string userId,
+            Guid deviceId,
+            Guid? requestedOrganizationId,
+            Guid? projectId,
+            CancellationToken cancellationToken)
+        {
+            if (requestedOrganizationId is { } requested && requested != organizationId)
+            {
+                throw new AccountApiException(404, "project_not_found", "Project not found.");
+            }
+            Project? project = null;
+            if (projectId is { } requestedProjectId)
+            {
+                project = await dbContext.Projects.SingleOrDefaultAsync(
+                    x => x.ProjectId == requestedProjectId &&
+                         x.RemoteUserId == userId &&
+                         x.DeletedAtUtc == null,
+                    cancellationToken)
+                    ?? throw new AccountApiException(404, "project_not_found", "Project not found.");
+            }
+            return new GenerationAccessContext(
+                organizationId,
+                "Test organization",
+                "Member",
+                project);
+        }
     }
 
     private sealed class StubProviderResolver : IProviderRuntimeResolver

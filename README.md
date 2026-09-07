@@ -41,9 +41,15 @@ Solution: `TOOL_GEN_POST_VIDEO.slnx`.
 
 Người dùng có thể dựng video từ bất kỳ số lượng cảnh đã duyệt nào, tối thiểu một cảnh. Bản dựng lấy các cảnh đã duyệt của scene plan hiện hành theo đúng thứ tự và bỏ qua những cảnh chưa duyệt; không bắt buộc hoàn tất toàn bộ scene plan.
 
+Với `ProviderNativeVerified` trong video dài, Native Audio do provider sinh được desktop kiểm tra track, độ nghe được và metadata rồi người dùng phát video, xác nhận checklist và duyệt trực tiếp. Workflow này không hiển thị, báo giá hoặc gọi ASR/transcript verification; render cuối cũng không đòi `SpeechVerificationReport`.
+
 Khi FinalVideo đã dựng xong, nút `Xuất video MP4` mở hộp thoại lưu file của Windows. Desktop kiểm tra lại SHA-256 của bản dựng, sao chép nguyên tử ra vị trí người dùng chọn rồi ghi nhận trạng thái `Exported`; thao tác này không render lại và không gọi AI/provider.
 
 Với `CanonicalVoice`, readiness dựa trên TTS có model/credential/rate/budget hợp lệ. Voice profile preview phải được nghe trước khi khóa phiên bản giọng. WAV `NativeVoiceOver` của cảnh được kiểm tra kỹ thuật; khi WAV hiện hành đã có, nút chuyển thẳng sang tạo video nền, lệnh tạo video dùng lại và tự chấp nhận đúng VoiceGeneration trước server cost gate, không có bước duyệt WAV riêng. `OnCameraDialogue` vẫn dừng ở bước duyệt/chờ lip-sync. Canonical Voice không chạy ASR/transcript verification.
+
+Trình chọn Canonical Voice dùng modal và lấy catalog an toàn từ server. Catalog hiện gồm 13 giọng dựng sẵn của OpenAI: `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage`, `shimmer`, `verse`, `marin`, `cedar`; hai mã cũ `female-sweet` và `male-warm` vẫn được chấp nhận lần lượt như alias của `shimmer` và `onyx`. Mở modal hoặc chọn giọng không gọi provider và không phát sinh chi phí. Nút nghe thử khả dụng ngay ở màn hình tạo project: nếu có project đang chọn thì request dùng project đó làm ngữ cảnh quyền/budget/hạch toán; nếu chưa có project nội dung, server tự tạo hoặc tái sử dụng một project kỹ thuật ẩn theo user và organization. Project kỹ thuật không xuất hiện trong danh sách/dashboard và chỉ làm phạm vi ownership, audit, budget cho catalog preview. Lần tạo câu mẫu tiếng Việt đầu tiên luôn qua báo giá/xác nhận TTS, còn phát lại WAV đã tải trong phiên không tạo request mới.
+
+Content plan Canonical Voice hướng lời đọc tới 85–95% thời lượng nội dung của từng cảnh và kiểm tra biên an toàn 80–105% trước TTS. Dashboard hiển thị thời lượng ước tính khi duyệt/chỉnh lời và thời lượng WAV thực tế sau TTS. WAV đã hợp lệ kỹ thuật chỉ nhận cảnh báo nếu nhịp thưa, vẫn đi thẳng sang tạo video và không bị tự động sinh lại; sửa content plan bằng AI luôn là request riêng có báo giá/xác nhận.
 
 Narrated asset mới tiếp tục dùng `scene-audio-sync-v3`. Khi dựng cuối, desktop tương thích có giới hạn với asset `v2` đã được người dùng duyệt chính xác và còn khớp scene/generation/voice/speech snapshot/hash; phiên bản cũ hơn hoặc asset không còn đúng lineage vẫn bị từ chối. Cơ chế này không tạo lại video hoặc TTS.
 

@@ -213,20 +213,22 @@ Không bật fallback provider/model để “cứ chạy được”.
 - OpenAI TTS credential và rate Active.
 - Storage/retention cho voice output đủ dung lượng.
 - Voice preview, approval, scene WAV, kiểm tra kỹ thuật, duration guard và render đều smoke test.
+- Provider status trả đúng catalog giọng được server cho phép; modal hiển thị đủ 13 giọng dựng sẵn hiện hành, hai alias cũ vẫn mở được project lịch sử và việc mở/chọn modal không tạo `ProviderRequest` hoặc budget reservation. Smoke test nút nghe thử ngay trong form tạo project cả khi có và chưa có project nội dung. Khi đã chọn project, request dùng project đó làm ngữ cảnh hạch toán, kể cả project chưa bật Canonical Voice. Khi chưa chọn project, quote phải tạo/tái sử dụng đúng một project kỹ thuật ẩn theo user+organization; context này không xuất hiện trong danh sách/dashboard. Xác nhận quote xuất hiện trước outbound, request dùng `RequestKind=VoicePreview` với metadata `previewKind=Catalog` và gắn đúng context project/user/organization, không sửa chính sách/giọng của project nội dung, WAV chỉ tải qua server và phát lại mẫu đã tải không reserve budget lần nữa.
 - Rollback đã thử bằng cách tắt flags.
 
 Thứ tự bật:
 
-1. Bật `CanonicalVoiceEnabled` trên staging. `SpeechVerificationEnabled` là cờ độc lập cho Provider Native và không phải điều kiện của Canonical Voice.
+1. Bật `CanonicalVoiceEnabled` trên staging. `SpeechVerificationEnabled` là cờ độc lập cho Provider Native của workflow không phải video dài và không phải điều kiện của Canonical Voice.
 2. Bật desktop feature flag trên nhóm canary.
 3. Tạo voice draft -> preview -> nghe -> approve.
-4. Tạo scene WAV, tải qua proxy và kiểm tra MIME, SHA-256, sample rate, duration, audibility cùng tỷ lệ thời lượng cảnh.
-5. Xác nhận readiness `CanonicalVoiceReady`; kiểm tra TTS model/credential, rate và budget trước outbound. Transcription không được làm Canonical Voice mất readiness.
-6. Phát nghe WAV, xác nhận checklist và duyệt đúng voice generation/speech hash/voice snapshot; xác nhận không có request Transcription hoặc `SpeechVerificationReport` mới.
-7. Với `NativeVoiceOver`, tạo video nền không lời rồi ghép toàn bộ WAV, chỉ điều chỉnh tempo trong giới hạn và pad theo thời lượng cảnh; kiểm tra timeline gồm lẫn scene có/không audio.
-8. Xác nhận `OnCameraDialogue` dừng ở `SpeechReadyForLipSync` và không bị render giả.
+4. Sinh content plan có lời chiếm mục tiêu 85–95% thời lượng cảnh; xác nhận output ngoài biên an toàn 80–105% chỉ mở lựa chọn repair sau báo giá, không tự gọi OpenAI lần hai.
+5. Tạo scene WAV, tải qua proxy và kiểm tra MIME, SHA-256, sample rate, duration, audibility cùng tỷ lệ thời lượng cảnh.
+6. Xác nhận readiness `CanonicalVoiceReady`; kiểm tra TTS model/credential, rate và budget trước outbound. Transcription không được làm Canonical Voice mất readiness.
+7. Phát nghe WAV và kiểm tra đúng voice generation/speech hash/voice snapshot; WAV ngắn hơn mục tiêu biên tập chỉ cảnh báo nếu vẫn hợp lệ kỹ thuật, không được tự sinh lại TTS. Xác nhận không có request Transcription hoặc `SpeechVerificationReport` mới.
+8. Với `NativeVoiceOver`, tạo video nền không lời rồi ghép toàn bộ WAV, chỉ điều chỉnh tempo trong giới hạn và pad theo thời lượng cảnh; kiểm tra timeline gồm lẫn scene có/không audio.
+9. Xác nhận `OnCameraDialogue` dừng ở `SpeechReadyForLipSync` và không bị render giả.
 
-Nếu rollout speech verification cho `ProviderNativeVerified`, cấu hình riêng `SpeechVerificationEnabled`, transcription model/credential/rate và migration 4.1.5. Kiểm tra `Passed` đi tiếp; `NeedsReview` bắt nhập lý do và lưu audit; stale row version và `Failed` đều bị chặn.
+Nếu rollout speech verification cho `ProviderNativeVerified` của workflow không phải `OpenAiStructuredPlan`, cấu hình riêng `SpeechVerificationEnabled`, transcription model/credential/rate và migration 4.1.5. Kiểm tra `Passed` đi tiếp; `NeedsReview` bắt nhập lý do và lưu audit; stale row version và `Failed` đều bị chặn. Với video dài, phải xác nhận UI không hiện nút ASR, server từ chối quote/verify trước pricing/outbound và duyệt/render chỉ dựa trên audio hợp lệ cùng xác nhận nghe thủ công.
 
 Tắt flag phải giữ project cũ đọc được theo `ProviderNativeVerified`.
 

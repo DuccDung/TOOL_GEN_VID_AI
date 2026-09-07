@@ -62,6 +62,9 @@ public sealed class ProjectDashboardContentTests
         Assert.Null(scene.LastErrorCode);
         Assert.Null(scene.LastErrorMessage);
         Assert.True(scene.CanGenerate);
+        Assert.NotNull(scene.SpeechPacing);
+        Assert.Equal("TooShort", scene.SpeechPacing.EstimatedStatus);
+        Assert.Null(scene.SpeechPacing.ActualDurationSeconds);
     }
 
     private static async Task<Fixture> CreateFixtureAsync(

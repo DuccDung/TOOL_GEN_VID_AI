@@ -133,6 +133,132 @@ internal sealed class ProjectGenerationService(
         return response;
     }
 
+    public async Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewQuoteAsync(
+        Guid projectId,
+        string remoteUserId,
+        string voiceCode,
+        decimal speakingRate,
+        CancellationToken cancellationToken)
+    {
+        if (!OpenAiBuiltInVoiceCatalog.IsSupported(voiceCode))
+        {
+            throw new ArgumentException("Giọng nghe thử không hợp lệ.");
+        }
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            _ = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+        }
+        return await apiClient.GetVoiceCatalogPreviewQuoteAsync(
+            new VoiceCatalogPreviewQuoteRequest(projectId, voiceCode, speakingRate),
+            cancellationToken);
+    }
+
+    public async Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewContextQuoteAsync(
+        string voiceCode,
+        decimal speakingRate,
+        CancellationToken cancellationToken)
+    {
+        if (!OpenAiBuiltInVoiceCatalog.IsSupported(voiceCode))
+        {
+            throw new ArgumentException("Giọng nghe thử không hợp lệ.");
+        }
+        return await apiClient.GetVoiceCatalogPreviewContextQuoteAsync(
+            new VoiceCatalogPreviewContextQuoteRequest(voiceCode, speakingRate),
+            cancellationToken);
+    }
+
+    public async Task<VoiceCatalogPreviewPlayback> GenerateVoiceCatalogPreviewAsync(
+        Guid projectId,
+        string remoteUserId,
+        string voiceCode,
+        decimal speakingRate,
+        string operationRequestId,
+        CancellationToken cancellationToken)
+    {
+        if (!OpenAiBuiltInVoiceCatalog.IsSupported(voiceCode) ||
+            string.IsNullOrWhiteSpace(operationRequestId) ||
+            operationRequestId.Length > 100)
+        {
+            throw new ArgumentException("Yêu cầu nghe thử giọng không hợp lệ.");
+        }
+
+        string projectWorkspace;
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+            projectWorkspace = project.WorkspaceRelativePath;
+        }
+
+        var response = await apiClient.GenerateVoiceCatalogPreviewAsync(
+            new GenerateVoiceCatalogPreviewRequest(
+                projectId,
+                voiceCode,
+                speakingRate,
+                $"voice-catalog-preview:{projectId:N}:{voiceCode}:{operationRequestId}"),
+            cancellationToken);
+        if (!string.Equals(
+                OpenAiBuiltInVoiceCatalog.NormalizeSelection(response.VoiceCode),
+                OpenAiBuiltInVoiceCatalog.NormalizeSelection(voiceCode),
+                StringComparison.OrdinalIgnoreCase) ||
+            response.MimeType != "audio/wav" ||
+            response.DurationMs <= 0)
+        {
+            throw new InvalidDataException("Server trả về bản nghe thử giọng không hợp lệ.");
+        }
+
+        var relativePath = Path.Combine(
+            "voice-catalog-previews",
+            $"{response.VoiceCode}-{response.ProviderRequestId:N}.wav");
+        var workspaceRelativePath = Path.Combine(
+            projectWorkspace.Replace('/', Path.DirectorySeparatorChar),
+            relativePath);
+        var outputPath = workspaceService.Resolve(workspaceRelativePath);
+        var partialPath = outputPath + ".part";
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        if (File.Exists(partialPath))
+        {
+            File.Delete(partialPath);
+        }
+        try
+        {
+            await apiClient.DownloadVoiceCatalogPreviewAsync(response, partialPath, cancellationToken);
+            var probe = await mediaProbe.ProbeAsync(partialPath, cancellationToken);
+            await audioQualityValidator.RequireAudibleAsync(
+                partialPath,
+                "Bản nghe thử giọng tải về không nghe được",
+                cancellationToken);
+            if (!probe.HasAudio || probe.DurationSeconds <= 0 ||
+                probe.AudioSampleRate != response.SampleRate)
+            {
+                throw new InvalidDataException("Bản nghe thử giọng tải về không khớp metadata đã xác nhận.");
+            }
+            File.Move(partialPath, outputPath, true);
+        }
+        catch
+        {
+            if (File.Exists(partialPath))
+            {
+                File.Delete(partialPath);
+            }
+            throw;
+        }
+
+        var urlPath = string.Join(
+            '/',
+            workspaceRelativePath
+                .Split(
+                    [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Select(Uri.EscapeDataString));
+        return new VoiceCatalogPreviewPlayback(
+            response.VoiceCode,
+            response.SpeakingRate,
+            $"https://media.app.local/{urlPath}",
+            response.DurationMs,
+            response.ActualCost,
+            response.CurrencyCode);
+    }
+
     public async Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(
         Guid projectId,
         string remoteUserId,
@@ -1852,12 +1978,20 @@ internal sealed class ProjectGenerationService(
         string projectWorkspace;
         string aspectRatio;
         string speechProductionPolicy;
+        bool isLongFormWorkflow;
         await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
             var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
             projectWorkspace = project.WorkspaceRelativePath;
             aspectRatio = project.AspectRatio;
             speechProductionPolicy = project.SpeechProductionPolicy;
+            isLongFormWorkflow = await dbContext.Scripts
+                .AsNoTracking()
+                .AnyAsync(
+                    x => x.ScriptId == scene.ScriptId &&
+                         x.ProjectId == projectId &&
+                         x.StructureType == KlingLongFormVietnameseValidator.OpenAiStructuredPlan,
+                    cancellationToken);
             var generation = await dbContext.VideoGenerations.SingleAsync(x => x.VideoGenerationId == generationId, cancellationToken);
             generation.Status = "Downloading";
             var localScene = await dbContext.Scenes.SingleAsync(x => x.SceneId == scene.SceneId, cancellationToken);
@@ -2084,7 +2218,9 @@ internal sealed class ProjectGenerationService(
                 SpeechProductionPolicies.ProviderNativeVerified,
                 StringComparison.Ordinal))
         {
-            sceneToApprove.SpeechStatus = SceneSpeechStatuses.SpeechVerificationRequired;
+            sceneToApprove.SpeechStatus = isLongFormWorkflow
+                ? SceneSpeechStatuses.SpeechReviewRequired
+                : SceneSpeechStatuses.SpeechVerificationRequired;
             sceneToApprove.LastErrorCode = null;
             sceneToApprove.LastErrorMessage = null;
             await writeContext.SaveChangesAsync(cancellationToken);

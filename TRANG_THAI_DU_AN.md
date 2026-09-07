@@ -29,7 +29,7 @@ Khi source mâu thuẫn với file này, source và migration là nguồn sự t
 | Video dài nhiều cảnh | Đã có trong source |
 | Character reference và project asset library | Đã có trong source |
 | Scene first-frame | Đã có trong source; rollout DB/provider còn phải xác minh |
-| Canonical Voice và speech verification | Canonical Voice có TTS, kiểm tra kỹ thuật và timeline mix/render; `NativeVoiceOver` có WAV hiện hành đi thẳng sang tạo video, còn `OnCameraDialogue` giữ bước duyệt/chờ lip-sync. Không phụ thuộc ASR. Speech verification vẫn là luồng độc lập cho Provider Native khi được bật |
+| Canonical Voice và speech verification | Canonical Voice có TTS, kiểm tra kỹ thuật và timeline mix/render; `NativeVoiceOver` có WAV hiện hành đi thẳng sang tạo video, còn `OnCameraDialogue` giữ bước duyệt/chờ lip-sync. Video dài Provider Native nghe và duyệt trực tiếp, không phụ thuộc ASR. Speech verification chỉ còn là luồng độc lập cho workflow không phải video dài khi được bật |
 | SePay license payment | Đã có trong source; mặc định Disabled |
 | Organization pool và seat allocation | Đã có trong source; rollout phụ thuộc SePay/cấu hình pool |
 | Vietsub project/editor/SRT/timeline/OCR | Đã có trong source |
@@ -92,8 +92,10 @@ Feature flag desktop không thể vượt qua flag hoặc readiness của server
 - Worker polling server có claim lease, backoff, giới hạn tuổi/lần thử và settlement terminal.
 - Output được server cache rồi trả qua endpoint tương đối có authorization; desktop không thấy URL gốc.
 - Desktop tải bằng `.part`, kiểm tra MIME/size/hash, probe, trim và lưu asset.
-- Native Audio cần người dùng nghe trước khi duyệt.
-- Canonical Voice có voice profile version, preview/playback gate cho phiên bản giọng, TTS WAV, kiểm tra MIME/hash/sample/duration/audibility, duration/timeline guard và render pointer bất biến; endpoint ASR từ chối project Canonical Voice trước pricing/outbound.
+- Native Audio video dài cần qua kiểm tra kỹ thuật, người dùng phát video và xác nhận checklist trước khi duyệt; không hiện nút, báo giá hoặc gọi ASR và render không đòi transcript report.
+- Canonical Voice có voice profile version, preview/playback gate cho phiên bản giọng, TTS WAV, kiểm tra MIME/hash/sample/duration/audibility, duration/timeline guard và render pointer bất biến; endpoint ASR từ chối cả project Canonical Voice lẫn `OpenAiStructuredPlan` trước pricing/outbound.
+- Canonical Voice có modal chọn catalog 13 giọng dựng sẵn OpenAI do server trả về; create project, narrator profile và character profile dùng chung trình chọn. Hai alias cũ tiếp tục đọc được, còn thao tác mở/chọn trong modal không tạo request hoặc chi phí TTS. Modal tạo project cho nghe thử từng giọng ngay cả khi chưa có project nội dung: project đang chọn được dùng làm ngữ cảnh nếu có, nếu không server tạo/tái sử dụng project kỹ thuật ẩn theo user+organization để giữ bất biến ownership/audit/budget. Context ẩn không xuất hiện trong danh sách/dashboard và catalog preview không sửa cấu hình giọng của project nội dung. Server quote/xác nhận trước lần tạo câu mẫu tiếng Việt, kiểm tra lại ownership trước outbound; desktop tải và kiểm tra WAV qua gateway rồi cho phát/tạm dừng/phát lại ngay trong modal. Mẫu đã tải được cache theo giọng+tốc độ trong phiên UI.
+- Content plan Canonical Voice có hướng dẫn nhịp lời 85–95% theo từng cảnh, validator biên an toàn 80–105% trước TTS và một lượt repair có báo giá/xác nhận khi output OpenAI chưa đạt. Dashboard hiển thị ước tính khi duyệt/chỉnh lời và số đo WAV thực tế; cảnh báo WAV hơi ngắn không chặn tạo video hoặc tự sinh lại TTS.
 - Dashboard tương thích dữ liệu cũ: `NativeVoiceOver` có đúng WAV hiện hành được đưa thẳng về bước tạo video nền, không yêu cầu tạo/duyệt lại TTS và không hiện cảnh báo Native Audio cũ. Lệnh tạo video kiểm tra lại file cục bộ rồi tự chấp nhận VoiceGeneration trước outbound.
 - `NativeVoiceOver` dùng toàn bộ WAV đã kiểm tra kỹ thuật, điều chỉnh tempo trong giới hạn rồi pad theo thời lượng cảnh; render hỗ trợ timeline có lẫn scene audio và scene im lặng mà không làm lệch stream concat.
 - Render cuối chấp nhận bất kỳ số lượng cảnh đã duyệt nào, tối thiểu một cảnh; manifest giữ đúng thứ tự các cảnh đã duyệt và bỏ qua cảnh chưa duyệt thay vì bắt buộc hoàn tất toàn bộ scene plan.
@@ -134,7 +136,7 @@ Feature flag desktop không thể vượt qua flag hoặc readiness của server
 - Chưa paid smoke test BytePlus/Fal/Veo hiện hành.
 - Chưa đối chiếu settlement với dashboard/hợp đồng provider thật.
 - Cần benchmark ảnh first-frame Data URI cho Fal trước production.
-- Canonical Voice cần migration 4.1.3–4.1.4, TTS rate/model, staging smoke test và rollout flag. Speech verification cho Provider Native cần transcription rate/model và migration 4.1.5 nếu dùng audited `NeedsReview`.
+- Canonical Voice cần migration 4.1.3–4.1.4, TTS rate/model, staging smoke test và rollout flag. Speech verification cho Provider Native của workflow không phải video dài cần transcription rate/model và migration 4.1.5 nếu dùng audited `NeedsReview`.
 - Chưa có lip-sync cho `OnCameraDialogue` Canonical Voice.
 - Dashboard metrics/alert cho worker, budget reconciliation và output cache còn hạn chế.
 
@@ -168,8 +170,8 @@ Migration có trong source không đồng nghĩa đã chạy ở bất kỳ data
 
 ## Baseline kiểm thử
 
-- Ngày 2026-09-07, trên worktree chưa commit, đã chạy từ root: `dotnet restore TOOL_GEN_POST_VIDEO.slnx`, Release build 0 warning/error và 803/803 xUnit đạt.
-- Frontend cùng ngày: `npm ci`, `npm run build` thành công; 7/7 test file và 40/40 test đạt bằng `npm test`.
+- Ngày 2026-09-07, trên worktree chưa commit, đã chạy từ root: `dotnet restore TOOL_GEN_POST_VIDEO.slnx`, Release build 0 warning/error và 821/821 xUnit đạt.
+- Frontend cùng ngày: `npm ci`, `npm run build` thành công; 9/9 test file và 49/49 test đạt bằng `npm test`.
 - Mốc này chỉ xác minh source/worktree hiện hành; không chứng minh migration, credential, provider trả phí hoặc release production đã được rollout.
 
 Không dùng các mốc nhỏ hơn trong commit/tài liệu lịch sử làm baseline hiện hành. Khi có lần chạy mới, thay đúng mục này bằng ngày, commit, lệnh và kết quả thực tế.

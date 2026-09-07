@@ -134,6 +134,18 @@ public sealed record SceneCharacterSummary(
     string Status,
     string? ReferencePreviewUrl);
 
+public sealed record SceneSpeechPacingSummary(
+    int SpeechUnitCount,
+    decimal SpeakingRate,
+    decimal EstimatedDurationSeconds,
+    decimal EstimatedDurationRatio,
+    decimal TargetMinimumSeconds,
+    decimal TargetMaximumSeconds,
+    string EstimatedStatus,
+    decimal? ActualDurationSeconds = null,
+    decimal? ActualDurationRatio = null,
+    string? ActualStatus = null);
+
 public sealed record SceneDashboardSummary(
     Guid SceneId,
     int SequenceNumber,
@@ -168,7 +180,8 @@ public sealed record SceneDashboardSummary(
     VideoPreviewSummary? CanonicalVoicePreview = null,
     SceneSpeechVerificationSummary? SpeechVerification = null,
     Guid? VoiceProfileVersionId = null,
-    string? VoiceSnapshotHash = null);
+    string? VoiceSnapshotHash = null,
+    SceneSpeechPacingSummary? SpeechPacing = null);
 
 public sealed record UpdateSceneCommand(
     Guid SceneId,

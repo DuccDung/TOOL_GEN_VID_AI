@@ -4,8 +4,11 @@ type OperationError = NonNullable<HostMessage['error']>;
 
 export type ContentLanguageViolationView = {
   field: string;
-  reason: 'required' | 'language_invalid';
+  reason: 'required' | 'language_invalid' | 'speech_too_short' | 'speech_too_long';
   label: string;
+  estimatedDurationSeconds?: number | null;
+  targetMinimumSeconds?: number | null;
+  targetMaximumSeconds?: number | null;
 };
 
 export type ContentLanguageFailureView = {
@@ -20,8 +23,12 @@ const languageErrorCodes = new Set([
   'kling_content_language_invalid',
   'fal_content_language_invalid'
 ]);
-const contentRecoveryErrorCodes = new Set([
+const contentQualityErrorCodes = new Set([
   ...languageErrorCodes,
+  'content_speech_pacing_invalid'
+]);
+const contentRecoveryErrorCodes = new Set([
+  ...contentQualityErrorCodes,
   'content_failure_schema_not_ready'
 ]);
 
@@ -56,7 +63,7 @@ const fieldLabels: Record<string, string> = {
 };
 
 export function isContentLanguageError(error?: OperationError): boolean {
-  return Boolean(error && languageErrorCodes.has(error.code));
+  return Boolean(error && contentQualityErrorCodes.has(error.code));
 }
 
 export function formatContentLanguageError(error?: OperationError): string {
@@ -79,14 +86,20 @@ export function parseContentLanguageFailure(error?: OperationError): ContentLang
   const reasons = new Map(
     (error.errors?.reasons ?? [])
       .map((entry) => splitReason(entry))
-      .filter((entry): entry is [string, 'required' | 'language_invalid'] => entry !== null)
+      .filter((entry): entry is [string, ContentLanguageViolationView['reason']] => entry !== null)
   );
+  const estimatedDurations = parseMetrics(error.errors?.estimatedDurations);
+  const targetMinimumDurations = parseMetrics(error.errors?.targetMinimumDurations);
+  const targetMaximumDurations = parseMetrics(error.errors?.targetMaximumDurations);
   const requestId = error.errors?.providerRequestId?.find(Boolean)?.trim() || null;
   const canRepair = error.errors?.canRepair?.some((value) => value.toLowerCase() === 'true') === true;
   const violations = fields.map((field) => ({
     field,
     reason: reasons.get(field) ?? 'language_invalid',
-    label: toVietnameseFieldLabel(field)
+    label: toVietnameseFieldLabel(field),
+    estimatedDurationSeconds: estimatedDurations.get(field),
+    targetMinimumSeconds: targetMinimumDurations.get(field),
+    targetMaximumSeconds: targetMaximumDurations.get(field)
   }));
 
   return {
@@ -107,7 +120,10 @@ export function restoreContentLanguageFailure(
     .map((violation) => ({
       field: violation.field,
       reason: violation.reason,
-      label: toVietnameseFieldLabel(violation.field)
+      label: toVietnameseFieldLabel(violation.field),
+      estimatedDurationSeconds: violation.estimatedDurationSeconds,
+      targetMinimumSeconds: violation.targetMinimumSeconds,
+      targetMaximumSeconds: violation.targetMaximumSeconds
     }));
   return {
     code: failure.errorCode,
@@ -119,6 +135,17 @@ export function restoreContentLanguageFailure(
 }
 
 export function formatViolation(violation: ContentLanguageViolationView): string {
+  if (violation.reason === 'speech_too_short' || violation.reason === 'speech_too_long') {
+    const direction = violation.reason === 'speech_too_short' ? 'lời quá ngắn' : 'lời quá dài';
+    const estimate = formatDuration(violation.estimatedDurationSeconds);
+    const minimum = formatDuration(violation.targetMinimumSeconds);
+    const maximum = formatDuration(violation.targetMaximumSeconds);
+    const timing = estimate && minimum && maximum
+      ? `: ước tính ${estimate}, mục tiêu ${minimum}–${maximum}`
+      : '';
+    return `${violation.label} (${direction}${timing})`;
+  }
+
   const reason = violation.reason === 'required' ? 'đang bị rỗng' : 'chưa đạt tiếng Việt';
   return `${violation.label} (${reason})`;
 }
@@ -128,14 +155,34 @@ export function shortProviderRequestId(providerRequestId: string | null): string
   return providerRequestId.replaceAll('-', '').slice(0, 8).toUpperCase();
 }
 
-function splitReason(value: string): [string, 'required' | 'language_invalid'] | null {
+function splitReason(value: string): [string, ContentLanguageViolationView['reason']] | null {
   const separatorIndex = value.lastIndexOf('|');
   if (separatorIndex <= 0) return null;
   const field = value.slice(0, separatorIndex);
   const reason = value.slice(separatorIndex + 1);
-  return reason === 'required' || reason === 'language_invalid'
+  return reason === 'required' ||
+    reason === 'language_invalid' ||
+    reason === 'speech_too_short' ||
+    reason === 'speech_too_long'
     ? [field, reason]
     : null;
+}
+
+function parseMetrics(values?: string[]): Map<string, number> {
+  const metrics = new Map<string, number>();
+  for (const value of values ?? []) {
+    const separatorIndex = value.lastIndexOf('|');
+    if (separatorIndex <= 0) continue;
+    const field = value.slice(0, separatorIndex);
+    const metric = Number(value.slice(separatorIndex + 1));
+    if (Number.isFinite(metric) && metric >= 0) metrics.set(field, metric);
+  }
+  return metrics;
+}
+
+function formatDuration(value?: number | null): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return `${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(value)} giây`;
 }
 
 function isEmptyRequestId(value?: string | null): boolean {

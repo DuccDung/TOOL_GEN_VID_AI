@@ -268,13 +268,33 @@ public sealed class ProjectRenderServiceTests
     }
 
     [Fact]
+    public async Task RenderFinalVideo_LongFormFeatureEnabled_AllowsNativeSpeechWithoutAsrReport()
+    {
+        await using var fixture = await RenderFixture.CreateAsync(
+            "SceneVideo",
+            nativeAudioAudible: true,
+            speechVerificationEnabled: true,
+            narration: "Xin chào bạn.",
+            workflowStructureType: "OpenAiStructuredPlan");
+
+        var result = await fixture.Service.RenderFinalVideoAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            CancellationToken.None);
+
+        Assert.NotEqual(Guid.Empty, result.FinalVideoId);
+        Assert.Equal(1, fixture.Renderer.CallCount);
+    }
+
+    [Fact]
     public async Task RenderFinalVideo_FeatureEnabled_RejectsNativeSpeechWithoutAsrReport()
     {
         await using var fixture = await RenderFixture.CreateAsync(
             "SceneVideo",
             nativeAudioAudible: true,
             speechVerificationEnabled: true,
-            narration: "Xin chào bạn.");
+            narration: "Xin chào bạn.",
+            workflowStructureType: "DirectShortVideo");
 
         var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
             fixture.Service.RenderFinalVideoAsync(
@@ -410,7 +430,8 @@ public sealed class ProjectRenderServiceTests
             bool silentOutput = false,
             bool speechVerificationEnabled = true,
             string? narration = null,
-            bool mixedSilentScene = false)
+            bool mixedSilentScene = false,
+            string workflowStructureType = "OpenAiStructuredPlan")
         {
             var root = Path.Combine(Path.GetTempPath(), $"videomaker-render-{Guid.NewGuid():N}");
             var workspace = new ProjectWorkspaceService(root);
@@ -438,6 +459,7 @@ public sealed class ProjectRenderServiceTests
             var sceneId = Guid.NewGuid();
             var generationId = Guid.NewGuid();
             var assetId = Guid.NewGuid();
+            var scriptId = Guid.NewGuid();
             var now = DateTime.UtcNow;
             await using (var dbContext = factory.CreateDbContext())
             {
@@ -455,11 +477,24 @@ public sealed class ProjectRenderServiceTests
                     OutputHeight = 720,
                     OutputFrameRate = 25,
                     Status = "ReadyToRender",
+                    CurrentScriptVersion = 1,
                     CurrentScenePlanVersion = 1,
                     CurrencyCode = "USD",
                     WorkspaceRelativePath = projectRelativePath,
                     CreatedAtUtc = now,
                     UpdatedAtUtc = now,
+                    RowVersion = new byte[8]
+                });
+                dbContext.Scripts.Add(new Script
+                {
+                    ScriptId = scriptId,
+                    ProjectId = projectId,
+                    Version = 1,
+                    StructureType = workflowStructureType,
+                    FullText = narration ?? string.Empty,
+                    StoryBeatsJson = "[]",
+                    Status = "Approved",
+                    CreatedAtUtc = now,
                     RowVersion = new byte[8]
                 });
                 dbContext.MediaAssets.Add(new MediaAsset
@@ -505,7 +540,7 @@ public sealed class ProjectRenderServiceTests
                 {
                     SceneId = sceneId,
                     ProjectId = projectId,
-                    ScriptId = Guid.NewGuid(),
+                    ScriptId = scriptId,
                     StyleProfileId = Guid.NewGuid(),
                     ScenePlanVersion = 1,
                     SequenceNumber = 1,
@@ -572,7 +607,7 @@ public sealed class ProjectRenderServiceTests
                     {
                         SceneId = silentSceneId,
                         ProjectId = projectId,
-                        ScriptId = Guid.NewGuid(),
+                        ScriptId = scriptId,
                         StyleProfileId = Guid.NewGuid(),
                         ScenePlanVersion = 1,
                         SequenceNumber = 2,

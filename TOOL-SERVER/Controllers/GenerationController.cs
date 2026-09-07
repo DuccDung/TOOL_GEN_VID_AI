@@ -204,6 +204,53 @@ public sealed class GenerationController(
             cancellationToken);
     }
 
+    [HttpPost("voice-catalog-preview/quote")]
+    [ProducesResponseType<VoiceCatalogPreviewQuoteResponse>(StatusCodes.Status200OK)]
+    public Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewContextQuote(
+        [FromBody] VoiceCatalogPreviewContextQuoteRequest request,
+        CancellationToken cancellationToken) =>
+        generationService.GetVoiceCatalogPreviewContextQuoteAsync(
+            request,
+            RequireUserId(),
+            RequireDeviceId(),
+            cancellationToken);
+
+    [HttpPost("projects/{projectId:guid}/voice-catalog-preview/quote")]
+    [ProducesResponseType<VoiceCatalogPreviewQuoteResponse>(StatusCodes.Status200OK)]
+    public Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewQuote(
+        Guid projectId,
+        [FromBody] VoiceCatalogPreviewQuoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (projectId != request.ProjectId)
+        {
+            throw new ArgumentException("Project ID trên URL không khớp nội dung yêu cầu.");
+        }
+        return generationService.GetVoiceCatalogPreviewQuoteAsync(
+            request,
+            RequireUserId(),
+            RequireDeviceId(),
+            cancellationToken);
+    }
+
+    [HttpPost("projects/{projectId:guid}/voice-catalog-preview")]
+    [ProducesResponseType<VoiceCatalogPreviewResponse>(StatusCodes.Status200OK)]
+    public Task<VoiceCatalogPreviewResponse> GenerateVoiceCatalogPreview(
+        Guid projectId,
+        [FromBody] GenerateVoiceCatalogPreviewRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (projectId != request.ProjectId)
+        {
+            throw new ArgumentException("Project ID trên URL không khớp nội dung yêu cầu.");
+        }
+        return generationService.GenerateVoiceCatalogPreviewAsync(
+            request,
+            RequireUserId(),
+            RequireDeviceId(),
+            cancellationToken);
+    }
+
     [HttpPost("projects/{projectId:guid}/voice-profiles/{versionId:guid}/preview/quote")]
     [ProducesResponseType<VoiceProfilePreviewQuoteResponse>(StatusCodes.Status200OK)]
     public Task<VoiceProfilePreviewQuoteResponse> GetVoiceProfilePreviewQuote(

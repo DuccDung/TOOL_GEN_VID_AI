@@ -223,18 +223,23 @@ Scene speech mode:
 
 Project speech production policy:
 
-- `ProviderNativeVerified`: tương thích mặc định, dùng Native Audio provider và có thể ASR verify khi feature flag được bật.
+- `ProviderNativeVerified`: tương thích mặc định và dùng Native Audio provider. Trong video dài, desktop kiểm tra kỹ thuật rồi người dùng nghe/checklist/duyệt trực tiếp, không chạy ASR. Hạ tầng speech verification chỉ còn áp dụng cho workflow không phải `OpenAiStructuredPlan` khi feature flag được bật.
 - `CanonicalVoice`: dùng voice profile/version đã duyệt để tạo WAV chuẩn.
 
 Quy tắc:
 
 - Voice profile version bất biến; phải tạo preview và người dùng nghe trước khi approve.
+- Catalog giọng Canonical Voice do server công bố cho desktop và hiện gồm 13 giọng dựng sẵn OpenAI: `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage`, `shimmer`, `verse`, `marin`, `cedar`. Frontend không tự quyết định allowlist; mã cũ `female-sweet`/`male-warm` tiếp tục ánh xạ sang `shimmer`/`onyx` để đọc project lịch sử.
+- Modal chỉ thay đổi lựa chọn cục bộ; thao tác mở/chọn không được gọi provider hoặc giữ budget. Nút nghe thử khả dụng cả trong form tạo project. Catalog preview là request có phí nên luôn phải có project làm ngữ cảnh ownership, organization, quyền, budget và hạch toán: dùng project đang chọn nếu có; nếu chưa có project nội dung, server tạo hoặc tái sử dụng một project kỹ thuật ẩn xác định theo user và organization sau khi đã kiểm tra JWT, session/device, license, membership và role. Project kỹ thuật dùng `ProviderNativeVerified`, không mang cấu hình giọng nội dung và bị loại khỏi danh sách/dashboard của desktop. Sau báo giá và xác nhận mới được reserve/outbound; server kiểm tra lại ownership của context project trước outbound, WAV tải qua endpoint server, được desktop kiểm tra rồi mới phát. Phát lại mẫu đã tải không tạo `ProviderRequest` mới. Voice profile draft vẫn có preview riêng bắt buộc trước khi approve.
 - Scene voice request khóa exact speech text/hash, voice snapshot và plan version.
-- TTS phải có rate, reserve, usage và proxy như request cloud khác. ASR chỉ áp dụng cho `ProviderNativeVerified` khi được bật và cũng phải đi qua đầy đủ các chốt chi phí này.
+- Với content plan `CanonicalVoice`, lời có speech hướng tới 85–95% thời lượng nội dung cảnh. Bộ ước lượng tiếng Việt tính cụm đọc và khoảng nghỉ dấu câu; biên 80–105% dùng để phát hiện output OpenAI quá ngắn/dài trước TTS, không thay thế thời lượng WAV thực tế.
+- Content plan sai nhịp có thể dùng chung lượt repair có báo giá/xác nhận với lỗi ngôn ngữ. Không tự gọi repair, TTS hoặc provider lần hai; request đã tiêu thụ vẫn được quyết toán theo rate snapshot và idempotency hiện hành.
+- TTS phải có rate, reserve, usage và proxy như request cloud khác. ASR chỉ áp dụng cho `ProviderNativeVerified` của workflow không phải video dài khi được bật và cũng phải đi qua đầy đủ các chốt chi phí này.
 - WAV Canonical được kiểm tra MIME, hash, sample rate, duration, mức nghe được và tỷ lệ thời lượng so với cảnh trước khi được dùng cho video.
 - Canonical Voice không gửi WAV qua transcription, không tạo WER/CER và không phụ thuộc word timing ASR. Với `NativeVoiceOver`, WAV hiện hành đúng scene plan/speech hash/voice profile snapshot mở thẳng bước tạo video; lệnh tạo video kiểm tra kỹ thuật file cục bộ rồi tự chấp nhận đúng VoiceGeneration trước outbound, không có bước duyệt WAV riêng. `OnCameraDialogue` vẫn cần duyệt trước khi chuyển sang trạng thái chờ lip-sync.
-- Với `ProviderNativeVerified` có bật ASR, report gắn đúng source asset/hash và so expected transcript bằng WER/CER/required-term recall. `Passed` được đi tiếp; `NeedsReview` cần lý do audit; `Failed` không được override.
+- Với video dài `ProviderNativeVerified`, không tạo `SpeechVerificationReport`: clip phải có audio nghe được, người dùng phải phát video và xác nhận checklist trước khi duyệt. Với workflow khác có bật ASR, report vẫn gắn đúng source asset/hash và so expected transcript bằng WER/CER/required-term recall; `Passed` được đi tiếp, `NeedsReview` cần lý do audit và `Failed` không được override.
 - Audio quá dài/ngắn không được sửa âm thầm ngoài giới hạn tempo đã cấu hình.
+- Dashboard hiển thị nhịp ước tính trước TTS và tỷ lệ WAV thực tế sau TTS. WAV ngắn hơn mục tiêu biên tập nhưng vẫn qua kiểm tra kỹ thuật chỉ hiện cảnh báo; không chặn tạo video và không yêu cầu tạo lại giọng.
 - `NativeVoiceOver` Canonical dùng toàn bộ WAV đã kiểm tra kỹ thuật, chỉ điều chỉnh tempo trong giới hạn và pad đến thời lượng cảnh. Narrated asset mới phải ghi policy đồng bộ hiện hành để output cũ tạo theo cơ chế ASR timing không bị tái sử dụng nhầm. Render cuối chỉ được tương thích với `scene-audio-sync-v2` khi đó là exact approved render pointer và vẫn khớp generation, VoiceGeneration, speech hash, voice snapshot, trạng thái, audibility và hash file; không chấp nhận phiên bản cũ hơn.
 - `NativeVoiceOver` Canonical Voice thay native speech hoặc mix ambience đã xác minh, có ducking/limiter/loudness normalization.
 - `OnCameraDialogue` Canonical Voice chỉ đạt `SpeechReadyForLipSync`; không render như đã lip-sync khi chưa có engine.

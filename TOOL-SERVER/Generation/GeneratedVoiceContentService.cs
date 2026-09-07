@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TOOL_SERVER.Authentication;
 using TOOL_SERVER.Data;
@@ -34,7 +35,8 @@ internal sealed class GeneratedVoiceContentService(
             .AsNoTracking()
             .SingleOrDefaultAsync(
                 x => x.ProviderRequestId == providerRequestId &&
-                     (x.RequestKind == "Voice" || x.RequestKind == "VoicePreview") &&
+                     (x.RequestKind == "Voice" ||
+                      x.RequestKind == "VoicePreview") &&
                      x.ProviderCode == ProviderCodes.OpenAi,
                 cancellationToken)
             ?? throw NotFound();
@@ -45,16 +47,20 @@ internal sealed class GeneratedVoiceContentService(
             request.OrganizationId,
             request.ProjectId,
             cancellationToken);
-        var validSource = request.RequestKind == "Voice"
-            ? request.SceneId is not null &&
-              await dbContext.Scenes.AsNoTracking().AnyAsync(
-                  x => x.SceneId == request.SceneId && x.ProjectId == request.ProjectId,
-                  cancellationToken)
-            : request.SceneId is null &&
-              await dbContext.VoiceProfileVersions.AsNoTracking().AnyAsync(
-                  x => x.PreviewProviderRequestId == providerRequestId &&
-                       x.VoiceProfile.ProjectId == request.ProjectId,
-                  cancellationToken);
+        var validSource = request.RequestKind switch
+        {
+            "Voice" => request.SceneId is not null &&
+                       await dbContext.Scenes.AsNoTracking().AnyAsync(
+                           x => x.SceneId == request.SceneId && x.ProjectId == request.ProjectId,
+                           cancellationToken),
+            "VoicePreview" => request.SceneId is null &&
+                              (IsVoiceCatalogPreviewRequest(request.RequestJson) ||
+                               await dbContext.VoiceProfileVersions.AsNoTracking().AnyAsync(
+                                   x => x.PreviewProviderRequestId == providerRequestId &&
+                                        x.VoiceProfile.ProjectId == request.ProjectId,
+                                   cancellationToken)),
+            _ => false
+        };
         if (request.OrganizationId != access.OrganizationId ||
             request.RequestedByUserId != userId ||
             access.Project?.RemoteUserId != userId ||
@@ -111,4 +117,19 @@ internal sealed class GeneratedVoiceContentService(
         new(StatusCodes.Status404NotFound, "generated_voice_not_found", "Không tìm thấy giọng đọc của cảnh.");
 
     private DateTime UtcNow() => timeProvider.GetUtcNow().UtcDateTime;
+
+    private static bool IsVoiceCatalogPreviewRequest(string requestJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(requestJson);
+            return document.RootElement.TryGetProperty("previewKind", out var previewKind) &&
+                   previewKind.ValueKind == JsonValueKind.String &&
+                   string.Equals(previewKind.GetString(), "Catalog", StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 }

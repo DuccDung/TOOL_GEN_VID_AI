@@ -34,6 +34,8 @@ public sealed class OpenAiContentClientNativeSpeechTests
         Assert.Contains("cảnh 1 = 5 giây", root.GetProperty("input").GetString(), StringComparison.Ordinal);
         Assert.Contains("cảnh 1: đúng 5 giây", root.GetProperty("input").GetString(), StringComparison.Ordinal);
         Assert.Contains("spoken_text tiếng Việt tự nhiên", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("85–95% thời lượng nội dung", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("11–14 âm tiết/cụm đọc", root.GetProperty("input").GetString(), StringComparison.Ordinal);
         Assert.Contains("Một nhân vật cùng spoken_text phải dùng OnCameraDialogue", root.GetProperty("input").GetString(), StringComparison.Ordinal);
         Assert.Contains("khuôn mặt và miệng", root.GetProperty("instructions").GetString(), StringComparison.Ordinal);
         var schema = root.GetProperty("text").GetProperty("format").GetProperty("schema");
@@ -193,7 +195,15 @@ public sealed class OpenAiContentClientNativeSpeechTests
         await client.RepairWithVideoConstraintsAsync(
             CreateProvider(),
             rejectedPlan,
-            [new ContentLanguageViolation("title", "language_invalid")],
+            [
+                new ContentLanguageViolation("title", "language_invalid"),
+                new ContentLanguageViolation(
+                    "scenes[0].spoken_text",
+                    ContentPlanViolationReasons.SpeechTooShort,
+                    1.2m,
+                    4.25m,
+                    4.75m)
+            ],
             "vi-VN",
             "YouTube",
             "16:9",
@@ -201,14 +211,17 @@ public sealed class OpenAiContentClientNativeSpeechTests
             "safe-user",
             VideoModelCapabilities.KlingDefault,
             true,
+            1m,
             CancellationToken.None);
 
         using var request = JsonDocument.Parse(handler.RequestBody!);
         var instructions = request.RootElement.GetProperty("instructions").GetString();
         var input = request.RootElement.GetProperty("input").GetString();
         Assert.Contains("Chỉ sửa các trường được liệt kê", instructions, StringComparison.Ordinal);
+        Assert.Contains("chưa khớp nhịp lời", instructions, StringComparison.Ordinal);
         Assert.Contains("Tuyệt đối giữ nguyên character_key, asset_key", instructions, StringComparison.Ordinal);
         Assert.Contains("- title: language_invalid", input, StringComparison.Ordinal);
+        Assert.Contains("scenes[0].spoken_text: lời quá ngắn; ước tính 1.2 giây, mục tiêu 4.25–4.75 giây", input, StringComparison.Ordinal);
         Assert.Contains("A Better Habit", input, StringComparison.Ordinal);
     }
 
@@ -294,6 +307,7 @@ public sealed class OpenAiContentClientNativeSpeechTests
             "safe-user",
             VideoModelCapabilities.KlingDefault,
             false,
+            1m,
             CancellationToken.None);
 
         var scene = Assert.Single(result.Plan.Scenes);

@@ -45,7 +45,26 @@ describe('formatContentLanguageError', () => {
   it('recognizes both long-form provider language error codes', () => {
     expect(isContentLanguageError({ code: 'kling_content_language_invalid', message: 'Kling' })).toBe(true);
     expect(isContentLanguageError({ code: 'fal_content_language_invalid', message: 'Fal' })).toBe(true);
+    expect(isContentLanguageError({ code: 'content_speech_pacing_invalid', message: 'Nhịp lời' })).toBe(true);
     expect(isContentLanguageError({ code: 'validation_failed', message: 'Khác' })).toBe(false);
+  });
+
+  it('shows pacing metrics without exposing narration content', () => {
+    const message = formatContentLanguageError({
+      code: 'content_speech_pacing_invalid',
+      message: 'Lời đọc chưa khớp thời lượng cảnh.',
+      errors: {
+        fields: ['scenes[0].spoken_text'],
+        reasons: ['scenes[0].spoken_text|speech_too_short'],
+        estimatedDurations: ['scenes[0].spoken_text|6.1'],
+        targetMinimumDurations: ['scenes[0].spoken_text|6.8'],
+        targetMaximumDurations: ['scenes[0].spoken_text|7.6']
+      }
+    });
+
+    expect(message).toContain('cảnh 1: lời nói');
+    expect(message).toContain('ước tính 6,1 giây');
+    expect(message).toContain('mục tiêu 6,8 giây–7,6 giây');
   });
 
   it('keeps required reasons, repair eligibility and the persisted request id', () => {
