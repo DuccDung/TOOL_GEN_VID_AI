@@ -7,8 +7,113 @@ public static class KlingSpeechModes
     public const string NativeVoiceOver = "NativeVoiceOver";
 }
 
+public static class SpeechProductionPolicies
+{
+    public const string ProviderNativeVerified = "ProviderNativeVerified";
+    public const string CanonicalVoice = "CanonicalVoice";
+
+    public static bool IsSupported(string? value) =>
+        value is ProviderNativeVerified or CanonicalVoice;
+}
+
+public static class SpeechVerificationStatuses
+{
+    public const string NotRequested = "NotRequested";
+    public const string Pending = "Pending";
+    public const string Processing = "Processing";
+    public const string Passed = "Passed";
+    public const string NeedsReview = "NeedsReview";
+    public const string Failed = "Failed";
+}
+
+public static class SceneSpeechStatuses
+{
+    public const string SpeechNotRequired = "SpeechNotRequired";
+    public const string SpeechMissing = "SpeechMissing";
+    public const string SpeechGenerating = "SpeechGenerating";
+    public const string SpeechVerificationRequired = "SpeechVerificationRequired";
+    public const string SpeechReviewRequired = "SpeechReviewRequired";
+    public const string SpeechApproved = "SpeechApproved";
+    public const string SpeechReadyForLipSync = "SpeechReadyForLipSync";
+    public const string SpeechInvalid = "SpeechInvalid";
+}
+
+public static class VoiceProfileScopes
+{
+    public const string ProjectNarrator = "ProjectNarrator";
+    public const string Character = "Character";
+}
+
+public static class VoiceProfileVersionStatuses
+{
+    public const string Draft = "Draft";
+    public const string Approved = "Approved";
+    public const string Superseded = "Superseded";
+    public const string Revoked = "Revoked";
+}
+
+public static class SpeechMixStrategies
+{
+    public const string ReplaceAllNativeAudio = "ReplaceAllNativeAudio";
+    public const string MixWithVerifiedAmbience = "MixWithVerifiedAmbience";
+}
+
+public static class SpeechSynchronizationErrorCodes
+{
+    public const string SpeechNotRequired = "speech_not_required";
+    public const string SceneSpeechChanged = "scene_speech_changed";
+    public const string VoiceProfileMissing = "voice_profile_missing";
+    public const string VoiceVersionNotApproved = "voice_version_not_approved";
+    public const string VoicePreviewRequired = "voice_preview_required";
+    public const string SceneVoiceNotApproved = "scene_voice_not_approved";
+    public const string SpeechDurationOutOfRange = "speech_duration_out_of_range";
+    public const string SpeechVerificationNotRequired = "speech_verification_not_required";
+    public const string SpeechVerificationFailed = "speech_verification_failed";
+    public const string SpeechVerificationReviewRequired = "speech_verification_review_required";
+    public const string SpeechVerificationReviewInvalid = "speech_verification_review_invalid";
+    public const string SpeechAudioInvalid = "speech_audio_invalid";
+    public const string SpeechReadyForLipSync = "speech_ready_for_lipsync";
+    public const string PricingNotConfigured = "pricing_not_configured";
+}
+
 public sealed record GenerateContentRequest(
     Guid ProjectId,
+    string IdempotencyKey,
+    Guid? OrganizationId = null);
+
+public sealed record ContentLanguageViolation(
+    string Field,
+    string Reason,
+    decimal? EstimatedDurationSeconds = null,
+    decimal? TargetMinimumSeconds = null,
+    decimal? TargetMaximumSeconds = null);
+
+public sealed record ContentRepairQuoteRequest(
+    Guid ProjectId,
+    Guid FailedProviderRequestId,
+    Guid? OrganizationId = null);
+
+public sealed record ContentRepairQuoteResponse(
+    Guid FailedProviderRequestId,
+    string ProviderCode,
+    string ModelCode,
+    IReadOnlyList<ContentLanguageViolation> Violations,
+    decimal EstimatedCost,
+    string CurrencyCode);
+
+public sealed record ContentLanguageFailureResponse(
+    Guid FailedProviderRequestId,
+    string ErrorCode,
+    string Message,
+    IReadOnlyList<ContentLanguageViolation> Violations,
+    bool CanRepair);
+
+public sealed record LatestContentLanguageFailureResponse(
+    ContentLanguageFailureResponse? Failure);
+
+public sealed record RepairContentRequest(
+    Guid ProjectId,
+    Guid FailedProviderRequestId,
     string IdempotencyKey,
     Guid? OrganizationId = null);
 
@@ -101,7 +206,9 @@ public sealed record GenerateSceneVoiceRequest(
     int ScenePlanVersion,
     string ExpectedNarrationHash,
     string IdempotencyKey,
-    Guid? OrganizationId = null);
+    Guid? OrganizationId = null,
+    string? ExpectedVoiceSnapshotHash = null,
+    Guid? ExpectedVoiceProfileVersionId = null);
 
 public sealed record SceneVoiceGenerationResponse(
     Guid ProviderRequestId,
@@ -121,7 +228,224 @@ public sealed record SceneVoiceGenerationResponse(
     long OutputTokens,
     decimal ActualCost,
     string CurrencyCode,
+    DateTime ExpiresAtUtc,
+    Guid? VoiceGenerationId = null,
+    string? VoiceSnapshotHash = null,
+    string VerificationStatus = SpeechVerificationStatuses.NotRequested,
+    Guid? VoiceProfileVersionId = null,
+    string? ExpectedSpeechHash = null);
+
+public sealed record VoiceProfileVersionSummary(
+    Guid VoiceProfileId,
+    Guid VoiceProfileVersionId,
+    string Scope,
+    Guid? CharacterId,
+    int Version,
+    string ProviderCode,
+    string ModelCode,
+    string VoiceCode,
+    string ProviderVoiceCode,
+    string LanguageCode,
+    decimal SpeakingRate,
+    string VoiceInstructions,
+    string SnapshotHash,
+    string Status,
+    DateTime CreatedAtUtc,
+    DateTime? ApprovedAtUtc,
+    Guid? PreviewProviderRequestId = null,
+    string? PreviewContentUrl = null,
+    string? PreviewSha256 = null,
+    long? PreviewDurationMs = null,
+    DateTime? PreviewExpiresAtUtc = null,
+    string? RowVersion = null);
+
+public sealed record VoiceProfileVersionListResponse(
+    IReadOnlyList<VoiceProfileVersionSummary> Versions);
+
+public sealed record CreateVoiceProfileDraftRequest(
+    Guid ProjectId,
+    string Scope,
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid? CharacterId = null,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceProfilePreviewQuoteRequest(
+    Guid ProjectId,
+    Guid VoiceProfileVersionId,
+    string ExpectedVoiceSnapshotHash,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceProfilePreviewQuoteResponse(
+    Guid VoiceProfileVersionId,
+    string ProviderCode,
+    string ModelCode,
+    decimal EstimatedCost,
+    string CurrencyCode,
+    int PreviewTextCharacters);
+
+public sealed record GenerateVoiceProfilePreviewRequest(
+    Guid ProjectId,
+    Guid VoiceProfileVersionId,
+    string ExpectedVoiceSnapshotHash,
+    string IdempotencyKey,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceProfilePreviewResponse(
+    Guid VoiceProfileVersionId,
+    Guid ProviderRequestId,
+    string ProviderCode,
+    string ModelCode,
+    string ContentUrl,
+    string MimeType,
+    string Sha256,
+    long SizeBytes,
+    long DurationMs,
+    int SampleRate,
+    int Channels,
+    decimal ActualCost,
+    string CurrencyCode,
     DateTime ExpiresAtUtc);
+
+public sealed record VoiceCatalogPreviewQuoteRequest(
+    Guid ProjectId,
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceCatalogPreviewContextQuoteRequest(
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceCatalogPreviewQuoteResponse(
+    string VoiceCode,
+    decimal SpeakingRate,
+    string ProviderCode,
+    string ModelCode,
+    decimal EstimatedCost,
+    string CurrencyCode,
+    int PreviewTextCharacters,
+    Guid ContextProjectId);
+
+public sealed record GenerateVoiceCatalogPreviewRequest(
+    Guid ProjectId,
+    string VoiceCode,
+    decimal SpeakingRate,
+    string IdempotencyKey,
+    Guid? OrganizationId = null);
+
+public sealed record VoiceCatalogPreviewResponse(
+    string VoiceCode,
+    decimal SpeakingRate,
+    Guid ProviderRequestId,
+    string ProviderCode,
+    string ModelCode,
+    string ContentUrl,
+    string MimeType,
+    string Sha256,
+    long SizeBytes,
+    long DurationMs,
+    int SampleRate,
+    int Channels,
+    decimal ActualCost,
+    string CurrencyCode,
+    DateTime ExpiresAtUtc);
+
+public sealed record ApproveVoiceProfileVersionRequest(
+    Guid ProjectId,
+    Guid VoiceProfileVersionId,
+    string ExpectedVoiceSnapshotHash,
+    Guid? OrganizationId = null,
+    bool PlaybackConfirmed = false);
+
+public sealed record SupersedeVoiceProfileVersionRequest(
+    Guid ProjectId,
+    Guid VoiceProfileVersionId,
+    string ExpectedVoiceSnapshotHash,
+    Guid? OrganizationId = null);
+
+public sealed record SceneVoiceQuoteRequest(
+    Guid ProjectId,
+    Guid SceneId,
+    int ScenePlanVersion,
+    string ExpectedSpeechHash,
+    Guid? OrganizationId = null,
+    string? ExpectedVoiceSnapshotHash = null,
+    Guid? ExpectedVoiceProfileVersionId = null);
+
+public sealed record SceneVoiceQuoteResponse(
+    Guid SceneId,
+    Guid VoiceProfileVersionId,
+    string VoiceSnapshotHash,
+    string ProviderCode,
+    string ModelCode,
+    decimal EstimatedCost,
+    string CurrencyCode,
+    bool ReusesExistingGeneration);
+
+public sealed record SceneSpeechVerificationQuoteRequest(
+    Guid ProjectId,
+    Guid SceneId,
+    int ScenePlanVersion,
+    string ExpectedSpeechHash,
+    long DurationMs,
+    Guid? OrganizationId = null);
+
+public sealed record SceneSpeechVerificationQuoteResponse(
+    string ProviderCode,
+    string ModelCode,
+    decimal EstimatedCost,
+    string CurrencyCode,
+    long BillableAudioSeconds);
+
+public sealed record VerifySceneSpeechRequest(
+    Guid ProjectId,
+    Guid SceneId,
+    int ScenePlanVersion,
+    string ExpectedSpeechHash,
+    string MediaSha256,
+    long DurationMs,
+    string IdempotencyKey,
+    Guid? OrganizationId = null,
+    Guid? SourceMediaAssetId = null);
+
+public sealed record ApproveSpeechVerificationReviewRequest(
+    Guid ProjectId,
+    Guid SceneId,
+    Guid SpeechVerificationReportId,
+    string Reason,
+    string ExpectedRowVersion,
+    Guid? OrganizationId = null);
+
+public sealed record SceneSpeechVerificationResponse(
+    Guid SpeechVerificationReportId,
+    Guid ProviderRequestId,
+    string ProviderCode,
+    string ModelCode,
+    string Status,
+    string Transcript,
+    decimal WordErrorRate,
+    decimal CharacterErrorRate,
+    decimal RequiredTermRecall,
+    long? SpeechStartMs,
+    long? SpeechEndMs,
+    string ExpectedSpeechHash,
+    string MediaSha256,
+    decimal ActualCost,
+    string CurrencyCode,
+    string? NormalizedTranscript = null,
+    IReadOnlyList<string>? MissingRequiredTerms = null,
+    IReadOnlyList<TranscribedWordTiming>? WordTimings = null,
+    bool ReviewApproved = false,
+    string? ReviewReason = null,
+    DateTime? ReviewedAtUtc = null,
+    string? RowVersion = null);
+
+public sealed record TranscribedWordTiming(
+    string Text,
+    long StartMs,
+    long EndMs);
 
 public sealed record SubmitKlingVideoRequest(
     Guid ProjectId,
@@ -221,4 +545,15 @@ public sealed record GenerationProviderStatusResponse(
     string? VideoUnavailableMessage = null,
     decimal? EstimatedVideoCostPerSecond = null,
     bool VideoNativeAudio = true,
-    string VideoResolution = "720p");
+    string VideoResolution = "720p",
+    bool OpenAiTranscriptionReady = false,
+    string? OpenAiTranscriptionModel = null,
+    string? OpenAiTranscriptionUnavailableCode = null,
+    string? OpenAiTranscriptionUnavailableMessage = null,
+    decimal? EstimatedSpeechVerificationCost = null,
+    bool CanonicalVoiceEnabled = false,
+    bool SpeechVerificationEnabled = false,
+    bool CanonicalVoiceReady = false,
+    string? CanonicalVoiceUnavailableCode = null,
+    string? CanonicalVoiceUnavailableMessage = null,
+    IReadOnlyList<OpenAiVoiceOption>? OpenAiVoiceOptions = null);

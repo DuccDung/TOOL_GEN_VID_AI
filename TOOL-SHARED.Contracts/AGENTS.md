@@ -1,21 +1,27 @@
 # Hướng dẫn AI agent — TOOL-SHARED.Contracts
 
-> Ngữ cảnh hệ thống liên module: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-06.
+> Ngữ cảnh liên module: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-07.
 
 Áp dụng thêm `../AGENTS.md`.
 
-Đây là hợp đồng public dùng chung giữa server và desktop. Giữ DTO đơn giản, không chứa EF entity, service logic, secret đã mã hóa hoặc kiểu chỉ tồn tại trong một UI.
+## Phạm vi
 
-## Quy tắc contract
+Project này chỉ chứa DTO, enum/string constant và helper thuần dùng chung giữa server/desktop. Không thêm EF entity, HTTP client, secret handling, file I/O hoặc nghiệp vụ phụ thuộc môi trường.
 
-- Thêm field mới theo hướng tương thích ngược khi có client cũ: ưu tiên nullable/default ở cuối record constructor.
-- Không đổi tên/xóa field hoặc đổi ý nghĩa enum/string âm thầm; nếu bắt buộc, cập nhật server, desktop, tài liệu và test trong cùng thay đổi.
-- Request generation phải mang `OrganizationId` khi ngữ cảnh không thể suy ra duy nhất.
-- Response credential chỉ có trạng thái, version và secret hint; tuyệt đối không có API key/encrypted payload.
-- Response output video/ảnh chỉ có URL proxy tương đối của server, không có provider output URL.
-- Contract registry Vietsub chỉ mang metadata tối thiểu; không thêm subtitle text, media, model path hoặc local workspace path.
-- Error response dùng code ổn định, message có thể thân thiện với người dùng.
+## Tương thích
+
+- Thêm field tùy chọn ở cuối positional record khi có thể.
+- Không đổi tên/xóa field, đổi nullability hoặc đổi nghĩa field public nếu chưa cập nhật đồng thời server, desktop, frontend và test.
+- Organization-scoped request phải có `OrganizationId` hoặc được route/context xác định rõ.
+- Response không chứa plaintext/encrypted credential, Authorization, provider URL gốc, local absolute path hoặc raw provider payload.
+- Output video/ảnh chỉ trả URL proxy tương đối của server; Vietsub registry chỉ mang metadata tối thiểu.
+- Mã trạng thái/error dùng constant ổn định, tránh magic string khác nhau giữa các project.
+- Helper normalization phải deterministic, culture-safe và có test Unicode/whitespace.
 - Không đặt giá mặc định hoặc provider credential trong contracts.
 
-Sau thay đổi, tìm mọi nơi dùng tên DTO bằng `rg`, rồi build toàn solution; chỉ build project contracts không đủ chứng minh tương thích.
+## Quy trình
 
+1. Sửa contract trước.
+2. Cập nhật server producer/consumer.
+3. Cập nhật desktop C# và TypeScript shape/message.
+4. Thêm test serialization/compatibility và chạy toàn solution.

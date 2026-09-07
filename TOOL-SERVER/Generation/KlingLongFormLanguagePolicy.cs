@@ -28,8 +28,12 @@ internal static class KlingLongFormLanguagePolicy
             : projectLanguageCode;
 }
 
+internal sealed record VietnameseContentViolation(string Field, string Reason);
+
 internal static class KlingVietnameseContentValidator
 {
+    public const string RequiredReason = "required";
+    public const string LanguageInvalidReason = "language_invalid";
     private static readonly HashSet<char> VietnameseLetters = new(
         "ăâđêôơưĂÂĐÊÔƠƯ" +
         "áàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ" +
@@ -45,7 +49,7 @@ internal static class KlingVietnameseContentValidator
         "voi", "xin", "ruc", "ro", "sac", "mau", "mua", "he"
     };
 
-    public static IReadOnlyList<string> FindPlanViolations(GeneratedContentPlan plan)
+    public static IReadOnlyList<VietnameseContentViolation> FindPlanViolations(GeneratedContentPlan plan)
     {
         var fields = new List<(string Field, string? Value, bool Required)>
         {
@@ -107,28 +111,30 @@ internal static class KlingVietnameseContentValidator
         return FindViolations(fields);
     }
 
-    public static IReadOnlyList<string> FindViolations(
+    public static IReadOnlyList<VietnameseContentViolation> FindViolations(
         IEnumerable<(string Field, string? Value, bool Required)> fields)
     {
-        var violations = new List<string>();
+        var violations = new List<VietnameseContentViolation>();
         foreach (var (field, value, required) in fields)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
                 if (required)
                 {
-                    violations.Add(field);
+                    violations.Add(new VietnameseContentViolation(field, RequiredReason));
                 }
                 continue;
             }
 
-            if (RequiresVietnameseText(field) && !ContainsHighConfidenceVietnamese(value))
+            if (RequiresVietnameseText(field, value) && !ContainsHighConfidenceVietnamese(value))
             {
-                violations.Add(field);
+                violations.Add(new VietnameseContentViolation(field, LanguageInvalidReason));
             }
         }
 
-        return violations.Distinct(StringComparer.Ordinal).ToArray();
+        return violations
+            .DistinctBy(x => x.Field, StringComparer.Ordinal)
+            .ToArray();
     }
 
     public static bool ContainsHighConfidenceVietnamese(string? value)
@@ -157,10 +163,24 @@ internal static class KlingVietnameseContentValidator
         return markerCount >= 2 && markerCount * 2 >= Math.Min(tokens.Count, 10);
     }
 
-    private static bool RequiresVietnameseText(string field) =>
-        !(field.EndsWith(".name", StringComparison.Ordinal) &&
-          (field.StartsWith("character.", StringComparison.Ordinal) ||
-           field.StartsWith("characters[", StringComparison.Ordinal)));
+    private static bool RequiresVietnameseText(string field, string value) =>
+        !IsProperNameField(field) || !IsShortProperName(value);
+
+    private static bool IsShortProperName(string value)
+    {
+        var normalized = value.Trim();
+        var tokens = TokenizeForDetection(normalized);
+        return normalized.Length <= 80 && tokens.Count is > 0 and <= 8;
+    }
+
+    private static bool IsProperNameField(string field) =>
+        field.EndsWith(".name", StringComparison.Ordinal) &&
+        (field.StartsWith("character.", StringComparison.Ordinal) ||
+         field.StartsWith("characters[", StringComparison.Ordinal) ||
+         field.StartsWith("asset.", StringComparison.Ordinal) ||
+         field.StartsWith("assets[", StringComparison.Ordinal) ||
+         field.StartsWith("project_asset.", StringComparison.Ordinal) ||
+         field.StartsWith("project_assets[", StringComparison.Ordinal));
 
     private static IReadOnlyList<string> TokenizeForDetection(string value)
     {

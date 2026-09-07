@@ -18,7 +18,7 @@ internal static class ProviderCatalogBootstrapper
             ProviderCodes.OpenAi,
             "OpenAI",
             "https://api.openai.com/v1/",
-            "{\"responses\":true,\"imageGeneration\":true,\"speechGeneration\":true}",
+            "{\"responses\":true,\"imageGeneration\":true,\"speechGeneration\":true,\"transcription\":true}",
             true,
             [
                 new(
@@ -38,6 +38,12 @@ internal static class ProviderCatalogBootstrapper
                     "GPT-4o Mini TTS",
                     "Voice",
                     "{\"api\":\"audio/speech\",\"responseFormat\":\"wav\",\"maxInputTokens\":2000,\"usageSource\":\"estimated\"}",
+                    true),
+                new(
+                    "whisper-1",
+                    "Whisper-1 Speech Verification",
+                    "Transcription",
+                    "{\"api\":\"audio/transcriptions\",\"responseFormat\":\"verbose_json\",\"wordTimestamps\":true,\"billingUsageType\":\"AudioSecond\",\"billingUnit\":\"Second\"}",
                     true)
             ]),
         new(

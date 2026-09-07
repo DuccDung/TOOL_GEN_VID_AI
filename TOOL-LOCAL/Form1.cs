@@ -210,7 +210,9 @@ public partial class Form1 : Form
                 _licensePaymentClient,
                 _featureOptions.VietsubEnabled,
                 PostJsonToWebView,
-                CloseAfterLogout);
+                CloseAfterLogout,
+                _featureOptions.SpeechSynchronizationEnabled,
+                finalVideoExportSelector: SelectFinalVideoDestination);
             _vietsubBridge = new VietsubWebBridge(
                 _featureOptions.VietsubEnabled,
                 PostJsonToWebView,
@@ -883,6 +885,23 @@ public partial class Form1 : Form
             OverwritePrompt = true,
             RestoreDirectory = true,
             FileName = "phu-de-tieng-viet.srt"
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? dialog.FileName
+            : null;
+    }
+
+    private string? SelectFinalVideoDestination()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Xuất video hoàn chỉnh",
+            Filter = "Video MP4 (*.mp4)|*.mp4",
+            AddExtension = true,
+            DefaultExt = "mp4",
+            OverwritePrompt = true,
+            RestoreDirectory = true,
+            FileName = $"video-hoan-chinh-{DateTime.Now:yyyyMMdd-HHmm}.mp4"
         };
         return dialog.ShowDialog(this) == DialogResult.OK
             ? dialog.FileName

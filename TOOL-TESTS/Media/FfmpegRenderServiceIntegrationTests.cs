@@ -1,3 +1,4 @@
+using System.Globalization;
 using TOOL_LOCAL.Media;
 
 namespace TOOL_TESTS.Media;
@@ -108,12 +109,160 @@ public sealed class FfmpegRenderServiceIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task RenderAsync_NormalizesSceneLoudnessBeforeConcatenation()
+    {
+        var tools = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg");
+        var ffmpeg = Path.Combine(tools, "ffmpeg.exe");
+        var ffprobe = Path.Combine(tools, "ffprobe.exe");
+        var root = Path.Combine(Path.GetTempPath(), $"videomaker-final-render-loudness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var quietScene = Path.Combine(root, "scene-quiet.mp4");
+            var loudScene = Path.Combine(root, "scene-loud.mp4");
+            var output = Path.Combine(root, "final.mp4");
+            var working = Path.Combine(root, "working");
+            var runner = new ExternalProcessRunner();
+            await CreateNativeAudioSceneAsync(runner, ffmpeg, quietScene, "blue", 440, 0.05m);
+            await CreateNativeAudioSceneAsync(runner, ffmpeg, loudScene, "green", 660, 0.8m);
+
+            var renderer = new FfmpegRenderService(ffmpeg, runner);
+            await renderer.RenderAsync(new FinalRenderManifest(
+                [quietScene, loudScene],
+                output,
+                working,
+                320,
+                180,
+                25m,
+                TargetSceneLoudnessLufs: -16m));
+
+            var probe = new FfprobeService(ffprobe, runner);
+            var validator = new AudioQualityValidator(ffmpeg, runner, probe);
+            var quietQuality = await validator.AnalyzeAsync(Path.Combine(working, "normalized_001.mp4"));
+            var loudQuality = await validator.AnalyzeAsync(Path.Combine(working, "normalized_002.mp4"));
+            Assert.NotNull(quietQuality.MeanVolumeDb);
+            Assert.NotNull(loudQuality.MeanVolumeDb);
+            Assert.InRange(
+                Math.Abs(quietQuality.MeanVolumeDb!.Value - loudQuality.MeanVolumeDb!.Value),
+                0m,
+                2.5m);
+            Assert.Equal(48_000, (await probe.ProbeAsync(output)).AudioSampleRate);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RenderAsync_PadsVideoOnlySceneWhenTimelineContainsAudio()
+    {
+        var tools = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg");
+        var ffmpeg = Path.Combine(tools, "ffmpeg.exe");
+        var ffprobe = Path.Combine(tools, "ffprobe.exe");
+        var root = Path.Combine(Path.GetTempPath(), $"videomaker-final-render-mixed-audio-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var audioScene = Path.Combine(root, "scene-audio.mp4");
+            var silentScene = Path.Combine(root, "scene-silent.mp4");
+            var output = Path.Combine(root, "final.mp4");
+            var working = Path.Combine(root, "working");
+            var runner = new ExternalProcessRunner();
+            await CreateNativeAudioSceneAsync(runner, ffmpeg, audioScene, "blue", 440);
+            var createSilent = await runner.RunAsync(
+                ffmpeg,
+                [
+                    "-y", "-f", "lavfi", "-i", "color=c=black:s=320x180:r=25:d=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", silentScene
+                ],
+                TimeSpan.FromMinutes(2));
+            Assert.True(createSilent.ExitCode == 0, createSilent.StandardError);
+
+            var renderer = new FfmpegRenderService(ffmpeg, runner);
+            await renderer.RenderAsync(new FinalRenderManifest(
+                [audioScene, silentScene],
+                output,
+                working,
+                320,
+                180,
+                25m,
+                SceneAudioEnabled: [true, false],
+                OutputAudioEnabled: true));
+
+            var probe = new FfprobeService(ffprobe, runner);
+            var result = await probe.ProbeAsync(output);
+            Assert.True(result.HasVideo);
+            Assert.True(result.HasAudio);
+            Assert.InRange(result.DurationSeconds, 1.9m, 2.1m);
+            var quality = await new AudioQualityValidator(ffmpeg, runner, probe).AnalyzeAsync(output);
+            Assert.True(quality.IsAudible, quality.FailureMessage);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RenderAsync_AudioNormalizationStillAllowsVideoOnlyScene()
+    {
+        var tools = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg");
+        var ffmpeg = Path.Combine(tools, "ffmpeg.exe");
+        var ffprobe = Path.Combine(tools, "ffprobe.exe");
+        var root = Path.Combine(Path.GetTempPath(), $"videomaker-final-render-silent-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var scene = Path.Combine(root, "scene-silent.mp4");
+            var output = Path.Combine(root, "final.mp4");
+            var working = Path.Combine(root, "working");
+            var runner = new ExternalProcessRunner();
+            var create = await runner.RunAsync(
+                ffmpeg,
+                [
+                    "-y", "-f", "lavfi", "-i", "color=c=black:s=320x180:r=25:d=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", scene
+                ],
+                TimeSpan.FromMinutes(2));
+            Assert.True(create.ExitCode == 0, create.StandardError);
+
+            var renderer = new FfmpegRenderService(ffmpeg, runner);
+            await renderer.RenderAsync(new FinalRenderManifest(
+                [scene],
+                output,
+                working,
+                320,
+                180,
+                25m));
+
+            var result = await new FfprobeService(ffprobe, runner).ProbeAsync(output);
+            Assert.True(result.HasVideo);
+            Assert.False(result.HasAudio);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static async Task CreateNativeAudioSceneAsync(
         IExternalProcessRunner runner,
         string ffmpeg,
         string output,
         string color,
-        int frequency)
+        int frequency,
+        decimal volume = 1m)
     {
         var result = await runner.RunAsync(
             ffmpeg,
@@ -123,6 +272,7 @@ public sealed class FfmpegRenderServiceIntegrationTests
                 "-f", "lavfi", "-i", $"sine=frequency={frequency}:sample_rate=48000:duration=1",
                 "-map", "0:v:0", "-map", "1:a:0",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-af", $"volume={volume.ToString(CultureInfo.InvariantCulture)}",
                 "-c:a", "aac", "-b:a", "192k", "-shortest", output
             ],
             TimeSpan.FromMinutes(2));

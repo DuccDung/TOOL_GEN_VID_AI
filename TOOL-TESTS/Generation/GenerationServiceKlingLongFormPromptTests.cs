@@ -81,6 +81,60 @@ public sealed class GenerationServiceKlingLongFormPromptTests
     }
 
     [Fact]
+    public async Task CanonicalVoiceWithoutApprovedWav_IsBlockedBeforeResolverBudgetAndOutbound()
+    {
+        await using var dbContext = CreateContext();
+        var seeded = SeedProject(
+            dbContext,
+            GenerationWorkflowTypes.OpenAiStructuredPlan,
+            "Khung cảnh thành phố Việt Nam yên tĩnh lúc bình minh.",
+            narration: "Hãy bắt đầu bằng một hành động nhỏ.");
+        seeded.Project.SpeechProductionPolicy = SpeechProductionPolicies.CanonicalVoice;
+        await dbContext.SaveChangesAsync();
+        var fixture = CreateService(dbContext, seeded.Project);
+
+        var exception = await Assert.ThrowsAsync<AccountApiException>(() => fixture.Service.SubmitVideoAsync(
+            CreateRequest(seeded),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None));
+
+        Assert.Equal(SpeechSynchronizationErrorCodes.SceneVoiceNotApproved, exception.Code);
+        Assert.Equal(0, fixture.ProviderResolver.ResolveCount);
+        Assert.Equal(0, fixture.Budget.ReserveCount);
+        Assert.Equal(0, fixture.VideoClient.SubmitCount);
+        Assert.Empty(dbContext.ProviderRequests);
+    }
+
+    [Fact]
+    public async Task CanonicalVoiceWithApprovedWav_SubmitsWithoutAsrReport()
+    {
+        await using var dbContext = CreateContext();
+        var seeded = SeedProject(
+            dbContext,
+            GenerationWorkflowTypes.OpenAiStructuredPlan,
+            "Khung cảnh thành phố Việt Nam yên tĩnh lúc bình minh.",
+            narration: "Hãy bắt đầu bằng một hành động nhỏ.");
+        seeded.Project.SpeechProductionPolicy = SpeechProductionPolicies.CanonicalVoice;
+        SeedApprovedCanonicalVoice(dbContext, seeded);
+        await dbContext.SaveChangesAsync();
+        var fixture = CreateService(dbContext, seeded.Project);
+
+        var response = await fixture.Service.SubmitVideoAsync(
+            CreateRequest(seeded),
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal("Submitted", response.Status);
+        Assert.Equal(1, fixture.ProviderResolver.ResolveCount);
+        Assert.Equal(1, fixture.Budget.ReserveCount);
+        Assert.Equal(1, fixture.VideoClient.SubmitCount);
+        Assert.DoesNotContain(seeded.Scene.Narration!, fixture.VideoClient.LastPrompt, StringComparison.Ordinal);
+        Assert.Empty(dbContext.SpeechVerificationReports);
+    }
+
+    [Fact]
     public async Task LongFormVoiceOverWithCharacter_IsBlockedBeforeResolverBudgetAndOutbound()
     {
         await using var dbContext = CreateContext();
@@ -301,6 +355,114 @@ public sealed class GenerationServiceKlingLongFormPromptTests
             media.MimeType,
             Convert.ToBase64String(bytes),
             hash);
+    }
+
+    private static void SeedApprovedCanonicalVoice(
+        VideoFactoryDbContext dbContext,
+        SeededProject seeded)
+    {
+        var now = DateTime.UtcNow;
+        var profileId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+        var voiceRequestId = Guid.NewGuid();
+        var voiceAssetId = Guid.NewGuid();
+        var voiceGenerationId = Guid.NewGuid();
+        var snapshotHash = new string('c', 64);
+        var speechHash = Convert.ToHexString(
+            SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+                SpeechTextNormalization.Normalize(seeded.Scene.Narration))))
+            .ToLowerInvariant();
+        var profile = new VoiceProfile
+        {
+            VoiceProfileId = profileId,
+            ProjectId = seeded.Project.ProjectId,
+            Scope = VoiceProfileScopes.ProjectNarrator,
+            CreatedAtUtc = now,
+            RowVersion = new byte[8]
+        };
+        var version = new VoiceProfileVersion
+        {
+            VoiceProfileVersionId = versionId,
+            VoiceProfileId = profileId,
+            Version = 1,
+            ProviderCode = ProviderCodes.OpenAi,
+            ModelCode = "gpt-4o-mini-tts",
+            VoiceCode = "female-sweet",
+            ProviderVoiceCode = "coral",
+            LanguageCode = "vi-VN",
+            SpeakingRate = 1m,
+            VoiceInstructions = "Rõ ràng",
+            SnapshotHash = snapshotHash,
+            Status = VoiceProfileVersionStatuses.Approved,
+            CreatedAtUtc = now,
+            ApprovedAtUtc = now,
+            RowVersion = new byte[8]
+        };
+        var request = new ProviderRequest
+        {
+            ProviderRequestId = voiceRequestId,
+            OrganizationId = seeded.Project.OrganizationId,
+            RequestedByUserId = seeded.Project.RemoteUserId,
+            ProjectId = seeded.Project.ProjectId,
+            SceneId = seeded.Scene.SceneId,
+            RequestKind = "Voice",
+            ProviderCode = ProviderCodes.OpenAi,
+            ModelCode = "gpt-4o-mini-tts",
+            IdempotencyKey = $"voice:{seeded.Scene.SceneId:N}",
+            Status = "Completed",
+            RequestJson = "{}",
+            CurrencyCode = "USD",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            RowVersion = new byte[8]
+        };
+        var asset = new MediaAsset
+        {
+            MediaAssetId = voiceAssetId,
+            ProjectId = seeded.Project.ProjectId,
+            SceneId = seeded.Scene.SceneId,
+            AssetType = "SceneVoice",
+            RelativePath = "voice/scene-001.wav",
+            MimeType = "audio/wav",
+            SizeBytes = 1024,
+            Sha256 = new string('b', 64),
+            DurationMs = 4500,
+            AudioSampleRate = 24000,
+            Status = "Ready",
+            SourceType = "Generated",
+            CreatedAtUtc = now,
+            VerifiedAtUtc = now,
+            RowVersion = new byte[8]
+        };
+        var generation = new VoiceGeneration
+        {
+            VoiceGenerationId = voiceGenerationId,
+            ProjectId = seeded.Project.ProjectId,
+            ScriptId = seeded.Scene.ScriptId,
+            SceneId = seeded.Scene.SceneId,
+            ScenePlanVersion = seeded.Scene.ScenePlanVersion,
+            ProviderRequestId = voiceRequestId,
+            Version = 1,
+            VoiceCode = "female-sweet",
+            ProviderVoiceCode = "coral",
+            NarrationHash = speechHash,
+            VoiceSnapshotHash = snapshotHash,
+            VoiceProfileVersionId = versionId,
+            VerificationStatus = SpeechVerificationStatuses.NotRequested,
+            LanguageCode = "vi-VN",
+            SpeakingRate = 1m,
+            Status = "Approved",
+            DurationMs = 4500,
+            OutputMediaAssetId = voiceAssetId,
+            CreatedAtUtc = now,
+            CompletedAtUtc = now,
+            ApprovedAtUtc = now,
+            RowVersion = new byte[8]
+        };
+        seeded.Project.ApprovedNarratorVoiceProfileVersionId = versionId;
+        seeded.Scene.ApprovedVoiceGenerationId = voiceGenerationId;
+        seeded.Scene.SpeechStatus = SceneSpeechStatuses.SpeechApproved;
+        dbContext.AddRange(profile, version, request, asset, generation);
     }
 
     private static Fixture CreateService(

@@ -13,7 +13,10 @@ public sealed record FinalRenderManifest(
     string? VoicePath = null,
     string? MusicPath = null,
     string? SubtitlePath = null,
-    decimal MusicVolume = 0.15m);
+    decimal MusicVolume = 0.15m,
+    decimal TargetSceneLoudnessLufs = -16m,
+    IReadOnlyList<bool>? SceneAudioEnabled = null,
+    bool OutputAudioEnabled = true);
 
 public interface IFinalMediaRenderer
 {
@@ -32,7 +35,12 @@ public sealed class FfmpegRenderService(string ffmpegPath, IExternalProcessRunne
         for (var index = 0; index < manifest.ScenePaths.Count; index++)
         {
             var normalized = Path.Combine(workingDirectory, $"normalized_{index + 1:000}.mp4");
-            await NormalizeSceneAsync(manifest.ScenePaths[index], normalized, manifest, cancellationToken);
+            await NormalizeSceneAsync(
+                manifest.ScenePaths[index],
+                normalized,
+                manifest,
+                index,
+                cancellationToken);
             normalizedFiles.Add(normalized);
         }
 
@@ -60,21 +68,45 @@ public sealed class FfmpegRenderService(string ffmpegPath, IExternalProcessRunne
         string input,
         string output,
         FinalRenderManifest manifest,
+        int sceneIndex,
         CancellationToken cancellationToken)
     {
         var filter = $"scale={manifest.Width}:{manifest.Height}:force_original_aspect_ratio=decrease," +
                      $"pad={manifest.Width}:{manifest.Height}:(ow-iw)/2:(oh-ih)/2:black," +
                      $"fps={Invariant(manifest.FramesPerSecond)},format=yuv420p";
-        return RunFfmpegAsync(
-            [
-                "-y", "-i", Path.GetFullPath(input),
-                "-map", "0:v:0", "-map", "0:a:0?", "-vf", filter,
-                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                "-movflags", "+faststart", output
-            ],
-            TimeSpan.FromMinutes(20),
-            cancellationToken);
+        var audioFilter = $"aformat=sample_rates=48000:channel_layouts=stereo," +
+                          $"loudnorm=I={Invariant(manifest.TargetSceneLoudnessLufs)}:LRA=11:TP=-1.5";
+        var sourceHasAudio = manifest.SceneAudioEnabled is null
+            ? (bool?)null
+            : manifest.SceneAudioEnabled[sceneIndex];
+        var arguments = new List<string> { "-y", "-i", Path.GetFullPath(input) };
+        if (manifest.OutputAudioEnabled && sourceHasAudio == false)
+        {
+            arguments.AddRange(["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]);
+        }
+        arguments.AddRange(["-map", "0:v:0"]);
+        if (manifest.OutputAudioEnabled)
+        {
+            arguments.AddRange([
+                "-map", sourceHasAudio == false ? "1:a:0" : "0:a:0?",
+                "-af", audioFilter,
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"
+            ]);
+            if (sourceHasAudio == false)
+            {
+                arguments.Add("-shortest");
+            }
+        }
+        else
+        {
+            arguments.Add("-an");
+        }
+        arguments.AddRange([
+            "-vf", filter,
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-movflags", "+faststart", output
+        ]);
+        return RunFfmpegAsync(arguments, TimeSpan.FromMinutes(20), cancellationToken);
     }
 
     private Task CompositeAudioAndSubtitleAsync(
@@ -113,7 +145,7 @@ public sealed class FfmpegRenderService(string ffmpegPath, IExternalProcessRunne
         {
             // SceneVideo already contains approved Kling Native Audio. Keep the
             // concatenated scene audio when no optional legacy voice/music input exists.
-            audioMap = "0:a:0?";
+            audioMap = manifest.OutputAudioEnabled ? "0:a:0?" : null;
         }
 
         if (!string.IsNullOrWhiteSpace(manifest.SubtitlePath))
@@ -184,6 +216,15 @@ public sealed class FfmpegRenderService(string ffmpegPath, IExternalProcessRunne
         if (manifest.MusicVolume is < 0 or > 1)
         {
             throw new ArgumentException("Music volume phải nằm trong khoảng 0–1.", nameof(manifest));
+        }
+        if (manifest.TargetSceneLoudnessLufs is < -30m or > -5m)
+        {
+            throw new ArgumentException("Mục tiêu loudness của scene phải nằm trong khoảng -30 đến -5 LUFS.", nameof(manifest));
+        }
+        if (manifest.SceneAudioEnabled is not null &&
+            manifest.SceneAudioEnabled.Count != manifest.ScenePaths.Count)
+        {
+            throw new ArgumentException("Danh sách trạng thái audio phải khớp số scene.", nameof(manifest));
         }
     }
 

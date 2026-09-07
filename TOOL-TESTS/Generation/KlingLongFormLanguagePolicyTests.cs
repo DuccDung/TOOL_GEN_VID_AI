@@ -50,8 +50,69 @@ public sealed class KlingLongFormLanguagePolicyTests
 
         var violations = KlingVietnameseContentValidator.FindPlanViolations(plan);
 
-        Assert.Contains("title", violations);
-        Assert.Contains("scenes[0].visual_prompt", violations);
+        Assert.Contains(violations, x => x.Field == "title" && x.Reason == "language_invalid");
+        Assert.Contains(violations, x =>
+            x.Field == "scenes[0].visual_prompt" && x.Reason == "language_invalid");
+    }
+
+    [Fact]
+    public void PlanValidator_AllowsProperAssetNamesButStillRequiresVietnameseDescriptions()
+    {
+        var plan = CreateVietnamesePlan() with
+        {
+            Assets =
+            [
+                CreateVietnamesePlan().Assets![0] with
+                {
+                    Name = "iPhone 17 Pro",
+                    CanonicalDescription = "A black phone rests face down on the wooden desk."
+                }
+            ]
+        };
+
+        var violations = KlingVietnameseContentValidator.FindPlanViolations(plan);
+
+        Assert.DoesNotContain(violations, x => x.Field == "assets[0].name");
+        Assert.Contains(violations, x =>
+            x.Field == "assets[0].canonical_description" && x.Reason == "language_invalid");
+    }
+
+    [Fact]
+    public void FieldValidator_TreatsMaterializedAssetNamesAsProperNames()
+    {
+        var violations = KlingVietnameseContentValidator.FindViolations([
+            ("project_asset.name", "Apple Watch", true),
+            ("project_asset.canonical_description", "Đồng hồ màu đen có dây silicon cố định.", true)
+        ]);
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void FieldValidator_DoesNotExemptLongEnglishProsePlacedInANameField()
+    {
+        var violations = KlingVietnameseContentValidator.FindViolations([
+            ("assets[0].name", "A clean modern presentation room with one large window and soft morning sunlight", true)
+        ]);
+
+        var violation = Assert.Single(violations);
+        Assert.Equal("assets[0].name", violation.Field);
+        Assert.Equal("language_invalid", violation.Reason);
+    }
+
+    [Fact]
+    public void FieldValidator_ClassifiesEmptyEnglishAndOptionalValues()
+    {
+        var violations = KlingVietnameseContentValidator.FindViolations([
+            ("title", "  ", true),
+            ("negative_prompt", "subtitles, watermark", true),
+            ("scenes[0].spoken_text", string.Empty, false)
+        ]);
+
+        Assert.Contains(violations, x => x.Field == "title" && x.Reason == "required");
+        Assert.Contains(violations, x =>
+            x.Field == "negative_prompt" && x.Reason == "language_invalid");
+        Assert.DoesNotContain(violations, x => x.Field == "scenes[0].spoken_text");
     }
 
     private static GeneratedContentPlan CreateVietnamesePlan() =>

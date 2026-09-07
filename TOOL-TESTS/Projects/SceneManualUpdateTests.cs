@@ -72,6 +72,28 @@ public sealed class SceneManualUpdateTests
     }
 
     [Fact]
+    public async Task UpdateScene_CanonicalVoiceRejectsNarrationBeyondSafeTempoWindow()
+    {
+        using var fixture = await CreateFixtureAsync(
+            klingSnapshot: true,
+            canonicalVoice: true);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Service.UpdateSceneAsync(
+            fixture.ProjectId,
+            fixture.UserId,
+            new UpdateSceneCommand(
+                fixture.SceneId,
+                Words(60),
+                "Khung hình phòng khách sáng.",
+                "Toàn cảnh phòng khách sáng, máy quay tiến chậm.",
+                "NativeVoiceOver")));
+
+        Assert.Contains("vượt khả năng ghép an toàn", exception.Message, StringComparison.Ordinal);
+        await using var verification = fixture.Factory.CreateDbContext();
+        Assert.Single(await verification.ScenePrompts.ToListAsync());
+    }
+
+    [Fact]
     public async Task UpdateScene_KlingLongFormRejectsEnglishManualContent()
     {
         using var fixture = await CreateFixtureAsync("OpenAiStructuredPlan", klingSnapshot: true);
@@ -177,7 +199,8 @@ public sealed class SceneManualUpdateTests
 
     private static async Task<Fixture> CreateFixtureAsync(
         string structureType = "OpenAiStructuredPlan",
-        bool klingSnapshot = false)
+        bool klingSnapshot = false,
+        bool canonicalVoice = false)
     {
         var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
             .UseInMemoryDatabase($"scene-manual-update-{Guid.NewGuid():N}")
@@ -215,6 +238,10 @@ public sealed class SceneManualUpdateTests
                 VideoPolicyVersion = klingSnapshot ? 1 : null,
                 VideoResolution = klingSnapshot ? "720p" : null,
                 VideoNativeAudio = klingSnapshot,
+                SpeechProductionPolicy = canonicalVoice
+                    ? TOOL_SHARED.Contracts.Generation.SpeechProductionPolicies.CanonicalVoice
+                    : TOOL_SHARED.Contracts.Generation.SpeechProductionPolicies.ProviderNativeVerified,
+                VoiceSpeakingRate = canonicalVoice ? 1m : null,
                 CurrencyCode = "USD",
                 WorkspaceRelativePath = $"projects/{projectId:N}",
                 CreatedAtUtc = now,

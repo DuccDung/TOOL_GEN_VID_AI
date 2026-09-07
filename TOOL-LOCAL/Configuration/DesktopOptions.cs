@@ -17,6 +17,8 @@ public sealed class DesktopOptions
 
     public DesktopFeatureOptions Features { get; init; } = new();
 
+    public DesktopSpeechSynchronizationOptions SpeechSynchronization { get; init; } = new();
+
     public static DesktopOptions Load() => Load(AppContext.BaseDirectory);
 
     internal static DesktopOptions Load(string applicationDirectory)
@@ -62,6 +64,14 @@ public sealed class DesktopOptions
             string.IsNullOrWhiteSpace(options.Update.Platform))
         {
             throw new InvalidOperationException("Cấu hình Update không hợp lệ.");
+        }
+        if (options.SpeechSynchronization.MaximumTempoAdjustmentRatio is < 0m or > 0.25m ||
+            options.SpeechSynchronization.MinimumVoiceDurationRatio is < 0.05m or > 1m ||
+            options.SpeechSynchronization.TargetLoudnessLufs is < -24m or > -10m ||
+            options.SpeechSynchronization.TargetSpeechLeadInMs is < 0 or > 2000 ||
+            options.SpeechSynchronization.SpeechBoundaryPaddingMs is < 0 or > 500)
+        {
+            throw new InvalidOperationException("Cấu hình SpeechSynchronization của desktop không hợp lệ.");
         }
 
         return options;
@@ -125,4 +135,19 @@ public sealed class DesktopFeatureOptions
     public bool VietsubLocalTranslationEnabled { get; init; }
 
     public bool VietsubLocalVoiceEnabled { get; init; } = true;
+
+    public bool SpeechSynchronizationEnabled { get; init; }
+}
+
+public sealed class DesktopSpeechSynchronizationOptions
+{
+    public decimal MaximumTempoAdjustmentRatio { get; init; } = 0.05m;
+
+    public decimal MinimumVoiceDurationRatio { get; init; } = 0.20m;
+
+    public decimal TargetLoudnessLufs { get; init; } = -16m;
+
+    public int TargetSpeechLeadInMs { get; init; } = 150;
+
+    public int SpeechBoundaryPaddingMs { get; init; } = 80;
 }

@@ -1,6 +1,6 @@
 # Kiểm thử và nghiệm thu VideoMaker
 
-> Ma trận kiểm thử và Definition of Done. Rà soát ngày 2026-09-06.
+> Ma trận kiểm thử và Definition of Done. Rà soát ngày 2026-09-07.
 
 Kết quả phải ghi rõ thời điểm, commit/worktree, môi trường và số Passed/Failed/Skipped. Không dùng mốc lịch sử như kết quả của lần thay đổi mới.
 
@@ -38,6 +38,7 @@ Không dùng `npm install` để âm thầm đổi lockfile trong một thay đ�
 | Migration | Static migration tests, apply trên clone, chạy lại idempotency, query verify và restore rehearsal |
 | WebView bridge | TypeScript/C# contract, invalid message, busy/cancel/reconnect, organization/project switching |
 | Media/download/render | Path traversal, `.part`, MIME/signature/size/hash, FFprobe, ApprovedGenerationId và FFmpeg integration |
+| Canonical Voice/speech | Feature flag, voice catalog/alias/preview context, pacing, TTS/ASR cost gate, WAV validation, approval/lineage, mix/render và audited review |
 | Vietsub/OCR | Manifest/SQLite/revision/lock, path safety, cue/source/language, cancel/retry và atomic SRT |
 | Translation runtime | Worker safety/protocol/readiness tests; model integration và benchmark opt-in; desktop smoke |
 | Local voice | Phrase/cache/revision, worker protocol, WAV/hash/path, fit 1.20x, FFmpeg timeline, playback authorization; runtime/model thật và nghe smoke là opt-in |
@@ -92,6 +93,8 @@ Test đọc nội dung migration không thay thế apply thật. Với mỗi mig
 6. Test `VideoFactory.DesktopLeastPrivilege.sql` bằng account desktop thật: đường cần thiết được phép, `auth`/`ai`/`vs` và secret/ledger bị chặn.
 7. Thử restore backup và ghi thời gian/điểm mất dữ liệu chấp nhận được.
 
+Với migration 4.1.2–4.1.5, kiểm tra thêm failure details không lộ nội dung nhạy cảm, backfill speech policy, voice profile approval proof, index/FK mới và constraint `NeedsReview` chỉ cho phép accept khi có lý do/reviewer/timestamp.
+
 Không apply migration vào database thật chỉ để hoàn thành checklist test.
 
 ## 5. Provider smoke test
@@ -122,6 +125,17 @@ Unit/integration mặc định không gửi request có phí. Smoke thật chỉ
 - LongForm có first frame Approved/current đúng tỷ lệ.
 - Chặn missing/stale/wrong-ratio/identity-square input.
 - Xác minh không fallback Text-to-Video.
+
+### Canonical Voice và speech verification
+
+- Mở/chọn voice modal không tạo provider request hoặc reservation; catalog 13 giọng và hai alias legacy đúng server contract.
+- Preview dùng đúng context project, gồm project kỹ thuật ẩn khi chưa có project nội dung; replay WAV đã tải không tạo phí lần hai.
+- Content pacing mục tiêu 85–95%, validator 80–105% và repair luôn qua quote/xác nhận/idempotency riêng.
+- TTS fail closed khi thiếu model/credential/rate/budget; WAV sai MIME/hash/sample/duration/audibility bị chặn.
+- Canonical Voice không gọi transcription; video dài Provider Native cũng không quote/gọi ASR và không cần `SpeechVerificationReport`.
+- `NativeVoiceOver` dùng đúng WAV/speech/voice snapshot và asset sync v3; compatibility v2 chỉ cho exact approved lineage.
+- `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`; render không giả định đã lip-sync.
+- Nếu bật speech verification ngoài video dài: `Passed`, audited `NeedsReview`, stale version và `Failed` phải đúng policy trước outbound/render.
 
 Kết quả một provider không đại diện cho provider khác.
 

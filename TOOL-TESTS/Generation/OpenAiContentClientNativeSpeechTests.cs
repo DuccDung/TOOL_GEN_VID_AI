@@ -30,12 +30,14 @@ public sealed class OpenAiContentClientNativeSpeechTests
         Assert.Equal("Minh bắt đầu thói quen nhỏ hôm nay.", scene.Narration);
         using var request = JsonDocument.Parse(Assert.IsType<string>(handler.RequestBody));
         var root = request.RootElement;
-        Assert.Contains("mandatory per-scene speech contracts", root.GetProperty("instructions").GetString(), StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("scene 1 = 5s", root.GetProperty("input").GetString());
-        Assert.Contains("scene 1: exactly 5s", root.GetProperty("input").GetString(), StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("spoken_text must be non-empty and natural for the scene duration", root.GetProperty("input").GetString(), StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("one character plus spoken_text requires OnCameraDialogue", root.GetProperty("input").GetString(), StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("face and mouth clear", root.GetProperty("instructions").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("spoken_text", root.GetProperty("instructions").GetString(), StringComparison.Ordinal);
+        Assert.Contains("cảnh 1 = 5 giây", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("cảnh 1: đúng 5 giây", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("spoken_text tiếng Việt tự nhiên", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("85–95% thời lượng nội dung", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("11–14 âm tiết/cụm đọc", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Một nhân vật cùng spoken_text phải dùng OnCameraDialogue", root.GetProperty("input").GetString(), StringComparison.Ordinal);
+        Assert.Contains("khuôn mặt và miệng", root.GetProperty("instructions").GetString(), StringComparison.Ordinal);
         var schema = root.GetProperty("text").GetProperty("format").GetProperty("schema");
         var sceneProperties = schema.GetProperty("properties")
             .GetProperty("scenes")
@@ -113,12 +115,114 @@ public sealed class OpenAiContentClientNativeSpeechTests
 
         using var request = JsonDocument.Parse(Assert.IsType<string>(handler.RequestBody));
         var instructions = request.RootElement.GetProperty("instructions").GetString();
-        Assert.Contains("every human-readable text field in natural Vietnamese", instructions, StringComparison.Ordinal);
+        Assert.Contains("mọi giá trị người đọc được phải viết bằng tiếng Việt tự nhiên", instructions, StringComparison.Ordinal);
         Assert.Contains("script_full_text", instructions, StringComparison.Ordinal);
         Assert.Contains("canonical_description", instructions, StringComparison.Ordinal);
         Assert.Contains("immutable_traits", instructions, StringComparison.Ordinal);
         Assert.Contains("ambient_audio", instructions, StringComparison.Ordinal);
-        Assert.Contains("All spoken_text must be natural Vietnamese", instructions, StringComparison.Ordinal);
+        Assert.Contains("spoken_text là câu được provider đọc đúng một lần", instructions, StringComparison.Ordinal);
+        Assert.Contains("tự kiểm tra mọi trường bắt buộc", instructions, StringComparison.Ordinal);
+        var schema = request.RootElement.GetProperty("text").GetProperty("format").GetProperty("schema");
+        var spokenTextDescription = schema.GetProperty("properties")
+            .GetProperty("scenes")
+            .GetProperty("items")
+            .GetProperty("properties")
+            .GetProperty("spoken_text")
+            .GetProperty("description")
+            .GetString();
+        var assetNameDescription = schema.GetProperty("properties")
+            .GetProperty("assets")
+            .GetProperty("items")
+            .GetProperty("properties")
+            .GetProperty("name")
+            .GetProperty("description")
+            .GetString();
+        Assert.Contains("tiếng Việt tự nhiên, đúng dấu", spokenTextDescription, StringComparison.Ordinal);
+        Assert.Contains("tên riêng, thương hiệu hoặc model", assetNameDescription, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_VietnamesePreservesEmptyHumanTextAndNormalizesAudioSentinels()
+    {
+        var handler = new CaptureHandler(CreateResponse(
+            string.Empty,
+            title: string.Empty,
+            visualPrompt: string.Empty,
+            voiceStyle: "None",
+            ambientAudio: "N/A",
+            soundEffects: "no sound effects"));
+        var client = new OpenAiContentClient(new StubHttpClientFactory(handler));
+
+        var result = await client.GenerateAsync(
+            CreateProvider(),
+            "thói quen lành mạnh",
+            "vi-VN",
+            "YouTube",
+            "16:9",
+            5,
+            "safe-user",
+            CancellationToken.None);
+
+        Assert.Empty(result.Plan.Title);
+        var scene = Assert.Single(result.Plan.Scenes);
+        Assert.Empty(scene.Narration);
+        Assert.Empty(scene.VisualPrompt);
+        Assert.Equal("Không áp dụng", scene.VoiceStyle);
+        Assert.Equal("Không có", scene.AmbientAudio);
+        Assert.Equal("Không có hiệu ứng âm thanh", scene.SoundEffects);
+        Assert.Equal(120, result.InputTokens);
+        Assert.Equal(240, result.OutputTokens);
+    }
+
+    [Fact]
+    public async Task RepairAsync_SendsRejectedPlanAndSafeViolationsWithImmutableInstructions()
+    {
+        var handler = new CaptureHandler(CreateResponse("Hãy bắt đầu bằng một hành động nhỏ."));
+        var client = new OpenAiContentClient(new StubHttpClientFactory(handler));
+        var rejectedPlan = new GeneratedContentPlan(
+            "A Better Habit",
+            "Hãy bắt đầu",
+            "Góc nhìn thực tế",
+            "Người trưởng thành",
+            "Hãy thử ngay",
+            "Hãy bắt đầu bằng một hành động nhỏ.",
+            "Ánh sáng tự nhiên",
+            "Không chữ trên màn hình",
+            [],
+            [],
+            []);
+
+        await client.RepairWithVideoConstraintsAsync(
+            CreateProvider(),
+            rejectedPlan,
+            [
+                new ContentLanguageViolation("title", "language_invalid"),
+                new ContentLanguageViolation(
+                    "scenes[0].spoken_text",
+                    ContentPlanViolationReasons.SpeechTooShort,
+                    1.2m,
+                    4.25m,
+                    4.75m)
+            ],
+            "vi-VN",
+            "YouTube",
+            "16:9",
+            5,
+            "safe-user",
+            VideoModelCapabilities.KlingDefault,
+            true,
+            1m,
+            CancellationToken.None);
+
+        using var request = JsonDocument.Parse(handler.RequestBody!);
+        var instructions = request.RootElement.GetProperty("instructions").GetString();
+        var input = request.RootElement.GetProperty("input").GetString();
+        Assert.Contains("Chỉ sửa các trường được liệt kê", instructions, StringComparison.Ordinal);
+        Assert.Contains("chưa khớp nhịp lời", instructions, StringComparison.Ordinal);
+        Assert.Contains("Tuyệt đối giữ nguyên character_key, asset_key", instructions, StringComparison.Ordinal);
+        Assert.Contains("- title: language_invalid", input, StringComparison.Ordinal);
+        Assert.Contains("scenes[0].spoken_text: lời quá ngắn; ước tính 1.2 giây, mục tiêu 4.25–4.75 giây", input, StringComparison.Ordinal);
+        Assert.Contains("A Better Habit", input, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -203,6 +307,7 @@ public sealed class OpenAiContentClientNativeSpeechTests
             "safe-user",
             VideoModelCapabilities.KlingDefault,
             false,
+            1m,
             CancellationToken.None);
 
         var scene = Assert.Single(result.Plan.Scenes);
@@ -220,11 +325,15 @@ public sealed class OpenAiContentClientNativeSpeechTests
         string speechMode = KlingSpeechModes.OnCameraDialogue,
         string[]? characterKeys = null,
         string? speakerCharacterKey = "minh",
-        string visualPrompt = "Minh speaks directly to the camera with his face and mouth clearly visible, gesturing naturally while speaking.")
+        string visualPrompt = "Minh speaks directly to the camera with his face and mouth clearly visible, gesturing naturally while speaking.",
+        string title = "Small habits",
+        string voiceStyle = "warm and confident",
+        string ambientAudio = "quiet room tone",
+        string soundEffects = "subtle hand movement")
     {
         var output = JsonSerializer.Serialize(new
         {
-            title = "Small habits",
+            title,
             hook = "Start today",
             angle = "Practical",
             audience = "Adults",
@@ -274,9 +383,9 @@ public sealed class OpenAiContentClientNativeSpeechTests
                     speech_mode = speechMode,
                     spoken_text = spokenText,
                     speaker_character_key = speakerCharacterKey,
-                    voice_style = "warm and confident",
-                    ambient_audio = "quiet room tone",
-                    sound_effects = "subtle hand movement"
+                    voice_style = voiceStyle,
+                    ambient_audio = ambientAudio,
+                    sound_effects = soundEffects
                 }
             }
         });

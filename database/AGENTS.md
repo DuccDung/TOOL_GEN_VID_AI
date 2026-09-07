@@ -1,67 +1,42 @@
 # Hướng dẫn AI agent — database
 
-> Ngữ cảnh hệ thống và danh sách migration hiện hành: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-06.
+> Danh sách migration hiện hành: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-07.
 
-Áp dụng thêm `../AGENTS.md`.
+Áp dụng thêm `../AGENTS.md` và đọc `../VAN_HANH_VA_PHAT_HANH.md` trước mọi thay đổi hoặc thực thi SQL.
 
-## Vai trò các script
+## Schema
 
-- `VideoFactory.Initial.sql`: bootstrap đầy đủ cho database mới và chứa các bước nâng cấp lịch sử cần thiết.
-- `VideoFactory.4.0.0.OrganizationAiGateway.sql`: migration idempotent sang AI Gateway theo tổ chức.
-- `VideoFactory.4.0.1` đến `4.0.11`: sửa seed tiếng Việt, ảnh/voice, video đa provider, trạng thái Native Audio, continuity asset, Fal/Veo LongForm, SePay và seat provisioning.
-- `VideoFactory.4.1.0.VietsubProjectRegistry.sql`: registry metadata project Vietsub trên server; không lưu subtitle/media/path local.
-- `VideoFactory.4.1.1.SceneFirstFrames.sql`: first-frame theo scene và snapshot vào provider request.
-- `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql`: script kiểm tra riêng, không phải migration cần chạy như một bước version mới.
-- `VideoFactory.DesktopLeastPrivilege.sql`: tạo role quyền tối thiểu cho desktop trong giai đoạn còn truy cập workflow trực tiếp.
+- `auth`: Identity, session, device, license, payment và Data Protection keys.
+- `ai`: organization, membership, credential, budget, reservation, ledger, audit và seat provisioning.
+- `vf`: project/workflow, asset, provider catalog/model/rate/request, speech và render.
+- `vs`: Vietsub project registry; media/subtitle content vẫn ở workspace local.
 
-Schema chính:
+## Migration
 
-- `auth`: Identity, session, device, license và Data Protection keys.
-- `ai`: organization, membership, credential version, budget period, reservation, usage ledger và audit.
-- `vf`: project/workflow, provider catalog/model/rate và provider request log.
-- `vs`: registry metadata project Vietsub; desktop không được dùng schema này để thay đường API server.
+- `VideoFactory.Initial.sql` khởi tạo database.
+- Migration versioned từ `4.0.0` đến `4.1.5` chạy theo thứ tự số trong runbook.
+- `4.1.0` tạo Vietsub registry; `4.1.1` tạo Scene First Frame; `4.1.2` lưu failure details; `4.1.3` thêm speech synchronization; `4.1.4` thêm bằng chứng duyệt voice profile; `4.1.5` thêm audited speech verification review.
+- `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql` là script kiểm tra, không phải migration version mới.
+- `VideoFactory.DesktopLeastPrivilege.sql` chạy sau cùng để áp quyền desktop.
+- Không sửa migration đã có khả năng được triển khai; tạo file version mới và ghi version idempotent.
 
-## Bất biến dữ liệu
+## Bất biến
 
-- `OrganizationId` phải đi cùng project/provider request/budget/usage để truy vết tenant.
-- Idempotency generation là duy nhất trong phạm vi organization, không phải toàn hệ thống.
-- Ledger và rate snapshot là dữ liệu đối soát; không cascade delete hoặc cập nhật lại chi phí lịch sử.
-- Credential payload chỉ tồn tại dạng mã hóa trên server; desktop role không được đọc schema/bảng chứa secret.
-- Migration legacy tạo `legacy-default` với budget `0` để không phát sinh chi phí ngoài ý muốn.
-- Không xóa version credential `Retiring` khi còn task Kling đang chạy tham chiếu.
+- Organization ID và ownership đi theo mọi request/usage/resource tenant-scoped.
+- Idempotency cloud nằm trong organization.
+- Ledger, rate snapshot, provider request và credential version là dữ liệu đối soát; không cascade/xóa/sửa lịch sử tùy tiện.
+- Budget `0` là khóa AI. Credential chỉ tồn tại dạng mã hóa và desktop role không được đọc.
+- Retiring credential được giữ khi task đang chạy tham chiếu.
+- Backfill hoàn tất trước `NOT NULL`, unique hoặc FK mới.
 
-## Quy tắc viết migration
+## Quy tắc SQL
 
-- Script phải idempotent: kiểm tra schema/table/column/index/constraint/version trước khi tạo hoặc đổi.
-- Dùng transaction và `XACT_ABORT ON` cho nhóm thay đổi cần nguyên tử; lỗi phải rollback và trả exit code cho `sqlcmd -b`.
-- Backfill trước khi đặt `NOT NULL` hoặc unique constraint.
-- Kiểm tra/tránh tên index/constraint cũ trước khi tạo uniqueness mới.
-- Không tự điền đơn giá provider; rate production do Global Admin nhập từ hợp đồng/dashboard hiện hành.
-- Không thay trực tiếp migration đã có thể được chạy ở production. Tạo migration phiên bản mới và cập nhật `ai.SchemaVersions`.
-- Giữ script least-privilege đồng bộ khi thêm bảng/view/procedure desktop thực sự cần.
+- Idempotent: kiểm tra schema/table/column/index/constraint/version trước tạo hoặc đổi.
+- Dùng `SET XACT_ABORT ON` và transaction cho thay đổi cần nguyên tử; lỗi phải rollback và làm `sqlcmd -b` trả exit code khác 0.
+- Không seed giá provider hoặc secret production.
+- Khi thêm bảng, cập nhật EF server/local phù hợp, least-privilege và migration test.
+- Không cấp quyền rộng schema `ai`, `auth`, `dbo` hoặc `vs` cho desktop.
 
-## An toàn chạy SQL
+## An toàn thực thi
 
-AI không được tự chạy các script này trên database thật. Trước khi chạy cần người dùng chỉ rõ instance/database, xác nhận backup đã restore thử và cho phép cửa sổ bảo trì. Thứ tự chuẩn:
-
-```powershell
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.Initial.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.0.OrganizationAiGateway.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.1.VietnameseSeedTextRepair.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.2.GptImageCharacterReference.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.3.SceneVoiceTts.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.4.BytePlusSeedance.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.5.SceneNativeAudioStatuses.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.6.NativeAudioWorkflowStatuses.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.7.ProjectAssetTextLibrary.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.8.AiGeneratedProjectAssets.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.9.FalVeoLongForm.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.10.LicenseSepayPayments.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.1.0.VietsubProjectRegistry.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.4.1.1.SceneFirstFrames.sql
-sqlcmd -S <server> -d VideoFactory -E -b -i database\VideoFactory.DesktopLeastPrivilege.sql
-```
-
-Ưu tiên test migration trên bản sao có dữ liệu gần production, chạy lặp lại để chứng minh idempotency, rồi đối chiếu row count, FK/index và `ai.SchemaVersions`.
-
+AI không tự chạy SQL thay đổi dữ liệu trên database thật. Cần người dùng xác nhận instance, database, backup đã restore thử và quyền tác động. Luôn chạy toàn bộ chuỗi lặp trên clone, kiểm tra version/FK/index/row count rồi mới lập kế hoạch production.

@@ -1,6 +1,6 @@
 # Kiến trúc kỹ thuật VideoMaker
 
-> Mô tả ranh giới module và đường gọi theo source ngày 2026-09-06.
+> Mô tả ranh giới module và đường gọi theo source ngày 2026-09-07.
 
 ## 1. Tổng thể
 
@@ -119,7 +119,7 @@ Mọi nhánh lỗi trước outbound phải không tạo chi phí. Lỗi sau res
 
 ### 5.2 Provider adapter
 
-- OpenAI dùng cho content có schema, image và speech compatibility path.
+- OpenAI dùng cho content có schema, image, Canonical Voice TTS và transcription ở workflow được phép.
 - Kling là video provider mặc định.
 - BytePlus Seedance có adapter riêng, catalog mặc định tắt.
 - Fal/Veo có adapter riêng, catalog mặc định tắt và chỉ nhận first frame hợp lệ cho `LongForm`.
@@ -132,6 +132,7 @@ Outbound provider chỉ cho phép HTTPS đến:
 - `api-singapore.klingai.com:443`
 - `ark.ap-southeast.bytepluses.com:443`
 - `queue.fal.run:443`
+- `api.fal.ai:443` chỉ cho credential test theo resolver hiện hành
 
 Output URL dùng allowlist riêng theo provider và vẫn qua DNS/redirect/MIME/size validation.
 
@@ -159,7 +160,11 @@ Download đi qua `.part`, sau đó kiểm tra HTTP metadata, file signature, siz
 - **Character/image:** server kiểm tra ownership/policy/budget, gọi OpenAI và trả asset qua kênh kiểm soát.
 - **Video:** server submit/poll/cache; desktop download, verify, preview và approve/reject.
 - **Fal first frame:** scene cần first frame Approved/current trước submit video.
+- **Canonical Voice:** server sở hữu catalog/profile/version, quote và TTS; desktop tải/kiểm WAV, giữ speech/voice snapshot và mix vào video nền.
+- **Provider Native:** video dài kiểm tra audio kỹ thuật rồi nghe/duyệt trực tiếp, không gọi ASR; speech verification là workflow độc lập ngoài video dài khi được bật.
 - **Render:** desktop tái xác minh approved generation và media trước ghép.
+
+Narrated asset mới dùng policy `scene-audio-sync-v3`. Tương thích `v2` chỉ áp dụng cho exact approved pointer còn khớp generation, VoiceGeneration, speech/voice snapshot và hash; `OnCameraDialogue` Canonical Voice dừng ở `SpeechReadyForLipSync` khi chưa có engine lip-sync.
 
 ## 7. Vietsub
 
@@ -194,7 +199,8 @@ Timeline được trộn bằng FFmpeg theo từng stem giới hạn số phrase
 - SePay: tắt mặc định.
 - Desktop server URL: `https://localhost:7202/`.
 - Desktop updater: bật, channel `Stable`, platform `win-x64`.
-- Vietsub/OCR: bật; translation local và local voice: tắt.
+- Canonical Voice/speech verification: tắt ở server; Speech Synchronization: tắt ở desktop.
+- Vietsub/OCR: bật; translation local: tắt; local voice UI/cài đặt: bật nhưng runtime thiếu component trả `NOT_INSTALLED`.
 
 Giá, credential, bank account và production connection string không nằm trong tài liệu hoặc source commit; chúng phải được cấu hình theo môi trường.
 

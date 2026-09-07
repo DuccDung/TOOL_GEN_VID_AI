@@ -162,35 +162,69 @@ internal static class WaveAudioValidator
         ushort channels = 0;
         int sampleRate = 0;
         int byteRate = 0;
+        ushort blockAlign = 0;
         int dataBytes = 0;
+        int? streamingDataChunkSizeOffset = null;
         var offset = 12;
         while (offset + 8 <= bytes.Length)
         {
             var chunkId = bytes.AsSpan(offset, 4);
             var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 4, 4));
             var payloadOffset = offset + 8;
-            if (chunkSize > int.MaxValue || payloadOffset + (long)chunkSize > bytes.Length)
+            var isDataChunk = chunkId.SequenceEqual("data"u8);
+            int payloadSize;
+            if (isDataChunk && chunkSize == uint.MaxValue)
+            {
+                // Streaming WAV writers cannot seek back to finalize chunk sizes,
+                // so they use uint.MaxValue until the response has been buffered.
+                payloadSize = bytes.Length - payloadOffset;
+                if (payloadSize <= 0)
+                {
+                    throw Invalid("Cấu trúc chunk WAV không hợp lệ.");
+                }
+                streamingDataChunkSizeOffset = offset + 4;
+            }
+            else if (chunkSize > int.MaxValue || payloadOffset + (long)chunkSize > bytes.Length)
             {
                 throw Invalid("Cấu trúc chunk WAV không hợp lệ.");
             }
-            if (chunkId.SequenceEqual("fmt "u8) && chunkSize >= 16)
+            else
+            {
+                payloadSize = (int)chunkSize;
+            }
+            if (chunkId.SequenceEqual("fmt "u8) && payloadSize >= 16)
             {
                 format = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(payloadOffset, 2));
                 channels = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(payloadOffset + 2, 2));
                 sampleRate = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(payloadOffset + 4, 4));
                 byteRate = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(payloadOffset + 8, 4));
+                blockAlign = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(payloadOffset + 12, 2));
             }
-            else if (chunkId.SequenceEqual("data"u8))
+            else if (isDataChunk)
             {
-                dataBytes = checked((int)chunkSize);
+                dataBytes = payloadSize;
             }
-            offset = checked(payloadOffset + (int)chunkSize + ((int)chunkSize & 1));
+            if (streamingDataChunkSizeOffset.HasValue)
+            {
+                break;
+            }
+            offset = checked(payloadOffset + payloadSize + (payloadSize & 1));
         }
 
         if (format is not (1 or 3) || channels is < 1 or > 2 || sampleRate is < 8_000 or > 192_000 ||
-            byteRate <= 0 || dataBytes <= 0)
+            byteRate <= 0 || blockAlign == 0 || byteRate != sampleRate * (long)blockAlign ||
+            dataBytes <= 0 || dataBytes % blockAlign != 0)
         {
             throw Invalid("Metadata PCM WAV của OpenAI không hợp lệ.");
+        }
+        if (streamingDataChunkSizeOffset is { } sizeOffset)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(4, 4),
+                checked((uint)(bytes.Length - 8)));
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(sizeOffset, 4),
+                checked((uint)dataBytes));
         }
         var durationMs = dataBytes * 1000L / byteRate;
         if (durationMs <= 0)

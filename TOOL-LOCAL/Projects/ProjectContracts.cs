@@ -1,3 +1,5 @@
+using TOOL_SHARED.Contracts.Generation;
+
 namespace TOOL_LOCAL.Projects;
 
 public sealed record CreateProjectCommand(
@@ -10,7 +12,8 @@ public sealed record CreateProjectCommand(
     string LanguageCode = "vi-VN",
     Guid OrganizationId = default,
     string? VoiceCode = null,
-    decimal? VoiceSpeakingRate = null);
+    decimal? VoiceSpeakingRate = null,
+    string SpeechProductionPolicy = "ProviderNativeVerified");
 
 public sealed record CreateShortVideoCommand(
     string Content,
@@ -56,6 +59,48 @@ public sealed record VideoPreviewSummary(
     long? DurationMs,
     string? MimeType);
 
+public sealed record SceneSpeechVerificationSummary(
+    Guid SpeechVerificationReportId,
+    string Status,
+    string Transcript,
+    string NormalizedTranscript,
+    decimal WordErrorRate,
+    decimal CharacterErrorRate,
+    decimal RequiredTermRecall,
+    IReadOnlyList<string> MissingRequiredTerms,
+    long? SpeechStartMs,
+    long? SpeechEndMs,
+    bool ReviewApproved = false,
+    string? ReviewReason = null,
+    DateTime? ReviewedAtUtc = null,
+    string? RowVersion = null);
+
+public sealed record VoiceProfileDashboardSummary(
+    Guid VoiceProfileId,
+    Guid VoiceProfileVersionId,
+    string Scope,
+    Guid? CharacterId,
+    int Version,
+    string ProviderCode,
+    string ModelCode,
+    string VoiceCode,
+    string ProviderVoiceCode,
+    string LanguageCode,
+    decimal SpeakingRate,
+    string SnapshotHash,
+    string Status,
+    DateTime CreatedAtUtc,
+    DateTime? ApprovedAtUtc,
+    VideoPreviewSummary? Preview,
+    Guid? PreviewProviderRequestId = null);
+
+public sealed record CanonicalVoiceQuoteSummary(
+    decimal EstimatedCost,
+    string CurrencyCode,
+    int NewVoiceCount,
+    int ReusedVoiceCount,
+    IReadOnlyList<SceneVoiceQuoteResponse> Scenes);
+
 public sealed record CharacterReferenceSummary(
     Guid CharacterReferenceId,
     string ReferenceType,
@@ -79,13 +124,27 @@ public sealed record CharacterDashboardSummary(
     CharacterReferenceSummary? PrimaryReference,
     bool CanEdit,
     bool CanApprove,
-    string? SetupMessage);
+    string? SetupMessage,
+    string? VoiceCode = null,
+    decimal? VoiceSpeakingRate = null);
 
 public sealed record SceneCharacterSummary(
     Guid CharacterId,
     string Name,
     string Status,
     string? ReferencePreviewUrl);
+
+public sealed record SceneSpeechPacingSummary(
+    int SpeechUnitCount,
+    decimal SpeakingRate,
+    decimal EstimatedDurationSeconds,
+    decimal EstimatedDurationRatio,
+    decimal TargetMinimumSeconds,
+    decimal TargetMaximumSeconds,
+    string EstimatedStatus,
+    decimal? ActualDurationSeconds = null,
+    decimal? ActualDurationRatio = null,
+    string? ActualStatus = null);
 
 public sealed record SceneDashboardSummary(
     Guid SceneId,
@@ -115,7 +174,14 @@ public sealed record SceneDashboardSummary(
     string? SpeakerCharacterName = null,
     string? VoiceStyle = null,
     string? AmbientAudio = null,
-    string? SoundEffects = null);
+    string? SoundEffects = null,
+    string SpeechStatus = "SpeechNotRequired",
+    bool HasCanonicalVoicePreview = false,
+    VideoPreviewSummary? CanonicalVoicePreview = null,
+    SceneSpeechVerificationSummary? SpeechVerification = null,
+    Guid? VoiceProfileVersionId = null,
+    string? VoiceSnapshotHash = null,
+    SceneSpeechPacingSummary? SpeechPacing = null);
 
 public sealed record UpdateSceneCommand(
     Guid SceneId,
@@ -134,7 +200,9 @@ public sealed record UpdateCharacterCommand(
     string VisualIdentity,
     string Wardrobe,
     IReadOnlyList<string> ImmutableTraits,
-    IReadOnlyList<string> ForbiddenChanges);
+    IReadOnlyList<string> ForbiddenChanges,
+    string? VoiceCode = null,
+    decimal? VoiceSpeakingRate = null);
 
 public sealed record ProjectContentSummary(
     int ScriptVersion,
@@ -165,12 +233,14 @@ public sealed record ProjectDashboard(
     string? VoiceCode = null,
     decimal? VoiceSpeakingRate = null,
     string AudioStrategy = "ProviderNative",
+    string SpeechProductionPolicy = "ProviderNativeVerified",
     string? VideoProviderCode = null,
     string? VideoModelCode = null,
     string? WorkflowStructureType = null,
     string? EffectiveGenerationLanguageCode = null,
     bool RequiresVietnameseContentRegeneration = false,
-    ProjectContentSummary? Content = null);
+    ProjectContentSummary? Content = null,
+    IReadOnlyList<VoiceProfileDashboardSummary>? VoiceProfiles = null);
 
 public sealed record AiModelSummary(
     string ProviderCode,

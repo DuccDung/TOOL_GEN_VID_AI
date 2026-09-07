@@ -12,6 +12,9 @@ internal interface IGenerationClient
     Task SelectOrganizationAsync(Guid organizationId, CancellationToken cancellationToken);
     Task<GenerationProviderStatusResponse> GetProviderStatusAsync(CancellationToken cancellationToken);
     Task<GeneratedContentResponse> GenerateContentAsync(GenerateContentRequest request, CancellationToken cancellationToken);
+    Task<ContentLanguageFailureResponse?> GetLatestContentLanguageFailureAsync(Guid projectId, CancellationToken cancellationToken);
+    Task<ContentRepairQuoteResponse> GetContentRepairQuoteAsync(ContentRepairQuoteRequest request, CancellationToken cancellationToken);
+    Task<GeneratedContentResponse> RepairContentAsync(RepairContentRequest request, CancellationToken cancellationToken);
     Task<GenerateCharacterReferenceImageResponse> GenerateCharacterReferenceImageAsync(GenerateCharacterReferenceImageRequest request, CancellationToken cancellationToken);
     Task<SceneFirstFrameQuoteResponse> GetSceneFirstFrameQuoteAsync(Guid projectId, Guid sceneId, CancellationToken cancellationToken);
     Task<GenerateSceneFirstFrameResponse> GenerateSceneFirstFrameAsync(GenerateSceneFirstFrameRequest request, CancellationToken cancellationToken);
@@ -21,6 +24,32 @@ internal interface IGenerationClient
     Task<SceneFirstFrameSummary> ApproveSceneFirstFrameAsync(Guid projectId, Guid sceneId, Guid frameId, ChangeSceneFirstFrameStatusRequest request, CancellationToken cancellationToken);
     Task<SceneFirstFrameSummary> RejectSceneFirstFrameAsync(Guid projectId, Guid sceneId, Guid frameId, ChangeSceneFirstFrameStatusRequest request, CancellationToken cancellationToken);
     Task<SceneVoiceGenerationResponse> GenerateSceneVoiceAsync(GenerateSceneVoiceRequest request, CancellationToken cancellationToken);
+    Task<VoiceProfileVersionListResponse> GetVoiceProfileVersionsAsync(Guid projectId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice profile listing is not supported by this client.");
+    Task<VoiceProfileVersionSummary> CreateVoiceProfileDraftAsync(CreateVoiceProfileDraftRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice profile drafts are not supported by this client.");
+    Task<VoiceProfilePreviewQuoteResponse> GetVoiceProfilePreviewQuoteAsync(VoiceProfilePreviewQuoteRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice profile preview quote is not supported by this client.");
+    Task<VoiceProfilePreviewResponse> GenerateVoiceProfilePreviewAsync(GenerateVoiceProfilePreviewRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice profile preview is not supported by this client.");
+    Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewQuoteAsync(VoiceCatalogPreviewQuoteRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice catalog preview quote is not supported by this client.");
+    Task<VoiceCatalogPreviewQuoteResponse> GetVoiceCatalogPreviewContextQuoteAsync(VoiceCatalogPreviewContextQuoteRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice catalog preview context quote is not supported by this client.");
+    Task<VoiceCatalogPreviewResponse> GenerateVoiceCatalogPreviewAsync(GenerateVoiceCatalogPreviewRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice catalog preview is not supported by this client.");
+    Task<VoiceProfileVersionSummary> ApproveVoiceProfileVersionAsync(ApproveVoiceProfileVersionRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice profile approval is not supported by this client.");
+    Task<VoiceProfileVersionSummary> SupersedeVoiceProfileVersionAsync(SupersedeVoiceProfileVersionRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice profile supersede is not supported by this client.");
+    Task<SceneVoiceQuoteResponse> GetSceneVoiceQuoteAsync(SceneVoiceQuoteRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Scene voice quote is not supported by this client.");
+    Task<SceneSpeechVerificationQuoteResponse> GetSceneSpeechVerificationQuoteAsync(SceneSpeechVerificationQuoteRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Speech verification quote is not supported by this client.");
+    Task<SceneSpeechVerificationResponse> VerifySceneSpeechAsync(VerifySceneSpeechRequest request, string wavPath, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Speech verification is not supported by this client.");
+    Task<SceneSpeechVerificationResponse> ApproveSpeechVerificationReviewAsync(ApproveSpeechVerificationReviewRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Speech verification review is not supported by this client.");
     Task<VideoTaskResponse> SubmitVideoAsync(SubmitVideoRequest request, CancellationToken cancellationToken);
     Task<VideoTaskResponse> GetVideoStatusAsync(Guid providerRequestId, CancellationToken cancellationToken);
     Task<ProjectAssetLibraryResponse> GetProjectAssetLibraryAsync(Guid projectId, CancellationToken cancellationToken);
@@ -37,6 +66,10 @@ internal interface IGenerationClient
     Task DownloadCharacterImageAsync(GenerateCharacterReferenceImageResponse response, string destinationPath, CancellationToken cancellationToken);
     Task DownloadSceneFirstFrameAsync(GenerateSceneFirstFrameResponse response, string destinationPath, CancellationToken cancellationToken);
     Task DownloadSceneVoiceAsync(SceneVoiceGenerationResponse response, string destinationPath, CancellationToken cancellationToken);
+    Task DownloadVoiceProfilePreviewAsync(VoiceProfilePreviewResponse response, string destinationPath, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice profile preview download is not supported by this client.");
+    Task DownloadVoiceCatalogPreviewAsync(VoiceCatalogPreviewResponse response, string destinationPath, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Voice catalog preview download is not supported by this client.");
     Task<ProviderSettingsResponse> GetSettingsAsync(CancellationToken cancellationToken);
     Task TestProviderAsync(string providerCode, CancellationToken cancellationToken);
 }

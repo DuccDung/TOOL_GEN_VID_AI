@@ -24,6 +24,12 @@ public interface IProjectService
         bool playbackConfirmed,
         CancellationToken cancellationToken = default);
 
+    Task UnapproveSceneAudioAsync(
+        Guid projectId,
+        string remoteUserId,
+        Guid sceneId,
+        CancellationToken cancellationToken = default);
+
     Task UpdateCharacterAsync(
         Guid projectId,
         string remoteUserId,

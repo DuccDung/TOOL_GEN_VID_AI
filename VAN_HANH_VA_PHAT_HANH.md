@@ -1,6 +1,6 @@
 # Vận hành và phát hành VideoMaker
 
-> Runbook chuẩn cho database, secret, provider, SePay, desktop bundle và rollback. Rà soát ngày 2026-09-06.
+> Runbook chuẩn cho database, secret, provider, speech, SePay, desktop bundle và rollback. Rà soát ngày 2026-09-07.
 
 Không chạy nội dung tài liệu này trên production nếu chưa xác định rõ instance/database, người phê duyệt, backup đã kiểm tra và phương án restore. Các giá trị trong dấu `<...>` là placeholder, không được commit secret thật.
 
@@ -37,6 +37,10 @@ database/VideoFactory.4.0.10.LicenseSepayPayments.sql
 database/VideoFactory.4.0.11.OrganizationSeatProvisioning.sql
 database/VideoFactory.4.1.0.VietsubProjectRegistry.sql
 database/VideoFactory.4.1.1.SceneFirstFrames.sql
+database/VideoFactory.4.1.2.ProviderRequestFailureDetails.sql
+database/VideoFactory.4.1.3.SpeechSynchronization.sql
+database/VideoFactory.4.1.4.VoiceProfileApproval.sql
+database/VideoFactory.4.1.5.SpeechVerificationReview.sql
 ```
 
 Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
@@ -123,7 +127,29 @@ Không rotate production chỉ để test giao diện.
 
 Mỗi provider có rollback flag/policy riêng. Tắt provider chặn request mới nhưng worker vẫn cần xử lý an toàn task đã gửi.
 
-## 7. Rollout SePay
+## 7. Rollout Canonical Voice và speech verification
+
+Điều kiện Canonical Voice:
+
+- Migration 4.1.3–4.1.4 đã chạy lặp trên clone và áp đúng môi trường.
+- OpenAI TTS credential/model/rate Active, budget giới hạn và storage/retention đủ dung lượng.
+- Catalog server trả đúng 13 giọng hiện hành; alias legacy chỉ dùng để đọc project cũ.
+- Voice preview/approval, content pacing, scene WAV, technical validation, audio mix/render và export đã smoke test.
+- Server `CanonicalVoiceEnabled` và desktop `SpeechSynchronizationEnabled` được bật theo thứ tự canary; rollback bằng cách tắt flag đã được thử.
+
+Smoke bắt buộc:
+
+1. Mở/chọn modal không tạo request hoặc reservation.
+2. Preview khi có project dùng đúng project; khi chưa có project dùng đúng một project kỹ thuật ẩn theo user+organization và không xuất hiện trong list/dashboard.
+3. Quote/xác nhận xảy ra trước TTS outbound; phát lại WAV đã tải không tạo request mới.
+4. Content plan đạt mục tiêu nhịp 85–95%; output ngoài biên 80–105% chỉ mở repair có quote, không tự gọi lần hai.
+5. WAV qua MIME/SHA-256/sample rate/duration/audibility và đúng speech/voice snapshot.
+6. `NativeVoiceOver` ghép toàn bộ WAV vào video nền; `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`.
+7. Video dài `ProviderNativeVerified` không hiển thị/quote/gọi ASR và duyệt bằng audio hợp lệ cùng checklist nghe.
+
+Speech verification là rollout độc lập cho workflow không phải `OpenAiStructuredPlan`: cần migration 4.1.5, transcription credential/model/rate và `SpeechVerificationEnabled`. `NeedsReview` phải có lý do/reviewer/timestamp; stale row version và `Failed` bị chặn.
+
+## 8. Rollout SePay
 
 SePay mặc định tắt. Trước khi bật:
 
@@ -145,7 +171,7 @@ Ví dụ test chỉ dành cho endpoint test đã xác nhận:
 
 Script không được hướng đến remote nếu chưa chủ động cho phép và xác minh đó là staging an toàn.
 
-## 8. Desktop và Vietsub runtime
+## 9. Desktop và Vietsub runtime
 
 - Desktop trỏ tới HTTPS server URL đúng môi trường.
 - SQL workflow dùng account/role ít quyền; không đóng gói production credential trong `appsettings.json`.
@@ -153,9 +179,10 @@ Script không được hướng đến remote nếu chưa chủ động cho phé
 - OCR/model/native runtime phải đúng bundle/fingerprint.
 - Profile Low-memory 6 GB chỉ được bật trong bundle đã benchmark; không hạ thêm ngưỡng qua WebView, manifest project hoặc cấu hình người dùng.
 - Giữ `VietsubLocalTranslationEnabled=false` đến khi verify model, benchmark và desktop smoke đạt trên chính bundle định phát hành.
+- `VietsubLocalVoiceEnabled=true` chỉ mở UI/cài đặt. Máy thiếu runtime/model phải trả `NOT_INSTALLED`; chỉ rollout sau verify checksum/probe, kiểm kê license/dependency Python, benchmark CPU, nghe nghiệm thu và smoke timeline/playback.
 - Không dùng marker `READY` từ máy/build khác.
 
-## 9. Bundle FFmpeg và phát hành desktop
+## 10. Bundle FFmpeg và phát hành desktop
 
 Bundle bắt buộc có `ffmpeg.exe`, `ffprobe.exe`, `LICENSE.txt`, `PROVENANCE.md` và `checksums.sha256`. Trước release:
 
@@ -177,12 +204,13 @@ Publish tạo artifact mới và từ chối release directory đã có file:
 
 Nếu dùng appsettings đóng gói riêng, truyền `-AppSettingsPath` đến file đã rà soát không chứa secret. `artifacts` là đầu ra tái tạo, không phải source of truth.
 
-## 10. Smoke sau triển khai
+## 11. Smoke sau triển khai
 
 - Login, refresh/revoke session, device/license lease.
 - Chọn organization và xác minh matrix role, đặc biệt `Viewer`.
 - Pricing missing, budget `0`, insufficient budget và idempotency conflict.
 - Một request content; provider video chỉ khi được phép phát sinh phí.
+- Canonical Voice/speech verification chỉ khi nằm trong scope rollout và đã phê duyệt chi phí.
 - Poll khi desktop reconnect, proxy download, MIME/size/hash và approve/render.
 - Admin credential hint/rotation không lộ secret.
 - SePay chỉ nếu nằm trong scope rollout.
@@ -190,7 +218,7 @@ Nếu dùng appsettings đóng gói riêng, truyền `-AppSettingsPath` đến f
 - Updater install/update/rollback trên máy sạch hoặc VM.
 - Health/log/metrics không chứa token, prompt nhạy cảm hoặc signed URL.
 
-## 11. Rollback
+## 12. Rollback
 
 - Dừng request mới bằng feature flag/model/policy thay vì xóa dữ liệu đang chạy.
 - Để worker settle/release task đã outbound; không xóa provider request hoặc usage ledger.
@@ -199,12 +227,13 @@ Nếu dùng appsettings đóng gói riêng, truyền `-AppSettingsPath` đến f
 - Desktop updater dùng backup/rollback tích hợp và phải xác minh manifest/checksum trước phục hồi.
 - Ghi lại timeline, version, migration, flag, task bị ảnh hưởng và quyết định tài chính.
 
-## 12. Checklist production
+## 13. Checklist production
 
 - [ ] Backup và restore rehearsal đạt.
 - [ ] Migration clone, idempotency và verify đạt.
 - [ ] Secret/certificate/Data Protection được kiểm tra.
 - [ ] Rate, credential, policy, budget và role đúng.
+- [ ] Canonical Voice/speech/local model chỉ bật khi checklist riêng đạt; video dài Provider Native không gọi ASR.
 - [ ] Build/test/smoke theo [KIEM_THU_VA_NGHIEM_THU.md](KIEM_THU_VA_NGHIEM_THU.md) đạt.
 - [ ] FFmpeg provenance/checksum có `Approval scope: Release`.
 - [ ] Monitoring/alert và rollback owner sẵn sàng.

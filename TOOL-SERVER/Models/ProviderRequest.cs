@@ -15,6 +15,8 @@ public partial class ProviderRequest
 
     public Guid? BudgetReservationId { get; set; }
 
+    public Guid? ParentProviderRequestId { get; set; }
+
     public Guid ProjectId { get; set; }
 
     public Guid? CharacterId { get; set; }
@@ -75,6 +77,8 @@ public partial class ProviderRequest
 
     public string? ErrorMessage { get; set; }
 
+    public string? ErrorDetailsJson { get; set; }
+
     public DateTime CreatedAtUtc { get; set; }
 
     public DateTime UpdatedAtUtc { get; set; }
@@ -100,6 +104,10 @@ public partial class ProviderRequest
     public virtual Provider? Provider { get; set; }
 
     public virtual ProviderModel? ProviderModel { get; set; }
+
+    public virtual ProviderRequest? ParentProviderRequest { get; set; }
+
+    public virtual ICollection<ProviderRequest> RepairRequests { get; set; } = new List<ProviderRequest>();
 
     public virtual Scene? Scene { get; set; }
 

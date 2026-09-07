@@ -19,6 +19,8 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("x.MediaAsset.DeletedAtUtc == null", finalPreviewQuery);
         Assert.DoesNotContain("AssetType == \"SceneVideo\"", finalPreviewQuery, StringComparison.Ordinal);
         Assert.Contains("FirstOrDefault(preview => preview is not null)", finalPreviewQuery);
+        Assert.Contains("new[] { asset.RelativePath, asset.ExportedPath }", service);
+        Assert.Contains("only exposed from the trusted workspace", service);
 
         var previewStart = app.IndexOf("function getFinalPreviewState", StringComparison.Ordinal);
         var previewEnd = app.IndexOf("function ProjectInfoCard", previewStart, StringComparison.Ordinal);
@@ -32,6 +34,39 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("key={preview.url}", previewComponent);
         Assert.DoesNotContain("scene.preview", previewComponent, StringComparison.Ordinal);
         Assert.Contains("return Boolean(project.preview?.url);", app);
+    }
+
+    [Fact]
+    public void FinalRender_AllowsAnyPositiveNumberOfApprovedScenes()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+
+        Assert.Contains("project.totalScenes === 0 || project.approvedScenes === 0", app);
+        Assert.Contains("project && project.approvedScenes > 0", app);
+        Assert.Contains("Bản dựng sẽ chỉ gồm {project.approvedScenes} cảnh đã duyệt", app);
+        Assert.Contains("cảnh chưa duyệt sẽ không được đưa vào bản dựng này", app);
+        Assert.DoesNotContain("project.approvedScenes !== project.totalScenes", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FinalVideoExport_IsAvailableAfterRenderAndUsesNativeSaveDialog()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var styles = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "styles.css");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
+        var form = ReadRepositoryFile("TOOL-LOCAL", "Form1.cs");
+        var renderService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectRenderService.cs");
+
+        Assert.Contains("postToHost('final-video.export')", app);
+        Assert.Contains("Xuất video MP4", app);
+        Assert.Contains("project.preview?.url &&", app);
+        Assert.Contains(".render-export-button", styles);
+        Assert.Contains("case \"final-video.export\"", bridge);
+        Assert.Contains("SelectFinalVideoDestination", form);
+        Assert.Contains("Filter = \"Video MP4 (*.mp4)|*.mp4\"", form);
+        Assert.Contains("ExportFinalVideoAsync", renderService);
+        Assert.Contains("finalVideo.Status = \"Exported\"", renderService);
+        Assert.Contains("project.Status = \"Completed\"", renderService);
     }
 
     [Fact]
@@ -164,6 +199,8 @@ public sealed class DesktopStoryboardUiTests
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
         var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
         var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
+        var formatter = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "contentLanguageError.ts");
 
         Assert.Contains("requiresVietnameseContentRegeneration", types);
         Assert.Contains("Tiếng Việt (bắt buộc cho Video Dài dùng ${", app);
@@ -172,6 +209,22 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("Dự án Video Dài này còn nội dung tiếng Anh", app);
         Assert.Contains("workflowStructureType", projectService);
         Assert.Contains("KlingLongFormVietnameseValidator.RequiresVietnamese", projectService);
+        Assert.Contains("exception.Errors", bridge);
+        Assert.Contains("formatContentLanguageError(message.error)", app);
+        Assert.Contains("fal_content_language_invalid", formatter);
+        Assert.Contains("Trường chưa đạt", formatter);
+        Assert.Contains("generation-content-error", app);
+        Assert.Contains("role=\"alert\"", app);
+        Assert.Contains("restoreContentLanguageFailure(dashboard.contentLanguageFailure)", app);
+        Assert.Contains("setContentGenerationError(restored ? restored.message : null)", app);
+        Assert.Contains("Sửa các trường bằng AI", app);
+        Assert.Contains("Mỗi failed plan chỉ có tối đa một lượt sửa", app);
+        Assert.Contains("formatMoney(quote.estimatedCost, quote.currencyCode)", app);
+        Assert.Contains("GetLatestContentLanguageFailureAsync", bridge);
+        Assert.Contains("contentLanguageFailure", bridge);
+        Assert.Contains("ContentLanguageFailureSummary", types);
+        Assert.Contains("reason: 'required' | 'language_invalid'", types);
+        Assert.Contains("Mã đối chiếu", app);
 
         var shortVideoStart = app.IndexOf("function ShortVideoPage", StringComparison.Ordinal);
         var shortVideoEnd = app.IndexOf("function LongVideoPage", shortVideoStart, StringComparison.Ordinal);
@@ -205,11 +258,79 @@ public sealed class DesktopStoryboardUiTests
         var bridgeContracts = ReadRepositoryFile("TOOL-LOCAL", "WebView", "WebMessageContracts.cs");
         var service = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
 
-        Assert.Contains("onPlay={() => setPreviewPlaybackConfirmed(true)}", app);
-        Assert.Contains("!previewPlaybackConfirmed", app);
-        Assert.Contains("{ sceneId, playbackConfirmed }", app);
+        Assert.Contains("onPlay={() => setVideoPlaybackConfirmed(true)}", app);
+        Assert.Contains("onPlay={() => setCanonicalVoicePlaybackConfirmed(true)}", app);
+        Assert.Contains("!requiredPlaybackConfirmed", app);
+        Assert.Contains("sceneId,\n      playbackConfirmed,\n      speechVerificationReportId", app);
         Assert.Contains("bool PlaybackConfirmed", bridgeContracts);
         Assert.Contains("if (!playbackConfirmed)", service);
+    }
+
+    [Fact]
+    public void CanonicalSpeechReview_RequiresTtsReadinessTechnicalValidationAndFreshPlayback()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var types = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "types.ts");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
+        var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+
+        Assert.Contains("dashboard.providerStatus.canonicalVoiceReady", app);
+        Assert.Contains("Canonical Voice không yêu cầu ASR", app);
+        Assert.Contains("const needsReviewOverride = !longFormProject &&", app);
+        Assert.Contains("scene.canonicalVoicePreview?.url, scene.speechVerification?.speechVerificationReportId", app);
+        Assert.Contains("reviewApproved?: boolean", types);
+        Assert.Contains("canonicalVoiceReady?: boolean", types);
+        Assert.Contains("ApproveSpeechVerificationReviewAsync", bridge);
+        Assert.Contains("RequireCanonicalVoiceReadyAsync", bridge);
+        Assert.Contains("if (!status.CanonicalVoiceReady)", bridge);
+        Assert.Contains("var requiresSpeechVerification = !canonicalSpeech &&", projectService);
+        Assert.Contains("workflowStructureType", projectService);
+    }
+
+    [Fact]
+    public void CanonicalVoiceJourney_UsesHonestActionsAndKeepsWavPlayerOutsideVideoViewport()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var styles = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "styles.css");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
+        var workflowUx = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "videoWorkflowUx.ts");
+
+        Assert.Contains("className=\"scene-media-column\"", app);
+        Assert.Contains("className=\"scene-media\"", app);
+        Assert.Contains("scene-canonical-voice", app);
+        Assert.Contains(".scene-media-column", styles);
+        Assert.Contains("Chuẩn bị WAV cho", workflowUx);
+        Assert.Contains("Video chưa được gửi sang provider ở bước này", workflowUx);
+        Assert.Contains("WAV hiện hành được dùng lại, không cần bước duyệt riêng", app);
+        Assert.Contains("WAV sẵn sàng cho video", app);
+        Assert.Contains("<SpeechPacingIndicator scene={scene} compact />", app);
+        Assert.Contains("WAV vẫn được dùng để tạo video; hệ thống không tự sinh lại giọng.", app);
+        Assert.Contains(".speech-pacing-indicator", styles);
+        Assert.Contains("không gọi TTS mới", workflowUx);
+        Assert.Contains("Tạo video nền", app);
+        Assert.Contains(
+            "enforceKlingLongFormSpeechPolicy && !canonicalVoiceWorkflow && scene.status === 'NativeAudioInvalid'",
+            app);
+        Assert.Contains("Video chưa được gửi tạo cho các cảnh này", bridge);
+        Assert.Contains("BuildVideoGenerationCompletionMessage", bridge);
+    }
+
+    [Fact]
+    public void LongFormNativeAudio_HidesAsrAndUsesManualListeningApproval()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var projectService = ReadRepositoryFile("TOOL-LOCAL", "Projects", "ProjectService.cs");
+
+        Assert.Contains(
+            "const speechVerificationRequired = project?.workflowStructureType !== 'OpenAiStructuredPlan';",
+            app);
+        Assert.Contains(
+            "{speechVerificationRequired && scene.speechMode !== 'None' && !canonicalVoiceWorkflow && (",
+            app);
+        Assert.Contains(
+            "const longFormProject = dashboard.selectedProject.workflowStructureType === 'OpenAiStructuredPlan';",
+            app);
+        Assert.Contains("!string.Equals(\n                                                     workflowStructureType", projectService);
     }
 
     [Fact]
@@ -243,7 +364,8 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("<header className=\"scene-heading\">", app);
         Assert.Contains("<div className=\"scene-card-body\">", app);
         Assert.Contains("<footer className=\"scene-footer\">", app);
-        Assert.Contains("Chưa có thumbnail", app);
+        Assert.Contains("Chưa có video", app);
+        Assert.Contains("WAV đã sẵn sàng; bấm “Tạo video nền” để tiếp tục", app);
         Assert.Contains("function ExpandableSceneText", app);
         Assert.Contains("function sceneDisplayTitle", app);
         Assert.Contains("spellCheck={false}", app);
@@ -296,6 +418,26 @@ public sealed class DesktopStoryboardUiTests
     }
 
     [Fact]
+    public void CanonicalVoiceVideoQuote_UsesLatestDashboardStateWhenTheResponseReturns()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+
+        Assert.Contains("const latestDashboardRef = useRef(dashboard);", app);
+        Assert.Contains("latestDashboardRef.current = dashboard;", app);
+
+        var confirmationStart = app.IndexOf("const confirmGenerateVideos", StringComparison.Ordinal);
+        var confirmationEnd = app.IndexOf("const generateVideos", confirmationStart, StringComparison.Ordinal);
+        Assert.True(confirmationStart >= 0 && confirmationEnd > confirmationStart);
+        var confirmation = app[confirmationStart..confirmationEnd];
+
+        Assert.Contains("const currentDashboard = latestDashboardRef.current;", confirmation);
+        Assert.Contains("const project = currentDashboard.selectedProject;", confirmation);
+        Assert.DoesNotContain("dashboard.selectedProject", confirmation, StringComparison.Ordinal);
+        Assert.DoesNotContain("dashboard.providerStatus", confirmation, StringComparison.Ordinal);
+        Assert.DoesNotContain("dashboard.sceneFirstFrames", confirmation, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VideoGeneration_PreflightsMediaToolsAndCanResumeCompletedRequest()
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
@@ -334,14 +476,15 @@ public sealed class DesktopStoryboardUiTests
     {
         var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
         var styles = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "styles.css");
+        var workflowUx = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "videoWorkflowUx.ts");
 
         Assert.Contains("const resumableScenes = selectedScenes.filter(sceneNeedsLocalCompletion);", app);
         Assert.Contains("const newRequestScenes = selectedScenes.filter((scene) => !sceneNeedsLocalCompletion(scene));", app);
-        Assert.Contains("estimatedVideoCostPerSecond * newRequestSeconds", app);
+        Assert.Contains("estimatedVideoCostPerSecond * newVideoRequestSeconds", app);
         Assert.Contains("XÁC NHẬN TẢI CLIP", app);
-        Assert.Contains("XÁC NHẬN TẢI VÀ TẠO CLIP", app);
+        Assert.Contains("XÁC NHẬN TIẾP TỤC QUY TRÌNH", app);
         Assert.Contains("không gửi yêu cầu tạo video mới và không phát sinh chi phí provider mới", app);
-        Assert.Contains("Tải ${selectedDownloadCount} clip đã tạo", app);
+        Assert.Contains("Tải ${downloadCount} clip đã tạo", workflowUx);
         Assert.Contains("confirmation-note-info", styles);
     }
 
@@ -492,6 +635,27 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("scene.assets.confirm", app);
         Assert.Contains("case \"project-assets.approve-ai\"", bridge);
         Assert.Contains("case \"scene.assets.confirm\"", bridge);
+    }
+
+    [Fact]
+    public void SpeechSynchronizationDisabled_ExplainsAndRoutesToDesktopSetting()
+    {
+        var app = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "App.tsx");
+        var styles = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "styles.css");
+        var bridge = ReadRepositoryFile("TOOL-LOCAL", "WebView", "DashboardBridge.cs");
+
+        Assert.Contains("showSpeechSynchronizationDisabled('Báo giá và kiểm tra transcript bằng ASR')", app);
+        Assert.Contains("showSpeechSynchronizationDisabled('Tạo Canonical Voice và ghép lời vào video')", app);
+        Assert.Contains("title: 'Bật đồng bộ lời nói trên máy này?'", app);
+        Assert.Contains("confirmLabel: 'Đi tới Cài đặt'", app);
+        Assert.Contains("page: 'settings'", app);
+        Assert.Contains("function DesktopSettingsPage", app);
+        Assert.Contains("role=\"switch\"", app);
+        Assert.Contains("desktop.settings.update", app);
+        Assert.Contains("case \"desktop.settings.update\"", bridge);
+        Assert.Contains("DesktopUserSettingsStore.WriteSpeechSynchronizationEnabled", bridge);
+        Assert.Contains("Server vẫn kiểm soát request có phí", app);
+        Assert.Contains(".desktop-feature-switch", styles);
     }
 
     private static string ReadRepositoryFile(params string[] relativeParts)

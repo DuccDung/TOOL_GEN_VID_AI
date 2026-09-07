@@ -1,12 +1,18 @@
-# Nghiệp vụ hệ thống VideoMaker
+# Nghiệp vụ và kiến trúc VideoMaker
 
-> Nguồn sự thật nghiệp vụ hiện hành. Rà soát ngày 2026-09-06.
+> Nguồn sự thật nghiệp vụ hiện hành. Rà soát theo source ngày 2026-09-07.
 
-## 1. Mục tiêu và phạm vi
+Trạng thái triển khai nằm trong `BOI_CANH_HE_THONG_HIEN_HANH.md`; kiến trúc kỹ thuật nằm trong `KIEN_TRUC_KY_THUAT.md`; hướng dẫn vận hành nằm trong `VAN_HANH_VA_PHAT_HANH.md`.
 
-VideoMaker hỗ trợ một người dùng có license hợp lệ tạo dự án, sinh nội dung/video bằng AI theo chính sách của tổ chức, duyệt clip và dựng media cục bộ. Server sở hữu auth, tổ chức, chi phí, credential, provider request và registry dùng chung; desktop sở hữu trải nghiệm biên tập, workspace và xử lý media local.
+## 1. Mục tiêu và ranh giới hệ thống
 
-Không có mô hình BYOK. Provider key thuộc tổ chức và chỉ được quản trị trên server.
+VideoMaker hỗ trợ ba nhóm công việc:
+
+1. Tạo video dài nhiều cảnh từ chủ đề và content plan có cấu trúc.
+2. Tạo video ngắn một cảnh trực tiếp từ nội dung người dùng.
+3. Tạo/chỉnh phụ đề, dịch ngữ cảnh và tạo giọng Việt bằng media/AI local.
+
+AI cloud được quản trị theo organization, không theo máy. Server sở hữu auth, license, organization, chi phí, credential, provider request, output proxy và registry dùng chung; desktop sở hữu trải nghiệm biên tập, workspace và xử lý media local. Không có BYOK.
 
 ## 2. Vai trò và quyền
 
@@ -18,157 +24,173 @@ Không có mô hình BYOK. Provider key thuộc tổ chức và chỉ được q
 | `Member` | Không | Không | Không | Có |
 | `Viewer` | Không | Không | Không | Không |
 
-Quy tắc bổ sung:
+- Global Admin tạo organization, quản lý catalog/rate, license plan, pool và release.
+- Chỉ Owner quản lý Owner; không được xóa, hạ cấp hoặc suspend Owner Active cuối cùng.
+- OrganizationAdmin không cấp/thu hồi Owner; BillingManager không quản lý member/credential.
+- Viewer bị chặn trước mọi outbound có khả năng phát sinh chi phí.
 
-- Chỉ Global Admin tạo tổ chức và quản lý bảng giá toàn cục.
-- Chỉ Owner quản lý Owner; không được vô hiệu hóa/xóa Owner Active cuối cùng.
-- Người dùng phải là thành viên Active của tổ chức hiện hành.
-- Một người dùng có thể thuộc nhiều tổ chức, nhưng mỗi request chỉ thuộc đúng một tổ chức.
-- Project phải thuộc organization và người gọi phải có quyền trên project đó.
+## 3. Xác thực, license và organization
 
-## 3. Tài khoản, license, thiết bị và tổ chức
+Một request bảo vệ cần JWT, session, user/device Active, device claim đúng, license lease còn hiệu lực, membership/role hợp lệ và project ownership đúng organization. Refresh token lưu hash, rotate atomically và revoke family/session khi reuse.
 
-Một phiên dùng AI hợp lệ cần đồng thời:
+Một user có thể thuộc nhiều organization nhưng mỗi request chỉ thuộc đúng organization đang chọn. Task đã gửi provider tiếp tục được worker theo dõi và quyết toán theo snapshot ban đầu dù desktop đóng hoặc membership/license thay đổi; không chuyển task sang organization hay credential khác.
 
-1. JWT còn hạn và đúng issuer/audience.
-2. Session chưa bị thu hồi.
-3. Device claim khớp thiết bị đã đăng ký.
-4. License lease còn hiệu lực.
-5. Organization membership và role hợp lệ.
-6. Project thuộc đúng organization/user theo nghiệp vụ.
+## 4. Organization AI Gateway
 
-License, session hoặc membership bị thu hồi phải chặn request mới. Task đã gửi provider được worker theo dõi và quyết toán theo snapshot ban đầu, không chuyển sang tổ chức hay credential khác.
+Mỗi request cloud phải truy vết được organization, user/session/device, project, provider/model, provider request, credential version, rate snapshot, reservation/usage/actual cost và idempotency key/request hash.
 
-## 4. Thanh toán SePay và phân bổ seat
+Thứ tự bắt buộc trước outbound:
 
-- SePay là integration tùy chọn và mặc định tắt.
-- Payment order phải có mã chuyển khoản duy nhất, số tiền kỳ vọng, thời hạn và trạng thái rõ ràng.
-- Webhook được xử lý idempotent; giao dịch trùng không được cấp license/seat hai lần.
-- Chỉ đối sánh khi nội dung, số tiền, trạng thái và điều kiện nghiệp vụ hợp lệ; dữ liệu mơ hồ phải chuyển xử lý thủ công.
-- Thanh toán thành công có thể tạo tổ chức và Owner hoặc bổ sung quyền/seat theo package đã snapshot.
-- Phân bổ user vào tổ chức phải kiểm tra số seat và khóa cạnh tranh; không vượt quá capacity.
-- Giao dịch đến muộn, hoàn tiền, chargeback hoặc lỗi provisioning cần trạng thái có thể đối soát; không sửa ledger bằng thao tác ad-hoc.
+1. JWT, session, user và device.
+2. License lease.
+3. Membership và role.
+4. Project ownership.
+5. Payload, request hash và idempotency.
+6. Provider/model/policy/capability.
+7. Credential version.
+8. Rate Active.
+9. Budget reservation.
+10. Outbound provider.
 
-## 5. Credential provider
+Không release mù hoặc submit lại khi trạng thái upstream còn không chắc chắn; worker phải reconcile.
 
-- Mỗi tổ chức có tối đa một credential `Active` cho mỗi provider.
-- Credential mới phải được test qua server trước khi ghi.
-- Server mã hóa secret bằng ASP.NET Core Data Protection và chỉ hiển thị hint.
-- Rotation theo vòng đời `Active -> Retiring -> Revoked`.
-- Task đang chạy giữ `CredentialVersionId` đã snapshot; rotation không đổi credential giữa chừng.
-- Không trả plaintext/encrypted payload cho desktop, không ghi secret vào log hoặc response lỗi.
+## 5. Credential, pricing và budget
 
-## 6. Pricing, budget và usage
+- Mỗi organization có tối đa một credential `Active` cho mỗi provider. Credential mới phải test trước khi ghi; response chỉ có hint/version/status.
+- Rotation theo `Active -> Retiring -> Revoked`; task đang chạy giữ version đã snapshot.
+- Global Admin nhập rate từ hợp đồng/dashboard chính thức; bootstrap không seed giá.
+- Thiếu rate trả `pricing_not_configured` trước outbound. Budget organization bằng `0` khóa AI; member limit cũng phải được kiểm tra.
+- Reservation/settlement/release dùng transaction `Serializable` và operation key idempotent.
+- `RateSnapshotJson` quyết toán request cũ; đổi giá mới không sửa lịch sử. Thiếu usage đáng tin cậy dùng estimate đã khóa theo policy, không mặc định ghi actual cost 0.
 
-- Global Admin cấu hình rate theo provider/model/đơn vị/thời gian hiệu lực.
-- Không tự suy đoán hoặc hard-code giá provider. Không có rate phù hợp phải trả `pricing_not_configured` trước outbound.
-- Mỗi project/request snapshot provider, model, policy và rate dùng để ước tính/settle.
-- Budget tháng của tổ chức và hạn mức thành viên được kiểm tra trước outbound. Giá trị `0` nghĩa là khóa AI.
-- Reservation, settlement và release chạy trong transaction cô lập `Serializable`.
-- Thành công quyết toán theo usage thực tế trong giới hạn hợp đồng; thất bại cuối giải phóng reservation theo quy tắc.
-- Mỗi ledger entry phải truy được organization, user, project, request, model, provider request, credential version và rate snapshot.
+## 6. Vòng đời project video
 
-## 7. Idempotency và trạng thái request
+Project có hai cấu trúc:
 
-- Idempotency key có phạm vi tổ chức và operation; cùng key/cùng payload trả lại kết quả hiện hành.
-- Cùng key nhưng payload khác phải bị từ chối.
-- Retry mạng không được tạo hai provider request hoặc hai khoản giữ ngân sách.
-- Worker claim bằng lease, cho phép khôi phục sau crash nhưng không poll/settle song song cùng task.
-- Trạng thái terminal không được quay lại trạng thái đang chạy.
+- `OpenAiStructuredPlan`: video dài nhiều cảnh.
+- `DirectShortVideo`: video ngắn một cảnh.
 
-## 8. Workflow video dài
+`LongForm` và `Default` là scope của video provider policy, không phải tên cấu trúc project. Project gắn `OrganizationId`, `CreatedByUserId` và snapshot provider/model/policy/resolution/speech production policy. Đổi policy organization chỉ ảnh hưởng project mới.
 
-### 8.1 Khởi tạo
+## 7. Video dài và content plan
 
-Người dùng chọn tổ chức và tạo project `LongForm`. Project snapshot video provider/model/policy, resolution, Native Audio và các tùy chọn liên quan. Đổi policy tổ chức sau đó chỉ tác động project mới, không âm thầm đổi project đang làm.
+- OpenAI dùng Responses API, JSON Schema, `store=false` và safety identifier là hash user ID.
+- Nội dung `OpenAiStructuredPlan` dùng `vi-VN`; output gồm script, character, scene, speech intent và project asset có key ổn định.
+- Scene có content duration và generation duration; provider có thể tạo clip dài hơn rồi desktop trim tail.
+- Output sai schema/ngôn ngữ/nhịp lời vẫn phải ghi request, usage và chi phí đã phát sinh; trả lỗi có field/reason/request ID an toàn.
+- Replay cùng idempotency trả lỗi cũ. Chỉ cho tối đa một lượt repair sau quote/xác nhận; repair không đổi key, scene count hoặc cấu trúc đã khóa.
 
-### 8.2 Nội dung có cấu trúc
+## 8. Character, asset và first frame
 
-OpenAI tạo content plan, kịch bản/cảnh, nhân vật và prompt theo contract có schema. Với Kling/Fal `LongForm`, nội dung đầu vào theo chính sách hiện hành là tiếng Việt `vi-VN`; không áp quy tắc này cho BytePlus hoặc `DirectShortVideo`.
+- Character có version, visual identity, wardrobe, immutable traits và forbidden changes. Chỉ reference primary Approved/current đúng project được dùng.
+- Project asset `Background`, `Prop`, `Item` hiện là text-only, có version và trạng thái Draft/Locked. Scene có assignment phải có đúng một Background và mọi asset phải hợp lệ/được khóa.
+- Cảnh một nhân vật nói trực diện dùng `OnCameraDialogue`; `NativeVoiceOver` dành cho B-roll không gắn nhân vật.
+- `SceneFirstFrame` là entity riêng, đúng project/scene/aspect/source snapshot và có lifecycle generate/materialize/review.
+- Fal/Veo Image-to-Video bắt buộc first frame Approved/current. Không gửi identity image vuông trực tiếp và không fallback Text-to-Video.
+- Sửa scene/character/asset làm invalid các output phụ thuộc theo version/hash, không sửa lịch sử.
 
-Mỗi scene phải giữ liên kết rõ với nội dung, nhân vật, tài sản và generation. Kết quả JSON sai schema hoặc vi phạm policy không được ghi như thành công.
+## 9. Video generation và provider
 
-### 8.3 Nhân vật và tài sản
+- Server xác minh duration, ratio, resolution, audio và reference capability; submit idempotent và không tự failover model/provider.
+- Worker server là nơi polling duy nhất, cache output trước khi hoàn tất và settle terminal.
+- Desktop tải qua relative proxy, dùng `.part`, kiểm tra MIME/size/hash/FFprobe rồi tạo local asset.
+- Kling là mặc định. BytePlus Seedance và Fal/Veo có adapter nhưng mặc định Disabled và phải rollout riêng.
+- Fal Standard/Fast là endpoint riêng, không fallback. Output URL gốc không rời server.
 
-- Character identity và ảnh tham chiếu phải thuộc đúng project.
-- Cảnh một nhân vật có lời trực diện dùng `OnCameraDialogue`.
-- `NativeVoiceOver` chỉ dành cho B-roll không gắn nhân vật.
-- `Background`, `Prop` và `Item` hiện là tài sản text-only trong workflow này.
-- Scene có asset assignment phải có đúng một `Background`; mọi asset được dùng phải ở trạng thái khóa/hợp lệ.
+## 10. Video ngắn
 
-### 8.4 First frame cho Fal/Veo
+- `DirectShortVideo` có một scene, thời lượng 5–15 giây và Kling.
+- Không gọi OpenAI để viết lại content và không áp policy tiếng Việt dành riêng cho video dài.
+- Khi tắt audio, desktop strip toàn bộ audio khỏi output local; provider policy không làm thay đổi cấu trúc workflow.
 
-Fal/Veo `LongForm` yêu cầu `SceneFirstFrame`:
+## 11. Speech, Native Audio và Canonical Voice
 
-- thuộc đúng project/scene/generation;
-- là bản current và đã Approved;
-- đúng tỷ lệ/resolution policy;
-- được lấy qua asset đã kiểm soát của server.
+Scene speech mode là `None`, `OnCameraDialogue` hoặc `NativeVoiceOver`. Project speech production policy là:
 
-Không gửi ảnh identity vuông trực tiếp làm input Veo và không fallback sang Text-to-Video khi first frame không hợp lệ.
+- `ProviderNativeVerified`: provider tạo Native Audio. Với video dài, desktop kiểm tra audio kỹ thuật rồi người dùng phát video, xác nhận checklist và duyệt trực tiếp; không quote/gọi ASR và không tạo `SpeechVerificationReport`.
+- `CanonicalVoice`: dùng voice profile/version Approved để tạo WAV chuẩn và ghép vào video.
 
-### 8.5 Sinh video, polling và duyệt
+Quy tắc Canonical Voice:
 
-Server giữ budget, gửi request provider, lưu snapshot và worker tiếp tục polling kể cả khi desktop đóng. Khi hoàn tất, server tải/cache output theo allowlist; desktop chỉ nhận URL proxy tương đối.
+- Voice profile version bất biến; preview phải được nghe/xác nhận trước khi approve.
+- Catalog do server trả về gồm `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage`, `shimmer`, `verse`, `marin`, `cedar`. Alias `female-sweet`/`male-warm` ánh xạ `shimmer`/`onyx` cho dữ liệu cũ.
+- Mở/chọn modal không gọi provider. Preview TTS là request có phí, dùng project hiện hành hoặc project kỹ thuật ẩn theo user+organization làm context ownership/audit/budget. Project ẩn không xuất hiện trong list/dashboard và không sửa cấu hình project nội dung.
+- Phải quote/xác nhận trước outbound; phát lại WAV đã tải trong phiên không tạo request mới.
+- Content plan hướng lời tới 85–95% content duration; validator dùng biên 80–105% trước TTS. Lỗi nhịp chỉ mở repair có quote, không tự sinh lại.
+- TTS qua đầy đủ credential/model/rate/budget/idempotency/output proxy. WAV được kiểm tra MIME, hash, sample rate, duration, audibility và ratio.
+- Canonical Voice không gửi WAV qua ASR và không phụ thuộc WER/CER. Speech verification chỉ áp dụng cho workflow không phải `OpenAiStructuredPlan` khi feature flag độc lập được bật.
+- `NativeVoiceOver` có WAV hiện hành đúng lineage đi thẳng sang tạo video nền; lệnh tạo video kiểm tra file rồi chấp nhận đúng VoiceGeneration trước outbound, không có bước duyệt WAV riêng.
+- `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`; chưa có engine thì không được render như đã lip-sync.
+- Narrated asset mới dùng `scene-audio-sync-v3`; `v2` chỉ tương thích khi là exact approved pointer và còn khớp generation, VoiceGeneration, speech/voice snapshot và hash. Phiên bản cũ hơn bị chặn.
+- Retry `NativeAudioInvalid`, repair, TTS hoặc provider lần hai là request có phí mới và cần xác nhận/idempotency phù hợp.
 
-Desktop tải bằng file `.part`, kiểm tra media/hash rồi yêu cầu người dùng nghe/xem và Approve hoặc Reject. Render cuối chỉ lấy clip thuộc đúng `ApprovedGenerationId` và kiểm lại video stream, audio, duration và hash.
+## 12. Render và xuất video
 
-### 8.6 Native Audio và retry
+- Bản dựng cần tối thiểu một scene đã duyệt; lấy các scene Approved/current theo đúng thứ tự scene plan và bỏ qua scene chưa duyệt.
+- Mỗi scene phải có approved render asset đúng generation/voice/speech snapshot và file khớp SHA-256.
+- FFmpeg normalize, concat, mix voice/music/ambience, chèn silent track khi cần và ghi qua file tạm; FFprobe xác minh output.
+- Retry render chỉ làm local, không gọi provider.
+- FinalVideo được xuất MP4 nhiều lần qua file tạm/atomic replace sau khi kiểm hash; thao tác export không render hoặc gọi AI lại và không làm mất bản workspace dùng để preview.
 
-Native Audio là workflow mặc định. TTS/WAV chỉ còn vì tương thích và không được dùng làm fallback ngầm.
+## 13. Vietsub local-first
 
-Nếu output bị `NativeAudioInvalid`, retry là request provider có phí mới. Desktop phải yêu cầu xác nhận người dùng; recovery profile do server/policy quyết định và vẫn qua pricing/budget/idempotency.
+- `VietsubProjectId` độc lập project video. Server chỉ giữ registry metadata/ownership/audit; không nhận subtitle, media hoặc path local.
+- Workspace thuộc exact organization + owner; COPY sao chép/hash atomically, LINK phát hiện source mất/đổi.
+- Playback dùng virtual HTTPS URL và HTTP Range, không lộ absolute path; mọi mutation dùng track revision.
+- Cue manual/locked không bị job ghi đè. Local job có state/checkpoint/pause/resume/retry/cancel và recovery.
+- OCR local chỉ chạy khi session/license/membership/role/owner hợp lệ; Viewer bị chặn.
 
-## 9. Workflow video ngắn
+### Dịch ngữ cảnh Qwen
 
-Project `DirectShortVideo` gửi nội dung trực tiếp theo contract được hỗ trợ. Workflow hiện hành chỉ dùng Kling và không gọi OpenAI để viết lại prompt/nội dung. Không áp quy tắc content tiếng Việt dành riêng cho `LongForm` một cách máy móc lên luồng này.
+- Nút **Dịch tiếng Việt** luôn hiện; thiếu active OCR track có cue phải yêu cầu quét OCR và không tạo job.
+- Chỉ nhận source `PADDLE_OCR_LOCAL`, language `en`/`zh`, cue tồn tại và revision khớp.
+- LLamaSharp/Qwen chạy trong worker x64 riêng qua IPC giới hạn; không có Cloud client, credential hoặc workflow database.
+- READY phải khớp model/worker/protocol/config/backend/native fingerprint và probe runtime/English/Chinese.
+- Resource warning RAM/commit cần người dùng xác nhận và snapshot theo job; không bỏ qua platform, disk, checksum/probe hoặc OOM thật.
+- Output stale/invalid không apply; translation memory/cache tách theo fingerprint/profile và SRT ghi atomically.
+- `VietsubLocalTranslationEnabled=false` cho tới khi model integration, benchmark và smoke desktop đạt; `Skipped` không phải pass.
 
-## 10. Quy tắc theo provider
+### Tạo giọng Việt Piper
 
-- **Kling:** provider video mặc định; hỗ trợ luồng Native Audio và video ngắn theo catalog/policy.
-- **BytePlus:** adapter có trong source nhưng catalog mặc định tắt; rollout độc lập và không dùng quy tắc first-frame của Fal.
-- **Fal/Veo:** catalog mặc định tắt; chỉ `LongForm`, yêu cầu approved/current first frame và không fallback T2V.
-- Mỗi provider cần rate, credential Active, model Enabled và organization policy cho phép trước outbound.
-- Không tự failover giữa provider vì điều đó thay đổi giá, dữ liệu gửi đi và semantics của project.
+- Chỉ track hiện hành có revision khớp và mọi cue có bản dịch tiếng Việt mới được tạo giọng; warning chất lượng dịch không chặn.
+- Piper CPU chạy trong Python worker cô lập với model/config/runtime đã pin; không nhận provider credential, URL tùy ý hoặc output path từ WebView.
+- Phrase/WAV/timeline cache theo content/config/revision. File `.partial` phải qua RIFF/PCM, size và SHA-256 trước promote.
+- Timeline giọng Việt là track riêng dùng chung playhead/play/pause/seek/rate với video, không dùng audio player độc lập.
+- Hệ thống mượn khoảng trống kế tiếp và tăng tốc tối đa `1.20x`; phrase dài hơn vẫn publish ở tốc độ tối đa, giữ diagnostic và không cắt câu cuối.
+- `VietsubLocalVoiceEnabled=true` làm workflow cài đặt/ trạng thái hiển thị. Thiếu component phải trả `NOT_INSTALLED`; chỉ trả READY sau checksum/probe và vẫn cần legal review, benchmark, nghe nghiệm thu, smoke trước production.
 
-## 11. Vietsub local
+## 14. SePay và seat
 
-Vietsub là module local-first:
+- SePay mặc định tắt. Payment snapshot amount/account/content/expiry và xử lý webhook idempotent.
+- Chỉ match giao dịch vào đúng account/code/exact amount và trạng thái; dữ liệu mơ hồ chuyển thủ công.
+- Pool/seat allocation dùng khóa cạnh tranh, không vượt capacity. Replay webhook không cấp license/seat hai lần.
+- Late payment, refund/chargeback và provisioning failure phải có trạng thái đối soát; không sửa ledger ad-hoc.
 
-- Server giữ `vs.Projects` như registry metadata; không nhận subtitle/media/workspace database.
-- Desktop giữ manifest JSON, SQLite `project.db`, media, OCR/SRT và artifact trong workspace.
-- Nút **Dịch tiếng Việt** luôn hiện. Nếu không có active OCR track có cue, UI yêu cầu quét OCR và không tạo translation job.
-- CTA hiện hành chỉ nhận track `PADDLE_OCR_LOCAL`, ngôn ngữ `en` hoặc `zh`, có cue và revision khớp.
-- Worker Qwen x64 chạy qua IPC local, không có provider client, credential hay database workflow.
-- Cue manual/locked không bị ghi đè. Output stale, sai revision hoặc invalid không được apply; SRT ghi atomically.
-- Readiness phải khớp model/worker/protocol/config/backend/native fingerprint và qua probe runtime/Anh/Trung.
-- Resource profile được native chọn và snapshot theo job. Job đang chạy/resume không tự đổi giữa Standard và Low-memory; cache/fingerprint phải tách theo profile.
-- Ngưỡng RAM tổng, RAM trống và commit của profile là mức khuyến nghị. Nếu dưới ngưỡng hoặc không đọc được snapshot, hệ thống phải cảnh báo và chưa được tạo job/nạp worker cho tới khi người dùng bấm **Vẫn tiếp tục**; xác nhận được snapshot vào job. Xác nhận không được bỏ qua Windows x64, dung lượng đĩa, checksum/probe model hoặc lỗi worker thực tế.
-- Feature dịch local giữ mặc định tắt cho đến khi model thật, benchmark và smoke desktop đạt.
-- Tạo giọng local là thao tác riêng sau dịch. Chỉ track hiện hành có revision khớp và toàn bộ cue có nội dung dịch tiếng Việt mới được tạo giọng; trạng thái cảnh báo/chất lượng bản dịch không chặn tạo giọng và không có fallback Cloud ngầm.
-- MVP dùng một giọng Việt Piper CPU đã pin model/config/SHA-256. Runtime Python và worker chạy cô lập, không nhận provider credential, URL tùy ý hoặc đường dẫn output từ WebView.
-- Phrase, WAV và timeline được cache theo nội dung/cấu hình/revision. File tạm dùng hậu tố `.partial`, phải qua kiểm tra RIFF/PCM, kích thước và SHA-256 trước khi ghi artifact hiện hành.
-- Timeline giọng Việt đã tạo phải hiển thị thành track riêng dưới timeline phụ đề, dùng chung playhead/play-pause/seek/tốc độ với video; không hiển thị bằng audio player độc lập trong panel thiết lập.
-- Hệ thống được mượn khoảng trống kế tiếp và tăng tốc tối đa `1.20x`. Phrase cần nhanh hơn ngưỡng này vẫn được dựng ở tốc độ tối đa, không làm job thất bại và không cắt câu cuối; hệ thống lưu timing diagnostic để cảnh báo khả năng chồng âm hoặc timeline dài hơn video.
-- Sửa cue hoặc đổi revision làm timeline cũ không còn được phát như output hiện hành; playback URL nội bộ chỉ mở artifact đúng project/track/revision/hash.
-- Feature tạo giọng local giữ mặc định tắt cho đến khi runtime/model thật, kiểm kê license/dependency, smoke và nghe nghiệm thu trên bundle phát hành đạt.
+## 15. Dữ liệu, output và bảo mật
 
-## 12. Bảo mật dữ liệu và output
+- Desktop chỉ đọc/ghi workflow `vf` trong giai đoạn chuyển tiếp; server là nguồn sự thật cho credential, cloud request và usage.
+- Provider outbound chỉ qua HTTPS exact allowlist. Output proxy xác minh auth/ownership/scheme/host/DNS/redirect/MIME/size và không lộ signed URL.
+- Path local phải chuẩn hóa, tương đối trong workspace root và chống traversal/reparse escape.
+- Không log secret, Authorization, signed URL, Base64, prompt/transcript nhạy cảm hoặc absolute local path.
 
-- Provider outbound chỉ qua HTTPS đến host allowlist source hiện hành.
-- Output proxy xác minh authorization, project ownership, scheme/host/DNS, redirect, MIME và kích thước; không lộ signed URL gốc.
-- Không log secret, Authorization header, signed URL, Base64 hoặc nội dung nhạy cảm đầy đủ.
-- Desktop không được ghi credential, provider request hay usage ledger.
-- Path local phải chuẩn hóa, dùng relative path trong workspace root và chống path traversal/symlink escape.
+## 16. Update và release
 
-## 13. Điều kiện được coi là hoàn tất
+- Server lưu metadata/artifact release. Setup/updater kiểm tra size, SHA-256, traversal, package root và bundle FFmpeg.
+- Update bảo vệ appsettings, workspace và WebView2 user data; thay file có backup/rollback.
+- Publish Release bị chặn nếu FFmpeg provenance chưa có `Approval scope: Release`.
 
-Một tính năng chỉ được tuyên bố sẵn sàng khi đồng thời có:
+## 17. API error và tương thích
 
-1. Source và migration/contract đồng bộ.
-2. Test tự động phù hợp đạt, `Skipped` được giải thích.
-3. Cấu hình/rate/credential của môi trường đã xác minh mà không lộ secret.
-4. Smoke thủ công end-to-end đạt trên đúng bundle/môi trường.
-5. Quan sát, rollback và runbook khả dụng.
+- Lỗi nghiệp vụ dùng HTTP status phù hợp và `ApiErrorResponse` có code ổn định; không trả raw exception/provider response/secret.
+- `401` từ API authenticated làm desktop xóa phiên; `403` license/role không mặc định là token hỏng.
+- Lỗi polling/cache không được biến thành submit hoặc settlement mới.
+- Project/output lịch sử tiếp tục đọc được theo compatibility policy; không xóa entity legacy chỉ vì không thấy call site trực tiếp.
 
-Trạng thái hiện hành và các hạng mục còn mở được ghi tại [BOI_CANH_HE_THONG_HIEN_HANH.md](BOI_CANH_HE_THONG_HIEN_HANH.md).
+## 18. Điều kiện nghiệm thu
+
+- Contract/source/migration/tài liệu đồng bộ; migration idempotent và least-privilege đạt trên clone.
+- Cross-user/cross-org/Viewer, thiếu rate/budget/credential/policy bị chặn trước outbound.
+- Idempotency, polling restart, settlement và output proxy đạt test.
+- Build/test đạt trên commit phát hành; Failed/Skipped được giải thích.
+- Integration/model/provider thật có smoke trên đúng môi trường/bundle và chi phí được phê duyệt.
+- Monitoring, rollback và runbook khả dụng; không có secret/dữ liệu nhạy cảm trong source/log/artifact.

@@ -27,6 +27,12 @@ public partial class VoiceGeneration
 
     public string? VoiceSnapshotJson { get; set; }
 
+    public string? VoiceSnapshotHash { get; set; }
+
+    public Guid? VoiceProfileVersionId { get; set; }
+
+    public string VerificationStatus { get; set; } = "NotRequested";
+
     public string LanguageCode { get; set; } = null!;
 
     public decimal SpeakingRate { get; set; }
@@ -43,9 +49,13 @@ public partial class VoiceGeneration
 
     public DateTime? CompletedAtUtc { get; set; }
 
+    public DateTime? ApprovedAtUtc { get; set; }
+
     public byte[] RowVersion { get; set; } = null!;
 
     public virtual MediaAsset? OutputMediaAsset { get; set; }
+
+    public virtual VoiceProfileVersion? VoiceProfileVersion { get; set; }
 
     public virtual Project Project { get; set; } = null!;
 

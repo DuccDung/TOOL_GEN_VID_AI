@@ -27,7 +27,15 @@ public partial class Character
 
     public string? VisualIdentity { get; set; }
 
+    public string? VoiceCode { get; set; }
+
+    public decimal? VoiceSpeakingRate { get; set; }
+
+    public Guid? ApprovedVoiceProfileVersionId { get; set; }
+
     public string Status { get; set; } = null!;
+
+    public virtual VoiceProfileVersion? ApprovedVoiceProfileVersion { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }
 

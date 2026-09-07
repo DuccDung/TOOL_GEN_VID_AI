@@ -70,6 +70,30 @@ public sealed class GeneratedVoiceContentServiceTests
         Assert.Equal("generated_voice_expired", exception.Code);
     }
 
+    [Fact]
+    public async Task GetAsync_ReturnsProjectScopedVoiceCatalogPreview()
+    {
+        await using var dbContext = CreateContext();
+        var (project, request, payload) = Seed(
+            dbContext,
+            DateTime.UtcNow.AddHours(1),
+            "VoicePreview",
+            "{\"previewKind\":\"Catalog\"}");
+        var service = new GeneratedVoiceContentService(
+            dbContext,
+            new StubAccessService(new GenerationAccessContext(
+                project.OrganizationId!.Value, "Organization", "Member", project)),
+            TimeProvider.System);
+
+        var content = await service.GetAsync(
+            request.ProviderRequestId,
+            "user-1",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal(payload, content.Payload);
+    }
+
     private static VideoFactoryDbContext CreateContext() =>
         new(new DbContextOptionsBuilder<VideoFactoryDbContext>()
             .UseInMemoryDatabase($"generated-voice-content-{Guid.NewGuid():N}")
@@ -77,7 +101,9 @@ public sealed class GeneratedVoiceContentServiceTests
 
     private static (Project Project, ProviderRequest Request, byte[] Payload) Seed(
         VideoFactoryDbContext dbContext,
-        DateTime expiresAtUtc)
+        DateTime expiresAtUtc,
+        string requestKind = "Voice",
+        string requestJson = "{}")
     {
         var now = DateTime.UtcNow;
         var project = new Project
@@ -120,13 +146,13 @@ public sealed class GeneratedVoiceContentServiceTests
             OrganizationId = project.OrganizationId,
             RequestedByUserId = "user-1",
             ProjectId = project.ProjectId,
-            SceneId = scene.SceneId,
-            RequestKind = "Voice",
+            SceneId = requestKind == "Voice" ? scene.SceneId : null,
+            RequestKind = requestKind,
             ProviderCode = ProviderCodes.OpenAi,
             ModelCode = "gpt-4o-mini-tts",
             IdempotencyKey = "voice-test",
             Status = "Completed",
-            RequestJson = "{}",
+            RequestJson = requestJson,
             CurrencyCode = "USD",
             CreatedAtUtc = now,
             UpdatedAtUtc = now,

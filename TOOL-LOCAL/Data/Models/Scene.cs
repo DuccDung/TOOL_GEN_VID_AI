@@ -73,6 +73,12 @@ public partial class Scene
 
     public Guid? ApprovedGenerationId { get; set; }
 
+    public Guid? ApprovedVoiceGenerationId { get; set; }
+
+    public Guid? ApprovedRenderMediaAssetId { get; set; }
+
+    public string SpeechStatus { get; set; } = "SpeechNotRequired";
+
     public string? LastErrorCode { get; set; }
 
     public string? LastErrorMessage { get; set; }
@@ -84,6 +90,10 @@ public partial class Scene
     public byte[] RowVersion { get; set; } = null!;
 
     public virtual VideoGeneration? ApprovedGeneration { get; set; }
+
+    public virtual VoiceGeneration? ApprovedVoiceGeneration { get; set; }
+
+    public virtual MediaAsset? ApprovedRenderMediaAsset { get; set; }
 
     public virtual Scene? GenerationDependencyScene { get; set; }
 

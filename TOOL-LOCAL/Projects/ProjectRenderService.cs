@@ -6,6 +6,7 @@ using TOOL_LOCAL.Data;
 using TOOL_LOCAL.Data.Models;
 using TOOL_LOCAL.Media;
 using TOOL_LOCAL.Storage;
+using TOOL_SHARED.Contracts.Generation;
 
 namespace TOOL_LOCAL.Projects;
 
@@ -17,11 +18,23 @@ internal sealed record FinalRenderResult(
     string RelativePath,
     long DurationMs);
 
+internal sealed record FinalVideoExportResult(
+    Guid FinalVideoId,
+    int Version,
+    string FileName,
+    long SizeBytes);
+
 internal interface IProjectRenderService
 {
     Task<FinalRenderResult> RenderFinalVideoAsync(
         Guid projectId,
         string remoteUserId,
+        CancellationToken cancellationToken);
+
+    Task<FinalVideoExportResult> ExportFinalVideoAsync(
+        Guid projectId,
+        string remoteUserId,
+        string destinationPath,
         CancellationToken cancellationToken);
 }
 
@@ -30,9 +43,13 @@ internal sealed class ProjectRenderService(
     ProjectWorkspaceService workspaceService,
     IMediaToolPreflightService mediaToolPreflight,
     IFinalMediaRenderer renderer,
-    IFinalOutputInspector outputInspector) : IProjectRenderService
+    IFinalOutputInspector outputInspector,
+    bool speechVerificationEnabled = true,
+    decimal targetSceneLoudnessLufs = -16m) : IProjectRenderService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string SceneAudioSyncPolicyVersion = "scene-audio-sync-v3";
+    private const string LegacyApprovedSceneAudioSyncPolicyVersion = "scene-audio-sync-v2";
     private readonly SemaphoreSlim _renderLock = new(1, 1);
 
     public async Task<FinalRenderResult> RenderFinalVideoAsync(
@@ -60,45 +77,149 @@ internal sealed class ProjectRenderService(
                     throw new ArgumentException("Dự án chưa có kế hoạch cảnh hiện hành.");
                 }
 
-                var scenes = await dbContext.Scenes
+                var currentScenes = await dbContext.Scenes
                     .AsNoTracking()
                     .Include(x => x.ApprovedGeneration)
                     .ThenInclude(x => x!.OutputMediaAsset)
+                    .Include(x => x.ApprovedVoiceGeneration)
+                    .ThenInclude(x => x!.OutputMediaAsset)
+                    .Include(x => x.ApprovedRenderMediaAsset)
                     .Where(x => x.ProjectId == projectId && x.ScenePlanVersion == scenePlanVersion)
                     .OrderBy(x => x.SequenceNumber)
                     .ToListAsync(cancellationToken);
-                if (scenes.Count == 0)
+                if (currentScenes.Count == 0)
                 {
                     throw new ArgumentException("Dự án chưa có cảnh để dựng video.");
+                }
+                var workflowStructureType = project.CurrentScriptVersion is null
+                    ? null
+                    : await dbContext.Scripts
+                        .AsNoTracking()
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.Version == project.CurrentScriptVersion.Value)
+                        .Select(x => x.StructureType)
+                        .SingleOrDefaultAsync(cancellationToken);
+                var isLongFormWorkflow = string.Equals(
+                    workflowStructureType,
+                    KlingLongFormVietnameseValidator.OpenAiStructuredPlan,
+                    StringComparison.Ordinal);
+
+                // Cho phép dựng một bản video từ bất kỳ số lượng cảnh đã duyệt nào.
+                // Các cảnh chưa duyệt vẫn ở lại storyboard và không được đưa vào manifest.
+                var scenes = currentScenes
+                    .Where(x => x.Status == "Approved")
+                    .ToList();
+                if (scenes.Count == 0)
+                {
+                    throw new ArgumentException("Dự án chưa có cảnh đã duyệt để dựng video.");
                 }
 
                 var sources = new List<RenderSource>(scenes.Count);
                 foreach (var scene in scenes)
                 {
                     var generation = scene.ApprovedGeneration;
-                    var asset = generation?.OutputMediaAsset;
+                    var speechMode = !string.IsNullOrWhiteSpace(scene.Dialogue)
+                        ? KlingSpeechModes.OnCameraDialogue
+                        : !string.IsNullOrWhiteSpace(scene.Narration)
+                            ? KlingSpeechModes.NativeVoiceOver
+                            : KlingSpeechModes.None;
+                    var canonicalSpeech =
+                        string.Equals(project.SpeechProductionPolicy, SpeechProductionPolicies.CanonicalVoice, StringComparison.Ordinal) &&
+                        speechMode != KlingSpeechModes.None;
+                    if (canonicalSpeech && speechMode == KlingSpeechModes.OnCameraDialogue)
+                    {
+                        throw new ArgumentException(
+                            $"Cảnh {scene.SequenceNumber} có Canonical Voice đã sẵn sàng cho lip-sync nhưng chưa có video lip-sync đã duyệt.");
+                    }
+                    var canonicalNarration =
+                        canonicalSpeech && speechMode == KlingSpeechModes.NativeVoiceOver;
+                    var asset = canonicalNarration
+                        ? scene.ApprovedRenderMediaAsset
+                        : scene.ApprovedRenderMediaAsset ?? generation?.OutputMediaAsset;
                     var silentOutput = string.Equals(
-                        ReadStringProperty(asset?.MetadataJson, "audioStrategy"),
+                        ReadStringProperty(generation?.OutputMediaAsset?.MetadataJson, "audioStrategy"),
                         "SilentOutput",
                         StringComparison.OrdinalIgnoreCase);
+                    var canonicalVoiceApproved =
+                        !canonicalNarration ||
+                        (scene.ApprovedVoiceGenerationId.HasValue &&
+                         scene.ApprovedVoiceGeneration is not null &&
+                         scene.ApprovedVoiceGeneration.VoiceGenerationId == scene.ApprovedVoiceGenerationId &&
+                          scene.ApprovedVoiceGeneration.Status == "Approved" &&
+                          scene.SpeechStatus == "SpeechApproved");
+                    var expectedSpeechHash = speechMode == KlingSpeechModes.None
+                        ? null
+                        : Sha256Hex(NormalizeNarration(
+                            speechMode == KlingSpeechModes.OnCameraDialogue ? scene.Dialogue : scene.Narration));
+                    var verificationSourceAssetId = canonicalNarration
+                        ? scene.ApprovedVoiceGeneration?.OutputMediaAssetId
+                        : generation?.OutputMediaAssetId;
+                    var requiresSpeechVerification = !canonicalSpeech &&
+                                                     speechVerificationEnabled &&
+                                                     !isLongFormWorkflow;
+                    var speechVerified = speechMode == KlingSpeechModes.None ||
+                        !requiresSpeechVerification ||
+                        await dbContext.SpeechVerificationReports.AsNoTracking().AnyAsync(
+                            x => x.SceneId == scene.SceneId &&
+                                 x.ExpectedSpeechHash == expectedSpeechHash &&
+                                 x.SourceMediaAssetId == verificationSourceAssetId &&
+                                 (!canonicalNarration ||
+                                  x.MediaSha256 == scene.ApprovedVoiceGeneration!.OutputMediaAsset!.Sha256) &&
+                                 (x.Status == SpeechVerificationStatuses.Passed ||
+                                  x.Status == SpeechVerificationStatuses.NeedsReview && x.ReviewApproved),
+                            cancellationToken);
+                    var canonicalSnapshotValid = !canonicalNarration ||
+                        (scene.ApprovedVoiceGeneration is not null &&
+                         string.Equals(
+                             ReadStringProperty(asset?.MetadataJson, "voiceGenerationId"),
+                             scene.ApprovedVoiceGeneration.VoiceGenerationId.ToString("D"),
+                             StringComparison.OrdinalIgnoreCase) &&
+                         string.Equals(
+                             ReadStringProperty(asset?.MetadataJson, "voiceSnapshotHash"),
+                             scene.ApprovedVoiceGeneration.VoiceSnapshotHash,
+                             StringComparison.OrdinalIgnoreCase) &&
+                         string.Equals(
+                             ReadStringProperty(asset?.MetadataJson, "speechHash"),
+                             expectedSpeechHash,
+                             StringComparison.OrdinalIgnoreCase) &&
+                         string.Equals(
+                             ReadStringProperty(asset?.MetadataJson, "mixStrategy"),
+                             SpeechMixStrategies.ReplaceAllNativeAudio,
+                             StringComparison.Ordinal) &&
+                         IsApprovedAudioSyncPolicyCompatible(
+                             ReadStringProperty(asset?.MetadataJson, "audioSyncPolicyVersion")));
+                    var assetTypeValid = canonicalNarration
+                        ? asset?.AssetType == "SceneVideoNarrated"
+                        : asset?.AssetType == "SceneVideo";
+                    var audioAudible = canonicalNarration
+                        ? ReadBooleanProperty(asset?.MetadataJson, "canonicalVoiceAudible")
+                        : ReadBooleanProperty(asset?.MetadataJson, "nativeAudioAudible");
                     if (scene.Status != "Approved" ||
                         scene.ApprovedGenerationId is null ||
                         generation is null ||
                         generation.VideoGenerationId != scene.ApprovedGenerationId ||
                         generation.Status != "Approved" ||
                         asset is null ||
-                        asset.AssetType != "SceneVideo" ||
+                         !assetTypeValid ||
+                         !canonicalVoiceApproved ||
+                         !speechVerified ||
+                         !canonicalSnapshotValid ||
                         asset.Status != "Ready" ||
                         asset.DeletedAtUtc is not null ||
-                        (!silentOutput && !ReadBooleanProperty(asset.MetadataJson, "nativeAudioAudible")))
+                        ((canonicalNarration || !silentOutput) && !audioAudible))
                     {
                         throw new ArgumentException(
-                            silentOutput
+                            canonicalNarration
+                                ? $"Cảnh {scene.SequenceNumber} chưa có clip Canonical Voice đã duyệt và còn khớp phiên bản lời đọc."
+                                : silentOutput
                                 ? $"Cảnh {scene.SequenceNumber} chưa có clip video không âm thanh đã duyệt hợp lệ."
-                                : $"Cảnh {scene.SequenceNumber} chưa có clip video Native Audio đã duyệt hợp lệ.");
+                                : $"Cảnh {scene.SequenceNumber} chưa có video và lời nói đã kiểm tra/duyệt hợp lệ.");
                     }
 
-                    var sourcePath = workspaceService.Resolve(asset.RelativePath);
+                    var sourcePath = workspaceService.Resolve(NormalizeRelativePath(Path.Combine(
+                        project.WorkspaceRelativePath,
+                        asset.RelativePath)));
                     if (!File.Exists(sourcePath))
                     {
                         throw new FileNotFoundException(
@@ -121,12 +242,8 @@ internal sealed class ProjectRenderService(
                         sourcePath,
                         asset.Sha256,
                         asset.DurationMs ?? generation.ActualDurationMs ?? generation.RequestedDurationMs,
-                        !silentOutput));
-                }
-
-                if (sources.Select(source => source.AudioEnabled).Distinct().Count() > 1)
-                {
-                    throw new ArgumentException("Chưa hỗ trợ dựng chung cảnh có âm thanh và cảnh tắt âm thanh trong cùng một video.");
+                        asset.AssetType,
+                        canonicalNarration || !silentOutput));
                 }
 
                 var version = (await dbContext.RenderJobs
@@ -140,7 +257,8 @@ internal sealed class ProjectRenderService(
                     project.OutputWidth,
                     project.OutputHeight,
                     project.OutputFrameRate,
-                    sources.All(source => source.AudioEnabled),
+                    project.SpeechProductionPolicy,
+                    sources.Any(source => source.AudioEnabled),
                     sources);
             }
 
@@ -155,7 +273,10 @@ internal sealed class ProjectRenderService(
                 $"v{input.Version}")));
             var manifestJson = JsonSerializer.Serialize(new
             {
-                audioStrategy = input.AudioEnabled ? "ProviderNative" : "SilentOutput",
+                audioStrategy = input.SpeechProductionPolicy == SpeechProductionPolicies.CanonicalVoice
+                    ? "CanonicalVoice"
+                    : input.AudioEnabled ? "ProviderNative" : "SilentOutput",
+                input.SpeechProductionPolicy,
                 input.ProjectId,
                 input.ScenePlanVersion,
                 input.Version,
@@ -171,7 +292,9 @@ internal sealed class ProjectRenderService(
                     source.MediaAssetId,
                     source.RelativePath,
                     source.Sha256,
-                    source.DurationMs
+                    source.DurationMs,
+                    source.AssetType,
+                    source.AudioEnabled
                 })
             }, JsonOptions);
             var manifestHash = Sha256Hex(manifestJson);
@@ -213,7 +336,10 @@ internal sealed class ProjectRenderService(
                         workingDirectory,
                         input.Width,
                         input.Height,
-                        input.FramesPerSecond),
+                        input.FramesPerSecond,
+                        TargetSceneLoudnessLufs: targetSceneLoudnessLufs,
+                        SceneAudioEnabled: input.Sources.Select(x => x.AudioEnabled).ToArray(),
+                        OutputAudioEnabled: input.AudioEnabled),
                     cancellationToken);
                 await MarkValidatingOutputAsync(renderJobId, cancellationToken);
 
@@ -225,8 +351,15 @@ internal sealed class ProjectRenderService(
                 var completedAtUtc = DateTime.UtcNow;
                 var technicalReportJson = JsonSerializer.Serialize(new
                 {
-                    audioStrategy = input.AudioEnabled ? "ProviderNative" : "SilentOutput",
-                    sourceAssetType = "SceneVideo",
+                    audioStrategy = input.SpeechProductionPolicy == SpeechProductionPolicies.CanonicalVoice
+                        ? "CanonicalVoice"
+                        : input.AudioEnabled ? "ProviderNative" : "SilentOutput",
+                    input.SpeechProductionPolicy,
+                    sourceAssetTypes = input.Sources
+                        .Select(x => x.AssetType)
+                        .Distinct()
+                        .ToArray(),
+                    mixedSceneAudio = input.Sources.Select(x => x.AudioEnabled).Distinct().Count() > 1,
                     inspection.Probe,
                     inspection.AudioQuality,
                     expectedSceneCount = input.Sources.Count,
@@ -303,6 +436,175 @@ internal sealed class ProjectRenderService(
                 await MarkFailedAsync(renderJobId, input.ProjectId, exception, CancellationToken.None);
                 throw;
             }
+        }
+        finally
+        {
+            _renderLock.Release();
+        }
+    }
+
+    public async Task<FinalVideoExportResult> ExportFinalVideoAsync(
+        Guid projectId,
+        string remoteUserId,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(destinationPath))
+        {
+            throw new ArgumentException("Hãy chọn vị trí lưu video MP4.", nameof(destinationPath));
+        }
+
+        string normalizedDestinationPath;
+        try
+        {
+            normalizedDestinationPath = Path.GetFullPath(
+                Environment.ExpandEnvironmentVariables(destinationPath.Trim()));
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new ArgumentException("Đường dẫn xuất video không hợp lệ.", nameof(destinationPath), exception);
+        }
+
+        if (!string.Equals(Path.GetExtension(normalizedDestinationPath), ".mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Video hoàn chỉnh phải được xuất dưới định dạng MP4.", nameof(destinationPath));
+        }
+        if (normalizedDestinationPath.Length > 1000)
+        {
+            throw new ArgumentException("Đường dẫn xuất video quá dài.", nameof(destinationPath));
+        }
+
+        var destinationDirectory = Path.GetDirectoryName(normalizedDestinationPath);
+        if (string.IsNullOrWhiteSpace(destinationDirectory) || !Directory.Exists(destinationDirectory))
+        {
+            throw new ArgumentException("Thư mục lưu video không tồn tại.", nameof(destinationPath));
+        }
+
+        await _renderLock.WaitAsync(cancellationToken);
+        try
+        {
+            FinalVideoExportInput input;
+            await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+            {
+                var projectExists = await dbContext.Projects
+                    .AsNoTracking()
+                    .AnyAsync(
+                        x => x.ProjectId == projectId &&
+                             x.RemoteUserId == remoteUserId &&
+                             x.DeletedAtUtc == null,
+                        cancellationToken);
+                if (!projectExists)
+                {
+                    throw new ArgumentException("Không tìm thấy dự án hoặc bạn không có quyền xuất video.");
+                }
+
+                var finalVideo = await dbContext.FinalVideos
+                    .AsNoTracking()
+                    .Include(x => x.RenderJob)
+                    .Include(x => x.MediaAsset)
+                    .Where(x =>
+                        x.ProjectId == projectId &&
+                        x.RenderJob.Status == "Completed" &&
+                        x.MediaAsset.AssetType == "FinalVideo" &&
+                        x.MediaAsset.Status == "Ready" &&
+                        x.MediaAsset.DeletedAtUtc == null &&
+                        x.Status != "Rejected" &&
+                        x.Status != "Invalid")
+                    .OrderByDescending(x => x.Version)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    ?? throw new ArgumentException("Dự án chưa có video hoàn chỉnh đã dựng để xuất.");
+
+                input = new FinalVideoExportInput(
+                    finalVideo.FinalVideoId,
+                    finalVideo.Version,
+                    finalVideo.MediaAsset.RelativePath,
+                    finalVideo.MediaAsset.Sha256);
+            }
+
+            var sourcePath = workspaceService.Resolve(input.RelativePath);
+            if (!File.Exists(sourcePath))
+            {
+                throw new ArgumentException("Không tìm thấy file video hoàn chỉnh trong workspace.");
+            }
+            if (string.Equals(
+                    Path.GetFullPath(sourcePath),
+                    normalizedDestinationPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Hãy chọn vị trí khác với file video gốc trong workspace.");
+            }
+
+            var sourceHash = await ComputeFileSha256Async(sourcePath, cancellationToken);
+            if (!sourceHash.Equals(input.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Video hoàn chỉnh đã thay đổi trong workspace. Hãy dựng lại trước khi xuất.");
+            }
+
+            var temporaryPath = Path.Combine(
+                destinationDirectory,
+                $".{Path.GetFileName(normalizedDestinationPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                await using (var source = new FileStream(
+                                 sourcePath,
+                                 FileMode.Open,
+                                 FileAccess.Read,
+                                 FileShare.Read,
+                                 81920,
+                                 FileOptions.Asynchronous | FileOptions.SequentialScan))
+                await using (var destination = new FileStream(
+                                 temporaryPath,
+                                 FileMode.CreateNew,
+                                 FileAccess.Write,
+                                 FileShare.None,
+                                 81920,
+                                 FileOptions.Asynchronous | FileOptions.SequentialScan))
+                {
+                    await source.CopyToAsync(destination, cancellationToken);
+                    await destination.FlushAsync(cancellationToken);
+                }
+
+                var exportedHash = await ComputeFileSha256Async(temporaryPath, cancellationToken);
+                if (!exportedHash.Equals(input.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("File MP4 vừa xuất không còn khớp với bản dựng đã kiểm tra.");
+                }
+
+                File.Move(temporaryPath, normalizedDestinationPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+
+            var exportedAtUtc = DateTime.UtcNow;
+            await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+            {
+                var finalVideo = await dbContext.FinalVideos.SingleAsync(
+                    x => x.FinalVideoId == input.FinalVideoId,
+                    cancellationToken);
+                var project = await dbContext.Projects.SingleAsync(
+                    x => x.ProjectId == projectId,
+                    cancellationToken);
+                finalVideo.Status = "Exported";
+                finalVideo.ApprovedAtUtc ??= exportedAtUtc;
+                finalVideo.ExportedPath = normalizedDestinationPath;
+                finalVideo.ExportedAtUtc = exportedAtUtc;
+                project.Status = "Completed";
+                project.LastErrorCode = null;
+                project.LastErrorMessage = null;
+                project.UpdatedAtUtc = exportedAtUtc;
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return new FinalVideoExportResult(
+                input.FinalVideoId,
+                input.Version,
+                Path.GetFileName(normalizedDestinationPath),
+                new FileInfo(normalizedDestinationPath).Length);
         }
         finally
         {
@@ -450,6 +752,13 @@ internal sealed class ProjectRenderService(
     private static string Sha256Hex(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
+    private static string NormalizeNarration(string? value) =>
+        SpeechTextNormalization.Normalize(value);
+
+    private static bool IsApprovedAudioSyncPolicyCompatible(string? policyVersion) =>
+        string.Equals(policyVersion, SceneAudioSyncPolicyVersion, StringComparison.Ordinal) ||
+        string.Equals(policyVersion, LegacyApprovedSceneAudioSyncPolicyVersion, StringComparison.Ordinal);
+
     private static string NormalizeRelativePath(string path) =>
         path.Replace(Path.DirectorySeparatorChar, '/');
 
@@ -464,8 +773,15 @@ internal sealed class ProjectRenderService(
         int Width,
         int Height,
         decimal FramesPerSecond,
+        string SpeechProductionPolicy,
         bool AudioEnabled,
         IReadOnlyList<RenderSource> Sources);
+
+    private sealed record FinalVideoExportInput(
+        Guid FinalVideoId,
+        int Version,
+        string RelativePath,
+        string Sha256);
 
     private sealed record RenderSource(
         Guid SceneId,
@@ -476,5 +792,6 @@ internal sealed class ProjectRenderService(
         string AbsolutePath,
         string Sha256,
         long DurationMs,
+        string AssetType,
         bool AudioEnabled);
 }

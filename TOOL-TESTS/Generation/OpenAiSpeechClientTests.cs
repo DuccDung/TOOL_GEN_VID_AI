@@ -78,6 +78,47 @@ public sealed class OpenAiSpeechClientTests
     }
 
     [Fact]
+    public void WaveValidator_AcceptsAndNormalizesStreamingSizedDataChunk()
+    {
+        var wav = CreatePcmWav(sampleRate: 24_000, channels: 1, durationSeconds: 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(4, 4), uint.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(40, 4), uint.MaxValue);
+
+        var result = WaveAudioValidator.Validate(wav, wav.Length);
+
+        Assert.Equal(1_000, result.DurationMs);
+        Assert.Equal(24_000, result.SampleRate);
+        Assert.Equal((byte)1, result.Channels);
+        Assert.Equal((uint)(result.Bytes.Length - 8), BinaryPrimitives.ReadUInt32LittleEndian(result.Bytes.AsSpan(4, 4)));
+        Assert.Equal((uint)(result.Bytes.Length - 44), BinaryPrimitives.ReadUInt32LittleEndian(result.Bytes.AsSpan(40, 4)));
+    }
+
+    [Fact]
+    public void WaveValidator_RejectsTruncatedFiniteDataChunk()
+    {
+        var wav = CreatePcmWav(sampleRate: 24_000, channels: 1, durationSeconds: 1);
+        var actualDataBytes = wav.Length - 44;
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(40, 4), checked((uint)(actualDataBytes + 2)));
+
+        var exception = Assert.Throws<ProviderHttpException>(() =>
+            WaveAudioValidator.Validate(wav, wav.Length));
+
+        Assert.Equal("voice_audio_invalid", exception.Code);
+    }
+
+    [Fact]
+    public void WaveValidator_RejectsStreamingSentinelOnNonDataChunk()
+    {
+        var wav = CreatePcmWav(sampleRate: 24_000, channels: 1, durationSeconds: 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(16, 4), uint.MaxValue);
+
+        var exception = Assert.Throws<ProviderHttpException>(() =>
+            WaveAudioValidator.Validate(wav, wav.Length));
+
+        Assert.Equal("voice_audio_invalid", exception.Code);
+    }
+
+    [Fact]
     public async Task GenerateAsync_NormalizesRateLimitWithoutEchoingNarration()
     {
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)

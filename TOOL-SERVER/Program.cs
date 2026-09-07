@@ -269,6 +269,7 @@ builder.Services.AddScoped<IAiCostEstimator, AiCostEstimator>();
 builder.Services.AddScoped<IOpenAiContentClient, OpenAiContentClient>();
 builder.Services.AddScoped<IOpenAiImageClient, OpenAiImageClient>();
 builder.Services.AddScoped<IOpenAiSpeechClient, OpenAiSpeechClient>();
+builder.Services.AddScoped<IOpenAiTranscriptionClient, OpenAiTranscriptionClient>();
 builder.Services.AddScoped<IKlingVideoClient, KlingVideoClient>();
 builder.Services.AddScoped<IVideoProviderClient, KlingVideoProviderAdapter>();
 builder.Services.AddScoped<IVideoProviderClient, BytePlusVideoClient>();
@@ -293,6 +294,11 @@ builder.Services.Configure<OpenAiImageOptions>(
     builder.Configuration.GetSection(OpenAiImageOptions.SectionName));
 builder.Services.Configure<OpenAiSpeechOptions>(
     builder.Configuration.GetSection(OpenAiSpeechOptions.SectionName));
+builder.Services.Configure<OpenAiTranscriptionOptions>(
+    builder.Configuration.GetSection(OpenAiTranscriptionOptions.SectionName));
+builder.Services.AddOptions<SpeechSynchronizationOptions>()
+    .Bind(builder.Configuration.GetSection(SpeechSynchronizationOptions.SectionName))
+    .ValidateOnStart();
 builder.Services.Configure<VideoOutputOptions>(
     builder.Configuration.GetSection(VideoOutputOptions.SectionName));
 builder.Services.Configure<VideoPollingOptions>(

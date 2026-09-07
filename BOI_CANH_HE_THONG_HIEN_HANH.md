@@ -1,6 +1,6 @@
 # Bối cảnh hệ thống hiện hành
 
-> Chỉ mục trạng thái liên module. Rà soát theo source ngày 2026-09-06.
+> Chỉ mục trạng thái liên module. Rà soát theo source ngày 2026-09-07.
 
 Tài liệu này phân biệt rõ bốn mức: **đã có trong source**, **đã có kiểm thử tự động**, **đã xác minh thủ công trên môi trường**, và **đã rollout production**. Không được suy từ mức trước sang mức sau nếu thiếu bằng chứng.
 
@@ -21,7 +21,8 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 | Phạm vi | Trạng thái source | Bằng chứng còn thiếu trước rollout |
 |---|---|---|
 | Gateway AI theo tổ chức | Có auth, membership/role, ownership, pricing, budget, idempotency, credential version, reservation/settlement và request log | Rehearsal database, cấu hình từng môi trường, smoke và quan sát vận hành |
-| OpenAI content/image/speech | Adapter, catalog, policy và luồng quyết toán đã có | Credential/rate thật và smoke có kiểm soát; speech không phải fallback mặc định |
+| OpenAI content/image/speech | Adapter, catalog, policy, content pacing, TTS/transcription và luồng quyết toán đã có | Credential/rate thật và smoke có kiểm soát; speech không phải fallback mặc định |
+| Canonical Voice và speech verification | Voice profile/version, catalog/preview, TTS WAV, technical validation, audio mix/render và audited review đã có; mặc định tắt. Video dài Provider Native nghe/duyệt trực tiếp và không gọi ASR | Migration 4.1.3–4.1.5, TTS/transcription rate theo scope, staging smoke và rollout flag; `OnCameraDialogue` chưa có lip-sync engine |
 | Kling video | Luồng video dài/ngắn, Native Audio, polling, recovery và output proxy đã có | Smoke trả phí theo model/policy được duyệt |
 | BytePlus Seedance | Adapter, polling và catalog đã có; seed mặc định `Disabled` | Rate, credential, allowlist output thực tế và rollout riêng |
 | Fal/Veo | Adapter, polling và luồng `SceneFirstFrame` cho `LongForm` đã có; seed mặc định `Disabled` | Migration 4.1.1 trên môi trường đích, rate/credential và smoke trả phí |
@@ -39,6 +40,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 - OpenAI Text/Image/Voice và Kling có catalog hoạt động theo seed hiện hành; khả dụng thực tế còn phụ thuộc policy, rate và credential.
 - BytePlus và Fal được seed `Disabled`, không tự bật khi deploy.
 - Fal/Veo chỉ áp dụng `LongForm`, cần `SceneFirstFrame` Approved/current đúng tỷ lệ.
+- Server có `CanonicalVoiceEnabled=false` và `SpeechVerificationEnabled=false`; desktop có `SpeechSynchronizationEnabled=false`.
 - SePay mặc định `Payments:Sepay:Enabled=false`.
 - Desktop có `VietsubEnabled=true`, `VietsubOcrEnabled=true`, `VietsubLocalTranslationEnabled=false`, `VietsubLocalVoiceEnabled=true`; máy chưa có Piper/model sẽ ở trạng thái `NOT_INSTALLED` và yêu cầu người dùng chủ động xác nhận cài.
 - Desktop mặc định còn có connection string SQL workflow; đây là trạng thái chuyển tiếp, không phải kiến trúc đích.
@@ -62,6 +64,10 @@ Chuỗi migration đang có trong source:
 13. `VideoFactory.4.0.11.OrganizationSeatProvisioning.sql`
 14. `VideoFactory.4.1.0.VietsubProjectRegistry.sql`
 15. `VideoFactory.4.1.1.SceneFirstFrames.sql`
+16. `VideoFactory.4.1.2.ProviderRequestFailureDetails.sql`
+17. `VideoFactory.4.1.3.SpeechSynchronization.sql`
+18. `VideoFactory.4.1.4.VoiceProfileApproval.sql`
+19. `VideoFactory.4.1.5.SpeechVerificationReview.sql`
 
 `VideoFactory.DesktopLeastPrivilege.sql` cấp quyền chuyển tiếp cho desktop; `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql` là script xác minh chuyên biệt. Không có bằng chứng trong repository rằng toàn bộ chuỗi trên đã được áp dụng vào production.
 
@@ -89,17 +95,26 @@ Mốc chuyển RAM dịch local thành cảnh báo có xác nhận ngày 2026-09
 - .NET: 820 passed, 0 failed, 3 skipped, 823 total.
 - Ba test opt-in vẫn bị skip gồm Qwen model integration, Qwen benchmark và Piper model integration. Nhánh xác nhận RAM đã có fake-worker/bridge test nhưng chưa thay thế verify model thật hoặc smoke desktop trên máy ít RAM.
 
+Mốc hợp nhất `main` vào `local-2` ngày 2026-09-07:
+
+- `dotnet restore` đạt; Release build toàn solution đạt với 0 warning, 0 error.
+- .NET: 939 passed, 0 failed, 3 skipped, 942 total.
+- Frontend: production build đạt; 12/12 test file và 64/64 test đạt.
+- Ba test opt-in bị skip gồm một Piper model integration, một Qwen model integration và một Qwen benchmark; không test nào trong ba test này được coi là model/runtime đã nghiệm thu.
+- Các lệnh trên xác minh source sau hợp nhất; chưa chạy migration database, provider có phí, model thật hoặc smoke desktop.
+
 ## Việc còn mở ưu tiên
 
-1. Chạy migration rehearsal trên bản sao database, sau đó rollout từng môi trường có backup/restore đã thử.
+1. Chạy migration rehearsal đến 4.1.5 trên bản sao database, sau đó rollout từng môi trường có backup/restore đã thử.
 2. Cấu hình rate/credential/policy/budget và smoke riêng cho từng provider; không gộp Kling, BytePlus và Fal thành một cờ hoàn tất.
 3. Rehearsal SePay ở staging, gồm duplicate webhook, late payment, seat shortage và rollback vận hành.
-4. Verify/benchmark model Qwen thật, probe runtime/Anh/Trung và smoke CTA dịch trên desktop x64.
-5. Verify model/runtime Piper thật, kiểm kê dependency/license, benchmark CPU, nghe nghiệm thu và smoke tạo giọng trên desktop x64.
-6. Đưa phần workflow desktop còn dùng SQL trực tiếp qua server API và thu hẹp/bỏ database role desktop.
-7. Hoàn thiện health/metrics/alert cho worker, budget, polling, cache và webhook.
-8. Phê duyệt bundle FFmpeg ở scope Release, rồi smoke install/update/rollback.
-9. Nghiệm thu thủ công Admin responsive và các workflow UI chính.
+4. Rehearsal Canonical Voice trên staging: migration, catalog preview, pacing, TTS WAV, mix/render, export và xác nhận video dài Provider Native không gọi ASR.
+5. Verify/benchmark model Qwen thật, probe runtime/Anh/Trung và smoke CTA dịch trên desktop x64.
+6. Verify model/runtime Piper thật, kiểm kê dependency/license, benchmark CPU, nghe nghiệm thu và smoke tạo giọng trên desktop x64.
+7. Đưa phần workflow desktop còn dùng SQL trực tiếp qua server API và thu hẹp/bỏ database role desktop.
+8. Hoàn thiện health/metrics/alert cho worker, budget, polling, cache và webhook.
+9. Phê duyệt bundle FFmpeg ở scope Release, rồi smoke install/update/rollback.
+10. Nghiệm thu thủ công Admin responsive và các workflow UI chính.
 
 ## Bộ tài liệu chuẩn
 
