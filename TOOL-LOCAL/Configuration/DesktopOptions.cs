@@ -128,6 +128,8 @@ public sealed class DesktopUpdateOptions
 
 public sealed class DesktopFeatureOptions
 {
+    public bool TikTokEnabled { get; init; } = true;
+
     public bool VietsubEnabled { get; init; }
 
     public bool VietsubOcrEnabled { get; init; }

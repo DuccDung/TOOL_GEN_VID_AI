@@ -16,6 +16,7 @@ using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.Vietsub.Translation;
 using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.Payments;
+using TOOL_LOCAL.TikTok;
 
 namespace TOOL_LOCAL;
 
@@ -44,6 +45,24 @@ internal static class Program
             using var generationHttpClient = new HttpClient
             {
                 BaseAddress = new Uri(options.Server.BaseUrl),
+                Timeout = TimeSpan.FromMinutes(30)
+            };
+            using var tiktokGatewayHttpClient = new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false
+            })
+            {
+                BaseAddress = new Uri(options.Server.BaseUrl),
+                Timeout = TimeSpan.FromSeconds(30)
+            };
+            using var tiktokUploadHttpClient = new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                UseProxy = false
+            })
+            {
                 Timeout = TimeSpan.FromMinutes(30)
             };
             using var sessionManager = new AccountSessionManager(
@@ -154,6 +173,14 @@ internal static class Program
                     sceneAudioMixer,
                     sceneVideoTrimmer,
                     speechAudioExtractor);
+                var tiktokGatewayClient = new TikTokGatewayClient(
+                    tiktokGatewayHttpClient,
+                    sessionManager,
+                    licenseManager);
+                var tiktokOAuthCoordinator = new TikTokOAuthCoordinator(tiktokGatewayClient);
+                var tiktokMediaService = new TikTokMediaService(mediaProbe, mediaToolPreflight);
+                var tiktokPreviewService = new TikTokMediaPreviewService(tiktokMediaService);
+                var tiktokUploadService = new TikTokUploadService(tiktokUploadHttpClient);
                 var updateApiClient = new DesktopUpdateApiClient(updateHttpClient, sessionManager, options.Update);
                 var packageUpdateService = new DesktopPackageUpdateService(updateHttpClient);
                 VietsubProjectStore? vietsubProjectStore = null;
@@ -300,6 +327,11 @@ internal static class Program
                     vietsubOcrService,
                     vietsubTranslationService,
                     vietsubVoiceService,
+                    tiktokGatewayClient,
+                    tiktokOAuthCoordinator,
+                    tiktokMediaService,
+                    tiktokPreviewService,
+                    tiktokUploadService,
                     licensePaymentClient);
                 try
                 {

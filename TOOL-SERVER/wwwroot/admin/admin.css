@@ -540,6 +540,162 @@ input:focus, select:focus, textarea:focus { border-color: #86a0f5; box-shadow: 0
 .input-help { display: block; color: var(--muted); font-size: 8px; font-weight: 500; line-height: 1.45; }
 .warning-text { color: #a1660b; }
 
+.tiktok-admin-panel { display: grid; gap: 24px; }
+.tiktok-admin-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.tiktok-admin-metrics article { min-height: 94px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.tiktok-admin-metrics small { display: block; color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.tiktok-admin-metrics strong { display: block; margin-top: 13px; overflow-wrap: anywhere; font-size: 15px; }
+.tiktok-admin-metrics strong.ready { color: #17845c; }
+.tiktok-admin-metrics strong.blocked { color: #a4313f; }
+.tiktok-admin-metrics strong.warning { color: #a1660b; }
+.tiktok-admin-grid { display: grid; grid-template-columns: minmax(310px, .85fr) minmax(420px, 1.15fr); gap: 15px; align-items: start; }
+.tiktok-settings-card, .tiktok-credentials-list { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.tiktok-settings-card form { display: grid; gap: 12px; }
+.tiktok-settings-card form > label:not(.toggle-row):not(.checkbox-label) { display: grid; gap: 6px; color: var(--text); font-size: 9px; font-weight: 750; }
+.tiktok-settings-card form > label input:not([type]) { width: 100%; }
+.tiktok-settings-card .checkbox-label { line-height: 1.55; }
+.tiktok-policy-note { display: grid; gap: 7px; margin-top: 14px; padding: 12px; border-radius: 9px; color: var(--muted); background: #f6f8fc; font-size: 9px; }
+.tiktok-policy-note strong { color: var(--text); }
+.tiktok-policy-note code { overflow-wrap: anywhere; color: #195bb3; font-size: 8px; }
+.tiktok-credentials-list { display: grid; gap: 11px; }
+.tiktok-credential-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcff; }
+.tiktok-credential-card p { margin: 0; color: var(--muted); font-size: 8px; }
+.credential-top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.tiktok-secret-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.tiktok-secret-grid code { padding: 9px; overflow-wrap: anywhere; border: 1px solid #dce4f2; border-radius: 7px; color: #31415d; background: #fff; font-size: 8px; }
+.tiktok-credential-card .card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tiktok-verification-callout { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 13px; padding: 15px; border: 1px solid #b9d3ff; border-radius: 12px; color: #174b91; background: #f1f6ff; }
+.tiktok-verification-callout strong { display: block; font-size: 11px; }
+.tiktok-verification-callout p { margin: 6px 0 0; font-size: 9px; line-height: 1.6; }
+.tiktok-callout-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 11px; color: #fff; background: #2868c7; }
+.tiktok-callout-icon .ui-icon { width: 20px; height: 20px; }
+
+/* TikTok integration: isolated from the density of the other Admin panels. */
+.tiktok-admin-panel, .tt-dialog { --tt-muted: #526079; --tt-blue: #234dbb; --tt-green: #126144; --tt-amber: #80500b; --tt-red: #a62739; color: var(--ink); font-size: 15px; line-height: 1.6; }
+.tiktok-admin-panel [hidden], .tt-dialog [hidden] { display: none !important; }
+.tiktok-admin-panel h2, .tt-dialog h2 { margin: 4px 0 8px; color: var(--ink); font-size: 25px; line-height: 1.3; letter-spacing: -.025em; }
+.tiktok-admin-panel h3 { margin: 4px 0 0; color: var(--ink); font-size: 20px; line-height: 1.35; }
+.tt-eyebrow { display: block; color: var(--tt-muted); font-size: 12px; font-weight: 750; letter-spacing: .08em; }
+.tt-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.tt-page-heading p { margin: 0; max-width: 650px; color: var(--tt-muted); }
+.tt-page-heading > button { flex-shrink: 0; }
+.tiktok-admin-panel button, .tt-dialog button { min-height: 44px; font-size: 14px; line-height: 1.4; }
+.tiktok-admin-panel .ghost-button, .tt-dialog .ghost-button { padding: 10px 16px; border: 1px solid var(--line); background: var(--panel); color: var(--tt-blue); }
+.tiktok-admin-panel button:disabled, .tt-dialog button:disabled { opacity: .55; cursor: not-allowed; }
+.tiktok-admin-panel button:focus-visible, .tiktok-admin-panel a:focus-visible, .tiktok-admin-panel summary:focus-visible, .tt-dialog button:focus-visible, .tt-dialog a:focus-visible { outline: 3px solid #315bea; outline-offset: 3px; }
+.tiktok-admin-panel input:focus-visible, .tt-dialog input:focus-visible { outline: 2px solid #315bea; outline-offset: 2px; }
+.tiktok-admin-panel a, .tt-dialog a { color: var(--tt-blue); text-underline-offset: 3px; }
+#tiktokAdminConsole { display: grid; gap: 24px; min-width: 0; }
+.tt-hero { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 20px; padding: 24px; border: 1px solid #c6d6f6; border-radius: 16px; background: #f3f7ff; }
+.tt-hero.tt-success { background: #f0faf5; border-color: #b9dfcd; }
+.tt-hero.tt-warning { background: #fff9ec; border-color: #eed5a8; }
+.tt-hero.tt-neutral { background: #f6f7f9; border-color: var(--line); }
+.tt-hero-icon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 14px; color: var(--tt-blue); background: #e2ebff; }
+.tt-success .tt-hero-icon { color: var(--tt-green); background: #d9efe3; }
+.tt-warning .tt-hero-icon { color: var(--tt-amber); background: #ffedc7; }
+.tt-hero-icon .ui-icon { width: 26px; height: 26px; }
+.tt-hero-copy p { margin: 10px 0 0; color: var(--tt-muted); }
+.tt-hero-copy h3 { font-size: 24px; }
+.tt-countdown { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
+.tt-countdown strong { font-variant-numeric: tabular-nums; color: var(--tt-blue); }
+.tt-desktop-guide { margin-top: 16px; padding: 20px 24px; border-left: 3px solid #315bea; border-radius: 0 12px 12px 0; background: #f5f8ff; }
+.tt-desktop-guide ol, .tt-help ol { display: grid; gap: 8px; margin: 12px 0 0; padding-left: 24px; }
+.tt-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 20px 0; margin: 0; list-style: none; }
+.tt-steps li { display: flex; align-items: center; gap: 12px; padding: 12px; color: var(--tt-muted); }
+.tt-steps li > span { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border: 1px solid #d6ddea; border-radius: 50%; background: #f6f8fc; font-weight: 700; }
+.tt-steps strong { display: block; color: var(--ink); font-size: 14px; }
+.tt-steps small { display: block; margin-top: 2px; font-size: 12px; }
+.tt-steps .is-current { background: #f3f6ff; border-radius: 12px; }
+.tt-steps .is-current > span { background: #315bea; border-color: #315bea; color: white; }
+.tt-steps .is-done > span { color: var(--tt-green); border-color: #b9dfcd; background: #edf8f2; }
+.tt-metrics { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 16px; }
+.tt-metrics article { display: flex; align-items: center; gap: 16px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.tt-metrics article > .ui-icon { width: 22px; height: 22px; color: var(--tt-muted); }
+.tt-metrics strong, .tt-metrics span { display: block; }
+.tt-metrics strong { color: var(--ink); font-size: 20px; font-variant-numeric: tabular-nums; line-height: 1.4; }
+.tt-metrics span { margin-top: 4px; color: var(--tt-muted); font-size: 13px; }
+.tt-updated { margin: 12px 0 0; color: var(--tt-muted); font-size: 12px; }
+.tt-workspace { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.tt-card { min-width: 0; padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.tt-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tt-card-heading > .ui-icon { width: 22px; height: 22px; color: var(--tt-muted); }
+.tt-description { margin: 12px 0 20px; color: var(--tt-muted); font-size: 14px; }
+#tiktokSettingsForm { display: grid; gap: 12px; }
+#tiktokSettingsFields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.tiktok-admin-panel .tt-choice { display: flex; flex-direction: row; align-items: flex-start; gap: 12px; padding: 12px 0; color: var(--ink); font-size: 15px; font-weight: 500; cursor: pointer; }
+.tt-choice > input { width: 20px; height: 20px; margin: 3px 0; flex-shrink: 0; accent-color: #315bea; cursor: inherit; }
+.tt-choice strong, .tt-choice small { display: block; }
+.tt-choice small { margin-top: 4px; color: var(--tt-muted); font-size: 13px; font-weight: 400; }
+#tiktokSettingsFields:disabled .tt-choice { cursor: not-allowed; }
+.tt-policy-explanation, .tt-next-note { padding: 12px 16px; margin: 8px 0; border-radius: 8px; color: var(--tt-muted); background: #f4f7fb; font-size: 14px; }
+.tt-audit-fields { display: grid; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tt-audit-fields > label, .tt-dialog-fields > label { display: block; color: var(--ink); font-size: 14px; font-weight: 650; }
+.tt-audit-fields > small, .tt-dialog-fields > small { color: var(--tt-muted); font-size: 13px; }
+.tt-audit-fields input:not([type]), .tt-dialog-fields input { min-width: 0; height: 46px; font-size: 16px; }
+.tt-field-error, .tt-form-message { margin: 0; color: var(--tt-red); font-size: 14px; overflow-wrap: anywhere; }
+.tt-field-error:empty, .tt-form-message:empty { display: none; }
+.tt-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tt-form-actions > span { flex-basis: 100%; color: var(--tt-muted); font-size: 13px; }
+.tt-form-actions > span.tt-field-error { color: var(--tt-red); }
+.tt-inline-warning { display: block; padding: 14px 16px; margin: 12px 0 0; border: 1px solid #eed5a8; border-radius: 10px; background: #fff9ec; color: var(--tt-amber); font-size: 14px; }
+.tt-inline-warning p { margin: 6px 0; }
+.tt-inline-warning summary { font-size: 13px; }
+.tt-notice { margin: 0; padding: 14px 18px; border: 1px solid #b9dfcd; border-radius: 10px; color: var(--tt-green); background: #f0faf5; }
+.tt-notice.tt-warning { color: var(--tt-amber); background: #fff9ec; border-color: #eed5a8; }
+.tt-credential { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fafbfd; }
+.tt-credential p { margin: 10px 0; color: var(--tt-muted); font-size: 13px; }
+.tt-badge { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; background: #e9edf3; color: #465269; }
+.tt-badge.tt-success { background: #dff2e8; color: var(--tt-green); }
+.tt-badge.tt-warning { background: #fff0d1; color: var(--tt-amber); }
+.tt-secret-hints { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.tt-secret-hints dt { color: var(--tt-muted); font-size: 12px; }
+.tt-secret-hints dd { margin: 4px 0 0; }
+.tiktok-admin-panel code { overflow-wrap: anywhere; font-size: 13px; color: #32466e; }
+.tt-danger-link, .tt-text-button { padding: 8px 0; border: 0; background: transparent; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.tt-danger-link { color: var(--tt-red); }.tt-text-button { color: var(--tt-blue); }
+.tt-empty { margin: 0; padding: 16px; border: 1px dashed #c7d1e2; border-radius: 8px; color: var(--tt-muted); font-size: 14px; }
+.tt-history { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tt-history > p { color: var(--tt-muted); font-size: 13px; }
+.tt-help > summary, .tt-history > summary { min-height: 44px; padding: 8px 0; color: var(--ink); font-size: 15px; font-weight: 650; cursor: pointer; }
+.tt-help p { color: var(--tt-muted); font-size: 14px; }
+.tt-copy-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 20px 0; padding: 16px; border-radius: 10px; background: #f4f7fb; }
+.tt-copy-row > div { min-width: 0; }.tt-copy-row span, .tt-copy-row code { display: block; }
+.tt-copy-row span { margin-bottom: 8px; color: var(--tt-muted); font-size: 13px; }
+.tt-copy-row button { flex-shrink: 0; }
+.tt-dialog { width: min(580px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); padding: 28px; border-radius: 16px; overflow-y: auto; }
+.tt-dialog form { min-width: 0; }.tt-dialog .dialog-heading { align-items: flex-start; gap: 16px; }
+.tt-dialog .dialog-close { min-width: 44px; color: var(--tt-muted); }
+.tt-dialog p { font-size: 14px; }.tt-dialog .form-message { font-size: 14px; }
+.tt-dialog .danger-button { min-height: 44px; padding: 10px 16px; background: #a62739; color: white; border: 0; border-radius: 9px; }
+.tt-dialog-fields { display: grid; gap: 8px; margin: 20px 0; }.tt-dialog-fields > label:not(:first-child) { margin-top: 12px; }
+.tt-dialog .dialog-actions { flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.tt-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.tt-loading, .tt-load-error { min-height: 230px; padding: 32px 24px; border: 1px solid var(--line); border-radius: 14px; color: var(--tt-muted); background: #f8faff; }
+.tt-loading-bar { display: block; width: 75%; height: 24px; margin-bottom: 16px; border-radius: 6px; background: #e4ebf6; }.tt-loading-bar.short { width: 45%; height: 16px; }
+@media (max-width: 1200px) {
+  .tt-hero { grid-template-columns: 48px minmax(0, 1fr); }.tt-hero > button { grid-column: 2; justify-self: start; }
+  .tt-page-heading { align-items: flex-start; flex-direction: column; }
+  .tt-workspace { grid-template-columns: 1fr; }
+}
+@media (max-width: 780px) {
+  .tt-steps { grid-template-columns: 1fr; gap: 4px; }.tt-metrics { grid-template-columns: 1fr; }
+  .tt-hero, .tt-card { padding: 20px; }.tt-hero-copy h3 { font-size: 21px; }
+}
+@media (max-width: 480px) {
+  .tiktok-admin-panel { padding: 16px; }.tt-hero { grid-template-columns: 1fr; gap: 12px; }
+  .tt-hero > button { grid-column: 1; width: 100%; }.tt-hero-icon { width: 44px; height: 44px; }
+  .tt-secret-hints { grid-template-columns: 1fr; }.tt-copy-row { flex-direction: column; align-items: stretch; }
+  .tt-page-heading > button { width: 100%; }.tt-dialog { padding: 20px; }.tt-dialog h2 { font-size: 22px; }
+  .tt-dialog .dialog-actions > button { flex: 1 1 100%; }.tt-form-actions > button { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tiktok-admin-panel *, .tt-dialog * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .tt-badge, .tt-hero, .tt-notice, .tt-steps li > span { border: 1px solid CanvasText; }
+  .tiktok-admin-panel button:focus-visible, .tt-dialog button:focus-visible { outline-color: Highlight; }
+}
+
 @media (max-width: 1050px) {
   .topbar { flex-wrap: wrap; padding: 24px 0; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -557,6 +713,8 @@ input:focus, select:focus, textarea:focus { border-color: #86a0f5; box-shadow: 0
   .plan-grid { grid-template-columns: repeat(2,minmax(220px,1fr)); }
   .detail-columns { grid-template-columns: 1fr; }
   .organization-metrics, .usage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tiktok-admin-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tiktok-admin-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 780px) {
   .admin-shell { display: block; }
@@ -579,6 +737,7 @@ input:focus, select:focus, textarea:focus { border-color: #86a0f5; box-shadow: 0
   .organization-tab-toolbar { align-items: stretch; flex-direction: column; }
   .organization-tab-toolbar .search-form input { width: 100%; }
   .inline-budget-form { grid-template-columns: 1fr; }
+  .tiktok-secret-grid { grid-template-columns: 1fr; }
   .inline-budget-form .form-message { grid-column: auto; }
   .cost-guide-hero { align-items: flex-start; flex-direction: column; }
   .cost-guide-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -609,6 +768,7 @@ input:focus, select:focus, textarea:focus { border-color: #86a0f5; box-shadow: 0
   .plan-grid, .detail-stats { grid-template-columns: 1fr; }
   .search-form { align-items: stretch; flex-direction: column; }.search-form input { width: 100%; }
   .organization-metrics, .usage-metrics { grid-template-columns: 1fr; }
+  .tiktok-admin-metrics { grid-template-columns: 1fr; }
   .organization-detail-header { align-items: flex-start; flex-direction: column; gap: 8px; }
   .organization-detail-actions { width: 100%; justify-content: flex-start; margin-left: 0; }
   .cost-guide-page { padding: 16px; }

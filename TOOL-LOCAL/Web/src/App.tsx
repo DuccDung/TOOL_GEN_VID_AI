@@ -75,6 +75,8 @@ import {
 } from './contentLanguageError';
 import { VietsubPage } from './features/vietsub/VietsubPage';
 import { useVietsubModule } from './features/vietsub/useVietsubModule';
+import { TikTokPage } from './features/tiktok/TikTokPage';
+import { useTikTokModule } from './features/tiktok/useTikTokModule';
 import { getSceneFirstFrameAssetBlocker } from './sceneAssetValidation';
 import { buildSpeechTranscriptDiff, type SpeechDiffSegment } from './speechTranscriptDiff';
 import { assessSpeechPacing } from './speechPacing';
@@ -127,7 +129,7 @@ import type {
   UpdateProjectAssetPayload,
 } from './types';
 
-type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'apiKeys' | 'settings';
+type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'tiktok' | 'apiKeys' | 'settings';
 type LongVideoStepId = 'setup' | 'content' | 'assets' | 'storyboard' | 'export';
 type LongVideoStep = {
   id: LongVideoStepId;
@@ -205,6 +207,10 @@ const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
     title: 'Dịch phụ đề',
     subtitle: 'Tạo phụ đề tiếng Việt, giọng đọc và video hoàn chỉnh trong một workspace riêng.'
   },
+  tiktok: {
+    title: 'Đăng TikTok',
+    subtitle: 'Chọn video trên máy và tải trực tiếp lên tài khoản TikTok của bạn.'
+  },
   apiKeys: {
     title: 'API AI tổ chức',
     subtitle: 'Trạng thái OpenAI, provider video và ngân sách do tổ chức quản lý tập trung.'
@@ -249,7 +255,8 @@ const emptyState: DashboardState = {
   generationRunning: false,
   features: {
     vietsubEnabled: false,
-    speechSynchronizationEnabled: false
+    speechSynchronizationEnabled: false,
+    tikTokEnabled: false
   },
   sceneFirstFrames: [],
   contentLanguageFailure: null
@@ -277,6 +284,7 @@ const primaryMenu: Array<{
   { label: 'Tạo Video Dài', icon: Film, page: 'longVideo' },
   { label: 'Tạo Video Ngắn', icon: Play, page: 'shortVideo' },
   { label: 'Dịch phụ đề', icon: Languages, page: 'vietsub', feature: 'vietsubEnabled' },
+  { label: 'Đăng TikTok', icon: Upload, page: 'tiktok', feature: 'tikTokEnabled' },
   { label: 'Nhân vật AI', icon: Users },
   { label: 'Thư viện video', icon: Library },
   { label: 'Lịch sử render', icon: Clock3 },
@@ -422,6 +430,7 @@ function App() {
     dashboard.features.vietsubEnabled,
     dashboard.selectedOrganizationId
   );
+  const tiktok = useTikTokModule(dashboard.features.tikTokEnabled);
   const selectedProjectRequestRef = useRef<string | null>(null);
   const licenseRequestsRef = useRef(new Map<string, LicenseRequestKind>());
   const licenseBootstrapRequestedRef = useRef(false);
@@ -905,7 +914,10 @@ function App() {
     if (page === 'vietsub' && !dashboard.features.vietsubEnabled) {
       setPage('create');
     }
-  }, [dashboard.features.vietsubEnabled, page]);
+    if (page === 'tiktok' && !dashboard.features.tikTokEnabled) {
+      setPage('create');
+    }
+  }, [dashboard.features.vietsubEnabled, dashboard.features.tikTokEnabled, page]);
 
   useEffect(() => {
     try {
@@ -1694,9 +1706,15 @@ function App() {
   const generationBusy = busy || dashboard.generationRunning;
   const pageBusy = page === 'vietsub'
     ? vietsub.state.loading || vietsub.state.busy
-    : generationBusy;
+    : page === 'tiktok'
+      ? tiktok.state.loading || tiktok.state.busy
+      : generationBusy;
   const licenseLocked = Boolean(dashboard.license &&
     (!dashboard.license.hasActiveLicense || !dashboard.license.currentDeviceActivated));
+  const tiktokCredentialVerification = Boolean(
+    tiktok.state.feature.isCredentialVerification &&
+    dashboard.profile.roles.some((role) => role.toLowerCase() === 'admin')
+  );
   const checkMediaTools = () => {
     if (generationBusy) return;
     setBusy(true);
@@ -1739,6 +1757,8 @@ function App() {
           onRefresh={() => {
             if (page === 'vietsub') {
               vietsub.refresh();
+            } else if (page === 'tiktok') {
+              tiktok.refresh();
             } else {
               setBusy(true);
               postToHost('dashboard.refresh');
@@ -1759,7 +1779,9 @@ function App() {
           onUnavailable={notify}
         />
 
-        {page === 'vietsub' ? (
+        {page === 'tiktok' ? (
+          <TikTokPage module={tiktok} />
+        ) : page === 'vietsub' ? (
           <VietsubPage
             state={vietsub.state}
             onRefresh={vietsub.refresh}
@@ -1990,7 +2012,7 @@ function App() {
         <MediaToolInstallModal progress={mediaInstallProgress} />
       )}
 
-      {!busy && licenseLocked && dashboard.license && (
+      {!busy && licenseLocked && dashboard.license && !(page === 'tiktok' && tiktokCredentialVerification) && (
         <LicenseGateOverlay
           license={dashboard.license}
           offers={licenseOffers}
@@ -2002,6 +2024,7 @@ function App() {
           onRefreshStatus={requestLicensePaymentStatus}
           onResetExpired={resetExpiredLicensePayment}
           onRetry={retryLicenseBootstrap}
+          onVerifyTikTok={tiktokCredentialVerification ? () => setPage('tiktok') : undefined}
           onLogout={() => postToHost('auth.logout')}
         />
       )}
@@ -2032,6 +2055,7 @@ function LicenseGateOverlay({
   onRefreshStatus,
   onResetExpired,
   onRetry,
+  onVerifyTikTok,
   onLogout
 }: {
   license: NonNullable<DashboardState['license']>;
@@ -2044,6 +2068,7 @@ function LicenseGateOverlay({
   onRefreshStatus: () => void;
   onResetExpired: () => void;
   onRetry: () => void;
+  onVerifyTikTok?: () => void;
   onLogout: () => void;
 }) {
   const cardRef = useRef<HTMLElement>(null);
@@ -2197,6 +2222,14 @@ function LicenseGateOverlay({
                 </p>
               </div>
             </div>
+
+            {onVerifyTikTok && (
+              <div className="license-tiktok-verification">
+                <ShieldCheck size={19} />
+                <span>Credential TikTok đang chờ chính tài khoản Admin này xác minh OAuth trên Desktop.</span>
+                <button type="button" className="license-primary-action" onClick={onVerifyTikTok}>Mở xác minh TikTok</button>
+              </div>
+            )}
 
             {canPurchase ? (
               <>
@@ -2706,7 +2739,7 @@ function Header({
         <p>{pageHeader.subtitle}</p>
       </div>
       <div className="topbar-spacer" />
-      {dashboard.organizations.length > 0 && (
+      {page !== 'tiktok' && dashboard.organizations.length > 0 && (
         <label className="project-picker">
           <span>Tổ chức</span>
           <select
@@ -2726,7 +2759,7 @@ function Header({
           <Plus size={17} /> <span>Tạo video mới</span>
         </button>
       )}
-      {page !== 'apiKeys' && page !== 'settings' && page !== 'shortVideo' && page !== 'vietsub' && dashboard.projects.length > 0 && (
+      {page !== 'apiKeys' && page !== 'settings' && page !== 'shortVideo' && page !== 'vietsub' && page !== 'tiktok' && dashboard.projects.length > 0 && (
         <label className="project-picker">
           <span>Dự án</span>
           <select

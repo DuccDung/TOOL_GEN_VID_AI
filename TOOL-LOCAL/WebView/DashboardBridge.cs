@@ -25,6 +25,7 @@ internal sealed class DashboardBridge : IDisposable
     private readonly IMediaToolPreflightService _mediaToolPreflight;
     private readonly LicensePaymentApiClient _licensePaymentClient;
     private readonly bool _vietsubEnabled;
+    private readonly bool _tiktokEnabled;
     private readonly bool _speechSynchronizationEnabled;
     private readonly string _applicationDirectory;
     private readonly Action<string> _postJson;
@@ -50,6 +51,7 @@ internal sealed class DashboardBridge : IDisposable
         IMediaToolPreflightService mediaToolPreflight,
         LicensePaymentApiClient licensePaymentClient,
         bool vietsubEnabled,
+        bool tiktokEnabled,
         Action<string> postJson,
         Action closeApplication,
         bool speechSynchronizationEnabled = false,
@@ -65,6 +67,7 @@ internal sealed class DashboardBridge : IDisposable
         _mediaToolPreflight = mediaToolPreflight;
         _licensePaymentClient = licensePaymentClient;
         _vietsubEnabled = vietsubEnabled;
+        _tiktokEnabled = tiktokEnabled;
         _speechSynchronizationEnabled = speechSynchronizationEnabled;
         _applicationDirectory = applicationDirectory ?? AppContext.BaseDirectory;
         _postJson = postJson;
@@ -1788,7 +1791,7 @@ internal sealed class DashboardBridge : IDisposable
                             DateTime.UtcNow),
                         _licenseManager.Current,
                         false,
-                        new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled),
+                        new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled),
                         [])));
                 return;
             }
@@ -1878,7 +1881,7 @@ internal sealed class DashboardBridge : IDisposable
                     mediaToolStatus,
                     _licenseManager.Current,
                     _generationRunning,
-                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled),
+                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled),
                     sceneFirstFrames,
                     contentLanguageFailure)));
         }

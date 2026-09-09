@@ -22,6 +22,8 @@ using System.Threading.RateLimiting;
 using TOOL_SHARED.Contracts.Common;
 using TOOL_SERVER.Vietsub;
 using TOOL_SERVER.Vietsub.Data;
+using TOOL_SERVER.TikTok;
+using TOOL_SERVER.TikTok.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -115,6 +117,26 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+    options.AddPolicy("tiktok-write", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"tiktok-write:{httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? httpContext.Connection.RemoteIpAddress?.ToString()}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 6,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("tiktok-status", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"tiktok-status:{httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? httpContext.Connection.RemoteIpAddress?.ToString()}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
 });
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services
@@ -137,6 +159,12 @@ builder.Services
     .Bind(builder.Configuration.GetSection(SepayPaymentOptions.SectionName))
     .Validate(SepayPaymentOptions.IsValidOrDisabled, "SePay payment configuration is invalid.")
     .ValidateOnStart();
+builder.Services
+    .AddOptions<TikTokOptions>()
+    .Bind(builder.Configuration.GetSection(TikTokOptions.SectionName))
+    .ValidateDataAnnotations()
+    .Validate(TikTokOptions.IsValidOrDisabled, "TikTok configuration is invalid.")
+    .ValidateOnStart();
 builder.Services.Configure<FormOptions>(options =>
     options.MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024);
 
@@ -152,6 +180,8 @@ builder.Services.AddDbContext<ProviderAdminDbContext>(options =>
 builder.Services.AddDbContext<VideoFactoryDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddDbContext<VietsubDbContext>(options =>
+    options.UseSqlServer(connectionString));
+builder.Services.AddDbContext<TikTokDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddDbContext<DataProtectionKeyDbContext>(options =>
     options.UseSqlServer(connectionString));
@@ -261,6 +291,13 @@ builder.Services.AddScoped<IAiPricingAdminService, AiPricingAdminService>();
 builder.Services.AddScoped<IAiBudgetService, AiBudgetService>();
 builder.Services.AddScoped<IGenerationAccessService, GenerationAccessService>();
 builder.Services.AddScoped<IVietsubProjectService, VietsubProjectService>();
+builder.Services.AddScoped<ITikTokAccessService, TikTokAccessService>();
+builder.Services.AddScoped<ITikTokService, TikTokService>();
+builder.Services.AddScoped<ITikTokTokenProtector, TikTokTokenProtector>();
+builder.Services.AddScoped<ITikTokAppCredentialProtector, TikTokAppCredentialProtector>();
+builder.Services.AddScoped<ITikTokCredentialRuntime, TikTokCredentialRuntime>();
+builder.Services.AddScoped<ITikTokAdminService, TikTokAdminService>();
+builder.Services.AddHostedService<TikTokPublishingWorker>();
 builder.Services.AddScoped<TOOL_SERVER.Projects.IProjectAssetService, TOOL_SERVER.Projects.ProjectAssetService>();
 builder.Services.AddScoped<IProviderCredentialProtector, ProviderCredentialProtector>();
 builder.Services.AddScoped<IProviderRuntimeResolver, ProviderRuntimeResolver>();
@@ -341,6 +378,16 @@ builder.Services.AddHttpClient("ProviderCredentialTest", client =>
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
     AllowAutoRedirect = false
+});
+builder.Services.AddHttpClient<ITikTokApiClient, TikTokApiClient>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseCookies = false,
+    UseProxy = false
 });
 builder.Services.AddSingleton<IDesktopReleaseStorage, DesktopReleaseStorage>();
 builder.Services.AddScoped<IDesktopReleaseService, DesktopReleaseService>();

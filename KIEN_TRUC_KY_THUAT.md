@@ -45,6 +45,7 @@ Desktop không gọi AI provider trực tiếp. Server là trust boundary cho au
 - AI request, provider request, idempotency, reservation và usage ledger;
 - project registry/server workflow trong SQL;
 - Vietsub project registry metadata;
+- TikTok Developer App credential dùng chung được Data Protection bảo vệ, kết nối OAuth/token theo user, integration policy và metadata publish job trong schema `social`;
 - output cache và release metadata.
 
 ### Desktop sở hữu
@@ -52,6 +53,7 @@ Desktop không gọi AI provider trực tiếp. Server là trust boundary cho au
 - UI state và selection hiện hành;
 - workspace media, file `.part`, thumbnail/waveform và render output;
 - manifest/SQLite/SRT/OCR artifact của Vietsub;
+- lựa chọn file, absolute path, preview và byte video dùng để upload trực tiếp TikTok;
 - cấu hình máy phát triển không chứa provider secret.
 
 Desktop còn kết nối SQL trực tiếp cho workflow schema `vf` trong giai đoạn chuyển tiếp. Nó không được có quyền đọc/ghi bảng sự thật `auth`, `ai`, credential/usage hoặc schema `vs`.
@@ -74,8 +76,9 @@ Server tách phạm vi dữ liệu bằng các context chính:
 - `ProviderAdminDbContext`: thao tác quản trị provider/catalog.
 - `VideoFactoryDbContext`: project, scene, asset và generation workflow.
 - `VietsubDbContext`: registry metadata `vs.Projects`.
+- `TikTokDbContext`: app credential/version, integration settings, connection, OAuth session và publish job trong schema `social`; audit quản trị ghi vào `auth.AccountAuditLogs`.
 
-Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp.
+Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs`, `social` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp.
 
 ### 4.3 Nhóm API
 
@@ -88,6 +91,7 @@ Các nhóm endpoint chính gồm:
 - video submit/status/retry/approve và output proxy;
 - SePay payment order/webhook/status;
 - Vietsub registry metadata.
+- TikTok state/OAuth/creator info/direct-post init/status theo user và device hiện hành; API Global Admin quản lý credential dạng write-only, mở cửa sổ xác minh và policy public posting.
 
 Contract public nằm ở `TOOL-SHARED.Contracts`; thay contract phải cập nhật server, desktop và test cùng lúc.
 
@@ -96,6 +100,10 @@ Contract public nằm ở `TOOL-SHARED.Contracts`; thay contract phải cập nh
 Server có các background worker cho request/provider polling, settlement/release, output caching/cleanup và các quy trình nền liên quan. Worker dùng claim lease để nhiều instance không xử lý cùng bản ghi, có giới hạn attempt/age và chỉ chuyển trạng thái tiến tới terminal.
 
 Task provider tiếp tục chạy sau khi desktop đóng. Desktop reconnect bằng status API/idempotency thay vì gửi lại request mới tùy tiện.
+
+`TikTokPublishingWorker` polling các publish job chưa terminal theo batch. Signed upload URL chỉ dùng trong desktop native để chuyển byte file local; worker/server không đọc file người dùng và không trả URL này cho React.
+
+`TikTokCredentialRuntime` ưu tiên credential database `Active`; cấu hình Client Key/Secret tĩnh chỉ là đường tương thích legacy. OAuth session snapshot `TikTokAppCredentialId`. Credential `Pending` chỉ khả dụng cho đúng Global Admin trong cửa sổ xác minh và chỉ được kích hoạt sau code exchange có scope `video.publish`.
 
 ## 5. AI Gateway
 
@@ -201,6 +209,7 @@ Timeline được trộn bằng FFmpeg theo từng stem giới hạn số phrase
 - Desktop updater: bật, channel `Stable`, platform `win-x64`.
 - Canonical Voice/speech verification: tắt ở server; Speech Synchronization: tắt ở desktop.
 - Vietsub/OCR: bật; translation local: tắt; local voice UI/cài đặt: bật nhưng runtime thiếu component trả `NOT_INSTALLED`.
+- TikTok: item desktop hiển thị mặc định với `Features:TikTokEnabled=true`; server bật khả năng quản trị bằng `TikTok:AdminManagedCredentialsEnabled=true`, giữ legacy `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và không chứa Client Key/Secret trong cấu hình mặc định.
 
 Giá, credential, bank account và production connection string không nằm trong tài liệu hoặc source commit; chúng phải được cấu hình theo môi trường.
 

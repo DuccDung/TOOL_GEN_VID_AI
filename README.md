@@ -60,6 +60,15 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Dịch local Qwen chạy trong worker x64 riêng và mặc định tắt tới khi model/benchmark/smoke đạt.
 - Tạo giọng local Piper hiển thị qua feature flag mặc định bật nhưng runtime/model phải được cài, kiểm checksum và probe; `NOT_INSTALLED` không phải `READY`.
 
+### Đăng TikTok
+
+- Đây là item độc lập, theo tài khoản người dùng và không dùng organization/project video làm ownership.
+- Người dùng chọn MP4/MOV/WebM từ máy; đường dẫn và byte video ở desktop, không được gửi qua server.
+- Login Kit Desktop dùng OAuth 2.0 + PKCE qua trình duyệt hệ thống và loopback `127.0.0.1`. Server giữ `client_secret`, access/refresh token đã mã hóa và metadata job.
+- Global Admin nhập Client Key/Client Secret tại mục **Tích hợp TikTok**. Server mã hóa ngay, chỉ trả hint và giữ credential ở `Pending`; credential chỉ thành `Active` sau khi đúng Admin hoàn tất một lần OAuth thật trên Desktop.
+- Server khởi tạo Direct Post; desktop tải tuần tự các chunk trực tiếp lên signed upload URL TikTok rồi chỉ hỏi trạng thái qua server. Server tiếp tục polling job khi desktop đóng.
+- Không hỗ trợ cookie/session trình duyệt, Selenium hoặc nhập token thủ công. Public posting chỉ rollout sau khi TikTok duyệt app/scope và audit Content Posting API; `AuditedForPublicPosting=false` giữ an toàn cho tài khoản test riêng tư.
+
 ## Nguyên tắc hệ thống
 
 - Provider key chỉ tồn tại trên server, được test rồi mã hóa; desktop không có BYOK.
@@ -69,6 +78,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Output provider không lộ trực tiếp. Server cache/proxy có authorization và SSRF guard; desktop xác minh file local.
 - TTS, ASR, Native Audio, Canonical Voice và local model không fallback ngầm cho nhau.
 - Vietsub giữ subtitle/media/path local; server chỉ giữ registry metadata.
+- TikTok token/session nằm ở server; video/path local nằm ở desktop và signed upload URL không được đưa vào React hoặc log.
 
 ## Mặc định quan trọng
 
@@ -77,7 +87,8 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Canonical Voice và speech verification mặc định tắt ở server/desktop.
 - SePay mặc định `Enabled=false`.
 - Vietsub và OCR bật; dịch Qwen tắt; UI/cài đặt giọng Piper bật nhưng runtime/model không được coi là sẵn sàng khi chưa qua gate.
-- Migration đến 4.1.5 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
+- Item TikTok hiển thị mặc định ở desktop; quản lý credential trong Admin được hỗ trợ nhưng integration runtime vẫn tắt cho tới khi credential được OAuth xác minh. `TikTok:EmergencyDisabled` là kill switch theo môi trường.
+- Migration đến 4.1.7 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
 
 ## Yêu cầu phát triển
 
@@ -118,4 +129,4 @@ Desktop mặc định kết nối `https://localhost:7202/`. Có thể dùng `TO
 
 ## Phát hành
 
-Không publish chỉ từ một build xanh. Phải hoàn tất migration rehearsal đến 4.1.5, cấu hình rate/credential/budget, smoke môi trường, kiểm tra FFmpeg `Approval scope: Release`, package integrity và rollback theo [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md).
+Không publish chỉ từ một build xanh. Phải hoàn tất migration rehearsal đến 4.1.7, cấu hình rate/credential/budget, xác minh TikTok Developer App qua Global Admin nếu bật, smoke môi trường, kiểm tra FFmpeg `Approval scope: Release`, package integrity và rollback theo [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md).

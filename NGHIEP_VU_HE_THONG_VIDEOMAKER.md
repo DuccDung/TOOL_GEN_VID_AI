@@ -159,6 +159,19 @@ Quy tắc Canonical Voice:
 - Hệ thống mượn khoảng trống kế tiếp và tăng tốc tối đa `1.20x`; phrase dài hơn vẫn publish ở tốc độ tối đa, giữ diagnostic và không cắt câu cuối.
 - `VietsubLocalVoiceEnabled=true` làm workflow cài đặt/ trạng thái hiển thị. Thiếu component phải trả `NOT_INSTALLED`; chỉ trả READY sau checksum/probe và vẫn cần legal review, benchmark, nghe nghiệm thu, smoke trước production.
 
+## 13A. Đăng video TikTok
+
+- Chức năng là item độc lập theo user, không phụ thuộc organization/project. Bản đầu hỗ trợ một kết nối TikTok đang hoạt động cho mỗi user.
+- Kết nối tài khoản phải dùng Login Kit Desktop OAuth + PKCE và trình duyệt hệ thống. Không nhận cookie, browser session, access token hoặc refresh token do người dùng tự nhập.
+- Server giữ TikTok app secret và mã hóa token theo user; desktop không nhận các giá trị này. Đổi sang TikTok account khác phải kết thúc các job chưa terminal của kết nối cũ.
+- Chỉ Global Admin quản lý TikTok Developer App credential. Credential mới được mã hóa trên server ở trạng thái `Pending`, response chỉ có hint; một OAuth code exchange thật do chính Admin yêu cầu xác minh thực hiện mới được chuyển sang `Active`.
+- Yêu cầu xác minh có hạn 15 phút và tạm khóa integration. Không được xoay credential khi còn kết nối TikTok chưa thu hồi hoặc publish job chưa terminal; kích hoạt credential mới luôn reset xác nhận public posting về false.
+- File video, absolute path và preview chỉ ở desktop. Server chỉ nhận metadata cần để khởi tạo Direct Post; desktop upload trực tiếp đến exact HTTPS TikTok upload host bằng signed URL tạm thời.
+- Trước mỗi bài đăng phải query creator info mới; privacy bắt buộc do người dùng chọn, interaction mặc định bỏ chọn và không được bật khi TikTok cấm. Người dùng phải xác nhận consent/disclosure liên quan.
+- `ClientRequestId` ổn định theo lần chọn media để retry không tạo bài trùng. Job/status thuộc đúng user; server polling trạng thái sau khi desktop đóng và desktop khôi phục job active khi mở lại.
+- Không tự fallback sang automation trình duyệt. Public posting chỉ được bật sau app review, quyền `video.publish`, audit Content Posting API và nghiệm thu sandbox/production phù hợp.
+- Bật public posting cần Global Admin xác nhận rõ ràng và lưu metadata bằng chứng audit; không có xác nhận này thì chỉ cho phép `SELF_ONLY`.
+
 ## 14. SePay và seat
 
 - SePay mặc định tắt. Payment snapshot amount/account/content/expiry và xử lý webhook idempotent.

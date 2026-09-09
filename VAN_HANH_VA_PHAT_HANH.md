@@ -41,6 +41,8 @@ database/VideoFactory.4.1.2.ProviderRequestFailureDetails.sql
 database/VideoFactory.4.1.3.SpeechSynchronization.sql
 database/VideoFactory.4.1.4.VoiceProfileApproval.sql
 database/VideoFactory.4.1.5.SpeechVerificationReview.sql
+database/VideoFactory.4.1.6.TikTokPublishing.sql
+database/VideoFactory.4.1.7.TikTokAdminCredentials.sql
 ```
 
 Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
@@ -78,6 +80,8 @@ dotnet user-secrets set --project TOOL-SERVER "Jwt:SigningKey" "<random-secret-a
 ```
 
 SMTP password/App Password, admin bootstrap identity, SePay secret, signing key, production connection string và provider credential không được commit. Production dùng secret manager của môi trường và HTTPS certificate hợp lệ.
+
+TikTok Client Key/Client Secret mới được nhập qua mục **Tích hợp TikTok** bởi Global Admin sau migration 4.1.7. Cấu hình `TikTok:ClientKey`/`TikTok:ClientSecret` chỉ còn là fallback legacy và không dùng cho rollout mới.
 
 Data Protection key ring nằm trong database. Backup/restore phải giữ được key ring cùng encrypted credential; thử giải mã credential bằng health/admin flow sau restore mà không in secret.
 
@@ -149,6 +153,20 @@ Smoke bắt buộc:
 
 Speech verification là rollout độc lập cho workflow không phải `OpenAiStructuredPlan`: cần migration 4.1.5, transcription credential/model/rate và `SpeechVerificationEnabled`. `NeedsReview` phải có lý do/reviewer/timestamp; stale row version và `Failed` bị chặn.
 
+## 7A. Rollout TikTok Direct Post
+
+Item TikTok mặc định hiển thị trên desktop nhưng thao tác phía server vẫn tắt. Trước khi bật integration:
+
+- apply/rehearsal tuần tự `VideoFactory.4.1.6.TikTokPublishing.sql` rồi `VideoFactory.4.1.7.TikTokAdminCredentials.sql`, kiểm tra Data Protection key ring nằm trong backup/restore plan;
+- đăng ký đúng loopback redirect URI cho Login Kit Desktop, có scope `video.publish`, hoàn tất app review/audit theo yêu cầu TikTok;
+- Global Admin mở **Tích hợp TikTok**, nhập credential đã regenerate, bấm yêu cầu xác minh, rồi trong 15 phút đăng nhập đúng tài khoản Admin đó trên Desktop và hoàn tất **Kết nối TikTok**;
+- dùng tài khoản test để smoke connect/reconnect/disconnect, creator-info, privacy/interaction/disclosure, chunk upload, retry, restart desktop và terminal status;
+- xác nhận log/API/React không lộ token, app secret, signed upload URL hoặc absolute local path;
+- sau OAuth thành công, credential chuyển `Pending -> Active` và integration được bật nhưng public posting vẫn ở `SELF_ONLY`;
+- chỉ bật xác nhận public posting trong Admin sau khi có bằng chứng TikTok audit còn hiệu lực; dùng `TikTok:EmergencyDisabled=true` nếu cần dừng khẩn cấp.
+
+Không chạy smoke đăng bài vào tài khoản thật hoặc bật public posting nếu chưa có phê duyệt môi trường và TikTok audit tương ứng.
+
 ## 8. Rollout SePay
 
 SePay mặc định tắt. Trước khi bật:
@@ -214,6 +232,7 @@ Nếu dùng appsettings đóng gói riêng, truyền `-AppSettingsPath` đến f
 - Poll khi desktop reconnect, proxy download, MIME/size/hash và approve/render.
 - Admin credential hint/rotation không lộ secret.
 - SePay chỉ nếu nằm trong scope rollout.
+- TikTok chỉ nếu nằm trong scope rollout: OAuth, local direct upload, reconnect/poll và không lộ token/path/signed URL.
 - Vietsub create/open/sync registry, OCR và translation chỉ nếu runtime đã được phê duyệt.
 - Updater install/update/rollback trên máy sạch hoặc VM.
 - Health/log/metrics không chứa token, prompt nhạy cảm hoặc signed URL.

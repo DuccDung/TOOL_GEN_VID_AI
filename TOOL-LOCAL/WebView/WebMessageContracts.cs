@@ -44,7 +44,44 @@ internal sealed record DashboardStateResponse(
 
 internal sealed record DashboardFeatureFlagsResponse(
     bool VietsubEnabled,
-    bool SpeechSynchronizationEnabled = false);
+    bool SpeechSynchronizationEnabled = false,
+    bool TikTokEnabled = false);
+
+internal sealed record TikTokPublishWebRequest(
+    string Title,
+    string PrivacyLevel,
+    bool AllowComment,
+    bool AllowDuet,
+    bool AllowStitch,
+    bool CommercialContent,
+    bool BrandContent,
+    bool BrandOrganic,
+    bool IsAiGenerated,
+    bool ConsentConfirmed);
+
+internal sealed record TikTokPublishStatusWebRequest(Guid PublishJobId);
+
+internal sealed record TikTokPolicyWebRequest(string Policy);
+
+internal sealed record TikTokMediaWebResponse(
+    Guid MediaId,
+    string FileName,
+    string MimeType,
+    long SizeBytes,
+    decimal DurationSeconds,
+    int Width,
+    int Height,
+    decimal FramesPerSecond,
+    string VideoCodec,
+    string PreviewUrl);
+
+internal sealed record TikTokUploadProgressWebResponse(
+    Guid PublishJobId,
+    long UploadedBytes,
+    long TotalBytes,
+    int Percent,
+    int CompletedChunks,
+    int TotalChunks);
 
 internal sealed record DesktopFeatureSettingsResponse(
     bool SpeechSynchronizationEnabled,

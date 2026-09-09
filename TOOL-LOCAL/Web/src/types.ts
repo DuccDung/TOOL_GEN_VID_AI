@@ -399,6 +399,7 @@ export type DashboardState = {
 export type DashboardFeatures = {
   vietsubEnabled: boolean;
   speechSynchronizationEnabled: boolean;
+  tikTokEnabled: boolean;
 };
 
 export type DesktopFeatureSettings = {

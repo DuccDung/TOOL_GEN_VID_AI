@@ -27,6 +27,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 | BytePlus Seedance | Adapter, polling và catalog đã có; seed mặc định `Disabled` | Rate, credential, allowlist output thực tế và rollout riêng |
 | Fal/Veo | Adapter, polling và luồng `SceneFirstFrame` cho `LongForm` đã có; seed mặc định `Disabled` | Migration 4.1.1 trên môi trường đích, rate/credential và smoke trả phí |
 | SePay/license/seat | Payment order, webhook matching, organization provisioning và seat allocation đã có trong source; mặc định `Enabled=false` | Staging rehearsal, secret/webhook validation, QR/bank config, idempotency và đối soát |
+| TikTok Direct Post | OAuth Desktop PKCE, Global Admin credential write-only/mã hóa/xác minh, token mã hóa server, local media picker/preview/upload, idempotency, status recovery và server polling đã có; runtime chưa có credential Active | Migration 4.1.7 trên môi trường đích, TikTok app/scope/review/audit và smoke bằng tài khoản test |
 | Vietsub editor | Workspace local, manifest, SQLite, timeline/editor và API registry metadata đã có | Smoke desktop trên bundle phát hành và nghiệm thu UX |
 | Paddle OCR local | Luồng OCR local và test liên quan đã có; feature mặc định bật | Runtime/model bundle thật, smoke Anh/Trung và đo tài nguyên |
 | Dịch local Qwen | Worker x64 cô lập, IPC, readiness fingerprint, apply/retry/cancel và hai resource profile Standard/Low-memory đã có; RAM/commit thấp là cảnh báo có xác nhận được snapshot vào job, còn hard blocker thực tế vẫn chặn; feature mặc định tắt | Verify model thật, benchmark mức khuyến nghị Low-memory 6 GB, probe Anh/Trung và smoke desktop cả nhánh cảnh báo; test opt-in đang có thể `Skipped` |
@@ -42,6 +43,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 - Fal/Veo chỉ áp dụng `LongForm`, cần `SceneFirstFrame` Approved/current đúng tỷ lệ.
 - Server có `CanonicalVoiceEnabled=false` và `SpeechVerificationEnabled=false`; desktop có `SpeechSynchronizationEnabled=false`.
 - SePay mặc định `Payments:Sepay:Enabled=false`.
+- Item TikTok mặc định hiển thị với `Features:TikTokEnabled=true`; server có `TikTok:AdminManagedCredentialsEnabled=true` nhưng chưa bật runtime khi không có credential database `Active`, giữ `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và source không chứa secret.
 - Desktop có `VietsubEnabled=true`, `VietsubOcrEnabled=true`, `VietsubLocalTranslationEnabled=false`, `VietsubLocalVoiceEnabled=true`; máy chưa có Piper/model sẽ ở trạng thái `NOT_INSTALLED` và yêu cầu người dùng chủ động xác nhận cài.
 - Desktop mặc định còn có connection string SQL workflow; đây là trạng thái chuyển tiếp, không phải kiến trúc đích.
 
@@ -68,6 +70,8 @@ Chuỗi migration đang có trong source:
 17. `VideoFactory.4.1.3.SpeechSynchronization.sql`
 18. `VideoFactory.4.1.4.VoiceProfileApproval.sql`
 19. `VideoFactory.4.1.5.SpeechVerificationReview.sql`
+20. `VideoFactory.4.1.6.TikTokPublishing.sql`
+21. `VideoFactory.4.1.7.TikTokAdminCredentials.sql`
 
 `VideoFactory.DesktopLeastPrivilege.sql` cấp quyền chuyển tiếp cho desktop; `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql` là script xác minh chuyên biệt. Không có bằng chứng trong repository rằng toàn bộ chuỗi trên đã được áp dụng vào production.
 
@@ -103,18 +107,35 @@ Mốc hợp nhất `main` vào `local-2` ngày 2026-09-07:
 - Ba test opt-in bị skip gồm một Piper model integration, một Qwen model integration và một Qwen benchmark; không test nào trong ba test này được coi là model/runtime đã nghiệm thu.
 - Các lệnh trên xác minh source sau hợp nhất; chưa chạy migration database, provider có phí, model thật hoặc smoke desktop.
 
+Mốc triển khai item **Đăng TikTok** ngày 2026-09-07:
+
+- `dotnet restore` đạt; Release build toàn solution đạt với 0 warning, 0 error.
+- .NET: 965 passed, 0 failed, 3 skipped, 968 total; riêng test có tên TikTok: 26 passed, 0 failed, 0 skipped.
+- Frontend: production build đạt; 13/13 test file và 66/66 test đạt. Vite còn cảnh báo chunk JavaScript lớn hơn 500 kB, không phải lỗi build.
+- Ba test opt-in bị skip vẫn là Qwen model integration, Qwen benchmark và Piper model integration; không được tính là model/runtime đã đạt.
+- Migration 4.1.6 đã được áp dụng trên database local có backup được xác minh; không cấu hình TikTok secret thật, không gọi Content Posting API và chưa smoke desktop/TikTok account.
+
+Mốc bổ sung quản lý TikTok Developer App trong Global Admin ngày 2026-09-08:
+
+- `dotnet restore` đạt; Release build toàn solution đạt với 0 warning, 0 error.
+- .NET: 977 passed, 0 failed, 3 skipped, 980 total; riêng test có tên TikTok: 38 passed, 0 failed, 0 skipped.
+- Frontend: production build và 66/66 test đạt. Vite còn cảnh báo chunk JavaScript lớn hơn 500 kB, không phải lỗi build.
+- Ba test opt-in bị skip là Qwen model integration, Qwen benchmark và Piper model integration; không được tính là model/runtime đã đạt.
+- Migration 4.1.7 đã được áp dụng idempotent trên database local sau khi tạo full backup `COPY_ONLY/CHECKSUM` và `RESTORE VERIFYONLY` đạt; chưa gọi TikTok thật và chưa smoke desktop/tài khoản TikTok.
+
 ## Việc còn mở ưu tiên
 
-1. Chạy migration rehearsal đến 4.1.5 trên bản sao database, sau đó rollout từng môi trường có backup/restore đã thử.
-2. Cấu hình rate/credential/policy/budget và smoke riêng cho từng provider; không gộp Kling, BytePlus và Fal thành một cờ hoàn tất.
-3. Rehearsal SePay ở staging, gồm duplicate webhook, late payment, seat shortage và rollback vận hành.
-4. Rehearsal Canonical Voice trên staging: migration, catalog preview, pacing, TTS WAV, mix/render, export và xác nhận video dài Provider Native không gọi ASR.
-5. Verify/benchmark model Qwen thật, probe runtime/Anh/Trung và smoke CTA dịch trên desktop x64.
-6. Verify model/runtime Piper thật, kiểm kê dependency/license, benchmark CPU, nghe nghiệm thu và smoke tạo giọng trên desktop x64.
-7. Đưa phần workflow desktop còn dùng SQL trực tiếp qua server API và thu hẹp/bỏ database role desktop.
-8. Hoàn thiện health/metrics/alert cho worker, budget, polling, cache và webhook.
-9. Phê duyệt bundle FFmpeg ở scope Release, rồi smoke install/update/rollback.
-10. Nghiệm thu thủ công Admin responsive và các workflow UI chính.
+1. Rehearsal chuỗi migration đến 4.1.7 trên bản sao của từng môi trường đích, sau đó rollout có backup/restore đã thử; kết quả local không thay thế staging/production rehearsal.
+2. Đăng ký/review TikTok app, nhập credential đã regenerate trong Global Admin, yêu cầu xác minh rồi hoàn tất OAuth bằng đúng tài khoản Admin trên Desktop; smoke upload/status bằng tài khoản test trước khi xác nhận public posting.
+3. Cấu hình rate/credential/policy/budget và smoke riêng cho từng provider; không gộp Kling, BytePlus và Fal thành một cờ hoàn tất.
+4. Rehearsal SePay ở staging, gồm duplicate webhook, late payment, seat shortage và rollback vận hành.
+5. Rehearsal Canonical Voice trên staging: migration, catalog preview, pacing, TTS WAV, mix/render, export và xác nhận video dài Provider Native không gọi ASR.
+6. Verify/benchmark model Qwen thật, probe runtime/Anh/Trung và smoke CTA dịch trên desktop x64.
+7. Verify model/runtime Piper thật, kiểm kê dependency/license, benchmark CPU, nghe nghiệm thu và smoke tạo giọng trên desktop x64.
+8. Đưa phần workflow desktop còn dùng SQL trực tiếp qua server API và thu hẹp/bỏ database role desktop.
+9. Hoàn thiện health/metrics/alert cho worker, budget, polling, cache và webhook.
+10. Phê duyệt bundle FFmpeg ở scope Release, rồi smoke install/update/rollback.
+11. Nghiệm thu thủ công Admin responsive và các workflow UI chính.
 
 ## Bộ tài liệu chuẩn
 
