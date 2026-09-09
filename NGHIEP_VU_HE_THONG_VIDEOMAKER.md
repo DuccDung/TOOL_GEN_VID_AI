@@ -161,14 +161,17 @@ Quy tắc Canonical Voice:
 
 ## 13A. Đăng video TikTok
 
-- Chức năng là item độc lập theo user, không phụ thuộc organization/project. Bản đầu hỗ trợ một kết nối TikTok đang hoạt động cho mỗi user.
+- Chức năng là item độc lập theo user, không phụ thuộc organization/project. Mỗi user có thể quản lý nhiều kết nối TikTok sau khi bật `TikTok:MultiAccountEnabled`; mỗi bài đăng phải chọn một `ConnectionId` thuộc user hiện hành.
 - Kết nối tài khoản phải dùng Login Kit Desktop OAuth + PKCE và trình duyệt hệ thống. Không nhận cookie, browser session, access token hoặc refresh token do người dùng tự nhập.
-- Server giữ TikTok app secret và mã hóa token theo user; desktop không nhận các giá trị này. Đổi sang TikTok account khác phải kết thúc các job chưa terminal của kết nối cũ.
+- Server giữ TikTok app secret và mã hóa token theo user; desktop không nhận các giá trị này. Chuyển tài khoản không ngắt kết nối hoặc đổi tài khoản của job cũ. Kết nối lại phải khớp danh tính TikTok/app đã lưu; đăng nhập nhầm tài khoản phải bị từ chối.
 - Chỉ Global Admin quản lý TikTok Developer App credential. Credential mới được mã hóa trên server ở trạng thái `Pending`, response chỉ có hint; một OAuth code exchange thật do chính Admin yêu cầu xác minh thực hiện mới được chuyển sang `Active`.
 - Yêu cầu xác minh có hạn 15 phút và tạm khóa integration. Không được xoay credential khi còn kết nối TikTok chưa thu hồi hoặc publish job chưa terminal; kích hoạt credential mới luôn reset xác nhận public posting về false.
 - File video, absolute path và preview chỉ ở desktop. Server chỉ nhận metadata cần để khởi tạo Direct Post; desktop upload trực tiếp đến exact HTTPS TikTok upload host bằng signed URL tạm thời.
 - Trước mỗi bài đăng phải query creator info mới; privacy bắt buộc do người dùng chọn, interaction mặc định bỏ chọn và không được bật khi TikTok cấm. Người dùng phải xác nhận consent/disclosure liên quan.
-- `ClientRequestId` ổn định theo lần chọn media để retry không tạo bài trùng. Job/status thuộc đúng user; server polling trạng thái sau khi desktop đóng và desktop khôi phục job active khi mở lại.
+- `ClientRequestId` ổn định theo lần đăng, tách khỏi `MediaId`; retry cùng ID chỉ chấp nhận cùng tài khoản và payload. Mỗi lần khởi tạo được ghi bền vững trước outbound. Timeout không rõ kết quả không được tự khởi tạo lại; người dùng kiểm tra trên TikTok trước khi chủ động chuẩn bị lần đăng mới.
+- Desktop chỉ upload một video tại một thời điểm; sau upload có thể chọn tài khoản khác trong khi server tiếp tục theo dõi nhiều job. Mở lại desktop đọc các job đang chạy và lịch sử; có nhiều tài khoản thì yêu cầu chọn rõ tài khoản nhận bài.
+- Ngắt một tài khoản chỉ xóa quyền của kết nối đó trên server và dừng theo dõi các job chưa terminal của nó; giữ metadata lịch sử. Video đã gửi vẫn có thể tiếp tục được TikTok xử lý. Không tuyên bố thao tác ngắt là xóa hoặc hủy bài trên TikTok.
+- Khi chuyển tài khoản, lấy lại creator info, bỏ privacy/consent/disclosure và lựa chọn tương tác cũ. Lịch sử dùng tên tài khoản snapshot lúc tạo job; dữ liệu cũ thiếu snapshot không được tự suy đoán.
 - Không tự fallback sang automation trình duyệt. Public posting chỉ được bật sau app review, quyền `video.publish`, audit Content Posting API và nghiệm thu sandbox/production phù hợp.
 - Bật public posting cần Global Admin xác nhận rõ ràng và lưu metadata bằng chứng audit; không có xác nhận này thì chỉ cho phép `SELF_ONLY`.
 

@@ -5,6 +5,11 @@ public sealed class TikTokConnection
     public Guid TikTokConnectionId { get; set; }
     public string UserId { get; set; } = null!;
     public string OpenId { get; set; } = null!;
+    public string? AppKeyHash { get; set; }
+    public Guid? TikTokAppCredentialId { get; set; }
+    public DateTime? DisconnectedAtUtc { get; set; }
+    public string? ProtectedAvatarUrl { get; set; }
+    public DateTime? AvatarExpiresAtUtc { get; set; }
     public string CreatorUsername { get; set; } = string.Empty;
     public string CreatorNickname { get; set; } = string.Empty;
     public string Scopes { get; set; } = null!;
@@ -20,6 +25,8 @@ public sealed class TikTokConnection
 
 public sealed class TikTokOAuthSession
 {
+    public Guid? TargetConnectionId { get; set; }
+    public bool MultiAccount { get; set; }
     public Guid TikTokOAuthSessionId { get; set; }
     public Guid? TikTokAppCredentialId { get; set; }
     public string UserId { get; set; } = null!;
@@ -75,6 +82,9 @@ public static class TikTokAppCredentialStatuses
 
 public sealed class TikTokPublishJob
 {
+    public string? CreatorUsernameSnapshot { get; set; }
+    public string? CreatorNicknameSnapshot { get; set; }
+    public DateTime? NextPollAtUtc { get; set; }
     public Guid TikTokPublishJobId { get; set; }
     public Guid TikTokConnectionId { get; set; }
     public string UserId { get; set; } = null!;
@@ -89,6 +99,21 @@ public sealed class TikTokPublishJob
     public string? FailureReason { get; set; }
     public long UploadedBytes { get; set; }
     public string PublicPostIds { get; set; } = string.Empty;
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
+    public byte[] RowVersion { get; set; } = [];
+}
+
+// Persisted before an upstream init. An uncertain init is never automatically submitted twice.
+public sealed class TikTokPublishAttempt
+{
+    public Guid TikTokPublishAttemptId { get; set; }
+    public string UserId { get; set; } = null!;
+    public Guid ClientRequestId { get; set; }
+    public Guid TikTokConnectionId { get; set; }
+    public string RequestHash { get; set; } = null!;
+    public string Status { get; set; } = "Initializing";
+    public Guid? TikTokPublishJobId { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];

@@ -57,7 +57,15 @@ internal sealed record TikTokPublishWebRequest(
     bool BrandContent,
     bool BrandOrganic,
     bool IsAiGenerated,
-    bool ConsentConfirmed);
+    bool ConsentConfirmed,
+    Guid ConnectionId = default,
+    Guid ClientRequestId = default,
+    Guid MediaId = default);
+
+internal sealed record TikTokConnectionWebRequest(Guid ConnectionId);
+internal sealed record TikTokConnectWebRequest(Guid? TargetConnectionId = null);
+internal sealed record TikTokHistoryWebRequest(Guid? ConnectionId = null, int Page = 1);
+internal sealed record TikTokCancelWebRequest(string? OperationRequestId);
 
 internal sealed record TikTokPublishStatusWebRequest(Guid PublishJobId);
 
@@ -81,7 +89,8 @@ internal sealed record TikTokUploadProgressWebResponse(
     long TotalBytes,
     int Percent,
     int CompletedChunks,
-    int TotalChunks);
+    int TotalChunks,
+    Guid? ConnectionId = null);
 
 internal sealed record DesktopFeatureSettingsResponse(
     bool SpeechSynchronizationEnabled,

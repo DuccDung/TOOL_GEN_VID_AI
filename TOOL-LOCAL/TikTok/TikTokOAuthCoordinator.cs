@@ -9,7 +9,7 @@ namespace TOOL_LOCAL.TikTok;
 
 internal sealed class TikTokOAuthCoordinator(ITikTokGatewayClient gatewayClient)
 {
-    public async Task<TikTokFeatureStateResponse> ConnectAsync(CancellationToken cancellationToken)
+    public async Task<TikTokFeatureStateResponse> ConnectAsync(CancellationToken cancellationToken, Guid? targetConnectionId = null)
     {
         var verifier = CreateVerifier();
         var challenge = Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))).ToLowerInvariant();
@@ -20,7 +20,7 @@ internal sealed class TikTokOAuthCoordinator(ITikTokGatewayClient gatewayClient)
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
             var redirectUri = $"http://127.0.0.1:{port}/callback/";
             var started = await gatewayClient.StartOAuthAsync(
-                new StartTikTokOAuthRequest(redirectUri, challenge),
+                new StartTikTokOAuthRequest(redirectUri, challenge, targetConnectionId, MultiAccount: true),
                 cancellationToken);
             OpenSystemBrowser(started.AuthorizationUrl);
             var callback = await ReceiveCallbackAsync(listener, started.State, cancellationToken);

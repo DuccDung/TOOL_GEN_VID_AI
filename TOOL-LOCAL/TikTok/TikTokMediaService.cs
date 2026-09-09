@@ -3,6 +3,8 @@ using TOOL_LOCAL.Media;
 
 namespace TOOL_LOCAL.TikTok;
 
+internal sealed record TikTokDesktopAvatar(byte[] Bytes, string MimeType);
+
 internal sealed record TikTokMediaSelection(
     Guid MediaId,
     string AbsolutePath,
@@ -26,6 +28,35 @@ internal sealed class TikTokMediaService(
         { "h264", "hevc", "vp8", "vp9" };
     private readonly object _sync = new();
     private TikTokMediaSelection? _current;
+    private readonly Dictionary<Guid, (TikTokDesktopAvatar Content, DateTime Expires, string Url)> _avatars = new();
+
+    public string SetAvatar(Guid id, TikTokDesktopAvatar avatar)
+    {
+        var url = $"https://{TikTokMediaPreviewService.HostName}/avatar/{id:N}/{Guid.NewGuid():N}";
+        lock (_sync)
+        {
+            if (_avatars.Count >= 16) _avatars.Remove(_avatars.OrderBy(x => x.Value.Expires).First().Key);
+            _avatars[id] = (avatar, DateTime.UtcNow.AddMinutes(15), url);
+        }
+        return url;
+    }
+
+    public string? GetAvatarUrl(Guid id)
+    {
+        lock (_sync) return _avatars.TryGetValue(id, out var value) && value.Expires > DateTime.UtcNow ? value.Url : null;
+    }
+
+    public void RetainAvatars(IEnumerable<Guid> ids)
+    {
+        var allowed = ids.ToHashSet();
+        lock (_sync)
+            foreach (var id in _avatars.Keys.Where(id => !allowed.Contains(id)).ToArray()) _avatars.Remove(id);
+    }
+
+    public TikTokDesktopAvatar? ResolveAvatar(Uri uri)
+    {
+        lock (_sync) return _avatars.Values.FirstOrDefault(x => x.Url == uri.AbsoluteUri && x.Expires > DateTime.UtcNow).Content;
+    }
 
     public async Task<TikTokMediaSelection> SelectAsync(string path, CancellationToken cancellationToken)
     {
@@ -128,6 +159,14 @@ internal sealed class TikTokMediaPreviewService(TikTokMediaService mediaService)
 
     public TikTokPreviewResponse Open(Uri uri, string method, string? rangeHeader)
     {
+        if (uri.IsAbsoluteUri && uri.Scheme == "https" && uri.Port == 443 && uri.Host == HostName &&
+            uri.AbsolutePath.StartsWith("/avatar/", StringComparison.Ordinal) && method is "GET" or "HEAD")
+        {
+            var avatar = mediaService.ResolveAvatar(uri);
+            return avatar is null ? Error(404, "Not Found", "tiktok_avatar_not_found") :
+                new(200, "OK", $"Content-Type: {avatar.MimeType}\r\nContent-Length: {avatar.Bytes.Length}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n",
+                    method == "HEAD" ? Stream.Null : new MemoryStream(avatar.Bytes, writable: false));
+        }
         if (method is not ("GET" or "HEAD") || !TryParse(uri, out var mediaId))
             return Error(400, "Bad Request", "tiktok_preview_request_invalid");
         if (!mediaService.TryResolve(mediaId, out var media))

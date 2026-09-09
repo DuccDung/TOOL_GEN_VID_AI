@@ -10,7 +10,7 @@
     const remaining = pending?.verificationExpiresAtUtc
       ? Math.max(0, Math.ceil((Date.parse(pending.verificationExpiresAtUtc) - now) / 1000)) : 0;
     const waiting = remaining > 0;
-    const canRotate = state.connectedUserCount === 0 && state.pendingPublishJobCount === 0;
+    const canRotate = (state.connectedAccountCount ?? state.connectedUserCount) === 0 && state.pendingPublishJobCount === 0;
     const common = { active, pending, remaining, waiting, canRotate };
     if (!state.adminManagementEnabled) return { ...common, tone: 'warning', title: 'Thao tác quản trị đang bị khóa', detail: 'Cấu hình môi trường hiện không cho phép thay đổi tại đây. Liên hệ người vận hành để kiểm tra.', action: 'refresh', actionLabel: 'Kiểm tra lại' };
     if (waiting) return { ...common, tone: 'info', title: pending.verificationRequestedByCurrentAdmin ? 'Đang chờ bạn xác minh trên Desktop' : 'Một Admin khác đang xác minh', detail: pending.verificationRequestedByCurrentAdmin ? 'Hoàn tất kết nối bằng đúng tài khoản Admin này trên VideoMaker Desktop. Trang sẽ tự cập nhật kết quả.' : 'Phiên xác minh thuộc một tài khoản Admin khác. Chờ người đó hoàn tất hoặc chờ phiên hết hạn.', action: 'refresh', actionLabel: 'Kiểm tra kết quả' };

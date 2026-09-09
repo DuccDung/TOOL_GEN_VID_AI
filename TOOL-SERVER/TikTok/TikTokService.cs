@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -16,19 +17,23 @@ public interface ITikTokService
     Task<TikTokFeatureStateResponse> GetStateAsync(string userId, CancellationToken cancellationToken);
     Task<StartTikTokOAuthResponse> StartOAuthAsync(string userId, Guid deviceId, StartTikTokOAuthRequest request, CancellationToken cancellationToken);
     Task<TikTokFeatureStateResponse> CompleteOAuthAsync(string userId, Guid deviceId, CompleteTikTokOAuthRequest request, CancellationToken cancellationToken);
-    Task DisconnectAsync(string userId, CancellationToken cancellationToken);
-    Task<TikTokCreatorInfoResponse> GetCreatorInfoAsync(string userId, CancellationToken cancellationToken);
+    Task DisconnectAsync(string userId, CancellationToken cancellationToken, Guid? connectionId = null);
+    Task<TikTokCreatorInfoResponse> GetCreatorInfoAsync(string userId, CancellationToken cancellationToken, Guid? connectionId = null);
     Task<InitializeTikTokPublishResponse> InitializePublishAsync(string userId, InitializeTikTokPublishRequest request, CancellationToken cancellationToken);
     Task<TikTokPublishStatusResponse> GetPublishStatusAsync(string userId, Guid publishJobId, CancellationToken cancellationToken);
+    Task<TikTokFeatureStateResponse> GetConnectionsStateAsync(string userId, CancellationToken cancellationToken);
+    Task<TikTokPublishHistoryResponse> GetPublishHistoryAsync(string userId, Guid? connectionId, int page, int pageSize, CancellationToken cancellationToken);
+    Task<TikTokPublishStatusResponse> ReadPublishStatusAsync(string userId, Guid publishJobId, CancellationToken cancellationToken);
 }
 
-public sealed class TikTokService(
+public sealed partial class TikTokService(
     TikTokDbContext db,
     ITikTokApiClient apiClient,
     ITikTokTokenProtector tokenProtector,
     ITikTokCredentialRuntime credentialRuntime,
     IOptions<TikTokOptions> options,
-    TimeProvider timeProvider) : ITikTokService
+    TimeProvider timeProvider,
+    TikTokAvatarCache? avatarCache = null) : ITikTokService
 {
     private const long MaximumVideoBytes = 4L * 1024 * 1024 * 1024;
     private const long MaximumSingleChunkBytes = 64L * 1024 * 1024;
@@ -60,8 +65,8 @@ public sealed class TikTokService(
                 UnavailableReason: access.UnavailableReason);
         }
 
-        var connection = await db.Connections
-            .AsNoTracking()
+        await RequireLegacyClientAsync(userId, cancellationToken);
+        var connection = await db.Connections.AsNoTracking()
             .SingleOrDefaultAsync(x => x.UserId == userId && x.RevokedAtUtc == null, cancellationToken);
         var activePublish = await db.PublishJobs
             .AsNoTracking()
@@ -85,6 +90,9 @@ public sealed class TikTokService(
         CancellationToken cancellationToken)
     {
         var access = await RequireAvailableAsync(userId, cancellationToken);
+        if (!request.MultiAccount) await RequireLegacyClientAsync(userId, cancellationToken);
+        if (request.TargetConnectionId is { } targetId)
+            _ = await FindOwnedConnectionAsync(userId, targetId, cancellationToken);
         var redirectUri = ValidateRedirectUri(request.RedirectUri);
         var challenge = ValidateCodeChallenge(request.CodeChallenge);
         var now = UtcNow();
@@ -97,6 +105,8 @@ public sealed class TikTokService(
         {
             TikTokOAuthSessionId = Guid.NewGuid(),
             TikTokAppCredentialId = access.Credential!.CredentialId,
+            TargetConnectionId = request.TargetConnectionId,
+            MultiAccount = request.MultiAccount,
             UserId = userId,
             DeviceId = deviceId,
             StateHash = SHA256.HashData(Encoding.UTF8.GetBytes(state)),
@@ -133,6 +143,7 @@ public sealed class TikTokService(
     {
         ValidateAuthorizationCode(request.Code);
         var verifier = ValidateCodeVerifier(request.CodeVerifier);
+        await using var oauthLease = await TikTokOperationLock.AcquireAsync(db, $"oauth:{userId}", cancellationToken);
         var now = UtcNow();
         var session = await db.OAuthSessions.SingleOrDefaultAsync(
             x => x.TikTokOAuthSessionId == request.OAuthSessionId &&
@@ -149,6 +160,11 @@ public sealed class TikTokService(
         {
             throw Error(400, "tiktok_oauth_validation_failed", "Phản hồi đăng nhập TikTok không hợp lệ.");
         }
+
+        if (!session.MultiAccount) await RequireLegacyClientAsync(userId, cancellationToken);
+        // Consume before the external code exchange. A timeout must not replay a one-use code.
+        session.ConsumedAtUtc = now;
+        await db.SaveChangesAsync(cancellationToken);
 
         var credential = await credentialRuntime.GetOAuthCredentialAsync(
             session.TikTokAppCredentialId,
@@ -215,33 +231,32 @@ public sealed class TikTokService(
                 cancellationToken);
         }
 
-        var connection = await db.Connections.SingleOrDefaultAsync(x => x.UserId == userId, cancellationToken);
+        var appKeyHash = HashAppKey(credential.ClientKey);
+        var candidates = await db.Connections.Where(x => x.UserId == userId).ToListAsync(cancellationToken);
+        var connection = candidates.SingleOrDefault(x => x.OpenId == token.OpenId && x.AppKeyHash == appKeyHash)
+            ?? candidates.SingleOrDefault(x => x.OpenId == token.OpenId && x.AppKeyHash == null);
+        if (session.TargetConnectionId is { } expectedId && connection?.TikTokConnectionId != expectedId)
+            throw Error(409, "tiktok_oauth_account_mismatch", "Bạn đã đăng nhập tài khoản TikTok khác. Hãy kết nối lại đúng tài khoản đã chọn.");
+        if (connection is null && candidates.Count > 0 && (!session.MultiAccount || !_options.MultiAccountEnabled))
+            throw Error(409, session.MultiAccount ? "tiktok_multi_account_disabled" : "tiktok_client_update_required",
+                session.MultiAccount ? "Tính năng thêm nhiều tài khoản chưa được mở trên server." : "Hãy cập nhật VideoMaker để thêm tài khoản TikTok.");
+        var connectionId = connection?.TikTokConnectionId ?? Guid.NewGuid();
+        await using var connectionLease = await TikTokOperationLock.AcquireAsync(db, $"connection:{connectionId}", cancellationToken);
         if (connection is null)
         {
             connection = new TikTokConnection
             {
-                TikTokConnectionId = Guid.NewGuid(),
+                TikTokConnectionId = connectionId,
                 UserId = userId,
                 CreatedAtUtc = now
             };
             db.Connections.Add(connection);
         }
-        else if (!string.Equals(connection.OpenId, token.OpenId, StringComparison.Ordinal))
-        {
-            var previousJobs = await db.PublishJobs
-                .Where(x => x.TikTokConnectionId == connection.TikTokConnectionId &&
-                            x.Status != TikTokPublishStatuses.Complete &&
-                            x.Status != TikTokPublishStatuses.Failed)
-                .ToListAsync(cancellationToken);
-            foreach (var previousJob in previousJobs)
-            {
-                previousJob.Status = TikTokPublishStatuses.Failed;
-                previousJob.FailureReason = "connection_replaced";
-                previousJob.ProtectedUploadUrl = null;
-                previousJob.UpdatedAtUtc = now;
-            }
-        }
+        else await db.Entry(connection).ReloadAsync(cancellationToken);
         connection.OpenId = token.OpenId;
+        connection.AppKeyHash = appKeyHash;
+        connection.TikTokAppCredentialId = credential.CredentialId;
+        connection.DisconnectedAtUtc = null;
         connection.Scopes = string.Join(',', scopes);
         connection.ProtectedAccessToken = tokenProtector.ProtectToken(userId, token.AccessToken);
         connection.ProtectedRefreshToken = tokenProtector.ProtectToken(userId, token.RefreshToken);
@@ -259,6 +274,11 @@ public sealed class TikTokService(
             var creator = await apiClient.GetCreatorInfoAsync(token.AccessToken, cancellationToken);
             connection.CreatorUsername = creator.Username;
             connection.CreatorNickname = creator.Nickname;
+            if (TikTokAvatarCache.IsAllowedUrl(creator.AvatarUrl))
+            {
+                connection.ProtectedAvatarUrl = tokenProtector.ProtectAvatarUrl(userId, creator.AvatarUrl!);
+                connection.AvatarExpiresAtUtc = UtcNow().AddMinutes(90);
+            }
             connection.UpdatedAtUtc = UtcNow();
             await db.SaveChangesAsync(cancellationToken);
         }
@@ -271,12 +291,19 @@ public sealed class TikTokService(
             // The OAuth grant is valid even when the optional profile refresh times out.
         }
 
-        return await GetStateAsync(userId, cancellationToken);
+        return session.MultiAccount
+            ? (await GetConnectionsStateAsync(userId, cancellationToken)) with { ConnectedConnectionId = connection.TikTokConnectionId }
+            : await GetStateAsync(userId, cancellationToken);
     }
 
-    public async Task DisconnectAsync(string userId, CancellationToken cancellationToken)
+    public async Task DisconnectAsync(string userId, CancellationToken cancellationToken, Guid? connectionId = null)
     {
-        var connection = await RequireConnectionAsync(userId, cancellationToken);
+        var owned = connectionId is { } id ? await FindOwnedConnectionAsync(userId, id, cancellationToken)
+            : await RequireConnectionAsync(userId, cancellationToken);
+        await using var lease = await TikTokOperationLock.AcquireAsync(db, $"connection:{owned.TikTokConnectionId}", cancellationToken);
+        await db.Entry(owned).ReloadAsync(cancellationToken);
+        var connection = owned;
+        if (connection.DisconnectedAtUtc is not null) return;
         try
         {
             var credential = await credentialRuntime.GetActiveCredentialAsync(cancellationToken);
@@ -287,13 +314,15 @@ public sealed class TikTokService(
         {
             // Local authorization is removed even if TikTok cannot be reached; the refresh token is not retained.
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            // A provider timeout must not prevent the user from removing the local authorization.
+            // Once revocation was attempted, finish local cleanup even if the desktop leaves.
         }
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        cancellationToken = cleanup.Token;
         var now = UtcNow();
         var pendingJobs = await db.PublishJobs
-            .Where(x => x.UserId == userId &&
+            .Where(x => x.UserId == userId && x.TikTokConnectionId == connection.TikTokConnectionId &&
                         x.Status != TikTokPublishStatuses.Complete &&
                         x.Status != TikTokPublishStatuses.Failed)
             .ToListAsync(cancellationToken);
@@ -307,17 +336,25 @@ public sealed class TikTokService(
         connection.ProtectedAccessToken = string.Empty;
         connection.ProtectedRefreshToken = string.Empty;
         connection.RevokedAtUtc = now;
+        connection.DisconnectedAtUtc = now;
+        connection.ProtectedAvatarUrl = null;
         connection.UpdatedAtUtc = now;
         await db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<TikTokCreatorInfoResponse> GetCreatorInfoAsync(
         string userId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? connectionId = null)
     {
         var runtimeAccess = await RequireAvailableAsync(userId, cancellationToken);
-        var connection = await RequireConnectionAsync(userId, cancellationToken);
-        var accessToken = await GetAccessTokenAsync(connection, runtimeAccess.Credential!, cancellationToken);
+        var connection = await RequireConnectionAsync(userId, cancellationToken, connectionId);
+        string accessToken;
+        await using (var lease = await TikTokOperationLock.AcquireAsync(db, $"connection:{connection.TikTokConnectionId}", cancellationToken))
+        {
+            await db.Entry(connection).ReloadAsync(cancellationToken);
+            accessToken = await GetAccessTokenAsync(connection, runtimeAccess.Credential!, cancellationToken);
+        }
         TikTokCreatorResult creator;
         try
         {
@@ -337,7 +374,8 @@ public sealed class TikTokService(
         }
         // Readiness refreshes return live profile data without rewriting the connection.
         // Concurrent reads must not compete with token refresh or disconnect via RowVersion.
-        return ToCreatorResponse(creator, runtimeAccess.AuditedForPublicPosting);
+        var avatarUrl = avatarCache?.Register(userId, connection.TikTokConnectionId, creator.AvatarUrl, tokenProtector);
+        return ToCreatorResponse(creator, runtimeAccess.AuditedForPublicPosting) with { ConnectionId = connection.TikTokConnectionId, AvatarUrl = avatarUrl };
     }
 
     public async Task<InitializeTikTokPublishResponse> InitializePublishAsync(
@@ -347,20 +385,37 @@ public sealed class TikTokService(
     {
         var runtimeAccess = await RequireAvailableAsync(userId, cancellationToken);
         ValidatePublishRequest(request);
+        var connection = await RequireConnectionAsync(userId, cancellationToken, request.ConnectionId);
+        await using var requestLease = await TikTokOperationLock.AcquireAsync(db, $"publish:{userId}:{request.ClientRequestId}", cancellationToken);
+        await using var connectionLease = await TikTokOperationLock.AcquireAsync(db, $"connection:{connection.TikTokConnectionId}", cancellationToken);
+        await db.Entry(connection).ReloadAsync(cancellationToken);
+        if (connection.RevokedAtUtc is not null) throw Error(409, "tiktok_reconnect_required", "Hãy kết nối lại tài khoản TikTok đã chọn.");
+        var requestHash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+            request with { ConnectionId = connection.TikTokConnectionId, Title = request.Title.Trim() })));
+        var previousAttempt = await db.PublishAttempts.AsNoTracking().SingleOrDefaultAsync(
+            x => x.UserId == userId && x.ClientRequestId == request.ClientRequestId, cancellationToken);
+        if (previousAttempt is not null && (previousAttempt.TikTokConnectionId != connection.TikTokConnectionId || previousAttempt.RequestHash != requestHash))
+            throw Error(409, "tiktok_idempotency_conflict", "Mã lần đăng đã được dùng cho tài khoản hoặc nội dung khác.");
         var now = UtcNow();
         var existing = await db.PublishJobs.AsNoTracking().SingleOrDefaultAsync(
             x => x.UserId == userId && x.ClientRequestId == request.ClientRequestId,
             cancellationToken);
         if (existing is not null)
         {
+            if (existing.TikTokConnectionId != connection.TikTokConnectionId)
+                throw Error(409, "tiktok_idempotency_conflict", "Mã lần đăng thuộc tài khoản TikTok khác.");
+            if (previousAttempt is null && request.ConnectionId is not null)
+                throw Error(409, "tiktok_publish_already_initialized", "Phiên đăng cũ đã tồn tại. Hãy kiểm tra lịch sử trước khi tạo bài mới.");
             if (existing.ProtectedUploadUrl is null || existing.UploadUrlExpiresAtUtc <= now)
             {
                 throw Error(409, "tiktok_publish_already_initialized", "Phiên đăng này đã được khởi tạo và không thể tạo trùng.");
             }
             return ToInitializeResponse(existing, tokenProtector.UnprotectUploadUrl(userId, existing.ProtectedUploadUrl));
         }
-
-        var connection = await RequireConnectionAsync(userId, cancellationToken);
+        if (previousAttempt is not null)
+            throw Error(409, previousAttempt.Status == "Rejected" ? "tiktok_publish_rejected" : "tiktok_publish_initialization_unknown",
+                previousAttempt.Status == "Rejected" ? "TikTok đã từ chối lần đăng này. Hãy kiểm tra lỗi trước khi bắt đầu một lần đăng mới."
+                    : "Lần đăng trước chưa xác định được kết quả khởi tạo. Hệ thống không gửi lại tự động; hãy kiểm tra tài khoản TikTok trước khi tạo bài mới.");
         var accessToken = await GetAccessTokenAsync(connection, runtimeAccess.Credential!, cancellationToken);
         TikTokCreatorResult creator;
         try
@@ -379,13 +434,22 @@ public sealed class TikTokService(
         {
             throw ProviderUnavailable();
         }
-        var creatorResponse = ToCreatorResponse(creator, runtimeAccess.AuditedForPublicPosting);
+        var creatorResponse = ToCreatorResponse(creator, runtimeAccess.AuditedForPublicPosting) with { ConnectionId = connection.TikTokConnectionId };
         if (creatorResponse.PublishingIssue is not null)
         {
             return new InitializeTikTokPublishResponse(Guid.Empty, string.Empty, 0, 0, default, creatorResponse);
         }
         ValidateAgainstCreator(request, creator, runtimeAccess.AuditedForPublicPosting);
         var (chunkSize, chunkCount) = CreateChunkPlan(request.VideoSizeBytes);
+
+        var attempt = new TikTokPublishAttempt
+        {
+            TikTokPublishAttemptId = Guid.NewGuid(), UserId = userId, ClientRequestId = request.ClientRequestId,
+            TikTokConnectionId = connection.TikTokConnectionId, RequestHash = requestHash,
+            CreatedAtUtc = now, UpdatedAtUtc = now
+        };
+        db.PublishAttempts.Add(attempt);
+        await db.SaveChangesAsync(cancellationToken);
 
         TikTokPublishInitResult initialized;
         try
@@ -408,14 +472,17 @@ public sealed class TikTokService(
         }
         catch (TikTokProviderException exception)
         {
+            await RecordAttemptFailureAsync(attempt, exception.StatusCode is >= 400 and < 500);
             throw MapProviderError(exception);
         }
         catch (HttpRequestException)
         {
+            await RecordAttemptFailureAsync(attempt, false);
             throw ProviderUnavailable();
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
+            await RecordAttemptFailureAsync(attempt, false);
             throw ProviderUnavailable();
         }
         ValidateUploadUrl(initialized.UploadUrl);
@@ -423,6 +490,8 @@ public sealed class TikTokService(
         {
             TikTokPublishJobId = Guid.NewGuid(),
             TikTokConnectionId = connection.TikTokConnectionId,
+            CreatorUsernameSnapshot = creator.Username,
+            CreatorNicknameSnapshot = creator.Nickname,
             UserId = userId,
             ClientRequestId = request.ClientRequestId,
             TikTokPublishId = initialized.PublishId,
@@ -436,6 +505,9 @@ public sealed class TikTokService(
             UpdatedAtUtc = now
         };
         db.PublishJobs.Add(job);
+        attempt.Status = "Initialized";
+        attempt.TikTokPublishJobId = job.TikTokPublishJobId;
+        attempt.UpdatedAtUtc = UtcNow();
         await db.SaveChangesAsync(cancellationToken);
         return ToInitializeResponse(job, initialized.UploadUrl);
     }
@@ -453,9 +525,14 @@ public sealed class TikTokService(
         {
             return ToStatusResponse(job);
         }
-        var connection = await RequireConnectionAsync(userId, cancellationToken);
+        var connection = await RequireConnectionAsync(userId, cancellationToken, job.TikTokConnectionId);
         var credential = await credentialRuntime.GetActiveCredentialAsync(cancellationToken);
-        var accessToken = await GetAccessTokenAsync(connection, credential, cancellationToken);
+        string accessToken;
+        await using (var lease = await TikTokOperationLock.AcquireAsync(db, $"connection:{connection.TikTokConnectionId}", cancellationToken))
+        {
+            await db.Entry(connection).ReloadAsync(cancellationToken);
+            accessToken = await GetAccessTokenAsync(connection, credential, cancellationToken);
+        }
         TikTokStatusResult result;
         try
         {
@@ -514,11 +591,19 @@ public sealed class TikTokService(
 
     private async Task<TikTokConnection> RequireConnectionAsync(
         string userId,
-        CancellationToken cancellationToken) =>
-        await db.Connections.SingleOrDefaultAsync(
-            x => x.UserId == userId && x.RevokedAtUtc == null,
-            cancellationToken)
-        ?? throw Error(409, "tiktok_not_connected", "Hãy kết nối tài khoản TikTok trước.");
+        CancellationToken cancellationToken,
+        Guid? connectionId = null)
+    {
+        if (connectionId is { } id)
+        {
+            var selected = await FindOwnedConnectionAsync(userId, id, cancellationToken);
+            if (selected.RevokedAtUtc is not null) throw Error(409, "tiktok_reconnect_required", "Hãy kết nối lại tài khoản TikTok đã chọn.");
+            return selected;
+        }
+        await RequireLegacyClientAsync(userId, cancellationToken);
+        return await db.Connections.SingleOrDefaultAsync(x => x.UserId == userId && x.RevokedAtUtc == null, cancellationToken)
+            ?? throw Error(409, "tiktok_not_connected", "Hãy kết nối tài khoản TikTok trước.");
+    }
 
     private async Task<string> GetAccessTokenAsync(
         TikTokConnection connection,
@@ -526,6 +611,10 @@ public sealed class TikTokService(
         CancellationToken cancellationToken)
     {
         var now = UtcNow();
+        if (connection.RevokedAtUtc is not null || connection.DisconnectedAtUtc is not null)
+            throw Error(409, "tiktok_reconnect_required", "Hãy kết nối lại tài khoản TikTok đã chọn.");
+        if (connection.AppKeyHash is not null && connection.AppKeyHash != HashAppKey(credential.ClientKey))
+            throw Error(409, "tiktok_reconnect_required", "Tài khoản TikTok thuộc cấu hình ứng dụng trước. Hãy kết nối lại.");
         if (connection.RefreshTokenExpiresAtUtc <= now || string.IsNullOrWhiteSpace(connection.ProtectedRefreshToken))
         {
             connection.RevokedAtUtc = now;
@@ -542,7 +631,12 @@ public sealed class TikTokService(
             var refreshToken = tokenProtector.UnprotectToken(connection.UserId, connection.ProtectedRefreshToken);
             var refreshed = await apiClient.RefreshTokenAsync(credential, refreshToken, cancellationToken);
             var scopes = ParseScopes(refreshed.Scope);
-            connection.OpenId = refreshed.OpenId;
+            if (!string.Equals(connection.OpenId, refreshed.OpenId, StringComparison.Ordinal))
+                throw Error(409, "tiktok_oauth_account_mismatch", "TikTok trả về danh tính không khớp. Hãy kết nối lại đúng tài khoản.");
+            if (!scopes.Contains("video.publish", StringComparer.Ordinal))
+                throw Error(403, "tiktok_publish_scope_missing", "Tài khoản TikTok chưa cấp quyền đăng video.");
+            connection.AppKeyHash = HashAppKey(credential.ClientKey);
+            connection.TikTokAppCredentialId = credential.CredentialId;
             connection.Scopes = string.Join(',', scopes);
             connection.ProtectedAccessToken = tokenProtector.ProtectToken(connection.UserId, refreshed.AccessToken);
             connection.ProtectedRefreshToken = tokenProtector.ProtectToken(connection.UserId, refreshed.RefreshToken);
@@ -557,7 +651,7 @@ public sealed class TikTokService(
             catch (DbUpdateConcurrencyException)
             {
                 db.Entry(connection).State = EntityState.Detached;
-                var current = await RequireConnectionAsync(connection.UserId, cancellationToken);
+                var current = await RequireConnectionAsync(connection.UserId, cancellationToken, connection.TikTokConnectionId);
                 if (current.AccessTokenExpiresAtUtc <= now)
                 {
                     throw Error(409, "tiktok_reconnect_required", "Quyền truy cập TikTok cần được làm mới. Vui lòng thử lại.");
@@ -761,7 +855,7 @@ public sealed class TikTokService(
 
     private DateTime UtcNow() => timeProvider.GetUtcNow().UtcDateTime;
 
-    private static TikTokConnectionSummary ToSummary(TikTokConnection connection) =>
+    private TikTokConnectionSummary ToSummary(TikTokConnection connection) =>
         new(
             connection.TikTokConnectionId,
             connection.CreatorUsername,
@@ -769,7 +863,11 @@ public sealed class TikTokService(
             ParseScopes(connection.Scopes),
             connection.AccessTokenExpiresAtUtc,
             connection.RefreshTokenExpiresAtUtc,
-            connection.UpdatedAtUtc);
+            connection.UpdatedAtUtc,
+            connection.DisconnectedAtUtc is not null ? "Disconnected" : connection.RevokedAtUtc is not null || connection.RefreshTokenExpiresAtUtc <= UtcNow()
+                ? "ReconnectRequired" : "Connected",
+            connection.ProtectedAvatarUrl is not null && connection.AvatarExpiresAtUtc > UtcNow()
+                ? $"api/tiktok/connections/{connection.TikTokConnectionId:D}/avatar" : null);
 
     private static TikTokCreatorInfoResponse ToCreatorResponse(
         TikTokCreatorResult creator,
@@ -787,7 +885,7 @@ public sealed class TikTokService(
             GetAuditIssue(creator, auditedForPublicPosting));
 
     private static InitializeTikTokPublishResponse ToInitializeResponse(TikTokPublishJob job, string uploadUrl) =>
-        new(job.TikTokPublishJobId, uploadUrl, job.ChunkSizeBytes, job.TotalChunkCount, job.UploadUrlExpiresAtUtc);
+        new(job.TikTokPublishJobId, uploadUrl, job.ChunkSizeBytes, job.TotalChunkCount, job.UploadUrlExpiresAtUtc, ConnectionId: job.TikTokConnectionId);
 
     private static TikTokPublishStatusResponse ToStatusResponse(TikTokPublishJob job) =>
         new(
@@ -797,7 +895,8 @@ public sealed class TikTokService(
             job.UploadedBytes,
             job.PublicPostIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             job.UpdatedAtUtc,
-            TikTokPublishStatuses.IsTerminal(job.Status));
+            TikTokPublishStatuses.IsTerminal(job.Status),
+            job.TikTokConnectionId, job.CreatorUsernameSnapshot, job.CreatorNicknameSnapshot, job.CreatedAtUtc);
 
     private static AccountApiException MapProviderError(TikTokProviderException exception) =>
         exception.ProviderCode switch

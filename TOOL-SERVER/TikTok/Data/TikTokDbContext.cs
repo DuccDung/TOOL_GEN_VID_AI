@@ -9,6 +9,7 @@ public sealed class TikTokDbContext(DbContextOptions<TikTokDbContext> options) :
     public DbSet<TikTokConnection> Connections => Set<TikTokConnection>();
     public DbSet<TikTokOAuthSession> OAuthSessions => Set<TikTokOAuthSession>();
     public DbSet<TikTokPublishJob> PublishJobs => Set<TikTokPublishJob>();
+    public DbSet<TikTokPublishAttempt> PublishAttempts => Set<TikTokPublishAttempt>();
     public DbSet<TikTokAppCredential> AppCredentials => Set<TikTokAppCredential>();
     public DbSet<TikTokIntegrationSetting> IntegrationSettings => Set<TikTokIntegrationSetting>();
     public DbSet<AccountAuditLog> AccountAuditLogs => Set<AccountAuditLog>();
@@ -33,7 +34,15 @@ public sealed class TikTokDbContext(DbContextOptions<TikTokDbContext> options) :
             entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.RevokedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
-            entity.HasIndex(x => x.UserId).IsUnique();
+            entity.Property(x => x.AppKeyHash).HasMaxLength(64).IsUnicode(false);
+            entity.Property(x => x.ProtectedAvatarUrl).HasColumnType("nvarchar(max)");
+            entity.Property(x => x.AvatarExpiresAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.DisconnectedAtUtc).HasColumnType("datetime2(3)");
+            entity.HasIndex(x => new { x.UserId, x.AppKeyHash, x.OpenId }).IsUnique().HasFilter(null)
+                .HasDatabaseName("UX_TikTokConnections_UserAppOpenId");
+            entity.HasIndex(x => new { x.UserId, x.RevokedAtUtc });
+            entity.HasOne<TikTokAppCredential>().WithMany().HasForeignKey(x => x.TikTokAppCredentialId)
+                .OnDelete(DeleteBehavior.NoAction);
         });
 
         builder.Entity<TikTokOAuthSession>(entity =>
@@ -54,6 +63,8 @@ public sealed class TikTokDbContext(DbContextOptions<TikTokDbContext> options) :
             entity.HasOne<TikTokAppCredential>()
                 .WithMany()
                 .HasForeignKey(x => x.TikTokAppCredentialId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne<TikTokConnection>().WithMany().HasForeignKey(x => x.TargetConnectionId)
                 .OnDelete(DeleteBehavior.NoAction);
         });
 
@@ -103,11 +114,34 @@ public sealed class TikTokDbContext(DbContextOptions<TikTokDbContext> options) :
             entity.Property(x => x.Status).HasMaxLength(40).IsUnicode(false);
             entity.Property(x => x.FailureReason).HasMaxLength(200).IsUnicode(false);
             entity.Property(x => x.PublicPostIds).HasMaxLength(1000).IsUnicode(false);
+            entity.Property(x => x.CreatorUsernameSnapshot).HasMaxLength(150);
+            entity.Property(x => x.CreatorNicknameSnapshot).HasMaxLength(200);
+            entity.Property(x => x.NextPollAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
             entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
             entity.HasIndex(x => new { x.UserId, x.ClientRequestId }).IsUnique();
             entity.HasIndex(x => new { x.Status, x.UpdatedAtUtc });
+            entity.HasIndex(x => new { x.UserId, x.TikTokConnectionId, x.CreatedAtUtc });
+            entity.HasOne<TikTokConnection>().WithMany().HasForeignKey(x => x.TikTokConnectionId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        builder.Entity<TikTokPublishAttempt>(entity =>
+        {
+            entity.ToTable("TikTokPublishAttempts", "social");
+            entity.HasKey(x => x.TikTokPublishAttemptId);
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.RequestHash).HasMaxLength(64).IsUnicode(false);
+            entity.Property(x => x.Status).HasMaxLength(20).IsUnicode(false);
+            entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnType("datetime2(3)");
+            entity.Property(x => x.RowVersion).IsRowVersion().IsConcurrencyToken();
+            entity.HasIndex(x => new { x.UserId, x.ClientRequestId }).IsUnique();
+            entity.HasOne<TikTokConnection>().WithMany().HasForeignKey(x => x.TikTokConnectionId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne<TikTokPublishJob>().WithMany().HasForeignKey(x => x.TikTokPublishJobId)
+                .OnDelete(DeleteBehavior.NoAction);
         });
 
         builder.Entity<AccountAuditLog>(entity =>

@@ -71,7 +71,26 @@ test('selected video loads and seeks under the real CSP, with recovery after a p
       addEventListener: (_, listener) => listeners.add(listener),
       removeEventListener: (_, listener) => listeners.delete(listener)
     };
-    window.reply = message => listeners.forEach(listener => listener({ data: message }));
+    window.reply = message => {
+      // Match the native bridge: every reply carries the originating request and account.
+      const kinds = { 'tiktok.state': 'tiktok.state.get', 'tiktok.creator': 'tiktok.creator.get',
+        'tiktok.media.selected': 'tiktok.media.select', 'tiktok.operation.cancelled': 'tiktok.operation.cancel' };
+      if (!message.requestId) {
+        if (message.type === 'tiktok.media.selected') window.tiktokModule.selectMedia();
+        if (message.type === 'tiktok.state' && window.tiktokModule.state.feature.configured) window.tiktokModule.refresh();
+        const kind = kinds[message.type] || (message.type.startsWith('tiktok.upload.') ? 'tiktok.publish.start' : null);
+        message.requestId = window.sent.filter(m => m.type === kind).at(-1)?.requestId;
+      }
+      if (message.payload && ['tiktok.creator', 'tiktok.publish.initialized', 'tiktok.upload.progress', 'tiktok.upload.completed'].includes(message.type))
+        message.payload.connectionId ??= window.sent.find(m => m.requestId === message.requestId)?.payload?.connectionId;
+      if (message.payload?.activePublish) message.payload.activePublish.connectionId ??= message.payload.connection?.connectionId;
+      listeners.forEach(listener => listener({ data: message }));
+      if (message.type === 'tiktok.operation.cancelled') {
+        const original = window.sent.filter(m => m.type === 'tiktok.publish.start').at(-1);
+        listeners.forEach(listener => listener({ data: { type: 'tiktok.error', requestId: original.requestId,
+          error: { code: 'tiktok_operation_cancelled', message: 'Đã hủy thao tác.' } } }));
+      }
+    };
   });
   const page = await context.newPage();
   let failPreview = false;
@@ -167,7 +186,26 @@ test('creator reads are deduplicated on page entry and can retry after success o
       addEventListener: (_, listener) => listeners.add(listener),
       removeEventListener: (_, listener) => listeners.delete(listener)
     };
-    window.reply = message => listeners.forEach(listener => listener({ data: message }));
+    window.reply = message => {
+      // Match the native bridge: every reply carries the originating request and account.
+      const kinds = { 'tiktok.state': 'tiktok.state.get', 'tiktok.creator': 'tiktok.creator.get',
+        'tiktok.media.selected': 'tiktok.media.select', 'tiktok.operation.cancelled': 'tiktok.operation.cancel' };
+      if (!message.requestId) {
+        if (message.type === 'tiktok.media.selected') window.tiktokModule.selectMedia();
+        if (message.type === 'tiktok.state' && window.tiktokModule.state.feature.configured) window.tiktokModule.refresh();
+        const kind = kinds[message.type] || (message.type.startsWith('tiktok.upload.') ? 'tiktok.publish.start' : null);
+        message.requestId = window.sent.filter(m => m.type === kind).at(-1)?.requestId;
+      }
+      if (message.payload && ['tiktok.creator', 'tiktok.publish.initialized', 'tiktok.upload.progress', 'tiktok.upload.completed'].includes(message.type))
+        message.payload.connectionId ??= window.sent.find(m => m.requestId === message.requestId)?.payload?.connectionId;
+      if (message.payload?.activePublish) message.payload.activePublish.connectionId ??= message.payload.connection?.connectionId;
+      listeners.forEach(listener => listener({ data: message }));
+      if (message.type === 'tiktok.operation.cancelled') {
+        const original = window.sent.filter(m => m.type === 'tiktok.publish.start').at(-1);
+        listeners.forEach(listener => listener({ data: { type: 'tiktok.error', requestId: original.requestId,
+          error: { code: 'tiktok_operation_cancelled', message: 'Đã hủy thao tác.' } } }));
+      }
+    };
   });
   await page.addScriptTag({ content: interactiveBundle });
   await page.waitForFunction(() => window.sent.some(message => message.type === 'tiktok.state.get'));
@@ -212,7 +250,7 @@ test('account identity stays readable beside disconnect and stacks on narrow scr
   await page.route('**/*', route => route.abort());
   const noop = () => {};
   const html = renderToStaticMarkup(createElement(TikTokPage, { module: {
-    state: { feature: { enabled: true, configured: true, connection: {
+    state: { selectedConnectionId: 'test-account', jobs: [], history: null, historyLoading: false, feature: { enabled: true, configured: true, connection: {
       connectionId: 'test-account', creatorNickname: 'Đức lập trình', creatorUsername: 'test_creator'
     } }, creator: { creatorUsername: 'test_creator', creatorNickname: 'Đức lập trình', privacyLevelOptions: ['SELF_ONLY'],
       commentDisabled: false, duetDisabled: false, stitchDisabled: false, maximumVideoDurationSeconds: 600,
@@ -230,7 +268,7 @@ test('account identity stays readable beside disconnect and stacks on narrow scr
     await page.setViewportSize({ width, height: 1000 });
     const dimensions = await page.evaluate(() => {
       const box = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
-      return { details: box('.tiktok-account-details'), name: box('.tiktok-account-details strong'),
+      return { details: box('.tiktok-account-choice'), name: box('.tiktok-account-choice > span'),
         avatar: box('.tiktok-account-avatar'), button: box('.tiktok-account-bar button'),
         overflow: document.documentElement.scrollWidth > window.innerWidth };
     });
@@ -246,7 +284,7 @@ test('account identity stays readable beside disconnect and stacks on narrow scr
       await page.screenshot({ path: path.join(process.env.VIDEOMAKER_SCREENSHOT_DIR, `tiktok-account-${width}.png`), fullPage: true });
     }
   }
-  await page.locator('.tiktok-account-details strong').evaluate(element => { element.textContent = 'Tên tài khoản TikTok rất dài '.repeat(8); });
+  await page.locator('.tiktok-account-choice > span').evaluate(element => { element.textContent = 'Tên tài khoản TikTok rất dài '.repeat(8); });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
 });
 
@@ -260,7 +298,7 @@ test('publish dialog follows real bridge events, traps focus and distinguishes u
       const main = document.querySelector('.app-main');
       return { account: box('.tiktok-account-bar'), submit: box('.tiktok-submit-row'),
         video: box('.tiktok-preview-wrap'), form: box('.tiktok-form-card'),
-        overflow: main.scrollHeight > main.clientHeight + 1 || main.scrollWidth > main.clientWidth + 1 };
+        overflow: main.scrollWidth > main.clientWidth + 1 };
     });
     assert.equal(layout.overflow, false, `complete desktop composer fits ${viewport.width}x${viewport.height}`);
     assert.ok(layout.submit.bottom <= viewport.height, 'publish action is visible without scrolling');
@@ -271,12 +309,12 @@ test('publish dialog follows real bridge events, traps focus and distinguishes u
   // Portrait videos also fit the same viewport rather than pushing the form down.
   await reply('tiktok.media.selected', { ...fixtureMedia, mediaId: 'portrait', width: 360, height: 640 });
   assert.ok(await page.locator('.tiktok-preview-wrap').evaluate(el => Math.abs(el.clientWidth / el.clientHeight - 9 / 16) < .02));
-  assert.equal(await page.locator('.app-main').evaluate(el => el.scrollHeight > el.clientHeight + 1), false);
+  assert.ok(await page.locator('.tiktok-submit-row').evaluate(el => el.getBoundingClientRect().bottom <= innerHeight));
   await reply('tiktok.media.selected', fixtureMedia);
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.getByRole('checkbox', { name: /Nội dung này quảng bá/ }).check();
   await page.getByRole('checkbox', { name: 'Thương hiệu của bạn', exact: true }).check();
-  assert.equal(await page.locator('.app-main').evaluate(el => el.scrollHeight > el.clientHeight + 1), false, 'expanded disclosure still fits a desktop viewport');
+  assert.ok(await page.locator('.tiktok-submit-row').evaluate(el => el.getBoundingClientRect().bottom <= innerHeight), 'expanded disclosure keeps the publish action visible; history may scroll');
   await page.getByRole('checkbox', { name: /Nội dung này quảng bá/ }).uncheck();
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('textbox', { name: 'Caption' }).fill('Video kiểm tra giao diện');
@@ -305,8 +343,11 @@ test('publish dialog follows real bridge events, traps focus and distinguishes u
   await reply('tiktok.upload.completed', { publishJobId: 'job-test' });
   await status('PROCESSING_DOWNLOAD');
   await dialog.getByRole('heading', { name: 'TikTok đang xử lý video' }).waitFor();
-  await page.evaluate(() => window.reply({ type: 'tiktok.error', requestId: 'poll-test',
-    error: { code: 'test_network', message: 'Chưa lấy được trạng thái mới.' } }));
+  await page.evaluate(() => {
+    window.tiktokModule.refresh();
+    const requestId = window.sent.filter(m => m.type === 'tiktok.state.get').at(-1).requestId;
+    window.reply({ type: 'tiktok.error', requestId, error: { code: 'test_network', message: 'Chưa lấy được trạng thái mới.' } });
+  });
   await dialog.getByRole('alert').waitFor();
   await status('PROCESSING_DOWNLOAD');
   await page.waitForFunction(() => !document.querySelector('.tiktok-dialog-warning'));
@@ -358,6 +399,7 @@ test('restored jobs show processing and provider rejection inside the dialog', a
   const { page, reply, status } = await openPublishingFixture(t);
   await reply('tiktok.state', { enabled: true, configured: true, connection: fixtureConnection,
     activePublish: { publishJobId: 'job-test', status: 'PROCESSING_DOWNLOAD', isTerminal: false, uploadedBytes: 100000, publicPostIds: [] } });
+  await page.locator('.tiktok-running-jobs button').click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('heading', { name: 'TikTok đang xử lý video' }).waitFor();
   await status('FAILED', true, 'spam_risk_text');
@@ -389,6 +431,76 @@ test('creator policy changes during initialization end loading and show the acco
   assert.equal(await page.evaluate(() => window.tiktokModule.state.publish), null);
 });
 
+test('rapid A B A switching rejects stale replies, resets consent, and keeps concurrent jobs isolated', async t => {
+  const { page, reply } = await openPublishingFixture(t);
+  const accountB = { connectionId: 'account-b', creatorUsername: 'creator_b', creatorNickname: 'Creator B', status: 'Connected' };
+  await reply('tiktok.state', { enabled: true, configured: true, multiAccountEnabled: true, connections: [fixtureConnection, accountB] });
+  await page.getByRole('combobox', { name: 'Ai có thể xem video?' }).selectOption('SELF_ONLY');
+  await page.getByRole('checkbox', { name: /Bằng việc đăng/ }).check();
+  await page.evaluate(() => window.tiktokModule.refreshCreator());
+  const oldA = await page.evaluate(() => window.sent.filter(m => m.type === 'tiktok.creator.get').at(-1).requestId);
+  await page.getByRole('combobox', { name: 'Tài khoản nhận bài đăng' }).selectOption('account-b');
+  const requestB = await page.evaluate(() => window.sent.filter(m => m.type === 'tiktok.creator.get').at(-1).requestId);
+  await page.getByRole('combobox', { name: 'Tài khoản nhận bài đăng' }).selectOption('test-account');
+  const latestA = await page.evaluate(() => window.sent.filter(m => m.type === 'tiktok.creator.get').at(-1).requestId);
+  assert.notEqual(oldA, latestA);
+  await reply('tiktok.error', undefined, oldA); // Old error cannot overwrite a current form.
+  await reply('tiktok.creator', { connectionId: 'account-b', creatorUsername: 'stale_b' }, requestB);
+  await reply('tiktok.creator', { connectionId: 'test-account', creatorUsername: 'stale_a' }, oldA);
+  assert.equal(await page.evaluate(() => window.tiktokModule.state.creator), null);
+  assert.equal(await page.evaluate(() => window.tiktokModule.state.error), null);
+  const creator = { connectionId: 'test-account', creatorUsername: 'test_creator', creatorNickname: 'Dân lập trình',
+    privacyLevelOptions: ['SELF_ONLY'], commentDisabled: false, duetDisabled: false, stitchDisabled: false, maximumVideoDurationSeconds: 600 };
+  await reply('tiktok.creator', creator, latestA);
+  assert.equal(await page.getByRole('combobox', { name: 'Ai có thể xem video?' }).inputValue(), '');
+  assert.equal(await page.getByRole('checkbox', { name: /Bằng việc đăng/ }).isChecked(), false);
+  await page.getByRole('combobox', { name: 'Ai có thể xem video?' }).selectOption('SELF_ONLY');
+  await page.getByRole('checkbox', { name: /Bằng việc đăng/ }).check();
+  await page.getByRole('button', { name: 'Đăng lên TikTok', exact: true }).click();
+  const publishA = await page.evaluate(() => window.sent.filter(m => m.type === 'tiktok.publish.start').at(-1));
+  assert.equal(publishA.payload.connectionId, 'test-account');
+  assert.notEqual(publishA.payload.clientRequestId, publishA.payload.mediaId);
+  await reply('tiktok.publish.initialized', { publishJobId: 'job-a', connectionId: 'test-account' }, publishA.requestId);
+  assert.equal(await page.getByRole('combobox', { name: 'Tài khoản nhận bài đăng' }).isDisabled(), true);
+  await reply('tiktok.upload.completed', { publishJobId: 'job-a', connectionId: 'test-account' }, publishA.requestId);
+  await page.getByRole('dialog').getByRole('button', { name: 'Thu nhỏ', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Tài khoản nhận bài đăng' }).selectOption('account-b');
+  await reply('tiktok.creator', { ...creator, connectionId: 'account-b', creatorUsername: 'creator_b' });
+  await page.getByRole('combobox', { name: 'Ai có thể xem video?' }).selectOption('SELF_ONLY');
+  await page.getByRole('checkbox', { name: /Bằng việc đăng/ }).check();
+  await page.getByRole('button', { name: 'Đăng lên TikTok', exact: true }).click();
+  const publishB = await page.evaluate(() => window.sent.filter(m => m.type === 'tiktok.publish.start').at(-1));
+  assert.equal(publishB.payload.connectionId, 'account-b');
+  assert.notEqual(publishB.payload.clientRequestId, publishA.payload.clientRequestId);
+  await reply('tiktok.publish.initialized', { publishJobId: 'job-b', connectionId: 'account-b' }, publishB.requestId);
+  await reply('tiktok.upload.completed', { publishJobId: 'job-b', connectionId: 'account-b' }, publishB.requestId);
+  await page.getByRole('dialog').getByRole('button', { name: 'Thu nhỏ', exact: true }).click();
+  const jobs = ['a', 'b'].map(letter => ({ publishJobId: 'job-' + letter,
+    connectionId: letter === 'a' ? 'test-account' : 'account-b', creatorUsername: 'creator_' + letter,
+    status: 'PROCESSING_DOWNLOAD', isTerminal: false, uploadedBytes: 100000, publicPostIds: [], updatedAtUtc: new Date().toISOString() }));
+  await reply('tiktok.state', { enabled: true, configured: true, multiAccountEnabled: true, connections: [fixtureConnection, accountB], activePublishes: jobs });
+  assert.equal(await page.locator('.tiktok-running-jobs button').count(), 2);
+  await page.locator('.tiktok-running-jobs button').filter({ hasText: '@creator_a' }).click();
+  assert.match(await page.getByRole('dialog').textContent(), /@creator_a/);
+  assert.equal(await page.getByRole('dialog').getByRole('button', { name: 'Hủy tải lên' }).count(), 0);
+  assert.equal(await page.getByRole('dialog').locator('.tiktok-dialog-summary strong').count(), 0, 'another job never shows the currently selected file');
+  await page.getByRole('dialog').getByRole('button', { name: 'Thu nhỏ', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Tài khoản nhận bài đăng' }).selectOption('test-account');
+  await page.getByRole('button', { name: 'Quản lý (2)', exact: true }).click();
+  await page.getByRole('dialog').getByRole('textbox', { name: 'Tìm tài khoản TikTok' }).fill('creator_b');
+  assert.equal(await page.locator('.tiktok-account-row').count(), 1);
+  await page.getByRole('dialog').getByRole('button', { name: 'Ngắt', exact: true }).click();
+  assert.match(await page.getByRole('dialog').textContent(), /Có 1 bài sẽ dừng theo dõi/);
+  if (process.env.VIDEOMAKER_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.VIDEOMAKER_SCREENSHOT_DIR, 'tiktok-multi-account-manager.png') });
+  await page.getByRole('dialog').getByRole('button', { name: 'Ngắt tài khoản này', exact: true }).click();
+  const disconnect = await page.evaluate(() => window.sent.filter(m => m.type === 'tiktok.oauth.disconnect').at(-1));
+  assert.equal(disconnect.payload.connectionId, 'account-b');
+  await page.evaluate(requestId => window.reply({ type: 'tiktok.error', requestId,
+    error: { code: 'synthetic_failure', message: 'Chưa ngắt được tài khoản B.' } }), disconnect.requestId);
+  await page.getByRole('dialog').getByRole('alert').filter({ hasText: 'Chưa ngắt được tài khoản B.' }).waitFor();
+  assert.equal(await page.evaluate(() => window.tiktokModule.state.busy), false);
+});
+
 const fixtureConnection = { connectionId: 'test-account', creatorNickname: 'Dân lập trình', creatorUsername: 'test_creator' };
 const fixtureMedia = { mediaId: 'test-media', fileName: 'video-kiem-tra-giao-dien.mp4', mimeType: 'video/mp4',
   sizeBytes: 100000, durationSeconds: 2, width: 640, height: 360, framesPerSecond: 30, videoCodec: 'h264',
@@ -416,7 +528,26 @@ async function openPublishingFixture(t) {
     window.chrome ??= {};
     window.chrome.webview = { postMessage: message => window.sent.push(JSON.parse(message)),
       addEventListener: (_, listener) => listeners.add(listener), removeEventListener: (_, listener) => listeners.delete(listener) };
-    window.reply = message => listeners.forEach(listener => listener({ data: message }));
+    window.reply = message => {
+      // Match the native bridge: every reply carries the originating request and account.
+      const kinds = { 'tiktok.state': 'tiktok.state.get', 'tiktok.creator': 'tiktok.creator.get',
+        'tiktok.media.selected': 'tiktok.media.select', 'tiktok.operation.cancelled': 'tiktok.operation.cancel' };
+      if (!message.requestId) {
+        if (message.type === 'tiktok.media.selected') window.tiktokModule.selectMedia();
+        if (message.type === 'tiktok.state' && window.tiktokModule.state.feature.configured) window.tiktokModule.refresh();
+        const kind = kinds[message.type] || (message.type.startsWith('tiktok.upload.') ? 'tiktok.publish.start' : null);
+        message.requestId = window.sent.filter(m => m.type === kind).at(-1)?.requestId;
+      }
+      if (message.payload && ['tiktok.creator', 'tiktok.publish.initialized', 'tiktok.upload.progress', 'tiktok.upload.completed'].includes(message.type))
+        message.payload.connectionId ??= window.sent.find(m => m.requestId === message.requestId)?.payload?.connectionId;
+      if (message.payload?.activePublish) message.payload.activePublish.connectionId ??= message.payload.connection?.connectionId;
+      listeners.forEach(listener => listener({ data: message }));
+      if (message.type === 'tiktok.operation.cancelled') {
+        const original = window.sent.filter(m => m.type === 'tiktok.publish.start').at(-1);
+        listeners.forEach(listener => listener({ data: { type: 'tiktok.error', requestId: original.requestId,
+          error: { code: 'tiktok_operation_cancelled', message: 'Đã hủy thao tác.' } } }));
+      }
+    };
   });
   await page.addStyleTag({ content: fs.readFileSync(path.join(repo, 'TOOL-LOCAL/Web/src/styles.css'), 'utf8') });
   await page.addScriptTag({ content: interactiveBundle });
@@ -432,8 +563,10 @@ async function openPublishingFixture(t) {
     maximumVideoDurationSeconds: 600 });
   await reply('tiktok.media.selected', fixtureMedia);
   await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
-  const status = (status, isTerminal = false, failureReason) => reply('tiktok.publish.status', {
-    publishJobId: 'job-test', status, isTerminal, failureReason, uploadedBytes: 100000, publicPostIds: [], updatedAtUtc: new Date().toISOString()
+  const status = (status, isTerminal = false, failureReason) => reply('tiktok.state', {
+    enabled: true, configured: true, connections: [fixtureConnection],
+    recentPublishes: [{ connectionId: fixtureConnection.connectionId, publishJobId: 'job-test', status,
+      isTerminal, failureReason, uploadedBytes: 100000, publicPostIds: [], updatedAtUtc: new Date().toISOString() }]
   });
   return { page, reply, status };
 }

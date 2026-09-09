@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link2, LoaderCircle, Send, ShieldCheck, Unlink, Upload, X } from 'lucide-react';
+import { Link2, LoaderCircle, Send, ShieldCheck, Upload, X } from 'lucide-react';
 import type { TikTokPublishPayload } from './types';
 import type { useTikTokModule } from './useTikTokModule';
 import { describeTikTokUnavailable } from './tiktokAvailability';
 import { TikTokVideoPreview } from './TikTokVideoPreview';
 import { TikTokPublishDialog } from './TikTokPublishDialog';
+import { TikTokAccounts, TikTokHistory } from './TikTokAccounts';
 
 type TikTokModule = ReturnType<typeof useTikTokModule>;
 
@@ -38,10 +39,10 @@ export function TikTokPage({ module }: { module: TikTokModule }) {
       brandOrganic: false,
       consentConfirmed: false
     }));
-  }, [state.creator]);
+  }, [state.creator, state.selectedConnectionId]);
 
   useEffect(() => {
-    if (state.feature.connection) module.refreshCreator();
+    if (state.feature.connection && !state.selectedConnectionId) module.refreshCreator();
   }, [state.feature.connection?.connectionId]);
 
   if (state.loading && !state.feature.connection) {
@@ -52,6 +53,8 @@ export function TikTokPage({ module }: { module: TikTokModule }) {
     const unavailable = describeTikTokUnavailable(state.feature.unavailableReason);
     return (
       <div className="page-shell tiktok-page">
+        {Boolean(state.feature.connections?.length) && <TikTokAccounts module={module} />}
+        <TikTokPublishDialog state={state} onDismiss={module.hidePublishFeedback} onCancel={module.cancel} />
         <section className="tiktok-empty-card">
           <ShieldCheck size={34} />
           <h2>{unavailable.title}</h2>
@@ -59,11 +62,12 @@ export function TikTokPage({ module }: { module: TikTokModule }) {
           {state.error && <ErrorBanner message={state.error} onClose={module.clearError} />}
           <button className="start-button" disabled={state.loading || state.busy} onClick={module.refresh}>Kiểm tra lại</button>
         </section>
+        {Boolean(state.feature.connections?.length) && <TikTokHistory module={module} />}
       </div>
     );
   }
 
-  if (!state.feature.connection) {
+  if (!state.feature.connection && !state.feature.connections?.length) {
     return (
       <div className="page-shell tiktok-page">
         <section className="tiktok-empty-card">
@@ -73,13 +77,25 @@ export function TikTokPage({ module }: { module: TikTokModule }) {
             ? 'Tài khoản VideoMaker này được phép xác minh. Bấm Kết nối TikTok và cấp quyền trong trình duyệt, sau đó quay lại Admin xem kết quả. Cài đặt Admin sẽ mở sau khi xác minh thành công.'
             : 'VideoMaker sẽ mở trang ủy quyền chính thức trong trình duyệt. Mật khẩu TikTok không đi qua ứng dụng.'}</p>
           {state.error && <ErrorBanner message={state.error} onClose={module.clearError} />}
-          <button className="start-button" disabled={state.busy} onClick={module.connect}>
+          <button className="start-button" disabled={state.busy} onClick={() => module.connect()}>
             {state.busy ? <LoaderCircle className="spin" size={18} /> : <Link2 size={18} />}
             Kết nối TikTok
           </button>
         </section>
       </div>
     );
+  }
+
+  if (!state.feature.connection || state.feature.connection.status === 'ReconnectRequired' || state.feature.connection.status === 'Disconnected') {
+    return <div className="page-shell tiktok-page">
+      <TikTokPublishDialog state={state} onDismiss={module.hidePublishFeedback} onCancel={module.cancel} />
+      <TikTokAccounts module={module} />
+      <section className="tiktok-empty-card"><h2>{state.feature.connection ? 'Kết nối lại tài khoản TikTok' : 'Chọn tài khoản nhận bài đăng'}</h2>
+        <p>{state.feature.connection ? 'Tài khoản này cần được cấp quyền lại trước khi đăng video. Các tài khoản khác vẫn hoạt động riêng.' : 'Chọn một tài khoản ở phía trên để chuẩn bị video.'}</p>
+        {state.feature.connection && <button className="start-button" disabled={state.busy} onClick={() => module.connect(state.feature.connection!.connectionId)}>Kết nối lại</button>}
+        {state.error && <ErrorBanner message={state.error} onClose={module.clearError} />}
+      </section><TikTokHistory module={module} />
+    </div>;
   }
 
   const creator = state.creator;
@@ -94,18 +110,8 @@ export function TikTokPage({ module }: { module: TikTokModule }) {
 
   return (
     <div className="page-shell tiktok-page">
-      <TikTokPublishDialog state={state} onDismiss={module.hidePublishFeedback} onCancel={module.cancel} />
-      <section className="tiktok-account-bar">
-        <div className="tiktok-account-avatar" aria-hidden="true">♪</div>
-        <div className="tiktok-account-details">
-          <span>Đăng đến tài khoản</span>
-          <div className="tiktok-account-identity">
-            <strong>{creator?.creatorNickname || state.feature.connection.creatorNickname || 'TikTok creator'}</strong>
-            <small>@{creator?.creatorUsername || state.feature.connection.creatorUsername || 'đang tải'}</small>
-          </div>
-        </div>
-        <button className="danger-outline" disabled={controlsDisabled} onClick={module.disconnect}><Unlink size={16} /> Ngắt kết nối</button>
-      </section>
+      <TikTokPublishDialog state={state} onDismiss={module.hidePublishFeedback} onCancel={module.cancel} onNewAttempt={module.newPublishIntent} />
+      <TikTokAccounts module={module} />
 
       {state.error && !state.publishFeedback?.open && <ErrorBanner message={state.error} onClose={module.clearError} />}
 
@@ -232,7 +238,7 @@ export function TikTokPage({ module }: { module: TikTokModule }) {
           </div>
         </section>
       </div>
-
+      <TikTokHistory module={module} />
     </div>
   );
 }

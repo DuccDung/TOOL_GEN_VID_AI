@@ -143,7 +143,7 @@ public sealed class TikTokLocalTests
 
         Assert.Contains("feature: 'tikTokEnabled'", app, StringComparison.Ordinal);
         Assert.Contains("page: 'tiktok'", app, StringComparison.Ordinal);
-        Assert.Contains("postToHost('tiktok.state.get')", hook, StringComparison.Ordinal);
+        Assert.Contains("send('tiktok.state.get'", hook, StringComparison.Ordinal);
         Assert.Contains("_tiktokBridge.TryHandleAsync", form, StringComparison.Ordinal);
         Assert.Contains("MessagePrefix = \"tiktok.\"", bridge, StringComparison.Ordinal);
         Assert.Contains("File được đọc tại máy và tải trực tiếp lên TikTok", page, StringComparison.Ordinal);

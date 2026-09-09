@@ -379,6 +379,15 @@ builder.Services.AddHttpClient("ProviderCredentialTest", client =>
 {
     AllowAutoRedirect = false
 });
+builder.Services.AddSingleton<TikTokAvatarCache>();
+builder.Services.AddHttpClient("TikTokAvatarDownload", client => client.Timeout = TimeSpan.FromSeconds(10))
+    .RemoveAllLoggers()
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false, UseProxy = false, UseCookies = false,
+        ConnectTimeout = TimeSpan.FromSeconds(5),
+        ConnectCallback = KlingOutputProxyService.ConnectPublicHostAsync
+    });
 builder.Services.AddHttpClient<ITikTokApiClient, TikTokApiClient>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(30);

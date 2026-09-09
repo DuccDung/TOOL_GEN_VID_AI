@@ -63,6 +63,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 ### Đăng TikTok
 
 - Đây là item độc lập, theo tài khoản người dùng và không dùng organization/project video làm ownership.
+- Có thanh chọn tài khoản, quản lý thêm/kết nối lại/ngắt từng tài khoản và lịch sử riêng. Nhiều tài khoản cần migration 4.1.8 và `TikTok:MultiAccountEnabled=true` trên server; cấu hình workspace đã bật cờ này theo yêu cầu người dùng. Xem [hướng dẫn triển khai nhiều tài khoản](TRIEN_KHAI_TIKTOK_NHIEU_TAI_KHOAN.md).
 - Người dùng chọn MP4/MOV/WebM từ máy; đường dẫn và byte video ở desktop, không được gửi qua server.
 - Login Kit Desktop dùng OAuth 2.0 + PKCE qua trình duyệt hệ thống và loopback `127.0.0.1`. Server giữ `client_secret`, access/refresh token đã mã hóa và metadata job.
 - Global Admin nhập Client Key/Client Secret tại mục **Tích hợp TikTok**. Server mã hóa ngay, chỉ trả hint và giữ credential ở `Pending`; credential chỉ thành `Active` sau khi đúng Admin hoàn tất một lần OAuth thật trên Desktop.
@@ -88,7 +89,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - SePay mặc định `Enabled=false`.
 - Vietsub và OCR bật; dịch Qwen tắt; UI/cài đặt giọng Piper bật nhưng runtime/model không được coi là sẵn sàng khi chưa qua gate.
 - Item TikTok hiển thị mặc định ở desktop; quản lý credential trong Admin được hỗ trợ nhưng integration runtime vẫn tắt cho tới khi credential được OAuth xác minh. `TikTok:EmergencyDisabled` là kill switch theo môi trường.
-- Migration đến 4.1.7 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
+- Migration đến 4.1.8 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
 
 ## Yêu cầu phát triển
 
@@ -129,4 +130,4 @@ Desktop mặc định kết nối `https://localhost:7202/`. Có thể dùng `TO
 
 ## Phát hành
 
-Không publish chỉ từ một build xanh. Phải hoàn tất migration rehearsal đến 4.1.7, cấu hình rate/credential/budget, xác minh TikTok Developer App qua Global Admin nếu bật, smoke môi trường, kiểm tra FFmpeg `Approval scope: Release`, package integrity và rollback theo [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md).
+Không publish chỉ từ một build xanh. Phải hoàn tất migration rehearsal đến 4.1.8, cấu hình rate/credential/budget, xác minh TikTok Developer App qua Global Admin nếu bật, smoke môi trường, kiểm tra FFmpeg `Approval scope: Release`, package integrity và rollback theo [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md).

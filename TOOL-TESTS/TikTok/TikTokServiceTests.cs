@@ -10,7 +10,7 @@ using TOOL_SHARED.Contracts.TikTok;
 
 namespace TOOL_TESTS.TikTok;
 
-public sealed class TikTokServiceTests
+public sealed partial class TikTokServiceTests
 {
     [Theory]
     [InlineData(false, TikTokUnavailableReasons.SetupRequired)]
@@ -398,11 +398,12 @@ public sealed class TikTokServiceTests
     private static TikTokService CreateService(
         TikTokDbContext db,
         FakeTikTokApiClient? api = null,
-        bool auditedForPublicPosting = true)
+        bool auditedForPublicPosting = true, bool multiAccount = false)
     {
         var options = Options.Create(new TikTokOptions
         {
             Enabled = true,
+            MultiAccountEnabled = multiAccount,
             ClientKey = "test-client-key",
             ClientSecret = "test-client-secret",
             Scopes = ["video.publish"],
@@ -434,6 +435,12 @@ public sealed class TikTokServiceTests
         public Func<Task>? BeforeCreatorResponse { get; init; }
         public TikTokPublishInitPayload? LastPublishPayload { get; private set; }
         public int ExchangeCalls { get; private set; }
+        public int InitializeCalls { get; private set; }
+        public int RefreshCalls { get; private set; }
+        public string OpenId { get; set; } = "open-a";
+        public string? StatusAccessToken { get; private set; }
+        public Func<Task>? BeforeInitialize { get; set; }
+        public Exception? InitializeError { get; set; }
 
         public Task<TikTokTokenResult> ExchangeCodeAsync(
             TikTokAppCredentialMaterial credential,
@@ -443,14 +450,17 @@ public sealed class TikTokServiceTests
             CancellationToken cancellationToken)
         {
             ExchangeCalls++;
-            return Task.FromResult(new TikTokTokenResult("open-a", "video.publish", "access-a", 3600, "refresh-a", 86400));
+            return Task.FromResult(new TikTokTokenResult(OpenId, "video.publish", "access-a", 3600, "refresh-a", 86400));
         }
 
         public Task<TikTokTokenResult> RefreshTokenAsync(
             TikTokAppCredentialMaterial credential,
             string refreshToken,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new TikTokTokenResult("open-a", "video.publish", "access-b", 3600, "refresh-b", 86400));
+            CancellationToken cancellationToken)
+        {
+            RefreshCalls++;
+            return Task.FromResult(new TikTokTokenResult(OpenId, "video.publish", "access-b", 3600, "refresh-b", 86400));
+        }
 
         public Task RevokeAsync(
             TikTokAppCredentialMaterial credential,
@@ -464,15 +474,19 @@ public sealed class TikTokServiceTests
                 "creator-a", "Creator A", PrivateAccount ? ["SELF_ONLY", "FOLLOWER_OF_CREATOR"] : ["SELF_ONLY", "PUBLIC_TO_EVERYONE"], false, false, false, 600);
         }
 
-        public Task<TikTokPublishInitResult> InitializePublishAsync(string accessToken, TikTokPublishInitPayload payload, CancellationToken cancellationToken)
+        public async Task<TikTokPublishInitResult> InitializePublishAsync(string accessToken, TikTokPublishInitPayload payload, CancellationToken cancellationToken)
         {
+            InitializeCalls++;
+            if (BeforeInitialize is not null) await BeforeInitialize();
+            if (InitializeError is not null) throw InitializeError;
             LastPublishPayload = payload;
-            return Task.FromResult(new TikTokPublishInitResult(
-                "v_pub_file~test",
-                UploadUrl));
+            return new TikTokPublishInitResult("v_pub_file~test", UploadUrl);
         }
 
-        public Task<TikTokStatusResult> GetPublishStatusAsync(string accessToken, string publishId, CancellationToken cancellationToken) =>
-            Task.FromResult(new TikTokStatusResult("PUBLISH_COMPLETE", null, 1, ["123"]));
+        public Task<TikTokStatusResult> GetPublishStatusAsync(string accessToken, string publishId, CancellationToken cancellationToken)
+        {
+            StatusAccessToken = accessToken;
+            return Task.FromResult(new TikTokStatusResult("PUBLISH_COMPLETE", null, 1, ["123"]));
+        }
     }
 }

@@ -8,6 +8,9 @@ public sealed class TikTokOptions
 
     public bool Enabled { get; init; }
 
+    // Enable only after migration 4.1.8 and the compatible desktop have been deployed.
+    public bool MultiAccountEnabled { get; init; }
+
     public bool AdminManagedCredentialsEnabled { get; init; } = true;
 
     public bool EmergencyDisabled { get; init; }

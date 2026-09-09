@@ -28,7 +28,6 @@ public sealed class TikTokPublishingWorker(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<TikTokDbContext>();
-            var service = scope.ServiceProvider.GetRequiredService<ITikTokService>();
             var now = DateTime.UtcNow;
             var dueBefore = now.Subtract(PollInterval);
 
@@ -47,6 +46,7 @@ public sealed class TikTokPublishingWorker(
                 .AsNoTracking()
                 .Where(x => x.Status != TikTokPublishStatuses.Complete
                             && x.Status != TikTokPublishStatuses.Failed
+                            && (x.NextPollAtUtc == null || x.NextPollAtUtc <= now)
                             && x.UpdatedAtUtc <= dueBefore)
                 .OrderBy(x => x.UpdatedAtUtc)
                 .Select(x => new { x.TikTokPublishJobId, x.UserId })
@@ -55,9 +55,17 @@ public sealed class TikTokPublishingWorker(
 
             foreach (var job in pendingJobs)
             {
+                // Claim before HTTP; a process crash releases the job after this deadline.
+                var claimed = await db.PublishJobs.Where(x => x.TikTokPublishJobId == job.TikTokPublishJobId &&
+                    x.Status != TikTokPublishStatuses.Complete && x.Status != TikTokPublishStatuses.Failed &&
+                    (x.NextPollAtUtc == null || x.NextPollAtUtc <= now))
+                    .ExecuteUpdateAsync(updates => updates.SetProperty(x => x.NextPollAtUtc, now.AddMinutes(5)), cancellationToken);
+                if (claimed == 0) continue;
+                await using var jobScope = scopeFactory.CreateAsyncScope();
+                var jobService = jobScope.ServiceProvider.GetRequiredService<ITikTokService>();
                 try
                 {
-                    await service.GetPublishStatusAsync(job.UserId, job.TikTokPublishJobId, cancellationToken);
+                    await jobService.GetPublishStatusAsync(job.UserId, job.TikTokPublishJobId, cancellationToken);
                 }
                 catch (AccountApiException ex)
                 {
@@ -78,6 +86,13 @@ public sealed class TikTokPublishingWorker(
                         "TikTok publish reconciliation is temporarily unavailable for job {JobId}.",
                         job.TikTokPublishJobId);
                 }
+                finally
+                {
+                    if (!cancellationToken.IsCancellationRequested)
+                        await db.PublishJobs.Where(x => x.TikTokPublishJobId == job.TikTokPublishJobId)
+                            .ExecuteUpdateAsync(updates => updates.SetProperty(x => x.NextPollAtUtc, DateTime.UtcNow.AddSeconds(30)), cancellationToken);
+                    db.ChangeTracker.Clear();
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -95,7 +110,7 @@ public sealed class TikTokPublishingWorker(
         string errorCode,
         CancellationToken cancellationToken)
     {
-        if (errorCode is not ("tiktok_not_connected" or "tiktok_reconnect_required" or "tiktok_publish_scope_missing"))
+        if (errorCode is not ("tiktok_not_connected" or "tiktok_reconnect_required" or "tiktok_publish_scope_missing" or "tiktok_connection_not_found" or "tiktok_app_changed"))
         {
             return;
         }

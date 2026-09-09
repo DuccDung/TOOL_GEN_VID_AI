@@ -13,8 +13,10 @@ internal interface ITikTokGatewayClient
     Task<TikTokFeatureStateResponse> GetStateAsync(CancellationToken cancellationToken);
     Task<StartTikTokOAuthResponse> StartOAuthAsync(StartTikTokOAuthRequest request, CancellationToken cancellationToken);
     Task<TikTokFeatureStateResponse> CompleteOAuthAsync(CompleteTikTokOAuthRequest request, CancellationToken cancellationToken);
-    Task DisconnectAsync(CancellationToken cancellationToken);
-    Task<TikTokCreatorInfoResponse> GetCreatorInfoAsync(CancellationToken cancellationToken);
+    Task DisconnectAsync(CancellationToken cancellationToken, Guid? connectionId = null);
+    Task<TikTokCreatorInfoResponse> GetCreatorInfoAsync(CancellationToken cancellationToken, Guid? connectionId = null);
+    Task<TikTokPublishHistoryResponse> GetHistoryAsync(Guid? connectionId, int page, CancellationToken cancellationToken);
+    Task<TikTokDesktopAvatar?> GetAvatarAsync(Guid connectionId, CancellationToken cancellationToken) => Task.FromResult<TikTokDesktopAvatar?>(null);
     Task<InitializeTikTokPublishResponse> InitializePublishAsync(InitializeTikTokPublishRequest request, CancellationToken cancellationToken);
     Task<TikTokPublishStatusResponse> GetPublishStatusAsync(Guid publishJobId, CancellationToken cancellationToken);
 }
@@ -27,7 +29,7 @@ internal sealed class TikTokGatewayClient(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public Task<TikTokFeatureStateResponse> GetStateAsync(CancellationToken cancellationToken) =>
-        SendAsync<TikTokFeatureStateResponse>(HttpMethod.Get, "api/tiktok/state", null, cancellationToken, requireLicense: false);
+        SendAsync<TikTokFeatureStateResponse>(HttpMethod.Get, "api/tiktok/connections", null, cancellationToken, requireLicense: false);
 
     public Task<StartTikTokOAuthResponse> StartOAuthAsync(
         StartTikTokOAuthRequest request,
@@ -40,11 +42,16 @@ internal sealed class TikTokGatewayClient(
         CancellationToken cancellationToken) =>
         SendAsync<TikTokFeatureStateResponse>(HttpMethod.Post, "api/tiktok/oauth/complete", request, cancellationToken, requireLicense: false);
 
-    public Task DisconnectAsync(CancellationToken cancellationToken) =>
-        SendWithoutResponseAsync(HttpMethod.Delete, "api/tiktok/connection", null, cancellationToken, requireLicense: false);
+    public Task DisconnectAsync(CancellationToken cancellationToken, Guid? connectionId = null) =>
+        SendWithoutResponseAsync(HttpMethod.Delete, connectionId is { } id ? $"api/tiktok/connections/{id:D}" : "api/tiktok/connection", null, cancellationToken, requireLicense: false);
 
-    public Task<TikTokCreatorInfoResponse> GetCreatorInfoAsync(CancellationToken cancellationToken) =>
-        SendAsync<TikTokCreatorInfoResponse>(HttpMethod.Post, "api/tiktok/creator-info", new { }, cancellationToken);
+    public Task<TikTokCreatorInfoResponse> GetCreatorInfoAsync(CancellationToken cancellationToken, Guid? connectionId = null) =>
+        SendAsync<TikTokCreatorInfoResponse>(HttpMethod.Post, connectionId is { } id ? $"api/tiktok/connections/{id:D}/creator-info" : "api/tiktok/creator-info", new { }, cancellationToken);
+
+    public Task<TikTokPublishHistoryResponse> GetHistoryAsync(Guid? connectionId, int page, CancellationToken cancellationToken) =>
+        SendAsync<TikTokPublishHistoryResponse>(HttpMethod.Get,
+            $"api/tiktok/publish-history?page={page}&pageSize=20" + (connectionId is { } id ? $"&connectionId={id:D}" : ""),
+            null, cancellationToken, requireLicense: false);
 
     public Task<InitializeTikTokPublishResponse> InitializePublishAsync(
         InitializeTikTokPublishRequest request,
@@ -55,6 +62,31 @@ internal sealed class TikTokGatewayClient(
         Guid publishJobId,
         CancellationToken cancellationToken) =>
         SendAsync<TikTokPublishStatusResponse>(HttpMethod.Get, $"api/tiktok/publish/{publishJobId:D}", null, cancellationToken, requireLicense: false);
+
+    public async Task<TikTokDesktopAvatar?> GetAvatarAsync(Guid connectionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await SendCoreAsync(HttpMethod.Get, $"api/tiktok/connections/{connectionId:D}/avatar", null, cancellationToken, false);
+            if (response.Content.Headers.ContentLength > TikTokAvatarValidation.MaximumBytes) return null;
+            var mime = response.Content.Headers.ContentType?.MediaType;
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var output = new MemoryStream();
+            var buffer = new byte[16384];
+            int read;
+            while ((read = await stream.ReadAsync(buffer, cancellationToken)) > 0)
+            {
+                if (output.Length + read > TikTokAvatarValidation.MaximumBytes) return null;
+                output.Write(buffer, 0, read);
+            }
+            var bytes = output.ToArray();
+            return TikTokAvatarValidation.IsValid(bytes, mime) ? new(bytes, mime!) : null;
+        }
+        catch (Exception error) when (error is AccountClientException or HttpRequestException or IOException or OperationCanceledException)
+        {
+            return null;
+        }
+    }
 
     private async Task<TResponse> SendAsync<TResponse>(
         HttpMethod method,

@@ -43,6 +43,7 @@ database/VideoFactory.4.1.4.VoiceProfileApproval.sql
 database/VideoFactory.4.1.5.SpeechVerificationReview.sql
 database/VideoFactory.4.1.6.TikTokPublishing.sql
 database/VideoFactory.4.1.7.TikTokAdminCredentials.sql
+database/VideoFactory.4.1.8.TikTokMultiAccount.sql
 ```
 
 Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
@@ -155,9 +156,11 @@ Speech verification là rollout độc lập cho workflow không phải `OpenAiS
 
 ## 7A. Rollout TikTok Direct Post
 
+Với nhiều tài khoản, thực hiện [quy trình migration, bật cờ và rollback](TRIEN_KHAI_TIKTOK_NHIEU_TAI_KHOAN.md). Cấu hình workspace đã bật `TikTok:MultiAccountEnabled=true` theo yêu cầu người dùng sau khi áp migration vào `DUNGDEV / VideoFactory`. Khi triển khai sang môi trường khác, giữ cờ tắt cho đến khi migration, server và desktop cùng tương thích. Migration 4.1.8 vẫn bắt buộc cho server mới khi cờ tắt. Không hạ về server một tài khoản sau khi có nhiều connection. Tắt cờ chỉ ngăn mở rộng tài khoản, giữ vận hành các kết nối hiện có.
+
 Item TikTok mặc định hiển thị trên desktop nhưng thao tác phía server vẫn tắt. Trước khi bật integration:
 
-- apply/rehearsal tuần tự `VideoFactory.4.1.6.TikTokPublishing.sql` rồi `VideoFactory.4.1.7.TikTokAdminCredentials.sql`, kiểm tra Data Protection key ring nằm trong backup/restore plan;
+- apply/rehearsal tuần tự migration TikTok 4.1.6, 4.1.7 rồi 4.1.8, kiểm tra Data Protection key ring nằm trong backup/restore plan;
 - đăng ký đúng loopback redirect URI cho Login Kit Desktop, có scope `video.publish`, hoàn tất app review/audit theo yêu cầu TikTok;
 - Global Admin mở **Tích hợp TikTok**, nhập credential đã regenerate, bấm yêu cầu xác minh, rồi trong 15 phút đăng nhập đúng tài khoản Admin đó trên Desktop và hoàn tất **Kết nối TikTok**;
 - dùng tài khoản test để smoke connect/reconnect/disconnect, creator-info, privacy/interaction/disclosure, chunk upload, retry, restart desktop và terminal status;

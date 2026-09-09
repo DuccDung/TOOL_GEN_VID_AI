@@ -85,7 +85,8 @@ public sealed class TikTokAdminService(
         var audited = hasDatabaseActive
             ? settings?.AuditedForPublicPosting == true
             : _options.AuditedForPublicPosting;
-        var connectedUsers = await db.Connections.CountAsync(x => x.RevokedAtUtc == null, cancellationToken);
+        var connectedAccounts = await db.Connections.CountAsync(x => x.RevokedAtUtc == null, cancellationToken);
+        var connectedUsers = await db.Connections.Where(x => x.RevokedAtUtc == null).Select(x => x.UserId).Distinct().CountAsync(cancellationToken);
         var pendingJobs = await db.PublishJobs.CountAsync(
             x => x.Status != TikTokPublishStatuses.Complete &&
                  x.Status != TikTokPublishStatuses.Failed,
@@ -102,7 +103,7 @@ public sealed class TikTokAdminService(
             pendingJobs,
             credentials.OrderByDescending(x => x.Version)
                 .Select(x => ToSummary(x, adminUserId, now))
-                .ToArray());
+                .ToArray(), connectedAccounts);
     }
 
     public async Task<TikTokAdminStateResponse> SaveCredentialAsync(

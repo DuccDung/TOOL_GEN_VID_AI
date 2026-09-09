@@ -27,7 +27,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 | BytePlus Seedance | Adapter, polling và catalog đã có; seed mặc định `Disabled` | Rate, credential, allowlist output thực tế và rollout riêng |
 | Fal/Veo | Adapter, polling và luồng `SceneFirstFrame` cho `LongForm` đã có; seed mặc định `Disabled` | Migration 4.1.1 trên môi trường đích, rate/credential và smoke trả phí |
 | SePay/license/seat | Payment order, webhook matching, organization provisioning và seat allocation đã có trong source; mặc định `Enabled=false` | Staging rehearsal, secret/webhook validation, QR/bank config, idempotency và đối soát |
-| TikTok Direct Post | OAuth Desktop PKCE, Global Admin credential write-only/mã hóa/xác minh, token mã hóa server, local media picker/preview/upload, idempotency, status recovery và server polling đã có; runtime chưa có credential Active | Migration 4.1.7 trên môi trường đích, TikTok app/scope/review/audit và smoke bằng tài khoản test |
+| TikTok Direct Post | Đã có OAuth, credential Admin, upload local, server polling và quản lý nhiều tài khoản; người dùng báo luồng đăng hiện tại hoạt động | Nhiều tài khoản cần migration 4.1.8, bật MultiAccountEnabled và smoke riêng trên môi trường được phép |
 | Vietsub editor | Workspace local, manifest, SQLite, timeline/editor và API registry metadata đã có | Smoke desktop trên bundle phát hành và nghiệm thu UX |
 | Paddle OCR local | Luồng OCR local và test liên quan đã có; feature mặc định bật | Runtime/model bundle thật, smoke Anh/Trung và đo tài nguyên |
 | Dịch local Qwen | Worker x64 cô lập, IPC, readiness fingerprint, apply/retry/cancel và hai resource profile Standard/Low-memory đã có; RAM/commit thấp là cảnh báo có xác nhận được snapshot vào job, còn hard blocker thực tế vẫn chặn; feature mặc định tắt | Verify model thật, benchmark mức khuyến nghị Low-memory 6 GB, probe Anh/Trung và smoke desktop cả nhánh cảnh báo; test opt-in đang có thể `Skipped` |
@@ -72,6 +72,7 @@ Chuỗi migration đang có trong source:
 19. `VideoFactory.4.1.5.SpeechVerificationReview.sql`
 20. `VideoFactory.4.1.6.TikTokPublishing.sql`
 21. `VideoFactory.4.1.7.TikTokAdminCredentials.sql`
+22. `VideoFactory.4.1.8.TikTokMultiAccount.sql`
 
 `VideoFactory.DesktopLeastPrivilege.sql` cấp quyền chuyển tiếp cho desktop; `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql` là script xác minh chuyên biệt. Không có bằng chứng trong repository rằng toàn bộ chuỗi trên đã được áp dụng vào production.
 
@@ -146,3 +147,11 @@ Mốc bổ sung quản lý TikTok Developer App trong Global Admin ngày 2026-09
 - [KIEM_THU_VA_NGHIEM_THU.md](KIEM_THU_VA_NGHIEM_THU.md): test matrix và Definition of Done.
 
 Các `AGENTS.md` theo thư mục vẫn có hiệu lực. Các file provenance, license và nguồn ảnh bên thứ ba là hồ sơ bắt buộc, không phải tài liệu lịch sử để gom/xóa.
+
+## Cập nhật nhiều tài khoản TikTok — 2026-09-09
+
+Source đã có quản lý nhiều tài khoản, OAuth reconnect đúng danh tính, ClientRequestId riêng mỗi lần đăng, durable publish attempts, lịch sử/account snapshot, worker claim và bridge chống phản hồi đến muộn. Theo yêu cầu trực tiếp của người dùng, migration `4.1.8-tiktok-multi-account` đã áp vào `DUNGDEV / VideoFactory` và xác minh lúc 15:35 UTC ngày 2026-09-09. Sau đó đã bật `TikTok:MultiAccountEnabled=true` trong `TOOL-SERVER/appsettings.json` của workspace theo yêu cầu người dùng.
+
+Kiểm tra tại workspace: Release build thành công (0 warning C#, 0 error); .NET 1029 passed / 0 failed / 3 skipped với SQL test opt-in; frontend 77 passed / 0 failed; browser desktop 7 passed, Admin state/browser 18 passed. Model Qwen/Piper bị skip không được tính là đạt. Vite vẫn cảnh báo bundle lớn hơn 500 kB.
+
+Đã rehearsal migration 4.1.8 hai lần và khóa đồng thời trên instance SQL Server LocalDB riêng với dữ liệu giả. Khi áp vào database đang dùng, đã backup COPY_ONLY/CHECKSUM, VERIFYONLY, restore bản sao đầy đủ, chạy migration hai lần trên bản sao và DBCC CHECKDB đạt. So sánh trước/sau trên database đích xác nhận giữ nguyên 1 kết nối, 2 job, OAuth/app credential và 1 Data Protection key. Bản sao thử đã dọn, backup được giữ lại. Khi bật cờ, server đang chạy từ checkout `Branch-Tool-Sub`, khác workspace hiện tại; chưa restart server đó hoặc xác minh cờ trên runtime. Chưa OAuth/đăng thật nhiều tài khoản và chưa phát hành. Người dùng đã báo đăng được bằng luồng cũ; đó không phải kết quả smoke nhiều tài khoản của agent. Chi tiết và đường dẫn backup: [TRIEN_KHAI_TIKTOK_NHIEU_TAI_KHOAN.md](TRIEN_KHAI_TIKTOK_NHIEU_TAI_KHOAN.md).

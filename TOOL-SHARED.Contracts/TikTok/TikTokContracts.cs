@@ -6,7 +6,15 @@ public sealed record TikTokFeatureStateResponse(
     TikTokConnectionSummary? Connection,
     TikTokPublishStatusResponse? ActivePublish = null,
     bool IsCredentialVerification = false,
-    string? UnavailableReason = null);
+    string? UnavailableReason = null,
+    IReadOnlyList<TikTokConnectionSummary>? Connections = null,
+    IReadOnlyList<TikTokPublishStatusResponse>? ActivePublishes = null,
+    bool MultiAccountEnabled = false,
+    Guid? ConnectedConnectionId = null,
+    IReadOnlyList<TikTokPublishStatusResponse>? RecentPublishes = null,
+    IReadOnlyList<TikTokPublishAttemptSummary>? UnresolvedAttempts = null);
+
+public sealed record TikTokPublishAttemptSummary(Guid ClientRequestId, Guid ConnectionId, string Status, DateTime CreatedAtUtc);
 
 public static class TikTokUnavailableReasons
 {
@@ -24,11 +32,15 @@ public sealed record TikTokConnectionSummary(
     IReadOnlyList<string> Scopes,
     DateTime AccessTokenExpiresAtUtc,
     DateTime RefreshTokenExpiresAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    string Status = "Connected",
+    string? AvatarUrl = null);
 
 public sealed record StartTikTokOAuthRequest(
     string RedirectUri,
-    string CodeChallenge);
+    string CodeChallenge,
+    Guid? TargetConnectionId = null,
+    bool MultiAccount = false);
 
 public sealed record StartTikTokOAuthResponse(
     Guid OAuthSessionId,
@@ -50,7 +62,9 @@ public sealed record TikTokCreatorInfoResponse(
     bool DuetDisabled,
     bool StitchDisabled,
     int MaximumVideoDurationSeconds,
-    TikTokPublishingIssue? PublishingIssue = null);
+    TikTokPublishingIssue? PublishingIssue = null,
+    Guid? ConnectionId = null,
+    string? AvatarUrl = null);
 
 public sealed record TikTokPublishingIssue(string Code, string Message);
 
@@ -66,7 +80,8 @@ public sealed record InitializeTikTokPublishRequest(
     bool IsAiGenerated,
     long VideoSizeBytes,
     decimal VideoDurationSeconds,
-    string MimeType);
+    string MimeType,
+    Guid? ConnectionId = null);
 
 // When BlockedCreator is present, no job or upload has been initialized;
 // consumers must show its PublishingIssue and ignore the upload fields.
@@ -76,7 +91,8 @@ public sealed record InitializeTikTokPublishResponse(
     long ChunkSizeBytes,
     int TotalChunkCount,
     DateTime UploadUrlExpiresAtUtc,
-    TikTokCreatorInfoResponse? BlockedCreator = null);
+    TikTokCreatorInfoResponse? BlockedCreator = null,
+    Guid? ConnectionId = null);
 
 public sealed record TikTokPublishStatusResponse(
     Guid PublishJobId,
@@ -85,7 +101,17 @@ public sealed record TikTokPublishStatusResponse(
     long UploadedBytes,
     IReadOnlyList<string> PublicPostIds,
     DateTime UpdatedAtUtc,
-    bool IsTerminal);
+    bool IsTerminal,
+    Guid? ConnectionId = null,
+    string? CreatorUsername = null,
+    string? CreatorNickname = null,
+    DateTime? CreatedAtUtc = null);
+
+public sealed record TikTokPublishHistoryResponse(
+    IReadOnlyList<TikTokPublishStatusResponse> Items,
+    int Page,
+    int PageSize,
+    int TotalCount);
 
 public sealed record TikTokAdminStateResponse(
     bool AdminManagementEnabled,
@@ -96,7 +122,8 @@ public sealed record TikTokAdminStateResponse(
     IReadOnlyList<string> Scopes,
     int ConnectedUserCount,
     int PendingPublishJobCount,
-    IReadOnlyList<TikTokAdminCredentialSummary> Credentials);
+    IReadOnlyList<TikTokAdminCredentialSummary> Credentials,
+    int ConnectedAccountCount = 0);
 
 public sealed record TikTokAdminCredentialSummary(
     Guid CredentialId,

@@ -20,7 +20,8 @@ public sealed record TikTokCreatorResult(
     bool CommentDisabled,
     bool DuetDisabled,
     bool StitchDisabled,
-    int MaximumVideoDurationSeconds);
+    int MaximumVideoDurationSeconds,
+    string? AvatarUrl = null);
 
 public sealed record TikTokPublishInitResult(string PublishId, string UploadUrl);
 
@@ -158,7 +159,8 @@ public sealed class TikTokApiClient(HttpClient httpClient) : ITikTokApiClient
             envelope.CommentDisabled,
             envelope.DuetDisabled,
             envelope.StitchDisabled,
-            envelope.MaximumVideoPostDurationSeconds);
+            envelope.MaximumVideoPostDurationSeconds,
+            envelope.CreatorAvatarUrl);
     }
 
     public async Task<TikTokPublishInitResult> InitializePublishAsync(
@@ -329,7 +331,8 @@ public sealed class TikTokApiClient(HttpClient httpClient) : ITikTokApiClient
         [property: JsonPropertyName("comment_disabled")] bool CommentDisabled,
         [property: JsonPropertyName("duet_disabled")] bool DuetDisabled,
         [property: JsonPropertyName("stitch_disabled")] bool StitchDisabled,
-        [property: JsonPropertyName("max_video_post_duration_sec")] int MaximumVideoPostDurationSeconds);
+        [property: JsonPropertyName("max_video_post_duration_sec")] int MaximumVideoPostDurationSeconds,
+        [property: JsonPropertyName("creator_avatar_url")] string? CreatorAvatarUrl);
 
     private sealed record PublishData(
         [property: JsonPropertyName("publish_id")] string? PublishId,

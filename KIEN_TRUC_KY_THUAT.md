@@ -76,7 +76,7 @@ Server tách phạm vi dữ liệu bằng các context chính:
 - `ProviderAdminDbContext`: thao tác quản trị provider/catalog.
 - `VideoFactoryDbContext`: project, scene, asset và generation workflow.
 - `VietsubDbContext`: registry metadata `vs.Projects`.
-- `TikTokDbContext`: app credential/version, integration settings, connection, OAuth session và publish job trong schema `social`; audit quản trị ghi vào `auth.AccountAuditLogs`.
+- `TikTokDbContext`: app credential/version, integration settings, nhiều connection theo user/app/OpenId, OAuth session có target connection, publish attempt và publish job trong schema `social`; audit quản trị ghi vào `auth.AccountAuditLogs`.
 
 Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs`, `social` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp.
 
@@ -101,7 +101,11 @@ Server có các background worker cho request/provider polling, settlement/relea
 
 Task provider tiếp tục chạy sau khi desktop đóng. Desktop reconnect bằng status API/idempotency thay vì gửi lại request mới tùy tiện.
 
-`TikTokPublishingWorker` polling các publish job chưa terminal theo batch. Signed upload URL chỉ dùng trong desktop native để chuyển byte file local; worker/server không đọc file người dùng và không trả URL này cho React.
+`TikTokPublishingWorker` polling các publish job chưa terminal theo batch, luôn dùng `job.TikTokConnectionId`. Worker claim bằng `NextPollAtUtc` trước outbound để phối hợp nhiều instance; claim hết hạn sau 5 phút nếu tiến trình chết, lượt tiếp theo sau 30 giây. API trạng thái chỉ đọc SQL, không gọi provider theo tần suất refresh của desktop. Signed upload URL chỉ dùng trong desktop native để chuyển byte file local; worker/server không đọc file người dùng và không trả URL này cho React.
+
+`TikTokOperationLock` dùng SQL Server session application lock trên connection riêng cho OAuth theo user, refresh/reconnect/disconnect theo connection và publish theo user/request ID. Không giữ transaction SQL qua HTTP. `TikTokPublishAttempts` được commit trước Direct Post init; payload hash gắn account và metadata. Attempt chưa xác định kết quả không được submit lại sau restart.
+
+Bridge TikTok gắn request ID, connection ID, media ID và ID lần đăng; snapshot file trước init, kiểm tra lại trước upload. React bỏ phản hồi creator/history đến muộn, giữ job theo ID và tài khoản. Avatar đi qua proxy có ownership, exact HTTPS host/443, DNS public pinning, không redirect, giới hạn MIME/signature/1 MiB; native đưa ảnh qua virtual host nội bộ. URL CDN có chữ ký được mã hóa, không sang React và HTTP client tải avatar tắt log URL.
 
 `TikTokCredentialRuntime` ưu tiên credential database `Active`; cấu hình Client Key/Secret tĩnh chỉ là đường tương thích legacy. OAuth session snapshot `TikTokAppCredentialId`. Credential `Pending` chỉ khả dụng cho đúng Global Admin trong cửa sổ xác minh và chỉ được kích hoạt sau code exchange có scope `video.publish`.
 

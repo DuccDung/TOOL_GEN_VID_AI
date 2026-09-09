@@ -6,6 +6,8 @@ export type TikTokConnection = {
   accessTokenExpiresAtUtc: string;
   refreshTokenExpiresAtUtc: string;
   updatedAtUtc: string;
+  status?: 'Connected' | 'ReconnectRequired' | 'Disconnected';
+  avatarUrl?: string | null;
 };
 
 export type TikTokFeatureState = {
@@ -15,6 +17,12 @@ export type TikTokFeatureState = {
   activePublish?: TikTokPublishStatus | null;
   isCredentialVerification?: boolean;
   unavailableReason?: string | null;
+  connections?: TikTokConnection[];
+  activePublishes?: TikTokPublishStatus[];
+  recentPublishes?: TikTokPublishStatus[];
+  multiAccountEnabled?: boolean;
+  connectedConnectionId?: string | null;
+  unresolvedAttempts?: { clientRequestId: string; connectionId: string; status: string; createdAtUtc: string }[];
 };
 
 export type TikTokCreatorInfo = {
@@ -26,6 +34,8 @@ export type TikTokCreatorInfo = {
   stitchDisabled: boolean;
   maximumVideoDurationSeconds: number;
   publishingIssue?: { code: string; message: string } | null;
+  connectionId?: string | null;
+  avatarUrl?: string | null;
 };
 
 export type TikTokMedia = {
@@ -42,6 +52,7 @@ export type TikTokMedia = {
 };
 
 export type TikTokUploadProgress = {
+  connectionId?: string | null;
   publishJobId: string;
   uploadedBytes: number;
   totalBytes: number;
@@ -51,6 +62,10 @@ export type TikTokUploadProgress = {
 };
 
 export type TikTokPublishStatus = {
+  connectionId?: string | null;
+  creatorUsername?: string | null;
+  creatorNickname?: string | null;
+  createdAtUtc?: string | null;
   publishJobId: string;
   status: string;
   failureReason?: string | null;
@@ -74,6 +89,10 @@ export type TikTokPublishPayload = {
 };
 
 export type TikTokModuleState = {
+  selectedConnectionId: string | null;
+  jobs: TikTokPublishStatus[];
+  history: TikTokPublishHistory | null;
+  historyLoading: boolean;
   feature: TikTokFeatureState;
   creator: TikTokCreatorInfo | null;
   media: TikTokMedia | null;
@@ -87,5 +106,17 @@ export type TikTokModuleState = {
     phase: 'preparing' | 'uploading' | 'processing' | 'success' | 'error' | 'cancelled';
     open: boolean;
     message?: string | null;
+    connectionId?: string | null;
+    accountLabel?: string;
+    jobId?: string;
+    fileName?: string;
+    canCancel?: boolean;
   } | null;
+};
+
+export type TikTokPublishHistory = {
+  items: TikTokPublishStatus[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
 };
