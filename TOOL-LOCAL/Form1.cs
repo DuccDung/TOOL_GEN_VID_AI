@@ -34,6 +34,7 @@ public partial class Form1 : Form
     private readonly LicenseSessionManager? _licenseManager;
     private readonly IProjectService? _projectService;
     private readonly IProjectRenderService? _projectRenderService;
+    private readonly TOOL_LOCAL.LocalVoice.LocalVoiceService? _localVoiceService;
     private readonly IProjectGenerationService? _generationService;
     private readonly IGenerationClient? _generationClient;
     private readonly ProjectWorkspaceService? _workspaceService;
@@ -113,12 +114,14 @@ public partial class Form1 : Form
         TikTokMediaService tiktokMediaService,
         TikTokMediaPreviewService tiktokPreviewService,
         TikTokUploadService tiktokUploadService,
-        LicensePaymentApiClient licensePaymentClient) : this()
+        LicensePaymentApiClient licensePaymentClient,
+        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoiceService = null) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
         _projectService = projectService;
         _projectRenderService = projectRenderService;
+        _localVoiceService = localVoiceService;
         _generationService = generationService;
         _generationClient = generationClient;
         _workspaceService = workspaceService;
@@ -230,7 +233,8 @@ public partial class Form1 : Form
                 PostJsonToWebView,
                 CloseAfterLogout,
                 _featureOptions.SpeechSynchronizationEnabled,
-                finalVideoExportSelector: SelectFinalVideoDestination);
+                finalVideoExportSelector: SelectFinalVideoDestination,
+                localVoice: _localVoiceService);
             _vietsubBridge = new VietsubWebBridge(
                 _featureOptions.VietsubEnabled,
                 PostJsonToWebView,

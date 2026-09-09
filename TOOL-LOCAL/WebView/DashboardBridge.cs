@@ -13,7 +13,7 @@ using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.WebView;
 
-internal sealed class DashboardBridge : IDisposable
+internal sealed partial class DashboardBridge : IDisposable
 {
     private const int MaxMessageLength = 64 * 1024;
     private readonly AccountSessionManager _sessionManager;
@@ -56,7 +56,8 @@ internal sealed class DashboardBridge : IDisposable
         Action closeApplication,
         bool speechSynchronizationEnabled = false,
         string? applicationDirectory = null,
-        Func<string?>? finalVideoExportSelector = null)
+        Func<string?>? finalVideoExportSelector = null,
+        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoice = null)
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -73,6 +74,7 @@ internal sealed class DashboardBridge : IDisposable
         _postJson = postJson;
         _closeApplication = closeApplication;
         _finalVideoExportSelector = finalVideoExportSelector;
+        _localVoice = localVoice;
     }
 
     public async Task HandleAsync(string json, CancellationToken cancellationToken = default)
@@ -111,6 +113,15 @@ internal sealed class DashboardBridge : IDisposable
 
         try
         {
+            if (request.Type.StartsWith("local-voice.", StringComparison.Ordinal))
+            {
+                await HandleLocalVoiceAsync(request, cancellationToken);
+                return;
+            }
+            if (request.Type is "project.select" or "organization.select" or "auth.logout")
+                if (_selectedProjectId is { } previousProject) _localVoice?.Cancel(previousProject);
+            if (_localVoice?.IsRunning == true && request.Type is "generation.video" or "generation.content" or "render.final")
+                throw new ArgumentException("Hãy chờ hoặc hủy tác vụ giọng local trước khi tạo hoặc dựng video.");
             switch (request.Type)
             {
                 case "app.ready":

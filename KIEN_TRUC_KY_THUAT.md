@@ -1,5 +1,15 @@
 # Kiến trúc kỹ thuật VideoMaker
 
+## Bổ sung 2026-09-09: local Veo voice consistency
+
+React LocalVoicePanel → bridge local-voice.* → LocalVoiceService. Server POST /api/generation/local-voice/access chỉ kiểm session/device/license/membership/role/project qua access service hiện hành; không reserve budget, gọi provider hoặc nhận media.
+
+Policy snapshot là vf.Projects.LocalVoicePolicyVersion; JSON checkpoint, voice samples và model nằm trong workspace local. Desktop chỉ ghi workflow vf, không thêm quyền ai/auth/vs. LocalVoiceRuntime chạy Python riêng với môi trường lọc, không provider key/Cloud client; installer và dependency/model lock là đường tải component duy nhất. Worker dùng profile CPU OpenVoice V2 converter + Silero + Demucs, không gọi module TTS.
+
+LocalVoiceStore kiểm path/reparse/hash, atomic checkpoint, khóa project liên tiến trình. Runtime có khóa component, xác minh byte trước khi chạy Python; worker nhận request riêng của host, kiểm lại model ghim và chặn socket API trong inference (không phải sandbox cấp hệ điều hành). LocalVoiceMedia kiểm duration/audio/stream và promote MP4 từ .part. Asset được duyệt là SceneVideoVoiceConverted, lưu lineage metadata; ProjectRenderService kiểm lại clip, mẫu và source trước và sau render.
+
+Cloud Fal LipSync dang dở trên branch được giữ nguyên và tách khỏi build mặc định bằng EnableExperimentalFalLipSync. Đây không phải fallback hoặc dependency của local voice.
+
 > Mô tả ranh giới module và đường gọi theo source ngày 2026-09-07.
 
 ## 1. Tổng thể

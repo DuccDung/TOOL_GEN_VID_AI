@@ -58,6 +58,24 @@ export type PreviewSummary = {
   mimeType?: string | null;
 };
 
+export type LocalVoiceStatus = 'Preparing' | 'DetectingSpeech' | 'SeparatingAudio' | 'ConvertingVoice' | 'Mixing' |
+  'Validating' | 'ReviewRequired' | 'Approved' | 'Rejected' | 'Failed' | 'Cancelled' | 'Stale' | 'Interrupted';
+export type LocalVoiceAnchor = {
+  id: string; characterId: string; sceneId: string; status: LocalVoiceStatus; previewUrl?: string | null; message?: string | null;
+};
+export type LocalVoiceJob = LocalVoiceAnchor & {
+  errorCode?: string | null; anchorId?: string | null; sourceFingerprint: string;
+  nativePreviewUrl?: string | null; nativeException: boolean;
+};
+export type LocalVoiceState = {
+  projectId: string; enabled: boolean; running: boolean;
+  runtime: { status: 'DISABLED' | 'NOT_INSTALLED' | 'INVALID' | 'READY'; message: string; fingerprint?: string | null };
+  anchors: LocalVoiceAnchor[]; jobs: LocalVoiceJob[];
+};
+export type LocalVoiceAction = {
+  projectId: string; sceneId?: string; jobId?: string; anchorId?: string; sceneIds?: string[]; confirmed?: boolean; reason?: string;
+};
+
 export type CharacterReferenceSummary = {
   characterReferenceId: string;
   referenceType: string;

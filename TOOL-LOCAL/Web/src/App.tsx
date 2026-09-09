@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { LocalVoicePanel } from './features/localVoice/LocalVoicePanel';
 import {
   ArrowLeft,
   ArrowRight,
@@ -3395,7 +3396,7 @@ function LongVideoPage({
     }
 
     if (activeStep === 'storyboard') {
-      return <StoryboardSection
+      return <><LocalVoicePanel project={project} busy={busy} /><StoryboardSection
         project={project}
         assetLibrary={assetLibrary}
         sceneFirstFrames={sceneFirstFrames}
@@ -3420,11 +3421,12 @@ function LongVideoPage({
         onUpdateSceneAssets={onUpdateSceneAssets}
         onConfirmSceneAssets={onConfirmSceneAssets}
         assetConfirmBusyId={assetConfirmBusyId}
-      />;
+      /></>;
     }
 
     return <>
       <LongVideoExportOverview project={project} mediaTools={mediaTools} />
+      <LocalVoicePanel project={project} busy={busy} />
       <RenderProgressCard
         project={project}
         busy={busy}

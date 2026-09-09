@@ -13,6 +13,68 @@ namespace TOOL_TESTS.Projects;
 public sealed class ProjectRenderServiceTests
 {
     [Fact]
+    public async Task LocalVoicePolicy_WithoutGuard_DoesNotFallBackToNativeApproval()
+    {
+        await using var f = await RenderFixture.CreateAsync("SceneVideo", true);
+        await using (var db = f.Factory.CreateDbContext())
+        {
+            (await db.Projects.SingleAsync()).LocalVoicePolicyVersion = LocalVoicePolicies.VeoLocalVoiceConsistency;
+            (await db.Scenes.SingleAsync()).Dialogue = "Test dialogue";
+            await db.SaveChangesAsync();
+        }
+        await Assert.ThrowsAsync<ArgumentException>(() => f.Service.RenderFinalVideoAsync(f.ProjectId, f.UserId, default));
+        Assert.Equal(0, f.Renderer.CallCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalVoicePolicy_UsesOnlyExplicitlyApprovedCurrentResult(bool nativeException)
+    {
+        await using var f = await TOOL_TESTS.LocalVoice.LocalVoiceServiceTests.Fixture.CreateAsync();
+        await f.EnableAsync();
+        await using (var setup = f.Factory.CreateDbContext())
+        {
+            var project = await setup.Projects.SingleAsync(); project.OutputWidth = 1280; project.OutputHeight = 720;
+            await setup.SaveChangesAsync();
+        }
+        if (nativeException) await f.Service.UseNativeAsync(f.ProjectId, f.User, f.Org, f.SceneId, true, "Reviewed native exception", default);
+        else
+        {
+            var anchor = await f.ReviewableAsync(true); await f.ApproveAsync(anchor);
+            var conversion = await f.ReviewableAsync(false, f.Store.Read(f.ProjectId, anchor.Id)); await f.ApproveAsync(conversion);
+        }
+        var renderer = new CaptureRenderer();
+        var service = new ProjectRenderService(f.Factory, new ProjectWorkspaceService(f.Root), new ReadyMediaToolPreflight(),
+            renderer, new StubOutputInspector(true, durationSeconds: 4), localVoice: f.Service);
+        var result = await service.RenderFinalVideoAsync(f.ProjectId, f.User, default);
+        Assert.NotEqual(Guid.Empty, result.FinalVideoId);
+        Assert.EndsWith(nativeException ? "native.mp4" : "converted.mp4", renderer.Manifest!.ScenePaths.Single());
+    }
+
+    [Fact]
+    public async Task LocalVoicePolicy_ChangedDuringRender_DoesNotPublishFinalVideo()
+    {
+        await using var f = await TOOL_TESTS.LocalVoice.LocalVoiceServiceTests.Fixture.CreateAsync(); await f.EnableAsync();
+        await using (var setup = f.Factory.CreateDbContext())
+        {
+            var project = await setup.Projects.SingleAsync(); project.OutputWidth = 1280; project.OutputHeight = 720;
+            await setup.SaveChangesAsync();
+        }
+        await f.Service.UseNativeAsync(f.ProjectId, f.User, f.Org, f.SceneId, true, "Reviewed exception", default);
+        var renderer = new CaptureRenderer { BeforeReturn = async () => {
+            await using var db = f.Factory.CreateDbContext(); (await db.Scenes.SingleAsync()).Dialogue = "Changed during render";
+            await db.SaveChangesAsync();
+        } };
+        var service = new ProjectRenderService(f.Factory, new ProjectWorkspaceService(f.Root), new ReadyMediaToolPreflight(),
+            renderer, new StubOutputInspector(true, durationSeconds: 4), localVoice: f.Service);
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.RenderFinalVideoAsync(f.ProjectId, f.User, default));
+        await using var verify = f.Factory.CreateDbContext();
+        Assert.Empty(await verify.FinalVideos.ToListAsync());
+        Assert.Equal("Failed", (await verify.RenderJobs.SingleAsync()).Status);
+    }
+
+    [Fact]
     public async Task RenderFinalVideo_UsesOnlyApprovedSceneVideoAndPersistsValidatedOutput()
     {
         await using var fixture = await RenderFixture.CreateAsync("SceneVideo", nativeAudioAudible: true);
@@ -770,6 +832,7 @@ public sealed class ProjectRenderServiceTests
 
     private sealed class CaptureRenderer : IFinalMediaRenderer
     {
+        public Func<Task>? BeforeReturn { get; init; }
         public int CallCount { get; private set; }
         public FinalRenderManifest? Manifest { get; private set; }
 
@@ -781,6 +844,7 @@ public sealed class ProjectRenderServiceTests
             Manifest = manifest;
             Directory.CreateDirectory(Path.GetDirectoryName(manifest.OutputPath)!);
             await File.WriteAllBytesAsync(manifest.OutputPath, "valid-final-video"u8.ToArray(), cancellationToken);
+            if (BeforeReturn is not null) await BeforeReturn();
         }
     }
 

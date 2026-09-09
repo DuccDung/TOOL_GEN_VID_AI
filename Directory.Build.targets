@@ -1,0 +1,11 @@
+<Project>
+  <!-- Incomplete Fal cloud lip-sync sources are retained for independent development.
+       They are not part of the local voice-conversion feature. Opting in still requires
+       completing their schema, pricing and dependency-injection integration. -->
+  <ItemGroup Condition="'$(EnableExperimentalFalLipSync)' != 'true' And '$(MSBuildProjectName)' == 'TOOL-SERVER'">
+    <Compile Remove="Generation\LipSync*.cs;Generation\FalLipSyncPolicy.cs;Models\LipSync*.cs;Controllers\AdminRuntimeSettingsController.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EnableExperimentalFalLipSync)' != 'true' And '$(MSBuildProjectName)' == 'TOOL-TESTS'">
+    <Compile Remove="Generation\LipSync*.cs;Generation\FalLipSyncClientTests.cs;Database\DynamicLipSyncPublicUrlMigrationTests.cs;Database\LipSyncGenerationMigrationTests.cs" />
+  </ItemGroup>
+</Project>

@@ -12,6 +12,7 @@ VideoMaker là hệ thống desktop/server hỗ trợ tạo video bằng AI và 
 4. [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md) — database, secret, pricing, credential, rollout, rollback và publish.
 5. [KIEM_THU_VA_NGHIEM_THU.md](KIEM_THU_VA_NGHIEM_THU.md) — test matrix và điều kiện nghiệm thu.
 6. [AGENTS.md](AGENTS.md) — quy tắc dành cho AI agent.
+7. [DE_XUAT_NGHIEP_VU_DONG_NHAT_GIONG_VEO_LOCAL.md](DE_XUAT_NGHIEP_VU_DONG_NHAT_GIONG_VEO_LOCAL.md) — nghiệp vụ gốc; xem [trạng thái triển khai thử nghiệm](KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md).
 
 Khi tài liệu khác source hoặc migration, source/migration là sự thật kỹ thuật. Khi mô tả nghiệp vụ khác nhau, ưu tiên `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`.
 
@@ -46,6 +47,8 @@ Solution: `TOOL_GEN_POST_VIDEO.slnx`.
 `ProviderNativeVerified` dùng Native Audio, kiểm tra kỹ thuật rồi nghe/checklist/duyệt trực tiếp trong video dài, không gọi ASR. `CanonicalVoice` dùng voice profile/version đã duyệt, TTS WAV và ghép lời có lineage; `NativeVoiceOver` đi thẳng sang tạo video nền khi WAV hợp lệ, còn `OnCameraDialogue` dừng ở trạng thái chờ lip-sync.
 
 Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ tự scene plan và bỏ qua cảnh chưa duyệt. FinalVideo có thể xuất MP4 nhiều lần sau khi kiểm lại SHA-256 mà không render hoặc gọi provider lại.
+
+Đồng nhất giọng Veo local (thử nghiệm, mặc định tắt): chọn mẫu giọng từ clip native đã duyệt cho mỗi nhân vật, chạy VAD/tách giọng/chuyển màu giọng local, nghe duyệt rồi mới render. Không TTS hay Cloud lip-sync. Cần migration 4.1.8 và runtime được cài/probe; xem [hướng dẫn bật và nghiệm thu](KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md). Có source không đồng nghĩa model tiếng Việt hoặc production đã được nghiệm thu.
 
 ### Video ngắn
 

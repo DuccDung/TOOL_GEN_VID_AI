@@ -139,6 +139,8 @@ public sealed class DesktopFeatureOptions
     public bool VietsubLocalVoiceEnabled { get; init; } = true;
 
     public bool SpeechSynchronizationEnabled { get; init; }
+
+    public bool VeoLocalVoiceConsistencyEnabled { get; init; }
 }
 
 public sealed class DesktopSpeechSynchronizationOptions

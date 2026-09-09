@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using TOOL_LOCAL.Data;
 using TOOL_LOCAL.Data.Models;
 using TOOL_LOCAL.Media;
+using TOOL_LOCAL.LocalVoice;
 using TOOL_LOCAL.Storage;
 using TOOL_SHARED.Contracts.Generation;
 
@@ -45,7 +46,8 @@ internal sealed class ProjectRenderService(
     IFinalMediaRenderer renderer,
     IFinalOutputInspector outputInspector,
     bool speechVerificationEnabled = true,
-    decimal targetSceneLoudnessLufs = -16m) : IProjectRenderService
+    decimal targetSceneLoudnessLufs = -16m,
+    LocalVoiceService? localVoice = null) : IProjectRenderService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string SceneAudioSyncPolicyVersion = "scene-audio-sync-v3";
@@ -137,6 +139,15 @@ internal sealed class ProjectRenderService(
                     var asset = canonicalNarration
                         ? scene.ApprovedRenderMediaAsset
                         : scene.ApprovedRenderMediaAsset ?? generation?.OutputMediaAsset;
+                    var localVoiceRequired = project.LocalVoicePolicyVersion == LocalVoicePolicies.VeoLocalVoiceConsistency &&
+                        speechMode == KlingSpeechModes.OnCameraDialogue;
+                    if (localVoiceRequired)
+                    {
+                        if (localVoice is null) throw new ArgumentException("Chưa có bộ kiểm tra giọng local cho project này.");
+                        asset = await localVoice.ResolveRenderAsync(dbContext, project, scene, cancellationToken);
+                        // Native approval alone is not final approval after local voice is enabled.
+                        if (asset is null) continue;
+                    }
                     var silentOutput = string.Equals(
                         ReadStringProperty(generation?.OutputMediaAsset?.MetadataJson, "audioStrategy"),
                         "SilentOutput",
@@ -191,7 +202,7 @@ internal sealed class ProjectRenderService(
                              ReadStringProperty(asset?.MetadataJson, "audioSyncPolicyVersion")));
                     var assetTypeValid = canonicalNarration
                         ? asset?.AssetType == "SceneVideoNarrated"
-                        : asset?.AssetType == "SceneVideo";
+                        : asset?.AssetType == "SceneVideo" || localVoiceRequired && asset?.AssetType == LocalVoicePolicies.AssetType;
                     var audioAudible = canonicalNarration
                         ? ReadBooleanProperty(asset?.MetadataJson, "canonicalVoiceAudible")
                         : ReadBooleanProperty(asset?.MetadataJson, "nativeAudioAudible");
@@ -243,9 +254,12 @@ internal sealed class ProjectRenderService(
                         asset.Sha256,
                         asset.DurationMs ?? generation.ActualDurationMs ?? generation.RequestedDurationMs,
                         asset.AssetType,
-                        canonicalNarration || !silentOutput));
+                        canonicalNarration || !silentOutput,
+                        localVoiceRequired,
+                        localVoiceRequired ? localVoice!.GetRenderApprovalFingerprint(projectId, scene.SceneId, asset.MediaAssetId) : null));
                 }
 
+                if (sources.Count == 0) throw new ArgumentException("Chưa có cảnh đủ điều kiện dựng. Hãy duyệt kết quả giọng local hoặc xác nhận ngoại lệ native.");
                 var version = (await dbContext.RenderJobs
                     .Where(x => x.ProjectId == projectId)
                     .MaxAsync(x => (int?)x.Version, cancellationToken) ?? 0) + 1;
@@ -258,6 +272,7 @@ internal sealed class ProjectRenderService(
                     project.OutputHeight,
                     project.OutputFrameRate,
                     project.SpeechProductionPolicy,
+                    project.LocalVoicePolicyVersion,
                     sources.Any(source => source.AudioEnabled),
                     sources);
             }
@@ -277,6 +292,7 @@ internal sealed class ProjectRenderService(
                     ? "CanonicalVoice"
                     : input.AudioEnabled ? "ProviderNative" : "SilentOutput",
                 input.SpeechProductionPolicy,
+                input.LocalVoicePolicyVersion,
                 input.ProjectId,
                 input.ScenePlanVersion,
                 input.Version,
@@ -294,7 +310,8 @@ internal sealed class ProjectRenderService(
                     source.Sha256,
                     source.DurationMs,
                     source.AssetType,
-                    source.AudioEnabled
+                    source.AudioEnabled,
+                    source.LocalVoiceApprovalFingerprint
                 })
             }, JsonOptions);
             var manifestHash = Sha256Hex(manifestJson);
@@ -363,6 +380,7 @@ internal sealed class ProjectRenderService(
                     inspection.Probe,
                     inspection.AudioQuality,
                     expectedSceneCount = input.Sources.Count,
+                    input.LocalVoicePolicyVersion,
                     expectedDurationMs = input.Sources.Sum(x => x.DurationMs)
                 }, JsonOptions);
                 var mediaAssetId = Guid.NewGuid();
@@ -375,6 +393,17 @@ internal sealed class ProjectRenderService(
                 var project = await dbContext.Projects.SingleAsync(
                     x => x.ProjectId == input.ProjectId,
                     cancellationToken);
+                if (project.LocalVoicePolicyVersion != input.LocalVoicePolicyVersion ||
+                    project.CurrentScenePlanVersion != input.ScenePlanVersion || project.DeletedAtUtc is not null)
+                    throw new InvalidDataException("Project đã thay đổi trong khi dựng video. Hãy dựng lại từ phiên bản hiện hành.");
+                foreach (var source in input.Sources.Where(x => x.LocalVoiceRequired))
+                {
+                    var scene = await dbContext.Scenes.AsNoTracking().SingleAsync(x => x.SceneId == source.SceneId, cancellationToken);
+                    var currentAsset = localVoice is null ? null : await localVoice.ResolveRenderAsync(dbContext, project, scene, cancellationToken);
+                    if (currentAsset?.MediaAssetId != source.MediaAssetId || currentAsset.Sha256 != source.Sha256 ||
+                        source.LocalVoiceApprovalFingerprint != localVoice!.GetRenderApprovalFingerprint(input.ProjectId, source.SceneId, currentAsset.MediaAssetId))
+                        throw new InvalidDataException("Nguồn hoặc mẫu giọng đã thay đổi khi dựng. Bản dựng không được công nhận.");
+                }
                 dbContext.MediaAssets.Add(new MediaAsset
                 {
                     MediaAssetId = mediaAssetId,
@@ -774,6 +803,7 @@ internal sealed class ProjectRenderService(
         int Height,
         decimal FramesPerSecond,
         string SpeechProductionPolicy,
+        string? LocalVoicePolicyVersion,
         bool AudioEnabled,
         IReadOnlyList<RenderSource> Sources);
 
@@ -793,5 +823,7 @@ internal sealed class ProjectRenderService(
         string Sha256,
         long DurationMs,
         string AssetType,
-        bool AudioEnabled);
+        bool AudioEnabled,
+        bool LocalVoiceRequired,
+        string? LocalVoiceApprovalFingerprint);
 }

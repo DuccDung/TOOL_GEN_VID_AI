@@ -1,5 +1,13 @@
 # Kiểm thử và nghiệm thu VideoMaker
 
+### Veo local voice — kiểm thử bổ sung 2026-09-09
+
+TOOL-TESTS/LocalVoice, các test local policy trong ProjectRenderServiceTests, và Web/src/features/localVoice/*.test.ts bao phủ policy, access, stale/hash, checkpoint, cancel/retry/idempotency, duyệt riêng, native exception, cleanup và FFmpeg remux. Fake model/media chỉ chứng minh điều phối, không chứng minh chất lượng tiếng Việt.
+
+LocalVoiceModelTests mặc định **Skipped**, chỉ chạy khi có VM_LOCAL_VOICE_COMPONENT_ROOT, VM_LOCAL_VOICE_SMOKE_SOURCE và VM_LOCAL_VOICE_SMOKE_ANCHOR. Hai sample phải có quyền sử dụng. Technical smoke kiểm nạp model, VAD/separation/conversion, audible/duration, video packet hash và cache retry; không chấm khẩu hình hoặc nhận diện giọng bằng tai.
+
+Trước production cần rehearsal migration trên clone, UI WebView2 thật, 2–3 clip Veo tiếng Việt cùng nhân vật, giọng nam/nữ, âm nền, lỗi/no-speech/multiple-speaker, restart/retry, nghe A/B và đo CPU/RAM/thời gian. Thiếu clip thật hoặc model test bị skip phải ghi chưa nghiệm thu. Test cloud LipSync bị loại khỏi build thử nghiệm không được tính Passed hoặc Skipped của runner.
+
 > Ma trận kiểm thử và Definition of Done. Rà soát ngày 2026-09-07.
 
 Kết quả phải ghi rõ thời điểm, commit/worktree, môi trường và số Passed/Failed/Skipped. Không dùng mốc lịch sử như kết quả của lần thay đổi mới.

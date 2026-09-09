@@ -151,6 +151,13 @@ internal static class Program
                 var finalOutputInspector = new FinalOutputInspector(
                     mediaProbe,
                     audioQualityValidator);
+                var generationClient = new ServerGenerationClient(
+                    generationHttpClient, sessionManager, licenseManager);
+                using var localVoiceService = new TOOL_LOCAL.LocalVoice.LocalVoiceService(
+                    dbContextFactory, new TOOL_LOCAL.LocalVoice.LocalVoiceStore(workspaceService),
+                    new TOOL_LOCAL.LocalVoice.LocalVoiceRuntime(workspaceService.WorkspaceRoot, options.Features.VeoLocalVoiceConsistencyEnabled),
+                    new TOOL_LOCAL.LocalVoice.LocalVoiceMedia(mediaToolPaths.FfmpegPath, mediaProcessRunner, mediaProbe, audioQualityValidator),
+                    generationClient);
                 var projectRenderService = new ProjectRenderService(
                     dbContextFactory,
                     workspaceService,
@@ -158,11 +165,8 @@ internal static class Program
                     finalMediaRenderer,
                     finalOutputInspector,
                     options.Features.SpeechSynchronizationEnabled,
-                    options.SpeechSynchronization.TargetLoudnessLufs);
-                var generationClient = new ServerGenerationClient(
-                    generationHttpClient,
-                    sessionManager,
-                    licenseManager);
+                    options.SpeechSynchronization.TargetLoudnessLufs,
+                    localVoiceService);
                 var generationService = new ProjectGenerationService(
                     dbContextFactory,
                     workspaceService,
@@ -332,7 +336,8 @@ internal static class Program
                     tiktokMediaService,
                     tiktokPreviewService,
                     tiktokUploadService,
-                    licensePaymentClient);
+                    licensePaymentClient,
+                    localVoiceService);
                 try
                 {
                     Application.Run(mainForm);

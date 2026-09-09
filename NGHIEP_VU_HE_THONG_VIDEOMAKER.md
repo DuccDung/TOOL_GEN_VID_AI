@@ -1,5 +1,15 @@
 # Nghiệp vụ và kiến trúc VideoMaker
 
+## Bổ sung 2026-09-09: đồng nhất giọng Veo local (thử nghiệm)
+
+- Chỉ project Fal/Veo OpenAiStructuredPlan + ProviderNativeVerified; native clip đã duyệt, cảnh thoại một nhân vật, generation 4/6/8 giây. Bật rõ cho từng project; không đổi ngầm project cũ.
+- Mỗi nhân vật dùng Voice Anchor lấy từ đoạn nói sạch của clip native. Người dùng xác nhận quyền dùng giọng, clip một người nói, nghe mẫu rồi duyệt; không nhận mẫu giọng ngoài trong MVP.
+- Chỉ speech-to-speech: VAD, separation, voice conversion, giữ residual và trộn lại, remux hình gốc. Không TTS, ASR Cloud hay fallback lip-sync có phí; không hứa bảo đảm khẩu hình chỉ từ thời lượng.
+- Kết quả chạy xong ở ReviewRequired; phải nghe kiểm tra câu chữ, mẫu giọng, khẩu hình và âm nền. Duyệt mẫu khác, sửa lời/prompt/nhân vật hoặc đổi nguồn làm kết quả cũ hết hiệu lực.
+- Batch do người dùng chọn; lỗi/hủy có checkpoint và chạy lại local, không tạo request Veo. Ngoại lệ dùng native phải có xác nhận, lý do, người duyệt và thời gian.
+- Khi policy local bật, native approval không tự trở thành final approval. Render chỉ dùng converted result hoặc ngoại lệ native được duyệt còn khớp hash/snapshot; bỏ qua cảnh chưa đủ duyệt và báo lỗi nếu không còn cảnh nào.
+- Giữ native, anchor, checkpoint và kết quả; dọn intermediate theo thao tác xác nhận có allowlist. Model mặc định tắt cho đến khi có nghiệm thu thật; chi tiết trạng thái ở nhật ký triển khai.
+
 > Nguồn sự thật nghiệp vụ hiện hành. Rà soát theo source ngày 2026-09-07.
 
 Trạng thái triển khai nằm trong `BOI_CANH_HE_THONG_HIEN_HANH.md`; kiến trúc kỹ thuật nằm trong `KIEN_TRUC_KY_THUAT.md`; hướng dẫn vận hành nằm trong `VAN_HANH_VA_PHAT_HANH.md`.

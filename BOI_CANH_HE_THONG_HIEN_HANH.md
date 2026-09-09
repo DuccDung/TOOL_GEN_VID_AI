@@ -1,5 +1,11 @@
 # Bối cảnh hệ thống hiện hành
 
+### Bổ sung 2026-09-09 trên branch fix-voice
+
+Đã bổ sung luồng thử nghiệm đồng nhất giọng Veo local: policy/migration 4.1.8, runtime/worker, anchor/job/retry/duyệt, UI và render guard. Features.VeoLocalVoiceConsistencyEnabled=false mặc định. Không tự chạy migration, không request provider có phí, chưa rollout; chất lượng tiếng Việt/khẩu hình trên clip Veo thật còn phải nghiệm thu. Kết quả lệnh của worktree và phạm vi chưa đạt được ghi riêng tại [KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md](KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md), không thay bằng số test lịch sử dưới đây.
+
+Theo yêu cầu và database người dùng chỉ định, migration 4.1.8 đã áp thành công trên DUNGDEV / VideoFactory ngày 2026-09-09 sau backup mới, checksum verification, restore thật và kiểm tra idempotency/constraint trên clone. Đã xác minh cột/constraint/version, dữ liệu 17 project cũ giữ nguyên và 0 project được tự bật local policy. Backup được giữ, database rehearsal đã dọn; chi tiết trong biên bản cuối nhật ký triển khai. Không bật feature hoặc coi việc áp schema là nghiệm thu ứng dụng/production; WebView2, quyền desktop thật và clip Veo tiếng Việt vẫn cần kiểm tra.
+
 > Chỉ mục trạng thái liên module. Rà soát theo source ngày 2026-09-07.
 
 Tài liệu này phân biệt rõ bốn mức: **đã có trong source**, **đã có kiểm thử tự động**, **đã xác minh thủ công trên môi trường**, và **đã rollout production**. Không được suy từ mức trước sang mức sau nếu thiếu bằng chứng.
