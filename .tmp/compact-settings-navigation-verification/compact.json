@@ -1,0 +1,13 @@
+{
+  "mode": "compact",
+  "zoom": 1,
+  "button": {
+    "x": 275,
+    "y": 140,
+    "width": 98.421875,
+    "height": 28
+  },
+  "label": "Tạo dự án mới",
+  "headerHeight": 76,
+  "insideSettings": true
+}

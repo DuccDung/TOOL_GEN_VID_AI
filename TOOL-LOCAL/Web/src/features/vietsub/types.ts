@@ -1,4 +1,8 @@
+import type { VietsubNoticeEvents } from './vietsubNoticeEvents';
+
 export type VietsubModuleState = {
+  cloudAvailability?: VietsubCloudAvailability | null;
+  noticeEvents?: VietsubNoticeEvents;
   enabled: boolean;
   initialized: boolean;
   loading: boolean;
@@ -13,6 +17,8 @@ export type VietsubModuleState = {
   subtitleWorkspace?: VietsubSubtitleWorkspace | null;
   subtitlePage?: VietsubSubtitlePage | null;
   timelineWindow?: VietsubTimelineWindow | null;
+  subtitleStyle: VietsubSubtitleStyle;
+  audioMixSettings: VietsubAudioMixSettings;
   subtitleNotice?: string | null;
   translationNotice?: string | null;
   translationResourceAlert?: VietsubTranslationResourceAlert | null;
@@ -29,6 +35,12 @@ export type VietsubModuleState = {
   activeJob?: VietsubJobSummary | null;
   ocrActivationRequest?: VietsubOcrActivationRequest | null;
   timelineMediaEvent?: VietsubTimelineMediaEvent | null;
+};
+
+export type VietsubCloudAvailability = {
+  available: boolean;
+  errorCode?: string | null;
+  message?: string | null;
 };
 
 export type VietsubOcrRegion = {
@@ -163,6 +175,8 @@ export type VietsubVoiceTimingDiagnostic = {
 };
 
 export type VietsubVoiceWorkspace = {
+  requiresRebuild?: boolean;
+  enabledCueCount?: number;
   settings: VietsubVoiceSettings;
   voices: VietsubVoiceCatalogItem[];
   timeline?: VietsubVoiceArtifact | null;
@@ -282,6 +296,8 @@ export type VietsubSubtitleWorkspace = {
 };
 
 export type VietsubSubtitleTrackSummary = {
+  voiceEnabledCueCount?: number;
+  voiceTranslatedCueCount?: number;
   trackId: string;
   displayName: string;
   languageCode: string;
@@ -294,6 +310,7 @@ export type VietsubSubtitleTrackSummary = {
 };
 
 export type VietsubSubtitleCue = {
+  voiceEnabled?: boolean;
   cueId: string;
   cueIndex: number;
   startMilliseconds: number;
@@ -323,6 +340,48 @@ export type VietsubSubtitlePage = {
 
 export type VietsubSubtitleStatus = 'ALL' | 'PENDING' | 'TRANSLATED' | 'LOCKED' | 'WARNING';
 
+export type VietsubSubtitleStylePreset = 'READABLE' | 'VERTICAL' | 'OUTLINE' | 'TIKTOK' | 'CINEMA' | 'YELLOW' | 'MINIMAL' | 'CUSTOM';
+
+export type VietsubSubtitleAlignment = 'BOTTOM_LEFT' | 'BOTTOM_CENTER' | 'BOTTOM_RIGHT';
+
+export type VietsubSubtitleVerticalPosition = 'TOP' | 'MIDDLE' | 'BOTTOM' | 'CUSTOM';
+
+export type VietsubSubtitleStyle = {
+  presetId: VietsubSubtitleStylePreset;
+  fontFamily: 'Arial' | 'Segoe UI' | 'Tahoma' | 'Verdana' | 'Times New Roman';
+  fontSizePercent: number;
+  bold: boolean;
+  italic: boolean;
+  textColor: string;
+  textOpacity: number;
+  outlineColor: string;
+  outlineOpacity: number;
+  outlineWidthPercent: number;
+  shadowColor: string;
+  shadowOpacity: number;
+  shadowOffsetPercent: number;
+  backgroundEnabled: boolean;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  alignment: VietsubSubtitleAlignment;
+  verticalPosition: VietsubSubtitleVerticalPosition;
+  positionXPercent: number;
+  positionYPercent: number;
+  bottomMarginPercent: number;
+  horizontalMarginPercent: number;
+  maxWidthPercent: number;
+  lineHeight: number;
+  maxLines: 1 | 2 | 3;
+};
+
+export type VietsubAudioMixSettings = {
+  originalVolume: number;
+  translatedVoiceVolume: number;
+  originalMuted: boolean;
+  translatedVoiceMuted: boolean;
+  autoDuckOriginal: boolean;
+};
+
 export type VietsubSubtitlePageQuery = {
   trackId?: string | null;
   offset: number;
@@ -333,6 +392,7 @@ export type VietsubSubtitlePageQuery = {
 };
 
 export type VietsubTimelineCue = {
+  voiceEnabled?: boolean;
   cueId: string;
   cueIndex: number;
   startMilliseconds: number;

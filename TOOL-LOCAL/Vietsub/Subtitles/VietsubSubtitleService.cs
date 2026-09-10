@@ -22,7 +22,9 @@ internal sealed record VietsubSubtitleTrackSummary(
     int CueCount,
     int TranslatedCueCount,
     int WarningCueCount,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    int VoiceEnabledCueCount = 0,
+    int VoiceTranslatedCueCount = 0);
 
 internal sealed record VietsubSubtitleWorkspaceSummary(
     Guid? ActiveTrackId,
@@ -44,7 +46,8 @@ internal sealed record VietsubSubtitleCueSummary(
     bool TranslationLocked,
     string? QualityStatus,
     IReadOnlyList<string> Warnings,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    bool VoiceEnabled = true);
 
 internal sealed record VietsubSubtitlePage(
     Guid TrackId,
@@ -75,7 +78,8 @@ internal sealed record VietsubTimelineCueSummary(
     string? QualityStatus,
     bool HasWarnings,
     bool HasTranslation,
-    string PreviewText);
+    string PreviewText,
+    bool VoiceEnabled = true);
 
 internal sealed record VietsubTimelineWindow(
     Guid TrackId,
@@ -90,6 +94,14 @@ internal sealed record VietsubTimelineWindowQuery(
     long WindowStartMilliseconds,
     long WindowEndMilliseconds,
     int MaximumCues);
+
+internal sealed record VietsubTimelineCueTimingUpdate(
+    int TrackRevision,
+    long PreviousStartMilliseconds,
+    long PreviousEndMilliseconds,
+    long StartMilliseconds,
+    long EndMilliseconds,
+    bool Changed);
 
 internal sealed partial class VietsubSubtitleService(
     VietsubAppPaths paths,
@@ -354,10 +366,31 @@ internal sealed partial class VietsubSubtitleService(
                 cue.QualityStatus,
                 cue.HasWarnings,
                 cue.HasTranslation,
-                cue.PreviewText)).ToArray());
+                cue.PreviewText,
+                cue.VoiceEnabled)).ToArray());
     }
 
     public async Task<int> UpdateCueTimingAsync(
+        VietsubProjectManifest project,
+        Guid trackId,
+        Guid cueId,
+        int expectedTrackRevision,
+        long startMilliseconds,
+        long endMilliseconds,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await UpdateCueTimingWithResultAsync(
+            project,
+            trackId,
+            cueId,
+            expectedTrackRevision,
+            startMilliseconds,
+            endMilliseconds,
+            cancellationToken);
+        return result.TrackRevision;
+    }
+
+    public async Task<VietsubTimelineCueTimingUpdate> UpdateCueTimingWithResultAsync(
         VietsubProjectManifest project,
         Guid trackId,
         Guid cueId,
@@ -394,15 +427,29 @@ internal sealed partial class VietsubSubtitleService(
         // thời lượng tối thiểu, media duration và revision để không đổi dữ liệu ngoài ý muốn.
 
         var cue = FindCue(track, cueId, out _);
+        var previousStartMilliseconds = cue.StartMilliseconds;
+        var previousEndMilliseconds = cue.EndMilliseconds;
         if (cue.StartMilliseconds == startMilliseconds && cue.EndMilliseconds == endMilliseconds)
         {
-            return track.Revision;
+            return new(
+                track.Revision,
+                previousStartMilliseconds,
+                previousEndMilliseconds,
+                startMilliseconds,
+                endMilliseconds,
+                Changed: false);
         }
         cue.StartMilliseconds = startMilliseconds;
         cue.EndMilliseconds = endMilliseconds;
         cue.UpdatedAtUtc = DateTime.UtcNow;
         await SaveMutationAsync(project.ProjectId, track, cancellationToken);
-        return track.Revision;
+        return new(
+            track.Revision,
+            previousStartMilliseconds,
+            previousEndMilliseconds,
+            startMilliseconds,
+            endMilliseconds,
+            Changed: true);
     }
 
     public async Task UpdateCueAsync(
@@ -454,7 +501,7 @@ internal sealed partial class VietsubSubtitleService(
                     cue.Warnings.Add("SOURCE_CONTEXT_CHANGED_AFTER_MANUAL");
                 }
             }
-            else if (cue.TranslationSource == VietsubTranslationSources.LocalAuto)
+            else if (cue.TranslationSource is VietsubTranslationSources.LocalAuto or VietsubTranslationSources.CloudAuto)
             {
                 cue.TranslatedText = string.Empty;
                 cue.QualityStatus = null;
@@ -497,6 +544,7 @@ internal sealed partial class VietsubSubtitleService(
             Speaker = cue.Speaker,
             OriginalText = originalRight,
             TranslatedText = translatedRight,
+            VoiceEnabled = cue.VoiceEnabled,
             OriginalLocked = true,
             TranslationLocked = translatedRight.Length > 0,
             UpdatedAtUtc = now
@@ -568,6 +616,7 @@ internal sealed partial class VietsubSubtitleService(
             Speaker = cue.Speaker,
             OriginalText = cue.OriginalText,
             TranslatedText = cue.TranslatedText,
+            VoiceEnabled = cue.VoiceEnabled,
             OriginalLocked = true,
             TranslationLocked = cue.TranslatedText.Length > 0,
             QualityStatus = cue.QualityStatus,
@@ -789,7 +838,9 @@ internal sealed partial class VietsubSubtitleService(
             track.Cues.Count,
             track.Cues.Count(cue => !string.IsNullOrWhiteSpace(cue.TranslatedText)),
             track.Cues.Count(cue => cue.Warnings.Count > 0),
-            track.UpdatedAtUtc);
+            track.UpdatedAtUtc,
+            track.Cues.Count(cue => cue.VoiceEnabled),
+            track.Cues.Count(cue => cue.VoiceEnabled && !string.IsNullOrWhiteSpace(cue.TranslatedText)));
 
     private static VietsubSubtitleCueSummary ToCueSummary(VietsubSubtitleCue cue, int cueIndex) =>
         new(
@@ -804,7 +855,8 @@ internal sealed partial class VietsubSubtitleService(
             cue.TranslationLocked,
             cue.QualityStatus,
             cue.Warnings,
-            cue.UpdatedAtUtc);
+            cue.UpdatedAtUtc,
+            cue.VoiceEnabled);
 
     private static async Task WriteAtomicAsync(
         string destinationPath,

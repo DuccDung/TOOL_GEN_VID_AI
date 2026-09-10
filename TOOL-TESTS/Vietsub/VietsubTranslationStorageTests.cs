@@ -34,9 +34,11 @@ public sealed class VietsubTranslationStorageTests : IDisposable
         Assert.Equal("vi", migrated.TranslationSettings.TargetLanguageCode);
         Assert.Equal(VietsubTranslationEnginePolicies.NotSelected, migrated.TranslationSettings.EnginePolicy);
         using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
-        Assert.Equal(3, saved.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(VietsubProjectManifest.CurrentSchemaVersion, saved.RootElement.GetProperty("schemaVersion").GetInt32());
         Assert.True(saved.RootElement.TryGetProperty("translationSettings", out _));
         Assert.True(saved.RootElement.TryGetProperty("voiceSettings", out _));
+        Assert.True(saved.RootElement.TryGetProperty("subtitleStyle", out _));
+        Assert.True(saved.RootElement.TryGetProperty("audioMixSettings", out _));
     }
 
     [Fact]
@@ -72,7 +74,7 @@ public sealed class VietsubTranslationStorageTests : IDisposable
         {
             await using var version = connection.CreateCommand();
             version.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
-            Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+            Assert.Equal(6L, Convert.ToInt64(await version.ExecuteScalarAsync()));
             await using var columns = connection.CreateCommand();
             columns.CommandText = """
                 SELECT COUNT(*) FROM pragma_table_info('subtitle_cues')
@@ -119,7 +121,7 @@ public sealed class VietsubTranslationStorageTests : IDisposable
             await using var command = future.CreateCommand();
             command.CommandText = """
                 CREATE TABLE schema_info(schema_version INTEGER NOT NULL);
-                INSERT INTO schema_info(schema_version) VALUES(6);
+                INSERT INTO schema_info(schema_version) VALUES(7);
                 """;
             await command.ExecuteNonQueryAsync();
         }
@@ -175,7 +177,7 @@ public sealed class VietsubTranslationStorageTests : IDisposable
         await using var verify = await OpenAsync(paths, projectId);
         await using var version = verify.CreateCommand();
         version.CommandText = "SELECT schema_version FROM schema_info;";
-        Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+        Assert.Equal(6L, Convert.ToInt64(await version.ExecuteScalarAsync()));
     }
 
     [Fact]

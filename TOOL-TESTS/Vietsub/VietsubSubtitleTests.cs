@@ -429,7 +429,7 @@ public sealed class VietsubSubtitleTests : IDisposable
         await verify.OpenAsync();
         await using var version = verify.CreateCommand();
         version.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
-        Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+        Assert.Equal(6L, Convert.ToInt64(await version.ExecuteScalarAsync()));
         await using var columns = verify.CreateCommand();
         columns.CommandText = """
             SELECT COUNT(*) FROM pragma_table_info('subtitle_cues')

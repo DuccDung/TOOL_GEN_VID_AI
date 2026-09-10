@@ -149,6 +149,7 @@ internal sealed class VietsubMediaRuntimeLog
     internal static string NormalizeResourceType(string? value) => value switch
     {
         VietsubPlaybackResourceTypes.Video => VietsubPlaybackResourceTypes.Video,
+        VietsubPlaybackResourceTypes.Voice => VietsubPlaybackResourceTypes.Voice,
         VietsubPlaybackResourceTypes.Thumbnail => VietsubPlaybackResourceTypes.Thumbnail,
         VietsubPlaybackResourceTypes.Waveform => VietsubPlaybackResourceTypes.Waveform,
         _ => VietsubPlaybackResourceTypes.Unknown

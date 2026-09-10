@@ -14,16 +14,17 @@ internal sealed record VietsubTimelineCueRecord(
     string? QualityStatus,
     bool HasWarnings,
     bool HasTranslation,
-    string PreviewText);
+    string PreviewText,
+    bool VoiceEnabled = true);
 
 internal sealed record VietsubTimelineWindowRecord(
     int TrackRevision,
     bool Truncated,
     IReadOnlyList<VietsubTimelineCueRecord> Cues);
 
-internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
+internal sealed partial class VietsubSubtitleStore(VietsubAppPaths paths)
 {
-    private const int SchemaVersion = 5;
+    private const int SchemaVersion = 6;
 
     public async Task InitializeAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
@@ -57,9 +58,14 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
             }
         }
 
+        if (existingSchemaVersion == 5)
+        {
+            await ValidateVersion5SchemaAsync(connection, cancellationToken);
+        }
         if (existingSchemaVersion == SchemaVersion)
         {
             await ValidateVersion5SchemaAsync(connection, cancellationToken);
+            await ValidateVoiceSelectionSchemaAsync(connection, cancellationToken);
             return;
         }
 
@@ -343,13 +349,19 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
         if (version == 4)
         {
             await MigrateFromVersion4Async(connection, cancellationToken);
-            version = SchemaVersion;
+            version = 5;
+        }
+        if (version == 5)
+        {
+            await MigrateToVersion6Async(connection, cancellationToken);
+            version = 6;
         }
         if (version != SchemaVersion)
         {
             throw new InvalidDataException("Phiên bản database Vietsub chưa được hỗ trợ.");
         }
         await ValidateVersion5SchemaAsync(connection, cancellationToken);
+        await ValidateVoiceSelectionSchemaAsync(connection, cancellationToken);
     }
 
     public Task SaveTrackAsync(
@@ -588,7 +600,7 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                    translation_source, translation_engine_id,
                    translation_engine_version, translation_source_fingerprint,
                    translation_confidence, translation_reviewed_at_utc,
-                   updated_at_utc
+                   updated_at_utc, voice_enabled
             FROM subtitle_cues
             ORDER BY track_id, cue_index;
             """;
@@ -621,7 +633,8 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 TranslationReviewedAtUtc = cueReader.IsDBNull(16)
                     ? null
                     : DateTime.Parse(cueReader.GetString(16), null, System.Globalization.DateTimeStyles.RoundtripKind),
-                UpdatedAtUtc = DateTime.Parse(cueReader.GetString(17), null, System.Globalization.DateTimeStyles.RoundtripKind)
+                UpdatedAtUtc = DateTime.Parse(cueReader.GetString(17), null, System.Globalization.DateTimeStyles.RoundtripKind),
+                VoiceEnabled = cueReader.GetBoolean(18)
             });
         }
 
@@ -692,7 +705,7 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                    CASE
                        WHEN length(trim(translated_text)) > 0 THEN substr(translated_text, 1, 200)
                        ELSE substr(original_text, 1, 200)
-                   END AS preview_text
+                   END AS preview_text, voice_enabled
             FROM subtitle_cues
             WHERE track_id = $trackId
               AND start_ms < $windowEnd
@@ -717,7 +730,8 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 cueReader.IsDBNull(6) ? null : cueReader.GetString(6),
                 cueReader.GetBoolean(7),
                 cueReader.GetBoolean(8),
-                cueReader.GetString(9)));
+                cueReader.GetString(9),
+                cueReader.GetBoolean(10)));
         }
 
         var truncated = cues.Count > maximumCues;
@@ -814,13 +828,13 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 translation_locked, quality_status, warning_json,
                 translation_source, translation_engine_id,
                 translation_engine_version, translation_source_fingerprint,
-                translation_confidence, translation_reviewed_at_utc, updated_at_utc)
+                translation_confidence, translation_reviewed_at_utc, updated_at_utc, voice_enabled)
             VALUES($cueId, $trackId, $cueIndex, $startMs, $endMs, $speaker,
                 $originalText, $translatedText, $originalLocked,
                 $translationLocked, $qualityStatus, $warningJson,
                 $translationSource, $translationEngineId,
                 $translationEngineVersion, $translationSourceFingerprint,
-                $translationConfidence, $translationReviewedAtUtc, $updatedAtUtc)
+                $translationConfidence, $translationReviewedAtUtc, $updatedAtUtc, $voiceEnabled)
             ON CONFLICT(cue_id) DO UPDATE SET
                 track_id = excluded.track_id,
                 cue_index = excluded.cue_index,
@@ -831,6 +845,7 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 translated_text = excluded.translated_text,
                 original_locked = excluded.original_locked,
                 translation_locked = excluded.translation_locked,
+                voice_enabled = excluded.voice_enabled,
                 quality_status = excluded.quality_status,
                 warning_json = excluded.warning_json,
                 translation_source = excluded.translation_source,
@@ -842,6 +857,7 @@ internal sealed class VietsubSubtitleStore(VietsubAppPaths paths)
                 updated_at_utc = excluded.updated_at_utc;
             """;
         command.Parameters.AddWithValue("$cueId", cue.CueId.ToString("D"));
+        command.Parameters.AddWithValue("$voiceEnabled", cue.VoiceEnabled);
         command.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
         command.Parameters.AddWithValue("$cueIndex", index);
         command.Parameters.AddWithValue("$startMs", cue.StartMilliseconds);

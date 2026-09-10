@@ -18,6 +18,7 @@ describe('VietsubTranslationResourceModal', () => {
 
     expect(html).toContain('role="alertdialog"');
     expect(html).toContain('aria-modal="true"');
+    expect(html).toContain('confirmation-overlay vietsub-resource-modal-overlay');
     expect(html).toContain('Tài nguyên máy thấp hơn mức khuyến nghị');
     expect(html).toContain('RAM trống hiện chỉ còn 1,17 GB; mức khuyến nghị là 4 GB.');
     expect(html).toContain('VideoMaker sẽ thử nạp');

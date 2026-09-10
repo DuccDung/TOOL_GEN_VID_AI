@@ -9,7 +9,8 @@ internal sealed record VietsubVoicePhraseAudio(
     VietsubVoicePhrase Phrase,
     VietsubVoiceArtifact Artifact,
     string AbsolutePath,
-    VietsubWavMetadata Metadata);
+    VietsubWavMetadata Metadata,
+    long TailFadeMilliseconds = 0);
 
 internal sealed record VietsubVoiceTimelineRenderResult(
     string AbsolutePath,
@@ -39,13 +40,48 @@ internal sealed class VietsubVoiceTimelineRenderer(
             throw new VietsubVoiceException(VietsubVoiceErrorCodes.TranslationRequired, "Không có phrase tiếng Việt để dựng giọng đọc.");
         }
 
-        var diagnostics = phraseAudio.Select((item, index) =>
+        var prepared = phraseAudio.ToArray();
+        var diagnostics = new VietsubVoiceTimingDiagnostic[prepared.Length];
+        for (var index = 0; index < prepared.Length; index++)
         {
+            var item = prepared[index];
             var nextStart = index + 1 < phraseAudio.Count
                 ? phraseAudio[index + 1].Phrase.StartMilliseconds
                 : requestedTimelineDurationMilliseconds;
-            return VietsubVoiceTimelineFitPolicy.Evaluate(item.Phrase, item.Metadata, nextStart, settings);
-        }).ToArray();
+            if (item.Phrase.HardEndMilliseconds is { } hardEnd) nextStart = Math.Min(nextStart, hardEnd);
+            var diagnostic = VietsubVoiceTimelineFitPolicy.Evaluate(item.Phrase, item.Metadata, nextStart, settings);
+            if (item.Phrase.HardEndMilliseconds is { } boundary)
+            {
+                var available = Math.Max(0, boundary - item.Phrase.StartMilliseconds);
+                var overflow = RenderedDuration(item.Metadata, diagnostic.Tempo) - available;
+                if (overflow > 0 && settings.TrimSilence && item.Metadata.SignalEndMilliseconds is { } signalEnd)
+                {
+                    // Source WAV milliseconds, before atempo. Output overflow is not source trim.
+                    var newEnd = item.Metadata.TrimStartMilliseconds + (long)Math.Floor(available * diagnostic.Tempo);
+                    var reduction = item.Metadata.TrimEndMilliseconds - newEnd;
+                    const int signalGuard = 5;
+                    if (available > 0 && reduction is > 0 and <= 120 && newEnd >= signalEnd + signalGuard)
+                    {
+                        item = item with
+                        {
+                            Metadata = item.Metadata with { TrimEndMilliseconds = newEnd },
+                            TailFadeMilliseconds = Math.Min(5, newEnd - signalEnd - signalGuard)
+                        };
+                        diagnostic = VietsubVoiceTimelineFitPolicy.Evaluate(item.Phrase, item.Metadata, nextStart, settings);
+                    }
+                }
+                overflow = RenderedDuration(item.Metadata, diagnostic.Tempo) - available;
+                if (overflow > 0)
+                {
+                    // A skipped cue excludes its own text from synthesis. Its start is
+                    // a fitting target, not a reason to fail or cut the preceding speech.
+                    diagnostic = diagnostic with { Status = VietsubVoiceTimingStatuses.ReviewRequired };
+                }
+            }
+            prepared[index] = item;
+            diagnostics[index] = diagnostic;
+        }
+        phraseAudio = prepared;
 
         await preflight.RequireReadyAsync(cancellationToken);
         var renderedContentEnd = phraseAudio.Max(item =>
@@ -116,17 +152,21 @@ internal sealed class VietsubVoiceTimelineRenderer(
             var trimStart = Seconds(item.Metadata.TrimStartMilliseconds);
             var trimEnd = Seconds(item.Metadata.TrimEndMilliseconds);
             var filter = $"[{index}:a:0]atrim=start={trimStart}:end={trimEnd},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo";
+            if (item.TailFadeMilliseconds > 0)
+                filter += $",afade=t=out:st={Seconds(item.Metadata.AudibleDurationMilliseconds - item.TailFadeMilliseconds)}:d={Seconds(item.TailFadeMilliseconds)}";
             if (diagnostic.Tempo > 1.0001)
             {
-                filter += $",atempo={diagnostic.Tempo.ToString("0.######", CultureInfo.InvariantCulture)}";
+                filter += $",atempo={diagnostic.Tempo.ToString("R", CultureInfo.InvariantCulture)}";
             }
-            filter += $",adelay={item.Phrase.StartMilliseconds}|{item.Phrase.StartMilliseconds}[a{index}]";
+            // adelay can emit leading frames without PTS after atempo. Rebuild the clock
+            // from all samples, including silence, before atrim/amix can drop those frames.
+            filter += $",adelay={item.Phrase.StartMilliseconds}|{item.Phrase.StartMilliseconds},asetpts=N/SR/TB[a{index}]";
             filters.Add(filter);
         }
         var inputLabels = string.Concat(Enumerable.Range(0, items.Count).Select(index => $"[a{index}]"));
         filters.Add(items.Count == 1
-            ? $"{inputLabels}apad,atrim=duration={Seconds(timelineDurationMilliseconds)},alimiter=limit=0.95[out]"
-            : $"{inputLabels}amix=inputs={items.Count}:duration=longest:normalize=0,alimiter=limit=0.95,apad,atrim=duration={Seconds(timelineDurationMilliseconds)}[out]");
+            ? $"{inputLabels}{TimelineOutputFilter(timelineDurationMilliseconds)}[out]"
+            : $"{inputLabels}amix=inputs={items.Count}:duration=longest:normalize=0,{TimelineOutputFilter(timelineDurationMilliseconds)}[out]");
         arguments.AddRange([
             "-filter_complex", string.Join(';', filters),
             "-map", "[out]",
@@ -151,7 +191,7 @@ internal sealed class VietsubVoiceTimelineRenderer(
             arguments.Add(stem);
         }
         var labels = string.Concat(Enumerable.Range(0, stems.Count).Select(index => $"[{index}:a:0]"));
-        var filter = $"{labels}amix=inputs={stems.Count}:duration=longest:normalize=0,alimiter=limit=0.95,apad,atrim=duration={Seconds(timelineDurationMilliseconds)}[out]";
+        var filter = $"{labels}amix=inputs={stems.Count}:duration=longest:normalize=0,{TimelineOutputFilter(timelineDurationMilliseconds)}[out]";
         arguments.AddRange([
             "-filter_complex", filter,
             "-map", "[out]",
@@ -186,6 +226,17 @@ internal sealed class VietsubVoiceTimelineRenderer(
         {
             throw new VietsubVoiceException(VietsubVoiceErrorCodes.TimelineFailed, "Ổ đĩa không đủ chỗ để dựng timeline giọng Việt.");
         }
+    }
+
+    private static long RenderedDuration(VietsubWavMetadata metadata, double tempo) =>
+        (long)Math.Ceiling(metadata.AudibleDurationMilliseconds / tempo - 1e-7);
+
+    private static string TimelineOutputFilter(long durationMilliseconds)
+    {
+        // Bound padding by samples as well as rebuild PTS. Some FFmpeg filter combinations
+        // propagate missing timestamps, so an unbounded apad + duration trim can keep writing.
+        var samples = checked(durationMilliseconds * 48); // All stems are 48 kHz.
+        return $"asetpts=N/SR/TB,apad=whole_len={samples},atrim=end_sample={samples},alimiter=limit=0.95:latency=1,asetpts=N/SR/TB";
     }
 
     private static string Seconds(long milliseconds) =>

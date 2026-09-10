@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using TOOL_LOCAL.Authentication;
+using TOOL_LOCAL.WebView;
 using TOOL_SHARED.Contracts.Accounts;
 using TOOL_SHARED.Contracts.Authentication;
 using TOOL_SHARED.Contracts.Common;
@@ -83,6 +84,107 @@ public sealed class LicenseSessionManagerTests
             handler.Requests);
     }
 
+    [Fact]
+    public async Task ConcurrentSessionLimit_NotifiesImmediatelyLocksAccessAndRecoversOnlyAfterSuccessfulHeartbeat()
+    {
+        var now = DateTime.UtcNow;
+        var rejected = false;
+        var handler = new RecordingHandler(request => request.RequestUri?.AbsolutePath == "/api/license/heartbeat" && rejected
+            ? JsonResponse(new ApiErrorResponse("concurrent_session_limit", "Gói đã đạt số phiên chạy đồng thời tối đa."), HttpStatusCode.Conflict)
+            : JsonResponse(ActiveLicense(now, true)));
+        using var session = await CreateAuthenticatedSessionAsync();
+        using var httpClient = CreateHttpClient(handler);
+        await using var manager = new LicenseSessionManager(new LicenseApiClient(httpClient, session));
+        var notifications = new List<CurrentLicenseResponse?>();
+        manager.LicenseInvalidated += _ => notifications.Add(manager.Current);
+        await manager.InitializeAsync();
+        Assert.True(manager.HasValidLease);
+
+        rejected = true;
+        var locked = await manager.RefreshNowAsync();
+
+        Assert.True(session.IsAuthenticated);
+        Assert.True(manager.IsLocked);
+        Assert.True(locked.HasActiveLicense);
+        Assert.True(locked.CurrentDeviceActivated);
+        Assert.Null(locked.LeaseExpiresAtUtc);
+        Assert.Equal(LicenseAccessStates.SessionLimit, locked.AccessState);
+        Assert.Equal("concurrent_session_limit", Assert.Single(notifications)?.AccessReasonCode);
+        await Assert.ThrowsAsync<AccountClientException>(() => manager.EnsureAccessAsync());
+        Assert.Single(notifications);
+
+        rejected = false;
+        await manager.RefreshNowAsync();
+        Assert.True(manager.HasValidLease);
+        Assert.Equal(LicenseAccessStates.Active, manager.Current?.AccessState);
+        rejected = true;
+        await manager.RefreshNowAsync();
+        Assert.Equal(2, notifications.Count);
+    }
+
+    [Theory]
+    [InlineData(409, "concurrent_session_limit", LicenseAccessStates.SessionLimit)]
+    [InlineData(403, "session_unavailable", LicenseAccessStates.Unavailable)]
+    [InlineData(423, "license_suspended", LicenseAccessStates.Suspended)]
+    public async Task InitializeAsync_ExpectedLicenseDenial_KeepsAuthenticatedSessionForLogout(int status, string code, string state)
+    {
+        var handler = new RecordingHandler(request => request.RequestUri?.AbsolutePath == "/api/license/current"
+            ? JsonResponse(ActiveLicense(DateTime.UtcNow, true))
+            : JsonResponse(new ApiErrorResponse(code, "Không thể tiếp tục phiên."), (HttpStatusCode)status));
+        using var session = await CreateAuthenticatedSessionAsync();
+        using var httpClient = CreateHttpClient(handler);
+        await using var manager = new LicenseSessionManager(new LicenseApiClient(httpClient, session));
+
+        await manager.InitializeAsync();
+
+        Assert.True(manager.IsLocked);
+        Assert.True(session.IsAuthenticated);
+        Assert.Equal(state, manager.Current?.AccessState);
+        Assert.Null(manager.Current?.LeaseExpiresAtUtc);
+    }
+
+    [Fact]
+    public async Task UnauthorizedHeartbeat_StillClearsAuthentication()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri?.AbsolutePath == "/api/license/current"
+            ? JsonResponse(ActiveLicense(DateTime.UtcNow, true))
+            : JsonResponse(new ApiErrorResponse("invalid_access_token", "Phiên đăng nhập đã hết hạn."), HttpStatusCode.Unauthorized));
+        using var session = await CreateAuthenticatedSessionAsync();
+        using var httpClient = CreateHttpClient(handler);
+        await using var manager = new LicenseSessionManager(new LicenseApiClient(httpClient, session));
+
+        await Assert.ThrowsAsync<AccountClientException>(() => manager.InitializeAsync());
+
+        Assert.False(session.IsAuthenticated);
+        Assert.True(manager.IsLocked);
+    }
+
+    [Fact]
+    public async Task LockedSession_LogoutBridgeRevokesOnlyCurrentSessionAndReturnsToLogin()
+    {
+        var logoutRequests = new List<LogoutRequest>();
+        using var session = await CreateAuthenticatedSessionAsync(logoutRequests.Add);
+        var handler = new RecordingHandler(request => request.RequestUri?.AbsolutePath == "/api/license/current"
+            ? JsonResponse(ActiveLicense(DateTime.UtcNow, true))
+            : JsonResponse(new ApiErrorResponse("concurrent_session_limit", "Đã đạt giới hạn phiên."), HttpStatusCode.Conflict));
+        using var httpClient = CreateHttpClient(handler);
+        await using var manager = new LicenseSessionManager(new LicenseApiClient(httpClient, session));
+        await manager.InitializeAsync();
+        var messages = new List<string>();
+        var returnedToLogin = false;
+        using var bridge = new DashboardBridge(session, manager, null!, null!, null!, null!, null!, null!, false,
+            messages.Add, () => returnedToLogin = true);
+
+        await bridge.HandleAsync("""{"type":"auth.logout","requestId":"logout-test","payload":{}}""");
+
+        Assert.False(session.IsAuthenticated);
+        Assert.True(returnedToLogin);
+        Assert.False(Assert.Single(logoutRequests).RevokeAllSessions);
+        using var response = System.Text.Json.JsonDocument.Parse(Assert.Single(messages));
+        Assert.Equal("auth.loggedOut", response.RootElement.GetProperty("type").GetString());
+        Assert.Equal("logout-test", response.RootElement.GetProperty("requestId").GetString());
+    }
+
     private static CurrentLicenseResponse MissingLicense(DateTime now) => new(
         false,
         null,
@@ -135,7 +237,7 @@ public sealed class LicenseSessionManagerTests
             Content = JsonContent.Create(body)
         };
 
-    private static async Task<AccountSessionManager> CreateAuthenticatedSessionAsync()
+    private static async Task<AccountSessionManager> CreateAuthenticatedSessionAsync(Action<LogoutRequest>? onLogout = null)
     {
         var response = new AuthTokenResponse(
             "access-token",
@@ -152,7 +254,7 @@ public sealed class LicenseSessionManagerTests
                 ["User"]));
         var store = new MemoryTokenStore(new StoredRefreshToken("initial-refresh", DateTime.UtcNow.AddDays(1)));
         var session = new AccountSessionManager(
-            new RestoreAccountApiClient(response),
+            new RestoreAccountApiClient(response, onLogout),
             store,
             new DeviceIdentityService());
         Assert.True(await session.TryRestoreAsync());
@@ -173,7 +275,7 @@ public sealed class LicenseSessionManagerTests
         }
     }
 
-    private sealed class RestoreAccountApiClient(AuthTokenResponse response) : IAccountApiClient
+    private sealed class RestoreAccountApiClient(AuthTokenResponse response, Action<LogoutRequest>? onLogout = null) : IAccountApiClient
     {
         public Task<AuthTokenResponse> RefreshAsync(
             RefreshTokenRequest request,
@@ -191,8 +293,11 @@ public sealed class LicenseSessionManagerTests
         public Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task LogoutAsync(string accessToken, LogoutRequest request, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task LogoutAsync(string accessToken, LogoutRequest request, CancellationToken cancellationToken = default)
+        {
+            onLogout?.Invoke(request);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class MemoryTokenStore(StoredRefreshToken? stored) : ITokenStore

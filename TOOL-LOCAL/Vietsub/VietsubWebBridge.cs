@@ -62,6 +62,10 @@ internal sealed record VietsubSubtitleCueRequest(Guid CueId);
 
 internal sealed record ExportVietsubSrtRequest(string Mode);
 
+internal sealed record UpdateVietsubSubtitleStyleRequest(
+    VietsubSubtitleStyle Style,
+    VietsubAudioMixSettings? AudioMixSettings = null);
+
 internal sealed record VietsubJobRequest(Guid JobId);
 
 internal sealed record VietsubOcrPreviewRequest(
@@ -95,10 +99,13 @@ internal sealed class VietsubWebBridge : IDisposable
     private readonly VietsubSubtitleService? _subtitleService;
     private readonly Func<string?>? _subtitleFileSelector;
     private readonly Func<string?>? _subtitleExportSelector;
+    private readonly Func<string?>? _videoExportSelector;
     private readonly VietsubJobManager? _jobManager;
     private readonly VietsubOcrService? _ocrService;
     private readonly VietsubTranslationService? _translationService;
+    private readonly VietsubCloudTranslationService? _cloudTranslationService;
     private readonly VietsubVoiceService? _voiceService;
+    private readonly VietsubVideoExportService? _videoExportService;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -132,7 +139,10 @@ internal sealed class VietsubWebBridge : IDisposable
         VietsubOcrService? ocrService = null,
         VietsubTimelineWaveformService? waveformService = null,
         VietsubTranslationService? translationService = null,
-        VietsubVoiceService? voiceService = null)
+        VietsubVoiceService? voiceService = null,
+        Func<string?>? videoExportSelector = null,
+        VietsubVideoExportService? videoExportService = null,
+        VietsubCloudTranslationService? cloudTranslationService = null)
     {
         _enabled = enabled;
         _postJson = postJson;
@@ -146,11 +156,14 @@ internal sealed class VietsubWebBridge : IDisposable
         _subtitleService = subtitleService;
         _subtitleFileSelector = subtitleFileSelector;
         _subtitleExportSelector = subtitleExportSelector;
+        _videoExportSelector = videoExportSelector;
         _jobManager = jobManager;
         _ocrService = ocrService;
         _waveformService = waveformService;
         _translationService = translationService;
+        _cloudTranslationService = cloudTranslationService;
         _voiceService = voiceService;
+        _videoExportService = videoExportService;
         if (_jobManager is not null)
         {
             _jobManager.JobChanged += JobManagerOnChanged;
@@ -253,6 +266,16 @@ internal sealed class VietsubWebBridge : IDisposable
                 case "vietsub.subtitle.page.get":
                     await PostSubtitlePageAsync(request, request.RequestId, cancellationToken);
                     break;
+                case "vietsub.subtitle.style.get":
+                    PostSubtitleStyle(request.RequestId);
+                    break;
+                case "vietsub.subtitle.style.update":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => UpdateSubtitleStyleAsync(request, request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
+                    break;
                 case "vietsub.timeline.window.get":
                     await PostTimelineWindowAsync(request, request.RequestId, cancellationToken);
                     break;
@@ -268,6 +291,11 @@ internal sealed class VietsubWebBridge : IDisposable
                         token => UpdateTimelineCueAsync(request, request.RequestId, token),
                         cancellationToken,
                         notifyCompletion: true);
+                    break;
+                case "vietsub.subtitle.voice.update":
+                    await RunProjectOperationAsync(request.RequestId,
+                        token => UpdateCueVoiceSelectionAsync(request, request.RequestId, token),
+                        cancellationToken, notifyCompletion: true);
                     break;
                 case "vietsub.subtitle.cue.update":
                     await RunProjectOperationAsync(
@@ -308,6 +336,13 @@ internal sealed class VietsubWebBridge : IDisposable
                     break;
                 case "vietsub.operation.cancel":
                     await CancelActiveOperationAsync(request.RequestId, cancellationToken);
+                    break;
+                case "vietsub.video.export":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => ExportVideoAsync(request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
                     break;
                 case "vietsub.job.status":
                     await PostJobStatusAsync(request, request.RequestId, cancellationToken);
@@ -372,6 +407,18 @@ internal sealed class VietsubWebBridge : IDisposable
                         token => StartTranslationAsync(request, request.RequestId, token),
                         cancellationToken);
                     break;
+                case "vietsub.cloud.availability":
+                    var cloudSession = RequireProjectSession();
+                    var cloudStatus = _cloudTranslationService is null
+                        ? new TOOL_SHARED.Contracts.Vietsub.VietsubCloudAvailability(false, "CLOUD_DISABLED", "Dịch Cloud chưa được bật.")
+                        : await _cloudTranslationService.AvailabilityAsync(cloudSession, cancellationToken);
+                    Post(new WebMessageResponse("vietsub.cloud.availability", request.RequestId,
+                        new { projectId = cloudSession.Manifest.ProjectId, organizationId = cloudSession.Manifest.OrganizationId, availability = cloudStatus }));
+                    break;
+                case "vietsub.job.translate.cloud":
+                    await RunProjectOperationAsync(request.RequestId,
+                        token => StartCloudTranslationAsync(request, request.RequestId, token), cancellationToken);
+                    break;
                 case "vietsub.job.voice":
                     await RunProjectOperationAsync(
                         request.RequestId,
@@ -421,6 +468,10 @@ internal sealed class VietsubWebBridge : IDisposable
             PostError(request.RequestId, exception.Code, exception.Message);
         }
         catch (VietsubVoiceException exception)
+        {
+            PostError(request.RequestId, exception.Code, exception.Message);
+        }
+        catch (VietsubVideoExportException exception)
         {
             PostError(request.RequestId, exception.Code, exception.Message);
         }
@@ -943,6 +994,46 @@ internal sealed class VietsubWebBridge : IDisposable
         PostSubtitleChanged(requestId, resetPage: false);
     }
 
+    private void PostSubtitleStyle(string requestId)
+    {
+        var session = RequireProjectSession();
+        EnsureCurrentProjectContext(session.Manifest);
+        Post(new WebMessageResponse(
+            "vietsub.subtitle.style",
+            requestId,
+            session.Manifest.SubtitleStyle.Copy()));
+    }
+
+    private async Task UpdateSubtitleStyleAsync(
+        WebMessageRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        EnsureCurrentProjectContext(session.Manifest);
+        var payload = request.Payload.Deserialize<UpdateVietsubSubtitleStyleRequest>(_jsonOptions)
+            ?? throw new JsonException();
+        var style = payload.Style?.Copy() ?? throw new JsonException();
+        style.Normalize();
+        var audioMixSettings = payload.AudioMixSettings?.Copy()
+            ?? session.Manifest.AudioMixSettings.Copy();
+        audioMixSettings.Normalize();
+        await session.UpdateAsync(manifest =>
+        {
+            manifest.SubtitleStyle = style;
+            manifest.AudioMixSettings = audioMixSettings;
+        }, cancellationToken);
+        await session.FlushAsync(cancellationToken);
+        Post(new WebMessageResponse(
+            "vietsub.subtitle.style.updated",
+            requestId,
+            style.Copy()));
+        Post(new WebMessageResponse(
+            "vietsub.audio.mix.updated",
+            requestId,
+            audioMixSettings.Copy()));
+    }
+
     private async Task PostTimelineWindowAsync(
         WebMessageRequest request,
         string requestId,
@@ -970,7 +1061,10 @@ internal sealed class VietsubWebBridge : IDisposable
         var session = RequireProjectSession();
         var payload = request.Payload.Deserialize<UpdateVietsubTimelineCueRequest>(_jsonOptions)
             ?? throw new JsonException();
-        var revision = await RequireSubtitleService().UpdateCueTimingAsync(
+        var voiceWorkspace = _voiceService is null
+            ? null
+            : await _voiceService.GetWorkspaceAsync(session.Manifest, cancellationToken);
+        var update = await RequireSubtitleService().UpdateCueTimingWithResultAsync(
             session.Manifest,
             payload.TrackId,
             payload.CueId,
@@ -978,7 +1072,16 @@ internal sealed class VietsubWebBridge : IDisposable
             payload.StartMilliseconds,
             payload.EndMilliseconds,
             cancellationToken);
-        PostSubtitleChanged(requestId, resetPage: false, payload.TrackId, revision);
+        if (_voiceService is not null && voiceWorkspace?.Timeline is { } timeline)
+        {
+            await _voiceService.TryCarryForwardTimelineAfterCueExtensionAsync(
+                session.Manifest,
+                payload.CueId,
+                timeline,
+                update,
+                cancellationToken);
+        }
+        PostSubtitleChanged(requestId, resetPage: false, payload.TrackId, update.TrackRevision);
     }
 
     private async Task SplitSubtitleCueAsync(
@@ -1119,6 +1222,44 @@ internal sealed class VietsubWebBridge : IDisposable
                 "vietsub_job_not_found",
                 "Không tìm thấy job trong dự án Vietsub hiện tại.");
         Post(new WebMessageResponse("vietsub.job.status", requestId, job));
+    }
+
+    private async Task ExportVideoAsync(
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var selector = _videoExportSelector
+            ?? throw new InvalidOperationException("Trình chọn nơi xuất video chưa được cấu hình.");
+        var destinationPath = selector();
+        if (string.IsNullOrWhiteSpace(destinationPath))
+        {
+            Post(new WebMessageResponse(
+                "vietsub.video.export.cancelled",
+                requestId,
+                new { cancelled = true }));
+            return;
+        }
+        Post(new WebMessageResponse(
+            "vietsub.video.export.started",
+            requestId,
+            new { started = true }));
+        var result = await RequireVideoExportService().ExportAsync(
+            session,
+            context.UserId,
+            context.OrganizationId,
+            destinationPath,
+            cancellationToken);
+        Post(new WebMessageResponse(
+            "vietsub.video.export.completed",
+            requestId,
+            new
+            {
+                result.FileName,
+                result.SizeBytes,
+                result.DurationSeconds
+            }));
     }
 
     private async Task PostOcrRuntimeStatusAsync(
@@ -1271,6 +1412,33 @@ internal sealed class VietsubWebBridge : IDisposable
         Post(new WebMessageResponse("vietsub.job.changed", requestId, job));
     }
 
+    private async Task StartCloudTranslationAsync(WebMessageRequest request, string requestId, CancellationToken ct)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var input = request.Payload.Deserialize<VietsubStartCloudTranslationRequest>(_jsonOptions) ?? throw new JsonException();
+        var service = _cloudTranslationService ?? throw new VietsubTranslationException("CLOUD_DISABLED", "Dịch Cloud chưa được bật.");
+        var job = await service.StartAsync(session, context.UserId, context.OrganizationId,
+            new VietsubStartTranslationInput("CONTINUE", input.ExpectedTrackId, input.ExpectedTrackRevision), ct);
+        if (job is null)
+            Post(new WebMessageResponse("vietsub.cloud.nothingToTranslate", requestId, new { projectId = session.Manifest.ProjectId }));
+        else Post(new WebMessageResponse("vietsub.job.changed", requestId, job));
+    }
+
+    private sealed record UpdateCueVoiceSelectionRequest(Guid ExpectedTrackId, int ExpectedTrackRevision,
+        IReadOnlyList<Guid> CueIds, bool? VoiceEnabled);
+
+    private async Task UpdateCueVoiceSelectionAsync(WebMessageRequest request, string requestId, CancellationToken token)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var input = request.Payload.Deserialize<UpdateCueVoiceSelectionRequest>(_jsonOptions) ?? throw new JsonException();
+        var revision = await RequireVoiceService().SetCueVoiceEnabledAsync(session, context.UserId,
+            context.OrganizationId, input.ExpectedTrackId, input.ExpectedTrackRevision,
+            input.CueIds, input.VoiceEnabled ?? throw new JsonException("Thiếu lựa chọn tạo giọng."), token);
+        PostSubtitleChanged(requestId, resetPage: false, trackId: input.ExpectedTrackId, trackRevision: revision);
+    }
+
     private async Task StartVoiceAsync(
         WebMessageRequest request,
         string requestId,
@@ -1355,6 +1523,8 @@ internal sealed class VietsubWebBridge : IDisposable
 
         var manager = RequireJobManager();
         var projectId = session.Manifest.ProjectId;
+        if (_cloudTranslationService is not null)
+            await _cloudTranslationService.ControlRemoteAsync(projectId, payload.JobId, action, cancellationToken);
         var job = action switch
         {
             "PAUSE" => await manager.PauseAsync(projectId, payload.JobId, cancellationToken),
@@ -1381,7 +1551,7 @@ internal sealed class VietsubWebBridge : IDisposable
         {
             _ = CompleteOcrJobOnceAsync(eventArgs.Job);
         }
-        if (eventArgs.Job.Type == VietsubJobTypes.TranslateLocal
+        if (eventArgs.Job.Type is VietsubJobTypes.TranslateLocal or VietsubJobTypes.TranslateCloud
             && eventArgs.Job.Status is VietsubJobStatusNames.Completed
                 or VietsubJobStatusNames.Failed
                 or VietsubJobStatusNames.Cancelled)
@@ -1886,6 +2056,8 @@ internal sealed class VietsubWebBridge : IDisposable
                 projects,
                 selectedProject,
                 subtitleWorkspace,
+                subtitleStyle = _projectSession?.Manifest.SubtitleStyle,
+                audioMixSettings = _projectSession?.Manifest.AudioMixSettings,
                 voiceWorkspace,
                 ocrSettings = _projectSession?.Manifest.OcrSettings,
                 voiceRuntime = _voiceService?.GetRuntimeStatus(),
@@ -2033,12 +2205,26 @@ internal sealed class VietsubWebBridge : IDisposable
         _voiceService
         ?? throw new InvalidOperationException("Dịch vụ giọng local Vietsub chưa được cấu hình.");
 
+    private VietsubVideoExportService RequireVideoExportService() =>
+        _videoExportService
+        ?? throw new InvalidOperationException("Dịch vụ xuất video Vietsub chưa được cấu hình.");
+
     private VietsubUserContext RequireContext() =>
         _contextProvider?.Invoke() is { } context
             && context.OrganizationId != Guid.Empty
             && !string.IsNullOrWhiteSpace(context.UserId)
                 ? context
                 : throw new InvalidOperationException("Hãy chọn tổ chức trước khi dùng Vietsub.");
+
+    private void EnsureCurrentProjectContext(VietsubProjectManifest manifest)
+    {
+        var context = RequireContext();
+        if (manifest.OrganizationId != context.OrganizationId
+            || !string.Equals(manifest.OwnerUserId, context.UserId, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Dự án Vietsub không thuộc phiên làm việc hiện tại.");
+        }
+    }
 
     private void PostError(string? requestId, string code, string message) =>
         Post(new WebMessageResponse(

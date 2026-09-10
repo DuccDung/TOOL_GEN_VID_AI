@@ -34,11 +34,13 @@ internal static class VietsubVoiceTranslationPolicy
 {
     public static void EnsureComplete(VietsubSubtitleTrack track)
     {
-        if (track.Cues.Count == 0 || track.Cues.Any(cue => string.IsNullOrWhiteSpace(cue.TranslatedText)))
+        if (!track.Cues.Any(cue => cue.VoiceEnabled))
+            throw new VietsubVoiceException("VOICE_NO_CUES_SELECTED", "Không có câu được chọn để tạo giọng.");
+        if (track.Cues.Any(cue => cue.VoiceEnabled && string.IsNullOrWhiteSpace(cue.TranslatedText)))
         {
             throw new VietsubVoiceException(
                 VietsubVoiceErrorCodes.TranslationRequired,
-                "Hãy hoàn thành bản dịch tiếng Việt trước khi tạo giọng.");
+                "Hãy hoàn thành bản dịch tiếng Việt cho các câu được chọn tạo giọng.");
         }
     }
 }
@@ -160,7 +162,8 @@ internal sealed record VietsubVoiceJobParameters(
     Guid InputTrackId,
     int InputRevision,
     string ConfigurationFingerprint,
-    VietsubVoiceSettingsSnapshot Settings)
+    VietsubVoiceSettingsSnapshot Settings,
+    string? SelectionFingerprint = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -172,7 +175,9 @@ internal sealed record VietsubVoiceJobParameters(
         {
             var value = JsonSerializer.Deserialize<VietsubVoiceJobParameters>(json, JsonOptions)
                 ?? throw new JsonException("Voice job parameters rỗng.");
-            if (value.StrategyVersion != 1
+            if (value.StrategyVersion is not (1 or 2)
+                || (value.StrategyVersion == 2 && (value.SelectionFingerprint?.Length != 64
+                    || !value.SelectionFingerprint.All(Uri.IsHexDigit)))
                 || value.InputTrackId == Guid.Empty
                 || value.InputRevision < 1
                 || value.Settings is null
@@ -202,7 +207,9 @@ internal sealed record VietsubVoicePhrase(
     string Speaker,
     string Text,
     long StartMilliseconds,
-    long EndMilliseconds);
+    long EndMilliseconds,
+    long? HardEndMilliseconds = null,
+    IReadOnlyList<int>? CueNumbers = null);
 
 internal sealed record VietsubVoiceSynthesisItem(
     int Index,
@@ -248,7 +255,9 @@ internal sealed record VietsubVoiceWorkspaceSummary(
     IReadOnlyList<VietsubVoiceCatalogItem> Voices,
     VietsubVoiceArtifact? Timeline,
     string? TimelinePlaybackUrl,
-    IReadOnlyList<VietsubVoiceTimingDiagnostic> TimingDiagnostics);
+    IReadOnlyList<VietsubVoiceTimingDiagnostic> TimingDiagnostics,
+    bool RequiresRebuild = false,
+    int EnabledCueCount = 0);
 
 internal interface IVietsubVoiceSynthesizer
 {
@@ -287,6 +296,7 @@ internal static class VietsubVoiceErrorCodes
     public const string ResultInvalid = "VOICE_RESULT_INVALID";
     public const string TimelineFailed = "VOICE_TIMELINE_FAILED";
     public const string TimingReviewRequired = "VOICE_TIMING_REVIEW_REQUIRED";
+    public const string SkippedCueOverlap = "VOICE_SKIPPED_CUE_OVERLAP";
     public const string JobConflict = "VOICE_JOB_CONFLICT";
     public const string JobNotResumable = "VOICE_JOB_NOT_RESUMABLE";
 }

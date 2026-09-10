@@ -803,7 +803,7 @@ internal sealed partial class OrganizationService(
             .Select(x => new UsageLedgerProjection(
                 x.AiUsageLedgerEntryId,
                 x.UserId,
-                x.ProjectId,
+                x.ProjectId ?? x.VietsubProjectId ?? Guid.Empty,
                 x.ProviderRequestId,
                 x.ProviderCode,
                 x.ModelCode,
@@ -811,7 +811,8 @@ internal sealed partial class OrganizationService(
                 x.Amount,
                 x.CurrencyCode,
                 x.UsageJson,
-                x.OccurredAtUtc))
+                x.OccurredAtUtc,
+                x.VietsubProjectId != null ? "Vietsub" : "Video"))
             .ToListAsync(cancellationToken);
         var actualRows = await governanceDb.AiUsageLedger
             .AsNoTracking()
@@ -842,7 +843,8 @@ internal sealed partial class OrganizationService(
                 row.OccurredAtUtc,
                 metrics.InputTokens,
                 metrics.OutputTokens,
-                metrics.VideoSeconds);
+                metrics.VideoSeconds,
+                row.ProjectKind);
         }).ToArray();
         var parsedActualRows = actualRows
             .Select(row => new ParsedUsageAggregateProjection(
@@ -928,7 +930,7 @@ internal sealed partial class OrganizationService(
             .Select(x => new UsageLedgerProjection(
                 x.AiUsageLedgerEntryId,
                 x.UserId,
-                x.ProjectId,
+                x.ProjectId ?? x.VietsubProjectId ?? Guid.Empty,
                 x.ProviderRequestId,
                 x.ProviderCode,
                 x.ModelCode,
@@ -936,7 +938,8 @@ internal sealed partial class OrganizationService(
                 x.Amount,
                 x.CurrencyCode,
                 x.UsageJson,
-                x.OccurredAtUtc))
+                x.OccurredAtUtc,
+                x.VietsubProjectId != null ? "Vietsub" : "Video"))
             .ToListAsync(cancellationToken);
         var actualRows = await governanceDb.AiUsageLedger
             .AsNoTracking()
@@ -949,7 +952,7 @@ internal sealed partial class OrganizationService(
         var items = itemRows.Select(row =>
         {
             var metrics = OrganizationUsageMetricsParser.Parse(row.UsageJson);
-            return new OrganizationUsageItemResponse(row.LedgerEntryId, row.UserId, row.ProjectId, row.ProviderRequestId, row.ProviderCode, row.ModelCode, row.EntryKind, row.Amount, row.CurrencyCode, row.OccurredAtUtc, metrics.InputTokens, metrics.OutputTokens, metrics.VideoSeconds);
+            return new OrganizationUsageItemResponse(row.LedgerEntryId, row.UserId, row.ProjectId, row.ProviderRequestId, row.ProviderCode, row.ModelCode, row.EntryKind, row.Amount, row.CurrencyCode, row.OccurredAtUtc, metrics.InputTokens, metrics.OutputTokens, metrics.VideoSeconds, row.ProjectKind);
         }).ToArray();
         var parsedActualRows = actualRows.Select(row => new ParsedUsageAggregateProjection(row.UserId, row.ProviderCode, row.ModelCode, row.Amount, OrganizationUsageMetricsParser.Parse(row.UsageJson))).ToArray();
         var totalMetrics = OrganizationUsageMetricsParser.Sum(parsedActualRows.Select(x => x.Metrics));
@@ -1334,7 +1337,8 @@ internal sealed partial class OrganizationService(
         decimal Amount,
         string CurrencyCode,
         string? UsageJson,
-        DateTime OccurredAtUtc);
+        DateTime OccurredAtUtc,
+        string ProjectKind);
 
     private sealed record UsageAggregateProjection(
         string UserId,

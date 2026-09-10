@@ -16,7 +16,7 @@ internal sealed record VietsubVoicePlaybackEntry(
 internal sealed class VietsubVoicePlaybackRegistry(
     Func<Guid, Guid, int, bool>? isTrackRevisionCurrent = null)
 {
-    private readonly ConcurrentDictionary<(Guid ProjectId, Guid ArtifactId), VietsubVoicePlaybackEntry> _entries = new();
+    private readonly ConcurrentDictionary<Guid, VietsubVoicePlaybackEntry> _entries = new();
     private readonly ConcurrentDictionary<string, VerifiedFile> _verified = new(StringComparer.OrdinalIgnoreCase);
 
     public static string CreateUrl(Guid projectId, Guid artifactId, string sha256) =>
@@ -24,16 +24,13 @@ internal sealed class VietsubVoicePlaybackRegistry(
 
     public void RegisterCurrent(VietsubVoicePlaybackEntry entry)
     {
-        ClearProject(entry.ProjectId);
-        _entries[(entry.ProjectId, entry.ArtifactId)] = entry;
+        // Replace atomically: a state refresh must not briefly revoke the same WAV.
+        _entries[entry.ProjectId] = entry;
     }
 
     public void ClearProject(Guid projectId)
     {
-        foreach (var key in _entries.Keys.Where(key => key.ProjectId == projectId))
-        {
-            _entries.TryRemove(key, out _);
-        }
+        _entries.TryRemove(projectId, out _);
     }
 
     public bool TryResolve(
@@ -46,7 +43,8 @@ internal sealed class VietsubVoicePlaybackRegistry(
         entry = null!;
         if (activeProject.ProjectId != projectId
             || activeProject.ActiveSubtitleTrackId is not Guid activeTrackId
-            || !_entries.TryGetValue((projectId, artifactId), out var candidate)
+            || !_entries.TryGetValue(projectId, out var candidate)
+            || candidate.ArtifactId != artifactId
             || candidate.TrackId != activeTrackId
             || (isTrackRevisionCurrent is not null
                 && !isTrackRevisionCurrent(candidate.ProjectId, candidate.TrackId, candidate.TrackRevision))
@@ -67,6 +65,7 @@ internal sealed class VietsubVoicePlaybackRegistry(
             if (!file.Exists || file.Length != entry.SizeBytes || file.Length <= 44) return false;
             if (_verified.TryGetValue(entry.AbsolutePath, out var cached)
                 && cached.Length == file.Length
+                && FixedHashEquals(cached.Sha256, entry.Sha256)
                 && cached.LastWriteAtUtc == file.LastWriteTimeUtc)
             {
                 return cached.Valid;
@@ -75,7 +74,7 @@ internal sealed class VietsubVoicePlaybackRegistry(
             var valid = CryptographicOperations.FixedTimeEquals(
                 SHA256.HashData(stream),
                 Convert.FromHexString(entry.Sha256));
-            _verified[entry.AbsolutePath] = new(file.Length, file.LastWriteTimeUtc, valid);
+            _verified[entry.AbsolutePath] = new(file.Length, file.LastWriteTimeUtc, entry.Sha256, valid);
             return valid;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or FormatException)
@@ -96,5 +95,5 @@ internal sealed class VietsubVoicePlaybackRegistry(
         }
     }
 
-    private sealed record VerifiedFile(long Length, DateTime LastWriteAtUtc, bool Valid);
+    private sealed record VerifiedFile(long Length, DateTime LastWriteAtUtc, string Sha256, bool Valid);
 }

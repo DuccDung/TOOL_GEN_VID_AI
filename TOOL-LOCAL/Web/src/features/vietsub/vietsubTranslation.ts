@@ -162,7 +162,7 @@ export function getVietsubTranslationRuntimeView(
   return {
     tone: 'warning',
     title: 'Engine cần được kiểm tra lại',
-    badge: 'Cần xử lý',
+    badge: 'Cần kiểm tra',
     canInstall: true,
     canTranslate: false,
     translationActionLabel: 'Kiểm tra engine trước'

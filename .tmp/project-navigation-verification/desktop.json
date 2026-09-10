@@ -1,0 +1,11 @@
+{
+  "mode": "desktop",
+  "zoom": 1,
+  "button": {
+    "x": 262,
+    "y": 102,
+    "width": 115.234375,
+    "height": 30
+  },
+  "label": "Tạo dự án mới"
+}

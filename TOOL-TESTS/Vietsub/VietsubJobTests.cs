@@ -38,7 +38,7 @@ public sealed class VietsubJobTests : IDisposable
         await connection.OpenAsync();
         await using var version = connection.CreateCommand();
         version.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
-        Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+        Assert.Equal(6L, Convert.ToInt64(await version.ExecuteScalarAsync()));
         await using var tables = connection.CreateCommand();
         tables.CommandText = """
             SELECT COUNT(*) FROM sqlite_master
@@ -79,7 +79,7 @@ public sealed class VietsubJobTests : IDisposable
         await verify.OpenAsync();
         await using var version = verify.CreateCommand();
         version.CommandText = "SELECT schema_version FROM schema_info LIMIT 1;";
-        Assert.Equal(5L, Convert.ToInt64(await version.ExecuteScalarAsync()));
+        Assert.Equal(6L, Convert.ToInt64(await version.ExecuteScalarAsync()));
         await using var index = verify.CreateCommand();
         index.CommandText = """
             SELECT COUNT(*) FROM sqlite_master

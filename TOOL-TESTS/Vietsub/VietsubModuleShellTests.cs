@@ -195,7 +195,7 @@ public sealed class VietsubModuleShellTests
     }
 
     [Fact]
-    public void Ui_ExposesVietnameseTranslationCtaAndKeepsMissingOcrAsClickFeedback()
+    public void Ui_ExposesTranslationModeDialogAndKeepsMissingOcrAsLocalClickFeedback()
     {
         var settings = ReadRepositoryFile(
             "TOOL-LOCAL", "Web", "src", "features", "vietsub", "VietsubSettingsPanel.tsx");
@@ -207,10 +207,17 @@ public sealed class VietsubModuleShellTests
         var program = ReadRepositoryFile("TOOL-LOCAL", "Program.cs");
 
         Assert.Contains("Dịch tiếng Việt", settings);
-        Assert.Contains("getVietsubTranslationRuntimeConfirmation", settings);
+        Assert.Contains("VietsubTranslationModeModal", settings);
+        Assert.Contains("Dịch Local", settings);
+        Assert.Contains("Dịch Cloud", settings);
+        Assert.Contains("aria-disabled={!cloudAvailability?.available}", settings);
+        Assert.Contains("disabled={busy || !cloudAvailability?.available || !onStartCloud}", settings);
+        Assert.Contains("onStartCloud", settings, StringComparison.Ordinal);
+        Assert.DoesNotContain("getVietsubTranslationRuntimeConfirmation", settings, StringComparison.Ordinal);
         Assert.Contains("ưu tiên tái sử dụng model 2,50 GB hợp lệ đã có trên máy", preflight);
         Assert.DoesNotContain("Dịch tự động", settings, StringComparison.Ordinal);
-        Assert.Contains("disabled={translationDisabled}", settings);
+        Assert.Contains("aria-controls=\"vietsub-translation-mode-dialog\"", settings);
+        Assert.Contains("disabled={busy || Boolean(activeJob)}", settings);
         Assert.DoesNotContain("disabled={!activeTrack", settings, StringComparison.Ordinal);
         Assert.Contains("Bạn cần quét OCR nhận dạng phụ đề trước khi dịch.", preflight);
         Assert.Contains("activeTrack.source !== 'PADDLE_OCR_LOCAL'", preflight);
@@ -218,7 +225,7 @@ public sealed class VietsubModuleShellTests
         Assert.Contains("runProjectOperation('vietsub.job.translate', payload)", hook);
         Assert.Contains("case \"vietsub.job.translate\"", bridge);
         Assert.Contains("catch (VietsubTranslationException exception)", bridge);
-        Assert.Contains("new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, voiceExecutor])", program);
+        Assert.Contains("new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, cloudExecutor, voiceExecutor])", program);
     }
 
     [Fact]

@@ -1760,13 +1760,13 @@ internal sealed class DashboardBridge : IDisposable
         {
             var current = _sessionManager.Current
                 ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
-            if (_licenseManager.Current is { HasActiveLicense: true } && !_licenseManager.HasValidLease)
+            if (_licenseManager.Current is { HasActiveLicense: true, AccessState: null or LicenseAccessStates.Active }
+                && !_licenseManager.HasValidLease)
             {
                 await _licenseManager.RefreshNowAsync(cancellationToken);
             }
             if (_licenseManager.IsLocked)
             {
-                _selectedProjectId = null;
                 Post(new WebMessageResponse(
                     "dashboard.state",
                     requestId,

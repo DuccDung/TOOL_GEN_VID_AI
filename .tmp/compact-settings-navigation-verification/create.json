@@ -1,0 +1,15 @@
+{
+  "mode": "create",
+  "zoom": 1,
+  "button": {
+    "x": 1046.5625,
+    "y": 164,
+    "width": 98.421875,
+    "height": 28
+  },
+  "label": "Tạo dự án mới",
+  "headerHeight": 49,
+  "insideSettings": true,
+  "creationForm": true,
+  "closeRequests": 1
+}

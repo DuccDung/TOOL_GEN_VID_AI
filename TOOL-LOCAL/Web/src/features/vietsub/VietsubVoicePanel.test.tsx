@@ -58,6 +58,7 @@ describe('Vietsub local voice panel', () => {
         errorCode: 'VOICE_RUNTIME_NOT_INSTALLED'
       },
       playheadMilliseconds: 0,
+      onSeek: noOp,
       onImportMedia: noOp,
       onUpdateOcrSettings: async () => true,
       onPreviewOcr: noOp,
@@ -73,10 +74,11 @@ describe('Vietsub local voice panel', () => {
       onActivateOcrTrack: noOp
     }));
 
-    expect(html).toContain('Chưa cài Piper local');
-    expect(html).toContain('Hãy cài runtime và model trước khi tạo giọng.');
-    expect(html).toContain('Cài Piper local');
+    expect(html).toContain('Tạo giọng Việt');
+    expect(html).toContain('Cần cài giọng');
     expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain('aria-controls="vietsub-voice-install-dialog"');
+    expect(html).not.toContain('Piper local chưa được cài đầy đủ');
     expect(html).not.toContain('Tính năng đang tắt');
   });
 
@@ -165,6 +167,7 @@ describe('Vietsub local voice panel', () => {
         }]
       },
       playheadMilliseconds: 0,
+      onSeek: noOp,
       onImportMedia: noOp,
       onUpdateOcrSettings: async () => true,
       onPreviewOcr: noOp,
@@ -180,9 +183,10 @@ describe('Vietsub local voice panel', () => {
       onActivateOcrTrack: noOp
     }));
 
-    expect(html).toContain('Piper local sẵn sàng');
-    expect(html).toContain('Timeline giọng Việt đã sẵn sàng');
+    expect(html).toContain('Tạo lại giọng Việt');
+    expect(html).toContain('Đã tạo');
     expect(html).toContain('timeline vẫn được tạo');
+    expect(html).not.toContain('Piper local sẵn sàng');
     expect(html).not.toContain('<audio');
     expect(html).not.toContain(playbackUrl);
     expect(html).not.toContain('relativePath');

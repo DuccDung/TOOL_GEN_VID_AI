@@ -10,6 +10,8 @@ Server là ranh giới tin cậy duy nhất cho auth/session/device/license, org
 
 Controller phải mỏng; validation nghiệp vụ, transaction và idempotency nằm trong service.
 
+Vietsub Cloud dùng `vs.CloudTranslationJobs/Batches/Attempts`, snapshot text/result tạm mã hóa, không biến registry thành kho editor. Budget/ledger có `VietsubProjectId` riêng; Unknown giữ reservation đến khi có bằng chứng đối soát. Dừng feature không dừng cleanup/settlement/reconciliation.
+
 ## Thứ tự request có chi phí
 
 1. JWT, session và device.

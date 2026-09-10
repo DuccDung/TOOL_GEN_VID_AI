@@ -47,6 +47,7 @@ internal static class VietsubTranslationQualityStatuses
 internal static class VietsubTranslationSources
 {
     public const string LocalAuto = "LOCAL_AUTO";
+    public const string CloudAuto = "CLOUD_AUTO";
     public const string Manual = "MANUAL";
 }
 

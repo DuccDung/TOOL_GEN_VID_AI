@@ -165,8 +165,10 @@ internal static class Program
                 VietsubJobManager? vietsubJobManager = null;
                 VietsubOcrService? vietsubOcrService = null;
                 VietsubTranslationService? vietsubTranslationService = null;
+                VietsubCloudTranslationService? vietsubCloudTranslationService = null;
                 QwenGgufVietsubTranslationProvider? vietsubTranslationProvider = null;
                 VietsubVoiceService? vietsubVoiceService = null;
+                VietsubVideoExportService? vietsubVideoExportService = null;
                 VietsubVoiceComponentStore? vietsubVoiceComponents = null;
                 if (options.Features.VietsubEnabled)
                 {
@@ -237,14 +239,29 @@ internal static class Program
                         voiceTimelineRenderer,
                         vietsubJobStore,
                         vietsubPaths);
-                    vietsubJobManager = new VietsubJobManager(
-                        vietsubJobStore,
-                        new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, voiceExecutor]));
                     var localJobAuthorizer = new VietsubLocalJobAuthorizer(
                         new DesktopVietsubLocalAccessContext(
                             sessionManager,
-                            licenseManager,
-                            generationClient));
+                             licenseManager,
+                             generationClient));
+                    var cloudClient = new VietsubCloudTranslationClient(generationHttpClient, sessionManager, licenseManager);
+                    var cloudExecutor = new VietsubCloudTranslationJobExecutor(vietsubProjectStore, vietsubSubtitleStore,
+                        translationStore, vietsubPaths, localJobAuthorizer, cloudClient, vietsubJobStore);
+                    vietsubJobManager = new VietsubJobManager(vietsubJobStore,
+                        new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, cloudExecutor, voiceExecutor]));
+                    vietsubCloudTranslationService = new VietsubCloudTranslationService(localJobAuthorizer, cloudClient,
+                        vietsubSubtitleStore, vietsubPaths, vietsubJobStore, vietsubJobManager);
+                    vietsubVideoExportService = new VietsubVideoExportService(
+                        localJobAuthorizer,
+                        vietsubProjectStore,
+                        vietsubMediaImportService,
+                        vietsubSubtitleStore,
+                        voiceStore,
+                        vietsubPaths,
+                        mediaToolPreflight,
+                        mediaProbe,
+                        mediaToolPaths.FfmpegPath,
+                        mediaProcessRunner);
                     vietsubOcrService = new VietsubOcrService(
                         localJobAuthorizer,
                         vietsubMediaImportService,
@@ -263,6 +280,7 @@ internal static class Program
                         vietsubPaths,
                         vietsubVoiceComponents,
                         voicePlaybackRegistry,
+                        voiceTimelineRenderer,
                         vietsubJobManager);
                     vietsubThumbnailService = new VietsubTimelineThumbnailService(
                         vietsubPaths,
@@ -300,7 +318,9 @@ internal static class Program
                     vietsubOcrService,
                     vietsubTranslationService,
                     vietsubVoiceService,
-                    licensePaymentClient);
+                    vietsubVideoExportService,
+                    licensePaymentClient,
+                    vietsubCloudTranslationService);
                 try
                 {
                     Application.Run(mainForm);

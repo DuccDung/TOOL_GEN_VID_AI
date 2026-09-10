@@ -36,7 +36,7 @@ export function VietsubTranslationResourceModal({
 
   return (
     <div
-      className="confirmation-overlay"
+      className="confirmation-overlay vietsub-resource-modal-overlay"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onDismiss();

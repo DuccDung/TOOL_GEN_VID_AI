@@ -1,0 +1,11 @@
+{
+  "mode": "narrow",
+  "zoom": 1.25,
+  "button": {
+    "x": 12.5,
+    "y": 125,
+    "width": 143.546875,
+    "height": 37.5
+  },
+  "label": "Tạo dự án mới"
+}

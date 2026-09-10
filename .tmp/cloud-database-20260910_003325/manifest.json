@@ -1,0 +1,17 @@
+{
+    "Server":  "DUNGDEV",
+    "Database":  "VideoFactory",
+    "Clone":  "VideoFactory_CloudRehearsal_20260910_003325",
+    "Backup":  "D:\\SQL2019\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\Backup\\VideoFactory_before_cloud_20260910_003325.bak",
+    "CloneData":  "D:\\SQL2019\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA\\VideoFactory_CloudRehearsal_20260910_003325.mdf",
+    "CloneLog":  "D:\\SQL2019\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA\\VideoFactory_CloudRehearsal_20260910_003325_log.ldf",
+    "Migration":  "D:\\laptrinhweb\\code_outsrc\\TOOL_AUTO_GEN_POST_VIDEO\\Branch-Tool-Sub\\TOOL_GEN_VID_AI\\database\\VideoFactory.4.1.6.VietsubCloudTranslation.sql",
+    "MigrationSha256":  "ACA62CF2B9596470CA9F99DBF046FEB1ACB001B3F83433B0AAE04C4ECE6542FA",
+    "CreatedAt":  "2026-09-10T00:33:26.0121260+07:00",
+    "CloneMigrationPassed":  true,
+    "CloneRestoreAndCheckDbPassed":  true,
+    "TargetMigrationAppliedAt":  "2026-09-10T00:38:40.1855060+07:00",
+    "TargetVerificationPassed":  true,
+    "CloneRemovedAfterVerification":  true,
+    "BackupSha256":  "7E2F14413B67ABDAC1032E62441BF9D826076666FC5D52EFC5A2824EA60D8F96"
+}

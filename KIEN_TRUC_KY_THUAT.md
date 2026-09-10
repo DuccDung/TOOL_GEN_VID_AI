@@ -73,7 +73,7 @@ Server tách phạm vi dữ liệu bằng các context chính:
 - `AiGovernanceDbContext`: organization, membership, provider catalog, pricing, budget, credential và usage.
 - `ProviderAdminDbContext`: thao tác quản trị provider/catalog.
 - `VideoFactoryDbContext`: project, scene, asset và generation workflow.
-- `VietsubDbContext`: registry metadata `vs.Projects`.
+- `VietsubDbContext`: registry `vs.Projects`, job/batch/attempt Cloud và payload/result tạm được mã hóa; không thay database biên tập local.
 
 Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp.
 
@@ -168,9 +168,13 @@ Narrated asset mới dùng policy `scene-audio-sync-v3`. Tương thích `v2` ch�
 
 ## 7. Vietsub
 
+Cloud translation có đường riêng: `vietsub.job.translate.cloud` → desktop snapshot/`TRANSLATE_CLOUD` → API `cloud-translation` → worker server → OpenAI Responses. Server giữ model/credential/rate/prompt snapshot; SQL application lock và lease bảo vệ dispatch. Mỗi batch reserve vào `VietsubProjectId`, giữ FK project video cũ bằng CHECK đúng một loại project. Result + trạng thái được lưu trước settlement; Unknown không tự retry/release. Desktop lấy lại cùng operation ID, CAS từng cue với receipt/checkpoint trong SQLite rồi ghi SRT atomically; provenance `CLOUD_AUTO` được xử lý như bản dịch tự động khi nguồn bị sửa. Qwen worker không tham chiếu Cloud. Xem [runbook Cloud](HUONG_DAN_VAN_HANH_DICH_CLOUD_VIETSUB.md).
+
 ### 7.1 Lưu trữ
 
-Mỗi project Vietsub có manifest JSON, SQLite `project.db`, media và artifact local. Server chỉ giữ metadata registry để tìm/chọn project; không được cấp SQL trực tiếp từ desktop vào schema `vs`.
+Mỗi project Vietsub có manifest JSON schema 6, SQLite `project.db`, media và artifact local. `subtitleStyle` và `audioMixSettings` nằm trong manifest; style được validate theo font/color/range allowlist, còn mixer giới hạn âm gốc `0–1` và giọng dịch `0–1.5`, với migration mặc định `0.25/1.0` và auto-duck bật. React ghi đồng thời style/mixer qua message `vietsub.subtitle.style.update`; preview tính content box thật khi có letterbox, phát audio engine giọng ẩn cùng playhead và áp gain/mute/duck theo bản nháp. Bộ dựng ASS chỉ nhận model style đã normalize, ánh xạ cùng anchor/tọa độ, cân dòng theo mục tiêu và trung hòa override tag trong cue; không nhận font path hoặc tham số FFmpeg từ DOM. `vietsub.video.export` chỉ nhận đích từ `SaveFileDialog` native; service xác thực user/license/organization/project, hash video, revision track, style, mixer và SHA-256 timeline giọng trước khi render. FFmpeg trộn stem gốc/giọng, dùng sidechain khi auto-duck bật, limiter trước AAC, ghi MP4 `.partial`, probe đúng trạng thái có/không audio rồi mới publish. Registry server dùng metadata để tìm/chọn project; riêng job Cloud giữ snapshot text tạm mã hóa. Không được cấp SQL trực tiếp từ desktop vào schema `vs`.
+
+Editor phụ đề điều khiển cuộn tại `useCueListFollow`: chỉ cuộn container danh sách, giữ một đích mới nhất, tạm giữ card khi người dùng cuộn/nhập/menu và tiếp tục sau hai giây rảnh khi đang phát. Row được memo hóa, key theo track + cue và giữ draft qua revision; project được remount theo project ID. Phản hồi trang chỉ được áp dụng khi khớp request mới nhất. Banner dùng `VietsubNotice`; `noticeEvents` là metadata riêng của state frontend để phân biệt một lần lỗi mới với poll cùng sự kiện, không đổi DTO native/server hoặc trạng thái nghiệp vụ. Thao tác giọng trong editor chỉ gửi một cue ID, flush draft trước và lấy revision mới nhất từ page/track summary.
 
 ### 7.2 OCR
 
@@ -188,9 +192,13 @@ Readiness marker gắn fingerprint của model, worker, protocol, resource profi
 
 Desktop điều phối Piper CPU qua Python worker JSONL cô lập. Component store chỉ tải từ HTTPS host allowlist, kiểm tra đúng size/SHA-256 của `uv`, model và config trước khi ghi marker `READY`; không dùng ngưỡng RAM cứng để chặn cài hoặc chạy.
 
-Job snapshot track/revision/cấu hình, gom cue thành phrase ổn định, tái dùng cache theo fingerprint và checkpoint sau từng phrase. Mỗi WAV phải là RIFF/PCM hợp lệ và được ghi atomically. Bộ dựng timeline trim silence, mượn khoảng trống kế tiếp và chỉ dùng `atempo` đến `1.20x`; vượt ngưỡng vẫn publish timeline, giữ timing diagnostic không chặn và nới đuôi timeline để không cắt câu cuối. React hiển thị output này bằng track **Giọng Việt** trên cùng time scale với video/phụ đề và dùng audio engine ẩn đồng bộ với master video, không dùng native audio controls độc lập.
+Job snapshot track/revision/cấu hình, gom cue thành phrase ổn định, tái dùng cache theo fingerprint và checkpoint sau từng phrase. Mỗi WAV phải là RIFF/PCM hợp lệ và được ghi atomically. Bộ dựng timeline trim silence, mượn khoảng trống kế tiếp và chỉ dùng `atempo` đến `1.20x`; vượt ngưỡng vẫn publish timeline, giữ timing diagnostic không chặn và nới đuôi timeline để không cắt câu cuối. React hiển thị output này bằng track **Giọng Việt** trên cùng time scale với video/phụ đề và dùng audio engine ẩn đồng bộ với master video, không dùng native audio controls độc lập. Thao tác chỉ nới `end` sẽ tạo bản ghi timeline revision mới trỏ tới đúng WAV/SHA-256 đã xác minh. Với các chỉnh sửa timing khác hoặc project đã lệch nhiều revision, service xác minh lại fingerprint/cue coverage/SHA-256 của toàn bộ phrase cache rồi dùng FFmpeg dựng timeline theo timing hiện hành mà không gọi Piper; cache không tương thích vẫn fail closed.
 
 Timeline được trộn bằng FFmpeg theo từng stem giới hạn số phrase. WebView chỉ phát qua virtual host nội bộ với registry của project/track/revision hiện hành và xác minh lại kích thước/SHA-256; UI không nhận đường dẫn filesystem. Job dịch và job giọng dùng cùng local job manager nên không chạy đồng thời trên máy.
+
+Mốc đầu câu bỏ qua được dùng làm mục tiêu fit, kể cả khi cue chồng thời gian; trường nội bộ `HardEndMilliseconds` không còn là giới hạn cắt âm. WAV inspector giữ riêng mốc cuối vượt ngưỡng `max(400, peak * 0.02)` của PCM16 trước khi thêm đệm. Renderer chỉ rút phần đuôi sau mốc này cộng 5 ms, tối đa 120 ms tính trên WAV trước `atempo`; fade tối đa 5 ms cũng chỉ nằm trong phần đuôi đó. Metadata trim chỉ dùng cho lần render, phrase/cache hash giữ nguyên. Nếu vẫn tràn, renderer trả diagnostic `REVIEW_REQUIRED` nhưng tiếp tục dựng timeline, không throw `VOICE_SKIPPED_CUE_OVERLAP` hoặc dùng `atrim` cắt ở đầu câu bỏ qua. Tạo mới và phục hồi cache dùng chung renderer này. Bước `VOICE_TIMELINE` vẫn ghi checkpoint 72% để lỗi render thật giữ đúng tiến độ; thành công publish ở 100%. Sau `adelay`, `asetpts=N/SR/TB` dựng lại timestamp từ mẫu âm thanh để không mất đoạn im lặng đầu do frame thiếu PTS; limiter bù latency để giữ đúng timing.
+
+Sau trộn stem, timestamp cũng được dựng lại; `apad=whole_len` và `atrim=end_sample` giới hạn đầu ra theo số mẫu 48 kHz. Cách này tránh việc padding tiếp tục ghi WAV khi tổ hợp filter truyền timestamp thiếu hoặc không hợp lệ.
 
 ## 8. Cấu hình mặc định cần biết
 

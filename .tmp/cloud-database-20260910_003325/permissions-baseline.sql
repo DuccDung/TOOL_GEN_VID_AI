@@ -1,0 +1,3 @@
+SET NOCOUNT ON;
+SELECT dp.name AS PrincipalName,p.class_desc,p.major_id,p.minor_id,p.permission_name,p.state_desc FROM sys.database_permissions p JOIN sys.database_principals dp ON dp.principal_id=p.grantee_principal_id ORDER BY dp.name,p.class_desc,p.major_id,p.minor_id,p.permission_name,p.state_desc;
+SELECT r.name AS RoleName,m.name AS MemberName FROM sys.database_role_members rm JOIN sys.database_principals r ON r.principal_id=rm.role_principal_id JOIN sys.database_principals m ON m.principal_id=rm.member_principal_id ORDER BY r.name,m.name;

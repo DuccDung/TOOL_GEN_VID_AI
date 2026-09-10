@@ -65,6 +65,7 @@ import openAiLogo from '@lobehub/icons-static-svg/icons/openai.svg';
 import pikaLogo from '@lobehub/icons-static-svg/icons/pika.svg';
 import runwayLogo from '@lobehub/icons-static-svg/icons/runway.svg';
 import { isHosted, postToHost, subscribeToHost } from './bridge';
+import { isLicenseLocked, licenseAccessTitle } from './licenseAccess';
 import {
   formatContentLanguageError,
   formatViolation,
@@ -101,6 +102,7 @@ import type {
   CurrentLicensePayment,
   ContentRepairQuote,
   LicenseOffer,
+  LicenseInvalidatedMessage,
   LicensePaymentCheckout,
   LicensePaymentStatus,
   MediaToolStatus,
@@ -405,6 +407,8 @@ function App() {
   const [licensePaymentStatus, setLicensePaymentStatus] = useState<LicensePaymentStatus | null>(null);
   const [licensePaymentBusy, setLicensePaymentBusy] = useState(false);
   const [licensePaymentError, setLicensePaymentError] = useState<string | null>(null);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const logoutRequestRef = useRef<string | null>(null);
   const [firstFramePreview, setFirstFramePreview] = useState<SceneFirstFrameSummary | null>(null);
   const [firstFrameOperation, setFirstFrameOperation] = useState<SceneFirstFrameOperation | null>(null);
   const [voiceCatalogPreviews, setVoiceCatalogPreviews] = useState<Record<string, VoiceCatalogPreviewPlayback>>({});
@@ -464,11 +468,22 @@ function App() {
     postLicenseRequest('current', 'license.payment.current.get');
   };
 
+  const requestLogout = () => {
+    if (logoutRequestRef.current) return;
+    setLicensePaymentError(null);
+    setLogoutBusy(true);
+    logoutRequestRef.current = postToHost('auth.logout');
+  };
+
   useEffect(() => {
     const unsubscribe = subscribeToHost((message: HostMessage) => {
       if (message.type === 'dashboard.state' && message.payload) {
         const nextDashboard = message.payload as DashboardState;
-        setDashboard({
+        setDashboard((current) => isLicenseLocked(nextDashboard.license) ? {
+          ...current,
+          profile: nextDashboard.profile,
+          license: nextDashboard.license
+        } : {
           ...nextDashboard,
           features: nextDashboard.features ?? { vietsubEnabled: false, speechSynchronizationEnabled: false },
           sceneFirstFrames: nextDashboard.sceneFirstFrames ?? [],
@@ -488,7 +503,11 @@ function App() {
           selectedProjectRequestRef.current = null;
           setPage(resolveSelectedProjectPage(nextDashboard.selectedProject?.workflowStructureType));
         }
-        if (nextDashboard.license?.hasActiveLicense && nextDashboard.license.currentDeviceActivated) {
+        if (message.requestId && licenseRequestsRef.current.get(message.requestId) === 'refresh') {
+          licenseRequestsRef.current.delete(message.requestId);
+          setLicensePaymentBusy(false);
+        }
+        if (nextDashboard.license && !isLicenseLocked(nextDashboard.license)) {
           licenseBootstrapRequestedRef.current = false;
           licenseStatusInFlightRef.current = false;
           licenseRequestsRef.current.clear();
@@ -706,6 +725,12 @@ function App() {
       }
 
       if (message.type === 'operation.error') {
+        if (message.requestId && message.requestId === logoutRequestRef.current) {
+          logoutRequestRef.current = null;
+          setLogoutBusy(false);
+          setLicensePaymentError(message.error?.message ?? 'Chưa thể đăng xuất. Vui lòng thử lại.');
+          return;
+        }
         const operationErrorMessage = formatContentLanguageError(message.error);
         const recoverableContentFailure = parseContentLanguageFailure(message.error);
         if (recoverableContentFailure) {
@@ -828,12 +853,17 @@ function App() {
       }
 
       if (message.type === 'license.invalidated') {
-        const reason = String((message.payload as { message?: string })?.message ?? 'License không còn hiệu lực.');
-        setDashboard((current) => current.license
-          ? { ...current, license: { ...current.license, hasActiveLicense: false, currentDeviceActivated: false, accessMessage: reason } }
-          : current);
+        const payload = message.payload as LicenseInvalidatedMessage | undefined;
+        const reason = payload?.message ?? 'License không còn hiệu lực.';
+        setDashboard((current) => payload?.license
+          ? { ...current, license: payload.license }
+          : current.license
+            ? { ...current, license: { ...current.license, leaseExpiresAtUtc: null, accessState: 'Unavailable', accessMessage: reason } }
+            : current);
+        setLicenseCheckout(null);
+        setLicensePaymentError(null);
+        setLicensePaymentBusy(false);
         licenseBootstrapRequestedRef.current = false;
-        postLicenseRequest('refresh', 'license.refresh');
         return;
       }
 
@@ -1695,8 +1725,7 @@ function App() {
   const pageBusy = page === 'vietsub'
     ? vietsub.state.loading || vietsub.state.busy
     : generationBusy;
-  const licenseLocked = Boolean(dashboard.license &&
-    (!dashboard.license.hasActiveLicense || !dashboard.license.currentDeviceActivated));
+  const licenseLocked = isLicenseLocked(dashboard.license);
   const checkMediaTools = () => {
     if (generationBusy) return;
     setBusy(true);
@@ -1725,7 +1754,7 @@ function App() {
         onClose={() => setSidebarOpen(false)}
         onToggle={() => setSidebarCollapsed((current) => !current)}
         onNavigate={handleNavigation}
-        onLogout={() => postToHost('auth.logout')}
+        onLogout={requestLogout}
         onUnavailable={notify}
       />
 
@@ -1772,6 +1801,8 @@ function App() {
             onPreviewOcr={vietsub.previewOcr}
             onStartOcr={vietsub.startOcr}
             onStartTranslation={vietsub.startTranslation}
+            onStartCloudTranslation={vietsub.startCloudTranslation}
+            onRefreshCloudAvailability={vietsub.refreshCloudAvailability}
             onInstallTranslationRuntime={vietsub.installTranslationRuntime}
             onStartVoice={vietsub.startVoice}
             onInstallVoiceRuntime={vietsub.installVoiceRuntime}
@@ -1789,12 +1820,16 @@ function App() {
             onRequestTimelineThumbnails={vietsub.requestTimelineThumbnails}
             onRequestTimelineWaveform={vietsub.requestTimelineWaveform}
             onUpdateSubtitleCue={vietsub.updateSubtitleCue}
+            onUpdateSubtitleStyle={vietsub.updateSubtitleStyle}
+            onUpdateCueVoice={vietsub.updateCueVoice}
             onUpdateTimelineCue={vietsub.updateTimelineCue}
             onSplitSubtitleCue={vietsub.splitSubtitleCue}
             onAlignSubtitleCue={vietsub.alignSubtitleCue}
             onDuplicateSubtitleCue={vietsub.duplicateSubtitleCue}
             onDeleteSubtitleCue={vietsub.deleteSubtitleCue}
             onExportSrt={vietsub.exportSrt}
+            onExportVideo={vietsub.exportVideo}
+            onCancelOperation={vietsub.cancel}
             onRegisterBeforeLeave={vietsub.registerBeforeLeave}
           />
         ) : page === 'projects' ? (
@@ -1990,19 +2025,26 @@ function App() {
         <MediaToolInstallModal progress={mediaInstallProgress} />
       )}
 
-      {!busy && licenseLocked && dashboard.license && (
+      {licenseLocked && dashboard.license && (
         <LicenseGateOverlay
           license={dashboard.license}
           offers={licenseOffers}
           checkout={licenseCheckout}
           paymentStatus={licensePaymentStatus}
           busy={licensePaymentBusy}
+          logoutBusy={logoutBusy}
           error={licensePaymentError}
           onSelectPlan={createLicensePayment}
           onRefreshStatus={requestLicensePaymentStatus}
           onResetExpired={resetExpiredLicensePayment}
           onRetry={retryLicenseBootstrap}
-          onLogout={() => postToHost('auth.logout')}
+          onCheckAgain={() => {
+            if (licensePaymentBusy || logoutRequestRef.current) return;
+            setLicensePaymentError(null);
+            setLicensePaymentBusy(true);
+            postLicenseRequest('refresh', 'license.refresh');
+          }}
+          onLogout={requestLogout}
         />
       )}
 
@@ -2024,14 +2066,16 @@ function App() {
 function LicenseGateOverlay({
   license,
   offers,
-  checkout,
+  checkout: pendingCheckout,
   paymentStatus,
   busy,
+  logoutBusy,
   error,
   onSelectPlan,
   onRefreshStatus,
   onResetExpired,
   onRetry,
+  onCheckAgain,
   onLogout
 }: {
   license: NonNullable<DashboardState['license']>;
@@ -2039,11 +2083,13 @@ function LicenseGateOverlay({
   checkout: LicensePaymentCheckout | null;
   paymentStatus: LicensePaymentStatus | null;
   busy: boolean;
+  logoutBusy: boolean;
   error: string | null;
   onSelectPlan: (licensePlanId: string) => void;
   onRefreshStatus: () => void;
   onResetExpired: () => void;
   onRetry: () => void;
+  onCheckAgain: () => void;
   onLogout: () => void;
 }) {
   const cardRef = useRef<HTMLElement>(null);
@@ -2051,6 +2097,8 @@ function LicenseGateOverlay({
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const canPurchase = license.accessState === 'Missing' || license.accessState === 'Expired' || !license.accessState;
+  const checkout = canPurchase ? pendingCheckout : null;
+  const sessionLimit = license.accessState === 'SessionLimit' || license.accessReasonCode === 'concurrent_session_limit';
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -2169,7 +2217,7 @@ function LicenseGateOverlay({
     <div className="license-gate-overlay" role="presentation">
       <section
         ref={cardRef}
-        className={`license-gate-card ${checkout ? 'has-checkout' : ''}`}
+        className={`license-gate-card ${checkout ? 'has-checkout' : ''} ${!canPurchase ? 'has-access-error' : ''}`}
         role="dialog"
         tabIndex={-1}
         aria-modal="true"
@@ -2178,7 +2226,9 @@ function LicenseGateOverlay({
       >
         <header className="license-gate-header">
           <div className="license-gate-brand"><Crown size={21} /><span>VIDEOMAKER</span></div>
-          <button type="button" className="license-gate-logout" onClick={onLogout}><LogOut size={16} />Đăng xuất</button>
+          {canPurchase && <button type="button" className="license-gate-logout" disabled={logoutBusy} onClick={onLogout}>
+            {logoutBusy ? <LoaderCircle className="spin" size={16} /> : <LogOut size={16} />}{logoutBusy ? 'Đang đăng xuất…' : 'Đăng xuất'}
+          </button>}
         </header>
 
         {!checkout ? (
@@ -2188,9 +2238,7 @@ function LicenseGateOverlay({
               <div>
                 <span className="license-gate-eyebrow">QUYỀN SỬ DỤNG</span>
                 <h1 id="license-gate-title">
-                  {license.accessState === 'Expired' ? 'Gói sử dụng đã hết hạn' :
-                    license.accessState === 'Suspended' ? 'Gói sử dụng đang bị tạm khóa' :
-                      license.accessState === 'Revoked' ? 'Gói sử dụng đã bị thu hồi' : 'Chọn gói để bắt đầu'}
+                  {licenseAccessTitle(license)}
                 </h1>
                 <p id="license-gate-description">
                   {license.accessMessage || 'Bạn cần một gói đang hoạt động để sử dụng các tính năng VideoMaker.'}
@@ -2234,10 +2282,26 @@ function LicenseGateOverlay({
                 {!offers.length && !error && <div className="license-loading"><LoaderCircle className="spin" size={22} />Đang tải các gói sử dụng...</div>}
               </>
             ) : (
-              <div className="license-support-notice"><TriangleAlert size={20} /><span>Trạng thái này cần quản trị viên hỗ trợ và không thể tự mở khóa bằng thanh toán.</span></div>
+              <>
+                <div className="license-support-notice"><TriangleAlert size={20} /><span>
+                  {sessionLimit
+                    ? 'Tài khoản đang có phiên đăng nhập khác được ưu tiên sử dụng. Bạn có thể đăng xuất tại đây để quay về màn hình đăng nhập, hoặc đăng xuất phiên khác rồi kiểm tra lại.'
+                    : license.accessState === 'DeviceLimit'
+                      ? 'Hãy giải phóng thiết bị không còn sử dụng rồi kiểm tra lại, hoặc đăng xuất để đổi tài khoản.'
+                      : 'Bạn có thể kiểm tra lại hoặc đăng xuất để đổi tài khoản. Nếu tình trạng tiếp diễn, hãy liên hệ quản trị viên.'}
+                </span></div>
+                <div className="license-access-actions">
+                  <button type="button" className="license-gate-logout" disabled={busy || logoutBusy} onClick={onCheckAgain}>
+                    <RefreshCw className={busy ? 'spin' : ''} size={17} />{busy ? 'Đang kiểm tra…' : 'Kiểm tra lại'}
+                  </button>
+                  <button type="button" className="license-gate-logout license-access-logout" disabled={logoutBusy} onClick={onLogout}>
+                    {logoutBusy ? <LoaderCircle className="spin" size={17} /> : <LogOut size={17} />}{logoutBusy ? 'Đang đăng xuất…' : 'Đăng xuất'}
+                  </button>
+                </div>
+              </>
             )}
 
-            {error && <div className="license-payment-error"><TriangleAlert size={18} /><span>{error}</span><button type="button" onClick={onRetry}>Thử lại</button></div>}
+            {error && <div className="license-payment-error" role="alert"><TriangleAlert size={18} /><span>{error}</span>{canPurchase && <button type="button" onClick={onRetry}>Thử lại</button>}</div>}
           </div>
         ) : (
           <div className="license-checkout-view">

@@ -1,12 +1,15 @@
 using System.Text;
+using System.Text.Json;
 using System.Security.Cryptography;
 using System.Net;
 using Microsoft.Data.Sqlite;
 using TOOL_LOCAL.Media;
+using TOOL_LOCAL.Vietsub;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Jobs;
 using TOOL_LOCAL.Vietsub.Playback;
 using TOOL_LOCAL.Vietsub.Storage;
+using TOOL_LOCAL.Vietsub.Subtitles;
 using TOOL_LOCAL.Vietsub.Translation;
 using TOOL_LOCAL.Vietsub.Voice;
 
@@ -269,7 +272,352 @@ public sealed class VietsubVoiceCoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Executor_PublishesTimelineWhenPhraseExceedsMaximumTempo()
+    public async Task Playback_RefreshIsAtomic_AndHashCacheCannotAuthorizeAnotherHash()
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "refresh.wav");
+        WritePcmWav(path, 500);
+        var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+        var project = new VietsubProjectManifest { ProjectId = Guid.NewGuid(), ActiveSubtitleTrackId = Guid.NewGuid() };
+        var entry = new VietsubVoicePlaybackEntry(project.ProjectId, Guid.NewGuid(), project.ActiveSubtitleTrackId.Value,
+            1, path, new FileInfo(path).Length, hash);
+        var registry = new VietsubVoicePlaybackRegistry();
+        registry.RegisterCurrent(entry);
+        Assert.True(registry.TryResolve(project, project.ProjectId, entry.ArtifactId, hash, out _));
+        using var start = new ManualResetEventSlim();
+        var writer = Task.Run(() => { start.Wait(); for (var i = 0; i < 50_000; i++) registry.RegisterCurrent(entry); });
+        var reader = Task.Run(() =>
+        {
+            start.Wait();
+            for (var i = 0; i < 2_000; i++) Assert.True(registry.TryResolve(project, project.ProjectId, entry.ArtifactId, hash, out _));
+        });
+        start.Set();
+        await Task.WhenAll(writer, reader);
+        var replacement = entry with { ArtifactId = Guid.NewGuid(), Sha256 = new string('a', 64) };
+        registry.RegisterCurrent(replacement);
+        Assert.False(registry.TryResolve(project, project.ProjectId, entry.ArtifactId, hash, out _));
+        Assert.False(registry.TryResolve(project, project.ProjectId, replacement.ArtifactId, replacement.Sha256, out _));
+        registry.ClearProject(project.ProjectId);
+        Assert.False(registry.TryResolve(project, project.ProjectId, replacement.ArtifactId, replacement.Sha256, out _));
+    }
+
+    [Fact]
+    public async Task Bridge_ExtendingCueEnd_KeepsVoiceTimelineOnCurrentRevision()
+    {
+        var paths = new VietsubAppPaths(_root);
+        var subtitles = new VietsubSubtitleStore(paths);
+        var projects = new VietsubProjectStore(paths, subtitles);
+        var project = await projects.CreateAsync(Guid.NewGuid(), "owner", "Voice cue extension");
+        var cue = Cue(1_000, 2_000, "Xin chÃ o", "speaker_1");
+        var track = new VietsubSubtitleTrack
+        {
+            DisplayName = "OCR",
+            LanguageCode = "en",
+            Source = "PADDLE_OCR_LOCAL",
+            Cues = [cue]
+        };
+        await subtitles.SaveTrackAsync(project.ProjectId, track);
+        project.ActiveSubtitleTrackId = track.TrackId;
+        await projects.SaveAsync(project);
+
+        var timelinePath = paths.GetProjectPath(
+            project.ProjectId,
+            "voice",
+            track.TrackId.ToString("N"),
+            $"revision-{track.Revision}",
+            "timeline.wav");
+        WritePcmWav(timelinePath, 3_000, 48_000);
+        var timelineHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(timelinePath))).ToLowerInvariant();
+        var now = DateTime.UtcNow;
+        var timeline = new VietsubVoiceArtifact(
+            Guid.NewGuid(),
+            track.TrackId,
+            track.Revision,
+            VietsubVoiceArtifactKinds.Timeline,
+            null,
+            Path.GetRelativePath(paths.GetProjectDirectory(project.ProjectId), timelinePath),
+            new FileInfo(timelinePath).Length,
+            timelineHash,
+            new string('a', 64),
+            VietsubVoiceEngines.Piper,
+            VietsubVoiceCatalog.PiperEngineVersion,
+            VietsubVoiceCatalog.PiperModelId,
+            VietsubVoiceCatalog.PiperModelVersion,
+            VietsubVoiceCatalog.PiperVoiceId,
+            3_000,
+            48_000,
+            1,
+            VietsubVoiceArtifactStatuses.Ready,
+            VietsubVoiceTimingStatuses.Natural,
+            now,
+            now,
+            [cue.CueId]);
+        var voiceStore = new VietsubVoiceStore(paths, subtitles);
+        Assert.True(await voiceStore.SaveArtifactAsync(
+            project.ProjectId,
+            timeline,
+            track.Revision));
+
+        using var components = new VietsubVoiceComponentStore(paths, featureEnabled: false);
+        var playbackRegistry = new VietsubVoicePlaybackRegistry(voiceStore.IsTrackRevisionCurrent);
+        var voiceService = new VietsubVoiceService(
+            null!,
+            subtitles,
+            voiceStore,
+            paths,
+            components,
+            playbackRegistry,
+            new VietsubVoiceTimelineRenderer(
+                paths,
+                new ReadyMediaPreflight(),
+                "ffmpeg.exe",
+                new WavWritingProcessRunner()),
+            null!);
+        var responses = new List<string>();
+        using var bridge = new VietsubWebBridge(
+            true,
+            responses.Add,
+            projects,
+            () => new VietsubUserContext("owner", project.OrganizationId),
+            subtitleService: new VietsubSubtitleService(paths, subtitles),
+            voiceService: voiceService);
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.project.open",
+            requestId = "open-voice-cue-extension",
+            payload = new { projectId = project.ProjectId }
+        }));
+        responses.Clear();
+
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.timeline.cue.update",
+            requestId = "extend-voice-cue",
+            payload = new
+            {
+                trackId = track.TrackId,
+                cueId = cue.CueId,
+                expectedTrackRevision = track.Revision,
+                startMilliseconds = cue.StartMilliseconds,
+                endMilliseconds = 2_800
+            }
+        }));
+
+        Assert.DoesNotContain(responses, response => response.Contains("vietsub.error", StringComparison.Ordinal));
+        var readyState = responses.Last(response =>
+            response.Contains("\"type\":\"vietsub.state\"", StringComparison.Ordinal)
+            && response.Contains("\"busy\":false", StringComparison.Ordinal));
+        using var stateJson = JsonDocument.Parse(readyState);
+        var voiceWorkspace = stateJson.RootElement.GetProperty("payload").GetProperty("voiceWorkspace");
+        var currentTimeline = voiceWorkspace.GetProperty("timeline");
+        Assert.Equal(track.Revision + 1, currentTimeline.GetProperty("trackRevision").GetInt32());
+        var playbackUrl = voiceWorkspace.GetProperty("timelinePlaybackUrl").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(playbackUrl));
+
+        var savedTrack = Assert.Single(await subtitles.LoadTracksAsync(project.ProjectId));
+        Assert.Equal(2_800, Assert.Single(savedTrack.Cues).EndMilliseconds);
+        var savedVoice = await voiceStore.LoadWorkspaceAsync(
+            project.ProjectId,
+            track.TrackId,
+            savedTrack.Revision,
+            project.VoiceSettings);
+        Assert.NotNull(savedVoice.Timeline);
+        Assert.Equal(timelineHash, savedVoice.Timeline!.Sha256);
+        var playback = new VietsubMediaPlaybackService(null!, voiceRegistry: playbackRegistry)
+            .Open(new Uri(playbackUrl!), "GET", null, project);
+        using var playbackContent = playback.Content;
+        Assert.Equal(200, playback.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Workspace_RebuildsVoiceFromCachedPhrasesAcrossTimingRevisions(bool hasSingleCueCache)
+    {
+        var paths = new VietsubAppPaths(_root);
+        var subtitles = new VietsubSubtitleStore(paths);
+        var projects = new VietsubProjectStore(paths, subtitles);
+        var project = await projects.CreateAsync(Guid.NewGuid(), "owner", "Voice cache recovery");
+        var firstCue = Cue(1_000, 1_800, "Xin chÃ o", "speaker_1");
+        var secondCue = Cue(2_000, 2_800, "cÃ¡c báº¡n", "speaker_1");
+        var track = new VietsubSubtitleTrack
+        {
+            DisplayName = "OCR",
+            LanguageCode = "en",
+            Source = "PADDLE_OCR_LOCAL",
+            Cues = [firstCue, secondCue]
+        };
+        await subtitles.SaveTrackAsync(project.ProjectId, track);
+        project.ActiveSubtitleTrackId = track.TrackId;
+        await projects.SaveAsync(project);
+
+        var settings = Settings();
+        var phrase = Assert.Single(VietsubVoicePhrasePlanner.Plan(track.Cues, settings));
+        var phrasePath = paths.GetProjectPath(
+            project.ProjectId,
+            "voice",
+            track.TrackId.ToString("N"),
+            $"revision-{track.Revision}",
+            "phrase.wav");
+        WritePcmWav(phrasePath, 1_500);
+        var phraseHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(phrasePath))).ToLowerInvariant();
+        var now = DateTime.UtcNow;
+        var phraseArtifact = new VietsubVoiceArtifact(
+            Guid.NewGuid(),
+            track.TrackId,
+            track.Revision,
+            VietsubVoiceArtifactKinds.Phrase,
+            phrase.PhraseId,
+            Path.GetRelativePath(paths.GetProjectDirectory(project.ProjectId), phrasePath),
+            new FileInfo(phrasePath).Length,
+            phraseHash,
+            VietsubVoiceFingerprintBuilder.BuildPhraseFingerprint(phrase, settings),
+            settings.EngineId,
+            settings.EngineVersion,
+            settings.ModelId,
+            settings.ModelVersion,
+            settings.VoiceId,
+            1_500,
+            16_000,
+            1,
+            VietsubVoiceArtifactStatuses.Ready,
+            null,
+            now,
+            now,
+            phrase.CueIds);
+        var voiceStore = new VietsubVoiceStore(paths, subtitles);
+        Assert.True(await voiceStore.SaveArtifactAsync(
+            project.ProjectId,
+            phraseArtifact,
+            track.Revision));
+
+        if (hasSingleCueCache)
+        {
+            var singlePhrase = Assert.Single(VietsubVoicePhrasePlanner.Plan([firstCue], settings));
+            var singlePath = Path.Combine(Path.GetDirectoryName(phrasePath)!, "single.wav");
+            WritePcmWav(singlePath, 700);
+            Assert.True(await voiceStore.SaveArtifactAsync(project.ProjectId, phraseArtifact with
+            {
+                ArtifactId = Guid.NewGuid(), PhraseId = singlePhrase.PhraseId, CueIds = singlePhrase.CueIds,
+                RelativePath = Path.GetRelativePath(paths.GetProjectDirectory(project.ProjectId), singlePath),
+                SizeBytes = new FileInfo(singlePath).Length, DurationMilliseconds = 700,
+                Sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(singlePath))).ToLowerInvariant(),
+                ContentFingerprint = VietsubVoiceFingerprintBuilder.BuildPhraseFingerprint(singlePhrase, settings)
+            }, track.Revision));
+        }
+
+        var oldTimelinePath = paths.GetProjectPath(
+            project.ProjectId,
+            "voice",
+            track.TrackId.ToString("N"),
+            $"revision-{track.Revision}",
+            "old-timeline.wav");
+        WritePcmWav(oldTimelinePath, 4_000, 48_000);
+        var oldTimelineHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(oldTimelinePath))).ToLowerInvariant();
+        var oldTimeline = new VietsubVoiceArtifact(
+            Guid.NewGuid(),
+            track.TrackId,
+            track.Revision,
+            VietsubVoiceArtifactKinds.Timeline,
+            null,
+            Path.GetRelativePath(paths.GetProjectDirectory(project.ProjectId), oldTimelinePath),
+            new FileInfo(oldTimelinePath).Length,
+            oldTimelineHash,
+            VietsubVoiceFingerprintBuilder.BuildTimelineFingerprint(
+                VietsubVoiceFingerprintBuilder.BuildConfigurationFingerprint(settings),
+                [phraseArtifact]),
+            settings.EngineId,
+            settings.EngineVersion,
+            settings.ModelId,
+            settings.ModelVersion,
+            settings.VoiceId,
+            4_000,
+            48_000,
+            1,
+            VietsubVoiceArtifactStatuses.Ready,
+            VietsubVoiceTimingStatuses.Natural,
+            now,
+            now,
+            phrase.CueIds);
+        Assert.True(await voiceStore.SaveArtifactAsync(
+            project.ProjectId,
+            oldTimeline,
+            track.Revision));
+
+        var subtitleService = new VietsubSubtitleService(paths, subtitles);
+        var revision = await subtitleService.UpdateCueTimingAsync(
+            project,
+            track.TrackId,
+            firstCue.CueId,
+            track.Revision,
+            500,
+            1_600);
+        revision = await subtitleService.UpdateCueTimingAsync(
+            project,
+            track.TrackId,
+            secondCue.CueId,
+            revision,
+            1_800,
+            3_200);
+        Assert.Equal(track.Revision + 2, revision);
+
+        using var components = new VietsubVoiceComponentStore(paths, featureEnabled: false);
+        var playbackRegistry = new VietsubVoicePlaybackRegistry(voiceStore.IsTrackRevisionCurrent);
+        var renderer = new VietsubVoiceTimelineRenderer(
+            paths,
+            new ReadyMediaPreflight(),
+            "ffmpeg.exe",
+            new WavWritingProcessRunner());
+        var voiceService = new VietsubVoiceService(
+            null!,
+            subtitles,
+            voiceStore,
+            paths,
+            components,
+            playbackRegistry,
+            renderer,
+            null!);
+
+        var workspace = await voiceService.GetWorkspaceAsync(project, CancellationToken.None);
+
+        Assert.NotNull(workspace.Timeline);
+        Assert.Equal(revision, workspace.Timeline!.TrackRevision);
+        Assert.NotEqual(oldTimeline.ArtifactId, workspace.Timeline.ArtifactId);
+        Assert.NotEqual(oldTimelineHash, workspace.Timeline.Sha256);
+        Assert.False(string.IsNullOrWhiteSpace(workspace.TimelinePlaybackUrl));
+        Assert.Equal(phrase.CueIds, workspace.Timeline.CueIds);
+        // A cached phrase containing both cues cannot be used when one cue is skipped.
+        revision = await subtitles.SetVoiceEnabledAsync(project.ProjectId, track.TrackId, revision, [secondCue.CueId], false);
+        var skipped = await voiceService.GetWorkspaceAsync(project, CancellationToken.None);
+        if (hasSingleCueCache)
+        {
+            Assert.NotNull(skipped.Timeline);
+            Assert.Equal([firstCue.CueId], skipped.Timeline.CueIds);
+            Assert.False(skipped.RequiresRebuild);
+        }
+        else
+        {
+            Assert.Null(skipped.Timeline);
+            Assert.Null(skipped.TimelinePlaybackUrl);
+            Assert.True(skipped.RequiresRebuild);
+        }
+        revision = await subtitles.SetVoiceEnabledAsync(project.ProjectId, track.TrackId, revision, [firstCue.CueId], false);
+        var allSkipped = await voiceService.GetWorkspaceAsync(project, CancellationToken.None);
+        Assert.Null(allSkipped.Timeline);
+        Assert.False(allSkipped.RequiresRebuild);
+        Assert.Equal(0, allSkipped.EnabledCueCount);
+        revision = await subtitles.SetVoiceEnabledAsync(project.ProjectId, track.TrackId, revision, [firstCue.CueId, secondCue.CueId], true);
+        var restored = await voiceService.GetWorkspaceAsync(project, CancellationToken.None);
+        Assert.NotNull(restored.Timeline);
+        Assert.Equal(revision, restored.Timeline.TrackRevision);
+        Assert.False(restored.RequiresRebuild);
+        Assert.Equal(phrase.CueIds, restored.Timeline.CueIds);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Executor_PublishesTimelineWhenPhraseExceedsMaximumTempo(bool skipFirstCue)
     {
         var paths = new VietsubAppPaths(_root);
         var subtitles = new VietsubSubtitleStore(paths);
@@ -277,6 +625,8 @@ public sealed class VietsubVoiceCoreTests : IDisposable
         var project = await projects.CreateAsync(Guid.NewGuid(), "owner", "Voice test");
         var cue1 = Cue(0, 1_200, "Xin chào", "speaker_1");
         var cue2 = Cue(1_400, 2_600, "Hẹn gặp lại.", "speaker_2");
+        cue1.VoiceEnabled = !skipFirstCue;
+        if (skipFirstCue) cue1.TranslatedText = string.Empty;
         cue1.QualityStatus = VietsubTranslationQualityStatuses.Review;
         cue1.Warnings.Add("QUALITY_WARNING");
         cue2.QualityStatus = VietsubTranslationQualityStatuses.Invalid;
@@ -293,11 +643,12 @@ public sealed class VietsubVoiceCoreTests : IDisposable
 
         var settings = Settings();
         var parameters = new VietsubVoiceJobParameters(
-            1,
+            2,
             track.TrackId,
             track.Revision,
             VietsubVoiceFingerprintBuilder.BuildConfigurationFingerprint(settings),
-            settings);
+            settings,
+            VietsubVoiceFingerprintBuilder.BuildSelectionFingerprint(track.Cues));
         var jobs = new VietsubJobStore(paths, subtitles);
         var job = await jobs.CreateAsync(
             project.ProjectId,
@@ -334,6 +685,7 @@ public sealed class VietsubVoiceCoreTests : IDisposable
             project.VoiceSettings);
         Assert.NotNull(workspace.Timeline);
         var timeline = workspace.Timeline!;
+        Assert.Equal(skipFirstCue ? [cue2.CueId] : new[] { cue1.CueId, cue2.CueId }, timeline.CueIds);
         Assert.Equal(VietsubVoiceArtifactStatuses.Ready, timeline.Status);
         Assert.Equal(track.Revision, timeline.TrackRevision);
         Assert.True(File.Exists(paths.GetProjectPath(

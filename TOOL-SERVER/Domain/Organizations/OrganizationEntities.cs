@@ -85,7 +85,8 @@ public sealed class AiBudgetReservation
     public Guid OrganizationBudgetPeriodId { get; set; }
     public Guid OrganizationId { get; set; }
     public string UserId { get; set; } = null!;
-    public Guid ProjectId { get; set; }
+    public Guid? ProjectId { get; set; }
+    public Guid? VietsubProjectId { get; set; }
     public Guid ProviderRequestId { get; set; }
     public string OperationKey { get; set; } = null!;
     public string ProviderCode { get; set; } = null!;
@@ -106,7 +107,8 @@ public sealed class AiUsageLedgerEntry
     public Guid OrganizationBudgetPeriodId { get; set; }
     public Guid OrganizationId { get; set; }
     public string UserId { get; set; } = null!;
-    public Guid ProjectId { get; set; }
+    public Guid? ProjectId { get; set; }
+    public Guid? VietsubProjectId { get; set; }
     public Guid? ProviderRequestId { get; set; }
     public Guid? OrganizationProviderCredentialId { get; set; }
     public string ProviderCode { get; set; } = null!;

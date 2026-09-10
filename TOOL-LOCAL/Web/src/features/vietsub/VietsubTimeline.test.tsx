@@ -1,6 +1,8 @@
-import { createElement } from 'react';
+// @vitest-environment jsdom
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { VietsubTimeline } from './VietsubTimeline';
 import {
   initialTimelineMediaLoadState,
@@ -12,7 +14,8 @@ import {
   selectTimelineThumbnailIndices,
   shouldResetTimelineMediaState
 } from './timelineMediaState';
-import type { VietsubMediaSummary, VietsubVoiceWorkspace } from './types';
+import type { VietsubMediaSummary, VietsubTimelineWindow, VietsubVoiceWorkspace } from './types';
+import { defaultVietsubAudioMixSettings } from './vietsubAudioMix';
 
 const createMedia = (
   waveformStatus: VietsubMediaSummary['waveformStatus'] = 'READY',
@@ -83,21 +86,57 @@ const createVoiceWorkspace = (): VietsubVoiceWorkspace => ({
   timingDiagnostics: []
 });
 
-const renderTimeline = (
+const createTimelineWindow = (): VietsubTimelineWindow => ({
+  trackId: 'track',
+  trackRevision: 4,
+  windowStartMilliseconds: 0,
+  windowEndMilliseconds: 12_000,
+  truncated: false,
+  cues: [
+    {
+      cueId: 'cue-1',
+      cueIndex: 0,
+      startMilliseconds: 500,
+      endMilliseconds: 2_000,
+      locked: false,
+      hasWarnings: false,
+      hasTranslation: true,
+      previewText: 'Câu thứ nhất'
+    },
+    {
+      cueId: 'cue-2',
+      cueIndex: 1,
+      startMilliseconds: 3_200,
+      endMilliseconds: 5_000,
+      locked: false,
+      hasWarnings: false,
+      hasTranslation: true,
+      previewText: 'Câu thứ hai'
+    }
+  ]
+});
+
+const timelineElement = (
   media: VietsubMediaSummary,
   voiceWorkspace: VietsubVoiceWorkspace | null = null,
-  voiceEnabled = false
-) => renderToStaticMarkup(createElement(
+  voiceEnabled = false,
+  timelineWindow: VietsubTimelineWindow | null = null,
+  onUpdateCueVoice?: (ids: string[], enabled: boolean, trackId: string, revision: number) => Promise<boolean>
+) => createElement(
   VietsubTimeline,
   {
     media,
-    trackId: null,
-    window: null,
+    trackId: timelineWindow?.trackId ?? null,
+    window: timelineWindow,
     playheadMilliseconds: 0,
     playing: false,
     voiceWorkspace,
     voiceEnabled,
+    audioMixSettings: defaultVietsubAudioMixSettings,
     busy: false,
+    canExportVideo: true,
+    exporting: false,
+    onExportVideo: () => { },
     selectedCueId: null,
     onSeek: () => { },
     onSelectCue: () => { },
@@ -105,11 +144,46 @@ const renderTimeline = (
     onRequestThumbnails: () => { },
     onRequestWaveform: () => { },
     onUpdateCue: async () => true,
-    onToggleVoice: () => { }
+    onUpdateCueVoice,
+    onToggleVoice: () => { },
+    onPreviewAudioMix: () => { },
+    onUpdateAudioMix: async () => true
   }
-));
+);
+const renderTimeline = (...args: Parameters<typeof timelineElement>) => renderToStaticMarkup(timelineElement(...args));
 
 describe('VietsubTimeline media artifacts', () => {
+  it('mở menu chuột phải và gửi lựa chọn giọng cho đúng câu', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    vi.stubGlobal('ResizeObserver', class { observe() { } disconnect() { } });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const update = vi.fn(async () => true);
+    const timeline = createTimelineWindow();
+    try {
+      await act(async () => root.render(timelineElement(createMedia(), createVoiceWorkspace(), true, timeline, update)));
+      const cue = container.querySelector<HTMLButtonElement>('[aria-label^="Cue 1,"]')!;
+      await act(async () => cue.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 })));
+      expect(container.querySelector('[role="menuitem"]')?.textContent).toBe('Bỏ qua tạo giọng');
+      await act(async () => container.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+      expect(update).toHaveBeenCalledWith(['cue-1'], false, timeline.trackId, timeline.trackRevision);
+      expect(container.querySelector('[role="menu"]')).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+  it('giữ phụ đề và hiển thị khoảng không tạo giọng riêng biệt', () => {
+    const window = createTimelineWindow();
+    window.cues[0].voiceEnabled = false;
+    const html = renderTimeline(createMedia('READY'), createVoiceWorkspace(), true, window);
+    expect(html).toContain('Không tạo giọng');
+    expect(html).toContain('is-skipped');
+    expect(html.match(/data-vietsub-voice-clip="true"/g)).toHaveLength(2);
+    expect(html.match(/data-vietsub-voice-waveform="true"/g)).toHaveLength(1);
+  });
   it('renders all thumbnail URLs and hides browser alt text', () => {
     const html = renderTimeline(createMedia('READY'));
 
@@ -141,15 +215,37 @@ describe('VietsubTimeline media artifacts', () => {
   });
 
   it('renders the generated Vietnamese voice as a timeline track below subtitles', () => {
-    const html = renderTimeline(createMedia('READY'), createVoiceWorkspace(), true);
+    const html = renderTimeline(
+      createMedia('READY'),
+      createVoiceWorkspace(),
+      true,
+      createTimelineWindow()
+    );
     const subtitleTrackPosition = html.indexOf('vietsub-timeline-subtitle-track');
     const voiceTrackPosition = html.indexOf('data-vietsub-generated-voice-track="true"');
 
     expect(voiceTrackPosition).toBeGreaterThan(subtitleTrackPosition);
-    expect(html).toContain('Giọng Việt · Piper local');
-    expect(html).toContain('data-vietsub-voice-waveform="true"');
+    expect(html.match(/data-vietsub-voice-clip="true"/g)).toHaveLength(2);
+    expect(html.match(/data-vietsub-voice-waveform="true"/g)).toHaveLength(2);
+    expect(html).toContain('data-vietsub-voice-cue-id="cue-1"');
+    expect(html).toContain('data-vietsub-voice-cue-id="cue-2"');
+    expect(html.match(/style="left:20px;width:60px"/g)).toHaveLength(2);
+    expect(html.match(/style="left:128px;width:72px"/g)).toHaveLength(2);
+    expect(html).not.toContain('Giọng Việt · Piper local');
+    expect(html).toContain('<span class="is-voice">');
     expect(html).toContain('aria-label="Tắt Giọng Việt"');
     expect(html).not.toContain('<audio');
+  });
+
+  it('shows original and translated voice mixing controls in the timeline toolbar', () => {
+    const html = renderTimeline(createMedia('READY'), createVoiceWorkspace(), true);
+
+    expect(html).toContain('aria-label="Trộn âm thanh trên timeline"');
+    expect(html).toContain('aria-label="Âm lượng âm thanh gốc"');
+    expect(html).toContain('aria-label="Âm lượng giọng Việt"');
+    expect(html).toContain('<b>Âm gốc</b><output>25%</output>');
+    expect(html).toContain('<b>Giọng Việt</b><output>100%</output>');
+    expect(html).toContain('Tự hạ nền');
   });
 
   it('uses bounded recovery and keeps a temporary error retryable', () => {

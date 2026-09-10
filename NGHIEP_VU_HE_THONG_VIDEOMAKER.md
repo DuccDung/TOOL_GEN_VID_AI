@@ -134,11 +134,16 @@ Quy tắc Canonical Voice:
 
 ## 13. Vietsub local-first
 
-- `VietsubProjectId` độc lập project video. Server chỉ giữ registry metadata/ownership/audit; không nhận subtitle, media hoặc path local.
+- `VietsubProjectId` độc lập project video. `vs.Projects` giữ registry metadata/ownership/audit; dữ liệu biên tập, media và path nằm local. Riêng thao tác **Dịch Cloud** chủ động gửi snapshot text có giới hạn vào job server, mã hóa và dọn theo retention; không upload video/audio/path.
 - Workspace thuộc exact organization + owner; COPY sao chép/hash atomically, LINK phát hiện source mất/đổi.
 - Playback dùng virtual HTTPS URL và HTTP Range, không lộ absolute path; mọi mutation dùng track revision.
 - Cue manual/locked không bị job ghi đè. Local job có state/checkpoint/pause/resume/retry/cancel và recovery.
 - OCR local chỉ chạy khi session/license/membership/role/owner hợp lệ; Viewer bị chặn.
+- Panel **Thiết lập dự án** chỉ hiển thị ba tác vụ **Quét OCR**, **Dịch tiếng Việt** và **Tạo giọng Việt**; không lặp lại card video nguồn, track phụ đề, revision hay trạng thái runtime đã sẵn sàng. **Quét OCR** mở popup có video hiện tại, điều khiển phát/tua và khung chỉnh vùng subtitle cứng; quét thử phải dùng đúng timestamp đang chọn. **Dịch tiếng Việt** mở popup chọn Local hoặc Cloud. Cloud dùng readiness server độc lập Local, bấm một lần để lưu draft và tạo job; không có model picker/API key. Thiếu flag/config/quyền/ngân sách thì khóa Cloud với lý do an toàn.
+- **Thiết kế phụ đề** chỉ mở khi dự án có video phát được. Người dùng có thể tua video, ẩn/hiện phụ đề, chọn chế độ vừa khung/lấp đầy, thu phóng, chọn preset rồi chỉnh font trong allowlist, màu/độ trong suốt, viền, bóng, nền, căn chữ, chiều rộng và số dòng mục tiêu. Vị trí được kéo trực tiếp trên video hoặc tinh chỉnh bằng phím mũi tên và lưu theo phần trăm của content box. Cùng modal có bộ trộn hai kênh để chỉnh riêng âm thanh gốc `0–100%`, giọng dịch `0–150%`, tắt/bật từng kênh và bật tự giảm âm gốc khi có tín hiệu giọng Việt. Bản nháp phụ đề/âm thanh chỉ tác động preview; phải bấm **Lưu thay đổi** mới ghi theo project. Khi đóng lúc còn thay đổi, UI phải xác nhận bỏ bản nháp. Preview chính và adapter render phải dùng cùng cấu hình đã lưu.
+- Phần đầu card **Biên tập phụ đề** đặt tiêu đề và nhóm nút trên cùng một hàng; số câu, trạng thái dịch và cảnh báo nằm ở hàng nhỏ bên dưới. Không lặp thêm nhãn PHỤ ĐỀ phía trên tiêu đề.
+- Nút **Xuất video** nằm ngay cạnh **Thiết kế phụ đề** và menu **Tệp phụ đề** trên thanh công cụ biên tập, đồng thời có thêm nút ở cuối thanh công cụ Timeline. Hai nút dùng chung luồng lưu các chỉnh sửa phụ đề đang chờ trước khi mở hộp thoại chọn nơi lưu MP4; lưu lỗi thì dừng để người dùng sửa. Cả hai cùng có trạng thái **Đang xuất…**, khóa bấm lặp kể cả khi bấm xen kẽ và dùng cùng chức năng xuất với **Xuất MP4** trong thiết kế thành phẩm. Thiếu video/track hoặc đang xử lý thao tác khác thì khóa nút; nhãn xuất luôn hiển thị ở panel hẹp.
+- Xuất MP4 phải lưu bản nháp hợp lệ trước, snapshot media/track/revision/style/cấu hình trộn và timeline giọng Việt hiện hành, tạo ASS từ bản dịch rồi render local bằng FFmpeg. Khi timeline giọng Việt hợp lệ và kênh này không bị tắt, FFmpeg trộn nó với âm thanh gốc; tùy chọn tự giảm nền dùng voice làm sidechain và output luôn qua limiter chống vỡ tiếng. Nếu chưa tạo timeline giọng Việt thì vẫn được xuất với âm gốc theo cấu hình. Output được ghi vào tệp `.partial`, kiểm tra lại video/audio stream, kích thước và thời lượng bằng FFprobe và chỉ publish khi toàn bộ snapshot vẫn còn hiện hành. Không được ghi đè video nguồn hoặc gửi phụ đề/âm thanh ra Cloud.
 
 ### Dịch ngữ cảnh Qwen
 
@@ -152,11 +157,14 @@ Quy tắc Canonical Voice:
 
 ### Tạo giọng Việt Piper
 
-- Chỉ track hiện hành có revision khớp và mọi cue có bản dịch tiếng Việt mới được tạo giọng; warning chất lượng dịch không chặn.
+- Chỉ track hiện hành có revision khớp và các cue được bật tạo giọng đều có bản dịch tiếng Việt mới được tạo giọng; warning chất lượng dịch không chặn. Mặc định mọi cue được bật; người dùng có thể bỏ qua/bật lại từng câu trong menu Thao tác hoặc menu chuột phải trên timeline mà không xóa phụ đề hay đổi timing. Danh sách không còn thanh chọn hàng loạt hoặc checkbox chọn câu; API/storage vẫn hỗ trợ danh sách ID. Cue bỏ qua không gửi tới Piper và ngắt cụm đọc. Hệ thống cố gắng fit giọng câu trước đến đầu câu bỏ qua; nếu không đủ thời gian, vẫn giữ phần giọng tràn và hoàn thành tác vụ.
+- Lựa chọn tạo giọng lưu tại `subtitle_cues.voice_enabled` trong SQLite schema 6; nâng từ schema 5 đặt mặc định bật cho dữ liệu cũ. Thay đổi theo batch phải khớp active track/revision, không có job local đang hoạt động và tăng revision một lần; split/duplicate kế thừa lựa chọn của câu gốc.
+- Đổi lựa chọn làm timeline giọng revision cũ mất hiệu lực. Chỉ dựng lại bằng cache khi các phrase phủ đủ những câu đang bật, không chứa câu bị bỏ qua và còn khớp nội dung/cấu hình/hash. Nếu cache không đủ, UI báo **Cập nhật giọng Việt**; không phát hoặc xuất âm giọng cũ. Bỏ qua toàn bộ câu cho phép xuất phụ đề và âm gốc theo mixer. Khi đã từng có giọng nhưng lựa chọn hiện tại chưa có timeline hợp lệ, xuất MP4 phải yêu cầu cập nhật giọng hoặc tắt kênh giọng Việt.
 - Piper CPU chạy trong Python worker cô lập với model/config/runtime đã pin; không nhận provider credential, URL tùy ý hoặc output path từ WebView.
 - Phrase/WAV/timeline cache theo content/config/revision. File `.partial` phải qua RIFF/PCM, size và SHA-256 trước promote.
 - Timeline giọng Việt là track riêng dùng chung playhead/play/pause/seek/rate với video, không dùng audio player độc lập.
-- Hệ thống mượn khoảng trống kế tiếp và tăng tốc tối đa `1.20x`; phrase dài hơn vẫn publish ở tốc độ tối đa, giữ diagnostic và không cắt câu cuối.
+- Chỉnh timing nhưng giữ nguyên cue/nội dung không được làm mất voice: trường hợp chỉ nới `end` được chuyển tiếp WAV đã xác minh sang revision mới; các thay đổi timing khác dựng lại timeline bằng FFmpeg từ phrase WAV cache, không gọi lại Piper hoặc tải model. Đổi nội dung/speaker hay cấu trúc cue vẫn làm timeline cũ mất hiệu lực.
+- Hệ thống mượn khoảng trống kế tiếp và tăng tốc tối đa `1.20x`; phrase dài hơn vẫn publish ở tốc độ tối đa, giữ diagnostic và không cắt phần tiếng nói. Nếu tràn vào câu bỏ qua, có thể rút tối đa 120 ms đuôi WAV đã được bộ phân tích xác định nằm sau tín hiệu tiếng nói, giữ thêm 5 ms đệm; không sửa WAV phrase gốc. Thiếu khoảng lặng thì giữ phần tràn, lưu diagnostic `REVIEW_REQUIRED` không chặn và hoàn thành tạo giọng bình thường. Quy tắc này dùng chung cho tạo mới, thử lại và dựng lại cache, kể cả câu bắt đầu trong vùng bỏ qua.
 - `VietsubLocalVoiceEnabled=true` làm workflow cài đặt/ trạng thái hiển thị. Thiếu component phải trả `NOT_INSTALLED`; chỉ trả READY sau checksum/probe và vẫn cần legal review, benchmark, nghe nghiệm thu, smoke trước production.
 
 ## 14. SePay và seat

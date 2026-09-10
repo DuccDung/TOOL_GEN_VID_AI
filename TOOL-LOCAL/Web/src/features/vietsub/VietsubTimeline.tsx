@@ -5,13 +5,16 @@ import {
   Film,
   Focus,
   LockKeyhole,
+  LoaderCircle,
   Play,
   Volume2,
   VolumeX,
+  Video,
   ZoomIn,
   ZoomOut
 } from 'lucide-react';
 import type {
+  VietsubAudioMixSettings,
   VietsubMediaSummary,
   VietsubTimelineMediaEvent,
   VietsubTimelineCue,
@@ -46,6 +49,11 @@ import {
 } from './timelineMediaState';
 
 type VietsubTimelineProps = {
+  canExportVideo: boolean;
+  exporting: boolean;
+  onExportVideo: () => void;
+  onUpdateCueVoice?: (cueIds: string[], enabled: boolean, trackId: string, revision: number) => Promise<boolean>;
+  voiceSelectionBusy?: boolean;
   media?: VietsubMediaSummary | null;
   mediaEvent?: VietsubTimelineMediaEvent | null;
   trackId?: string | null;
@@ -57,12 +65,15 @@ type VietsubTimelineProps = {
   busy: boolean;
   selectedCueId?: string | null;
   onSeek: (milliseconds: number) => void;
-  onSelectCue: (cueId: string, milliseconds: number) => void;
+  onSelectCue: (cueId: string, milliseconds: number, cueIndex: number) => void;
   onLoadWindow: (query: VietsubTimelineWindowQuery) => void;
   onRequestThumbnails: (sourceSha256: string, indices: number[]) => void;
   onRequestWaveform: (sourceSha256: string) => void;
   onUpdateCue: (update: VietsubTimelineCueUpdate) => Promise<boolean>;
   onToggleVoice: () => void;
+  audioMixSettings: VietsubAudioMixSettings;
+  onPreviewAudioMix: (settings: VietsubAudioMixSettings) => void;
+  onUpdateAudioMix: (settings: VietsubAudioMixSettings) => Promise<boolean>;
 };
 
 type CueDrag = {
@@ -77,6 +88,11 @@ type CueDrag = {
 };
 
 export function VietsubTimeline({
+  canExportVideo,
+  exporting,
+  onExportVideo,
+  onUpdateCueVoice,
+  voiceSelectionBusy,
   media,
   mediaEvent,
   trackId,
@@ -93,13 +109,27 @@ export function VietsubTimeline({
   onRequestThumbnails,
   onRequestWaveform,
   onUpdateCue,
-  onToggleVoice
+  onToggleVoice,
+  audioMixSettings,
+  onPreviewAudioMix,
+  onUpdateAudioMix
 }: VietsubTimelineProps) {
   const durationMilliseconds = Math.max(0, Math.round((media?.durationSeconds ?? 0) * 1000));
   const generatedVoiceAvailable = Boolean(
     voiceWorkspace?.timeline?.status === 'READY'
     && voiceWorkspace.timelinePlaybackUrl
   );
+  const [voiceMenu, setVoiceMenu] = useState<{ cue: VietsubTimelineCue; x: number; y: number } | null>(null);
+  const [voiceMenuNotice, setVoiceMenuNotice] = useState<string | null>(null);
+  useEffect(() => { setVoiceMenu(null); setVoiceMenuNotice(null); }, [trackId, timelineWindow?.trackRevision]);
+  useEffect(() => {
+    if (!voiceMenu) return;
+    const close = () => setVoiceMenu(null);
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    globalThis.window.addEventListener('click', close);
+    globalThis.window.addEventListener('keydown', key);
+    return () => { globalThis.window.removeEventListener('click', close); globalThis.window.removeEventListener('keydown', key); };
+  }, [voiceMenu]);
   const [pixelsPerSecond, setPixelsPerSecond] = useState(40);
   const [autoFollow, setAutoFollow] = useState(true);
   const [viewportWidth, setViewportWidth] = useState(1);
@@ -107,12 +137,15 @@ export function VietsubTimeline({
   const [drag, setDrag] = useState<CueDrag | null>(null);
   const [thumbnailLoads, setThumbnailLoads] = useState<Record<string, TimelineMediaLoadState>>({});
   const [waveformLoad, setWaveformLoad] = useState<TimelineMediaLoadState | null>(null);
+  const [audioMixDraft, setAudioMixDraft] = useState<VietsubAudioMixSettings>(() => ({ ...audioMixSettings }));
+  const [audioMixSaving, setAudioMixSaving] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const requestTimerRef = useRef<number | null>(null);
   const mediaRetryTimersRef = useRef(new Map<string, number>());
   const dragRef = useRef<CueDrag | null>(null);
   const playheadCleanupRef = useRef<(() => void) | null>(null);
   const previousMediaRef = useRef<VietsubMediaSummary | null>(null);
+  const audioMixDraftRef = useRef(audioMixDraft);
   const effectivePixelsPerSecond = fitTimelineZoom(
     durationMilliseconds,
     viewportWidth,
@@ -125,6 +158,51 @@ export function VietsubTimeline({
   );
   const rulerStep = rulerStepMilliseconds(effectivePixelsPerSecond);
   const gridStepPixels = timeToPixel(rulerStep, effectivePixelsPerSecond);
+
+  useEffect(() => {
+    const next = { ...audioMixSettings };
+    audioMixDraftRef.current = next;
+    setAudioMixDraft(next);
+  }, [
+    audioMixSettings.autoDuckOriginal,
+    audioMixSettings.originalMuted,
+    audioMixSettings.originalVolume,
+    audioMixSettings.translatedVoiceMuted,
+    audioMixSettings.translatedVoiceVolume
+  ]);
+
+  const previewAudioMix = useCallback((next: VietsubAudioMixSettings) => {
+    audioMixDraftRef.current = next;
+    setAudioMixDraft(next);
+    onPreviewAudioMix(next);
+  }, [onPreviewAudioMix]);
+
+  const persistAudioMix = useCallback(async (next = audioMixDraftRef.current) => {
+    if (audioMixSaving || busy) return;
+    setAudioMixSaving(true);
+    let completed = false;
+    try {
+      completed = await onUpdateAudioMix(next);
+    } catch {
+      completed = false;
+    } finally {
+      setAudioMixSaving(false);
+    }
+    if (!completed) {
+      const fallback = { ...audioMixSettings };
+      audioMixDraftRef.current = fallback;
+      setAudioMixDraft(fallback);
+      onPreviewAudioMix(fallback);
+    }
+  }, [audioMixSaving, audioMixSettings, busy, onPreviewAudioMix, onUpdateAudioMix]);
+
+  const updateAudioMix = useCallback((patch: Partial<VietsubAudioMixSettings>) => {
+    const next = { ...audioMixDraftRef.current, ...patch };
+    previewAudioMix(next);
+    return next;
+  }, [previewAudioMix]);
+
+  const audioMixDisabled = busy || audioMixSaving;
 
   useEffect(() => {
     dragRef.current = drag;
@@ -333,7 +411,7 @@ export function VietsubTimeline({
       }
       if (event.type === 'pointercancel') return;
       if (!completed.moved) {
-        onSelectCue(completed.cue.cueId, completed.cue.startMilliseconds);
+        onSelectCue(completed.cue.cueId, completed.cue.startMilliseconds, completed.cue.cueIndex);
         return;
       }
       if (!timelineWindow || busy) return;
@@ -492,6 +570,102 @@ export function VietsubTimeline({
     <section className="card vietsub-editor-timeline" aria-label="Timeline dự án Vietsub">
       <div className="vietsub-timeline-toolbar">
         <div><span className="vietsub-eyebrow">TIMELINE</span><strong>{formatTimeline(playheadMilliseconds)}</strong></div>
+        <div
+          className={`vietsub-timeline-audio-mixer ${audioMixSaving ? 'is-saving' : ''}`}
+          aria-label="Trộn âm thanh trên timeline"
+          aria-busy={audioMixSaving}
+        >
+          <div className={`vietsub-timeline-audio-channel ${audioMixDraft.originalMuted ? 'is-muted' : ''}`}>
+            <button
+              type="button"
+              disabled={audioMixDisabled || !media?.hasAudio}
+              aria-label={audioMixDraft.originalMuted ? 'Bật âm thanh gốc' : 'Tắt âm thanh gốc'}
+              aria-pressed={audioMixDraft.originalMuted}
+              title={media?.hasAudio ? 'Bật hoặc tắt âm thanh gốc' : 'Video không có âm thanh gốc'}
+              onClick={() => {
+                const next = updateAudioMix({ originalMuted: !audioMixDraftRef.current.originalMuted });
+                void persistAudioMix(next);
+              }}
+            >
+              {audioMixDraft.originalMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+            </button>
+            <label>
+              <span><b>Âm gốc</b><output>{Math.round(audioMixDraft.originalVolume * 100)}%</output></span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(audioMixDraft.originalVolume * 100)}
+                disabled={audioMixDisabled || !media?.hasAudio}
+                aria-label="Âm lượng âm thanh gốc"
+                onChange={(event) => updateAudioMix({
+                  originalVolume: Number(event.target.value) / 100,
+                  originalMuted: Number(event.target.value) > 0 ? false : audioMixDraftRef.current.originalMuted
+                })}
+                onPointerUp={() => void persistAudioMix()}
+                onKeyUp={(event) => {
+                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                    void persistAudioMix();
+                  }
+                }}
+              />
+            </label>
+          </div>
+          <div className={`vietsub-timeline-audio-channel is-voice ${audioMixDraft.translatedVoiceMuted ? 'is-muted' : ''} ${generatedVoiceAvailable ? '' : 'is-unavailable'}`}>
+            <button
+              type="button"
+              disabled={audioMixDisabled || !generatedVoiceAvailable}
+              aria-label={audioMixDraft.translatedVoiceMuted ? 'Bật giọng Việt' : 'Tắt giọng Việt'}
+              aria-pressed={audioMixDraft.translatedVoiceMuted}
+              title={generatedVoiceAvailable ? 'Bật hoặc tắt giọng Việt' : 'Hãy tạo giọng Việt trước'}
+              onClick={() => {
+                const next = updateAudioMix({ translatedVoiceMuted: !audioMixDraftRef.current.translatedVoiceMuted });
+                void persistAudioMix(next);
+              }}
+            >
+              {audioMixDraft.translatedVoiceMuted ? <VolumeX size={14} /> : <AudioLines size={14} />}
+            </button>
+            <label>
+              <span>
+                <b>Giọng Việt</b>
+                <output>{generatedVoiceAvailable ? `${Math.round(audioMixDraft.translatedVoiceVolume * 100)}%` : 'Chưa tạo'}</output>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={150}
+                step={1}
+                value={Math.round(audioMixDraft.translatedVoiceVolume * 100)}
+                disabled={audioMixDisabled || !generatedVoiceAvailable}
+                aria-label="Âm lượng giọng Việt"
+                onChange={(event) => updateAudioMix({
+                  translatedVoiceVolume: Number(event.target.value) / 100,
+                  translatedVoiceMuted: Number(event.target.value) > 0 ? false : audioMixDraftRef.current.translatedVoiceMuted
+                })}
+                onPointerUp={() => void persistAudioMix()}
+                onKeyUp={(event) => {
+                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                    void persistAudioMix();
+                  }
+                }}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className={`vietsub-timeline-duck-toggle ${audioMixDraft.autoDuckOriginal ? 'is-active' : ''}`}
+            disabled={audioMixDisabled || !media?.hasAudio || !generatedVoiceAvailable}
+            aria-pressed={audioMixDraft.autoDuckOriginal}
+            title="Tự động hạ âm gốc khi có giọng Việt"
+            onClick={() => {
+              const next = updateAudioMix({ autoDuckOriginal: !audioMixDraftRef.current.autoDuckOriginal });
+              void persistAudioMix(next);
+            }}
+          >
+            <AudioLines size={13} /> <span>Tự hạ nền</span>
+          </button>
+        </div>
         <div className="vietsub-timeline-tools">
           {timelineWindow?.truncated && <span className="warning">Cửa sổ có quá nhiều cue · hãy phóng to</span>}
           <button type="button" onClick={() => setAutoFollow((value) => !value)} className={autoFollow ? 'is-active' : ''} title="Tự theo playhead">
@@ -508,6 +682,17 @@ export function VietsubTimeline({
           />
           <button type="button" onClick={() => setPixelsPerSecond(clampTimelineZoom(effectivePixelsPerSecond * 1.5))} title="Phóng to timeline"><ZoomIn size={15} /></button>
           <span>{media ? formatTimeline(durationMilliseconds) : 'Chưa có video'}</span>
+          <button
+            type="button"
+            className="vietsub-timeline-export-trigger"
+            disabled={busy || voiceSelectionBusy || audioMixSaving || exporting || !canExportVideo}
+            aria-busy={exporting}
+            title={canExportVideo ? 'Xuất MP4 với phụ đề và cấu hình âm thanh hiện tại' : 'Hãy thêm video và chọn phụ đề trước khi xuất'}
+            onClick={onExportVideo}
+          >
+            {exporting ? <LoaderCircle size={15} className="spin" /> : <Video size={15} />}
+            <span>{exporting ? 'Đang xuất…' : 'Xuất video'}</span>
+          </button>
         </div>
       </div>
       <div className={`vietsub-timeline-canvas ${media ? '' : 'is-empty'}`}>
@@ -516,7 +701,11 @@ export function VietsubTimeline({
           <span><Film size={13} /> Video</span>
           <span><Volume2 size={13} /> Âm gốc</span>
           <span><Captions size={13} /> Phụ đề</span>
-          <span className={`${generatedVoiceAvailable ? '' : 'is-unavailable'} ${voiceEnabled ? '' : 'is-muted'}`}>
+          <span className={[
+            'is-voice',
+            generatedVoiceAvailable ? null : 'is-unavailable',
+            voiceEnabled ? null : 'is-muted'
+          ].filter(Boolean).join(' ')}>
             <button
               type="button"
               className="vietsub-timeline-track-toggle"
@@ -698,6 +887,12 @@ export function VietsubTimeline({
                     aria-pressed={selectedCueId === cue.cueId}
                     disabled={busy}
                     onClick={(event) => event.stopPropagation()}
+                    onContextMenu={(event) => {
+                      if (!onUpdateCueVoice) return;
+                      event.preventDefault(); event.stopPropagation();
+                      setVoiceMenu({ cue, x: Math.min(event.clientX, globalThis.window.innerWidth - 240),
+                        y: Math.min(event.clientY, globalThis.window.innerHeight - 100) });
+                    }}
                     onPointerDown={(event) => beginCueDrag(event, cue, 'move', setDrag)}
                     onKeyDown={(event) => {
                       if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || !timelineWindow || busy) return;
@@ -732,26 +927,33 @@ export function VietsubTimeline({
               className={`vietsub-timeline-generated-voice-track ${generatedVoiceAvailable ? 'is-ready' : 'is-empty'} ${voiceEnabled ? '' : 'is-muted'}`}
               data-vietsub-generated-voice-track="true"
             >
-              {generatedVoiceAvailable ? (
-                <div
-                  className="vietsub-timeline-generated-voice-clip"
-                  style={{
-                    width: `${Math.max(1, Math.min(
-                      contentWidth,
-                      timeToPixel(
-                        Math.min(
-                          durationMilliseconds,
-                          voiceWorkspace?.timeline?.durationMilliseconds ?? durationMilliseconds
-                        ),
-                        effectivePixelsPerSecond
-                      )
-                    ))}px`
-                  }}
-                  title={`Timeline Giọng Việt · ${formatTimeline(voiceWorkspace?.timeline?.durationMilliseconds ?? 0)}`}
-                >
-                  <GeneratedVoiceWaveform />
-                  <strong>Giọng Việt · Piper local</strong>
-                </div>
+              {renderedCues.length > 0 ? (
+                renderedCues.map((cue) => {
+                  const draft = drag?.cue.cueId === cue.cueId ? drag : null;
+                  const start = draft?.startMilliseconds ?? cue.startMilliseconds;
+                  const end = draft?.endMilliseconds ?? cue.endMilliseconds;
+                  const clipWidth = Math.max(4, timeToPixel(end - start, effectivePixelsPerSecond));
+                  const active = playheadMilliseconds >= start && playheadMilliseconds < end;
+                  return (
+                    <div
+                      key={`voice-${cue.cueId}`}
+                      className={`vietsub-timeline-generated-voice-clip ${cue.voiceEnabled === false ? 'is-skipped' : ''} ${active ? 'active' : ''} ${selectedCueId === cue.cueId ? 'selected' : ''}`}
+                      data-vietsub-voice-clip="true"
+                      data-vietsub-voice-cue-id={cue.cueId}
+                      style={{
+                        left: `${timeToPixel(start, effectivePixelsPerSecond)}px`,
+                        width: `${clipWidth}px`
+                      }}
+                      title={`Giọng Việt · Câu ${cue.cueIndex + 1} · ${formatTimeline(start)}–${formatTimeline(end)}`}
+                    >
+                      {cue.voiceEnabled === false ? <span className="vietsub-timeline-voice-label">Không tạo giọng</span> : generatedVoiceAvailable
+                        ? <GeneratedVoiceWaveform cueId={cue.cueId} width={clipWidth} />
+                        : <span className="vietsub-timeline-voice-label">{voiceWorkspace?.requiresRebuild ? 'Cần cập nhật giọng' : 'Chưa tạo giọng'}</span>}
+                    </div>
+                  );
+                })
+              ) : generatedVoiceAvailable ? (
+                <span>Đang tải các đoạn Giọng Việt…</span>
               ) : (
                 <span>Chưa có timeline Giọng Việt</span>
               )}
@@ -789,15 +991,32 @@ export function VietsubTimeline({
           </div>
         </div>
       </div>
+      {voiceMenu && <div className="vietsub-voice-context-menu" role="menu" style={{ left: voiceMenu.x, top: voiceMenu.y }}>
+        <button type="button" role="menuitem" disabled={busy || voiceSelectionBusy} onClick={async () => {
+          if (!onUpdateCueVoice || !timelineWindow) return;
+          setVoiceMenu(null);
+          try {
+            const saved = await onUpdateCueVoice([voiceMenu.cue.cueId], voiceMenu.cue.voiceEnabled === false,
+              timelineWindow.trackId, timelineWindow.trackRevision);
+            setVoiceMenuNotice(saved ? null : 'Chưa lưu được lựa chọn tạo giọng. Hãy thử lại.');
+          } catch { setVoiceMenuNotice('Chưa lưu được lựa chọn tạo giọng. Hãy thử lại.'); }
+        }}>{voiceMenu.cue.voiceEnabled === false ? 'Bật tạo giọng' : 'Bỏ qua tạo giọng'}</button>
+      </div>}
+      {voiceMenuNotice && <div role="status">{voiceMenuNotice}</div>}
     </section>
   );
 }
 
-function GeneratedVoiceWaveform() {
+function GeneratedVoiceWaveform({ cueId, width }: { cueId: string; width: number }) {
+  const seed = Array.from(cueId).reduce(
+    (hash, character) => ((hash * 33) ^ character.charCodeAt(0)) >>> 0,
+    5381
+  );
+  const barCount = Math.max(6, Math.min(96, Math.floor(Math.max(24, width - 8) / 4)));
   return (
     <span className="vietsub-generated-voice-waveform" aria-hidden="true" data-vietsub-voice-waveform="true">
-      {Array.from({ length: 64 }, (_, index) => (
-        <i key={index} style={{ height: `${22 + ((index * 29) % 68)}%` }} />
+      {Array.from({ length: barCount }, (_, index) => (
+        <i key={index} style={{ height: `${18 + ((seed + index * 29 + index * index * 7) % 74)}%` }} />
       ))}
     </span>
   );
@@ -809,6 +1028,7 @@ function beginCueDrag(
   mode: CueDrag['mode'],
   setDrag: (value: CueDrag) => void
 ) {
+  if (event.button !== 0) return;
   event.preventDefault();
   event.stopPropagation();
   event.currentTarget.setPointerCapture(event.pointerId);

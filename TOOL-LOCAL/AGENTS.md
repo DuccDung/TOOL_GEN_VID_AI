@@ -51,6 +51,7 @@
 - Project/workspace phải khớp exact organization + owner + selected context; virtual media URL không lộ path.
 - `LINK` phát hiện source mất/đổi; `COPY` không sửa source gốc. Subtitle mutation dùng track revision và không ghi đè cue manual/locked.
 - Dịch chỉ tạo job cho active track `PADDLE_OCR_LOCAL`, language `en`/`zh`, có cue và revision khớp.
+- Cloud đi qua `VietsubCloudTranslationClient` vào server, độc lập readiness Qwen. Lưu draft/snapshot/operation ID trước POST; reconnect/apply retry không tạo operation mới. `CLOUD_AUTO` giữ CAS/receipt, khóa/sửa tay và SRT atomic.
 - Qwen/LLamaSharp chỉ chạy trong worker x64 riêng. Worker crash/timeout/cancel không được làm desktop chết hoặc để orphan process.
 - Model/path/URL/executable không nhận từ DOM/project manifest. READY phải khớp model/worker/protocol/config/backend/native fingerprint và probe.
 - Cảnh báo thiếu RAM/commit cần xác nhận rõ; xác nhận không bỏ qua platform, disk, checksum/probe hoặc lỗi worker thật.

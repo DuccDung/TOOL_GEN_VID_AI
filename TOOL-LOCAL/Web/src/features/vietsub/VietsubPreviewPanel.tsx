@@ -1,10 +1,12 @@
+import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import {
   Captions,
   CaptionsOff,
+  ChevronDown,
   Copy,
   FileVideo2,
-  HardDrive,
+  Gauge,
   Link2,
   Pause,
   Play,
@@ -12,7 +14,10 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react';
-import type { VietsubMediaImportProgress, VietsubProjectSummary } from './types';
+import type { VietsubMediaImportProgress, VietsubProjectSummary, VietsubSubtitleStyle } from './types';
+import { VietsubSubtitleOverlay, useVideoContentRect } from './VietsubSubtitleOverlay';
+import { defaultVietsubSubtitleStyle } from './vietsubSubtitleStyle';
+import { VietsubNotice } from './VietsubNotice';
 
 type VietsubPreviewPanelProps = {
   project: VietsubProjectSummary;
@@ -24,9 +29,11 @@ type VietsubPreviewPanelProps = {
   playing: boolean;
   playbackRate: number;
   volume: number;
+  playbackVolume?: number;
   muted: boolean;
   subtitlesVisible: boolean;
   activeSubtitleText?: string | null;
+  subtitleStyle?: VietsubSubtitleStyle;
   onImportMedia: (mode: 'COPY' | 'LINK') => void;
   onPlayheadChange: (milliseconds: number) => void;
   onDurationChange: (milliseconds: number) => void;
@@ -49,9 +56,11 @@ export function VietsubPreviewPanel({
   playing,
   playbackRate,
   volume,
+  playbackVolume = volume,
   muted,
   subtitlesVisible,
   activeSubtitleText,
+  subtitleStyle = defaultVietsubSubtitleStyle,
   onImportMedia,
   onPlayheadChange,
   onDurationChange,
@@ -64,20 +73,22 @@ export function VietsubPreviewPanel({
   onToggleSubtitles
 }: VietsubPreviewPanelProps) {
   const media = project.sourceVideo;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = playbackVolume;
+    video.muted = muted;
+  }, [media?.playbackUrl, muted, playbackVolume, videoRef]);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const contentRect = useVideoContentRect(
+    stageRef,
+    videoRef,
+    media?.width ?? 16,
+    media?.height ?? 9
+  );
 
   return (
     <section className="card vietsub-editor-panel vietsub-preview-panel">
-      <div className="vietsub-panel-heading vietsub-preview-heading">
-        <div><span className="vietsub-eyebrow">XEM TRƯỚC</span><h3>{media?.fileName ?? 'Video nguồn'}</h3></div>
-        {media && (
-          <div className="vietsub-media-badges">
-            <span><HardDrive size={14} /> {media.importMode === 'COPY' ? 'Đã sao chép' : 'Đang liên kết'}</span>
-            <span>{formatDuration(media.durationSeconds)}</span>
-            <span>{media.width} × {media.height}</span>
-          </div>
-        )}
-      </div>
-
       {!media ? (
         <div className="vietsub-preview-empty">
           <div className="vietsub-preview-empty-icon"><FileVideo2 size={34} /></div>
@@ -97,7 +108,7 @@ export function VietsubPreviewPanel({
         </div>
       ) : (
         <>
-          <div className="vietsub-editor-video-stage">
+          <div ref={stageRef} className="vietsub-editor-video-stage">
             {media.playbackUrl ? (
               <>
                 <video
@@ -108,7 +119,7 @@ export function VietsubPreviewPanel({
                   onLoadedMetadata={(event) => {
                     const video = event.currentTarget;
                     video.playbackRate = playbackRate;
-                    video.volume = volume;
+                    video.volume = playbackVolume;
                     video.muted = muted;
                     onDurationChange(durationToMilliseconds(video.duration));
                   }}
@@ -120,9 +131,11 @@ export function VietsubPreviewPanel({
                   onEnded={() => onPlayingChange(false)}
                 />
                 {subtitlesVisible && activeSubtitleText?.trim() && (
-                  <div className="vietsub-preview-subtitle-overlay" aria-live="off">
-                    {activeSubtitleText}
-                  </div>
+                  <VietsubSubtitleOverlay
+                    text={activeSubtitleText}
+                    style={subtitleStyle}
+                    contentRect={contentRect}
+                  />
                 )}
               </>
             ) : (
@@ -150,14 +163,18 @@ export function VietsubPreviewPanel({
                 onChange={(event) => onSeek(Number(event.target.value))}
               />
               <span className="vietsub-playback-time">{formatPlaybackTime(durationMilliseconds)}</span>
-              <select
-                value={playbackRate}
-                aria-label="Tốc độ phát"
-                onChange={(event) => onPlaybackRateChange(Number(event.target.value))}
-              >
-                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option value={rate} key={rate}>{rate}×</option>)}
-              </select>
-              <button type="button" onClick={onToggleMuted} aria-label={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}>
+              <label className="vietsub-playback-rate" title="Tốc độ phát">
+                <Gauge size={14} aria-hidden="true" />
+                <select
+                  value={playbackRate}
+                  aria-label="Tốc độ phát"
+                  onChange={(event) => onPlaybackRateChange(Number(event.target.value))}
+                >
+                  {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option value={rate} key={rate}>{rate}×</option>)}
+                </select>
+                <ChevronDown size={12} aria-hidden="true" />
+              </label>
+              <button type="button" onClick={onToggleMuted} aria-label={muted ? 'Bật âm thanh gốc khi nghe thử' : 'Tắt âm thanh gốc khi nghe thử'}>
                 {muted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
               </button>
               <input
@@ -167,7 +184,7 @@ export function VietsubPreviewPanel({
                 max={1}
                 step={0.05}
                 value={muted ? 0 : volume}
-                aria-label="Âm lượng"
+                aria-label="Âm lượng nghe thử của âm thanh gốc"
                 onChange={(event) => onVolumeChange(Number(event.target.value))}
               />
               <button
@@ -181,18 +198,11 @@ export function VietsubPreviewPanel({
               </button>
             </div>
           )}
-          <div className="vietsub-preview-meta">
-            <span>Video {media.videoCodec?.toUpperCase() ?? 'không rõ'}</span>
-            <span>{media.hasAudio ? `Audio ${media.audioCodec?.toUpperCase() ?? 'có sẵn'}` : 'Không có audio'}</span>
-            <span>{formatBytes(media.sizeBytes)}</span>
-            {media.framesPerSecond && <span>{media.framesPerSecond.toFixed(2)} fps</span>}
-            {media.playbackUrl && <small>Space/K phát · J/L hoặc ←/→ tua 5 giây · M tắt tiếng</small>}
-          </div>
           {(media.sourceChanged || !media.sourceAvailable) && (
-            <div className="vietsub-media-warning">
-              <TriangleAlert size={17} />
+            <VietsubNotice className="vietsub-media-warning" icon={<TriangleAlert size={17} />}
+              eventId={`${project.projectId}:${media.mediaId}:${media.sourceIssueCode}:${media.sourceChanged}:${media.sourceAvailable}`}>
               <span>{sourceRecoveryMessage(media.sourceIssueCode, media.sourceChanged)}</span>
-            </div>
+            </VietsubNotice>
           )}
         </>
       )}
@@ -205,16 +215,6 @@ function formatBytes(value: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
   return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-}
-
-function formatDuration(value: number): string {
-  const seconds = Math.max(0, Math.round(value));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainingSeconds = seconds % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
-    : `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
 function formatPlaybackTime(milliseconds: number): string {

@@ -18,6 +18,15 @@ internal static class VietsubVoicePhrasePlanner
 
         foreach (var cue in ordered)
         {
+            if (!cue.VoiceEnabled)
+            {
+                if (current.Count > 0)
+                {
+                    result.Add(Create(current));
+                    current.Clear();
+                }
+                continue;
+            }
             if (string.IsNullOrWhiteSpace(cue.TranslatedText))
             {
                 continue;
@@ -35,7 +44,20 @@ internal static class VietsubVoicePhrasePlanner
         {
             result.Add(Create(current));
         }
-        return result;
+        return ApplySelectionBoundaries(result, ordered);
+    }
+
+    internal static IReadOnlyList<VietsubVoicePhrase> ApplySelectionBoundaries(
+        IEnumerable<VietsubVoicePhrase> phrases, IReadOnlyList<VietsubSubtitleCue> cues)
+    {
+        var numbers = cues.OrderBy(cue => cue.StartMilliseconds).ThenBy(cue => cue.EndMilliseconds)
+            .Select((cue, index) => (cue.CueId, Number: index + 1)).ToDictionary(item => item.CueId, item => item.Number);
+        return phrases.Select(phrase => phrase with
+        {
+            CueNumbers = phrase.CueIds.Select(id => numbers[id]).ToArray(),
+            HardEndMilliseconds = cues.Where(cue => !cue.VoiceEnabled && cue.EndMilliseconds > phrase.StartMilliseconds)
+                .Select(cue => (long?)Math.Max(phrase.StartMilliseconds, cue.StartMilliseconds)).Min()
+        }).ToArray();
     }
 
     private static bool CanJoin(
@@ -76,6 +98,10 @@ internal static class VietsubVoicePhrasePlanner
 
 internal static class VietsubVoiceFingerprintBuilder
 {
+    public static string BuildSelectionFingerprint(IEnumerable<VietsubSubtitleCue> cues) =>
+        Hash(string.Join('\n', cues.OrderBy(cue => cue.CueId)
+            .Select(cue => $"{cue.CueId:N}:{(cue.VoiceEnabled ? 1 : 0)}")));
+
     public static string BuildConfigurationFingerprint(VietsubVoiceSettingsSnapshot settings) =>
         Hash(string.Join('\n',
         [
@@ -105,6 +131,14 @@ internal static class VietsubVoiceFingerprintBuilder
             phrase.Speaker,
             phrase.Text.Normalize(NormalizationForm.FormC)
         ]));
+
+    public static string BuildTimelineFingerprint(
+        string configurationFingerprint,
+        IEnumerable<VietsubVoiceArtifact> artifacts) =>
+        Hash(string.Join('\n', new[] { "voice-timeline-v1", configurationFingerprint }
+            .Concat(artifacts
+                .OrderBy(item => item.PhraseId, StringComparer.Ordinal)
+                .Select(item => item.ContentFingerprint))));
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();

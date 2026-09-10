@@ -261,6 +261,10 @@ builder.Services.AddScoped<IAiPricingAdminService, AiPricingAdminService>();
 builder.Services.AddScoped<IAiBudgetService, AiBudgetService>();
 builder.Services.AddScoped<IGenerationAccessService, GenerationAccessService>();
 builder.Services.AddScoped<IVietsubProjectService, VietsubProjectService>();
+builder.Services.Configure<TOOL_SERVER.Vietsub.Translation.VietsubCloudTranslationOptions>(builder.Configuration.GetSection("VietsubCloudTranslation"));
+builder.Services.AddScoped<TOOL_SERVER.Vietsub.Translation.IOpenAiSubtitleTranslationClient, TOOL_SERVER.Vietsub.Translation.OpenAiSubtitleTranslationClient>();
+builder.Services.AddScoped<TOOL_SERVER.Vietsub.Translation.VietsubCloudTranslationService>();
+builder.Services.AddHostedService<TOOL_SERVER.Vietsub.Translation.VietsubCloudTranslationWorker>();
 builder.Services.AddScoped<TOOL_SERVER.Projects.IProjectAssetService, TOOL_SERVER.Projects.ProjectAssetService>();
 builder.Services.AddScoped<IProviderCredentialProtector, ProviderCredentialProtector>();
 builder.Services.AddScoped<IProviderRuntimeResolver, ProviderRuntimeResolver>();
@@ -307,6 +311,16 @@ builder.Services.AddHttpClient("OpenAiRuntime", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(5);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");
+});
+builder.Services.AddHttpClient("VietsubOpenAiRuntime", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(4);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("VideoMaker-Server/1.0");
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    AllowAutoRedirect = false,
+    UseProxy = false,
+    ConnectTimeout = TimeSpan.FromSeconds(20)
 });
 builder.Services.AddHttpClient("KlingRuntime", client =>
 {

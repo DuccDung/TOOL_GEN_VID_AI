@@ -41,9 +41,12 @@ database/VideoFactory.4.1.2.ProviderRequestFailureDetails.sql
 database/VideoFactory.4.1.3.SpeechSynchronization.sql
 database/VideoFactory.4.1.4.VoiceProfileApproval.sql
 database/VideoFactory.4.1.5.SpeechVerificationReview.sql
+database/VideoFactory.4.1.6.VietsubCloudTranslation.sql
 ```
 
 Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
+
+4.1.6 thay nullability của project budget/ledger và thêm tham chiếu Vietsub. Áp migration trước khi chạy binary server mới, kể cả Cloud còn disabled. Không rollback về worker cũ sau khi có reservation Vietsub. Quy trình cấu hình, giữ payload, đối soát Unknown và dừng rollout nằm trong [runbook Dịch Cloud](HUONG_DAN_VAN_HANH_DICH_CLOUD_VIETSUB.md).
 
 ### 2.2 Chạy rehearsal
 

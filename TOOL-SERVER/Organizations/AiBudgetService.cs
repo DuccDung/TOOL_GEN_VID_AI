@@ -25,6 +25,9 @@ public sealed record BudgetReservationResult(
 
 public interface IAiBudgetService
 {
+    Task<BudgetReservationResult> ReserveVietsubAsync(Guid organizationId, string userId,
+        Guid projectId, Guid requestId, string operationKey, string providerCode, string modelCode,
+        decimal amount, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<BudgetSnapshot> GetSnapshotAsync(Guid organizationId, CancellationToken cancellationToken);
 
     Task<BudgetReservationResult> ReserveAsync(
@@ -68,7 +71,7 @@ internal sealed class AiBudgetService(
         return ToSnapshot(period);
     }
 
-    public async Task<BudgetReservationResult> ReserveAsync(
+    public Task<BudgetReservationResult> ReserveAsync(
         Guid organizationId,
         string userId,
         Guid projectId,
@@ -78,7 +81,22 @@ internal sealed class AiBudgetService(
         string modelCode,
         decimal amount,
         CancellationToken cancellationToken)
+        => ReserveCoreAsync(organizationId, userId, projectId, null, providerRequestId,
+            operationKey, providerCode, modelCode, amount, cancellationToken);
+
+    public Task<BudgetReservationResult> ReserveVietsubAsync(Guid organizationId, string userId,
+        Guid projectId, Guid requestId, string operationKey, string providerCode, string modelCode,
+        decimal amount, CancellationToken cancellationToken)
+        => ReserveCoreAsync(organizationId, userId, null, projectId, requestId,
+            operationKey, providerCode, modelCode, amount, cancellationToken);
+
+    private async Task<BudgetReservationResult> ReserveCoreAsync(Guid organizationId, string userId,
+        Guid? projectId, Guid? vietsubProjectId, Guid providerRequestId, string operationKey,
+        string providerCode, string modelCode, decimal amount, CancellationToken cancellationToken)
     {
+        if ((projectId is null) == (vietsubProjectId is null)
+            || projectId == Guid.Empty || vietsubProjectId == Guid.Empty)
+            throw new ArgumentException("Budget reservation requires exactly one valid project.");
         if (amount <= 0)
         {
             throw new AccountApiException(
@@ -95,7 +113,8 @@ internal sealed class AiBudgetService(
             cancellationToken);
         if (existing is not null)
         {
-            if (existing.ProjectId != projectId || existing.ProviderRequestId != providerRequestId)
+            if (existing.ProjectId != projectId || existing.VietsubProjectId != vietsubProjectId
+                || existing.UserId != userId || existing.ProviderRequestId != providerRequestId)
             {
                 throw new AccountApiException(
                     StatusCodes.Status409Conflict,
@@ -161,6 +180,7 @@ internal sealed class AiBudgetService(
             OrganizationId = organizationId,
             UserId = userId,
             ProjectId = projectId,
+            VietsubProjectId = vietsubProjectId,
             ProviderRequestId = providerRequestId,
             OperationKey = operationKey,
             ProviderCode = providerCode,
@@ -210,6 +230,8 @@ internal sealed class AiBudgetService(
             x => x.AiBudgetReservationId == reservationId,
             cancellationToken)
             ?? throw new InvalidOperationException("Không tìm thấy khoản giữ ngân sách AI.");
+        // A scoped context may still track the Reserved row from before another worker settled it.
+        await dbContext.Entry(reservation).ReloadAsync(cancellationToken);
         if (reservation.Status == BudgetReservationStatuses.Settled)
         {
             await transaction.CommitAsync(cancellationToken);
@@ -223,6 +245,7 @@ internal sealed class AiBudgetService(
         var period = await dbContext.OrganizationBudgetPeriods.SingleAsync(
             x => x.OrganizationBudgetPeriodId == reservation.OrganizationBudgetPeriodId,
             cancellationToken);
+        await dbContext.Entry(period).ReloadAsync(cancellationToken);
         var now = UtcNow();
         period.ReservedCost = Math.Max(0, period.ReservedCost - reservation.ReservedAmount);
         period.ActualCost += actualAmount;
@@ -261,6 +284,7 @@ internal sealed class AiBudgetService(
         var reservation = await dbContext.AiBudgetReservations.SingleOrDefaultAsync(
             x => x.AiBudgetReservationId == reservationId,
             cancellationToken);
+        if (reservation is not null) await dbContext.Entry(reservation).ReloadAsync(cancellationToken);
         if (reservation is null || reservation.Status != BudgetReservationStatuses.Reserved)
         {
             await transaction.CommitAsync(cancellationToken);
@@ -270,6 +294,7 @@ internal sealed class AiBudgetService(
         var period = await dbContext.OrganizationBudgetPeriods.SingleAsync(
             x => x.OrganizationBudgetPeriodId == reservation.OrganizationBudgetPeriodId,
             cancellationToken);
+        await dbContext.Entry(period).ReloadAsync(cancellationToken);
         var now = UtcNow();
         period.ReservedCost = Math.Max(0, period.ReservedCost - reservation.ReservedAmount);
         period.UpdatedAtUtc = now;
@@ -309,6 +334,7 @@ internal sealed class AiBudgetService(
             cancellationToken);
         if (period is not null)
         {
+            await dbContext.Entry(period).ReloadAsync(cancellationToken);
             return period;
         }
 
@@ -342,6 +368,7 @@ internal sealed class AiBudgetService(
             OrganizationId = reservation.OrganizationId,
             UserId = reservation.UserId,
             ProjectId = reservation.ProjectId,
+            VietsubProjectId = reservation.VietsubProjectId,
             ProviderRequestId = reservation.ProviderRequestId,
             OrganizationProviderCredentialId = credentialId,
             ProviderCode = reservation.ProviderCode,

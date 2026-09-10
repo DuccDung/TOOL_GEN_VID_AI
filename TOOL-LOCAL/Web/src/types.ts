@@ -6,6 +6,11 @@ export type UserProfile = {
   roles: string[];
 };
 
+export type VietsubStartCloudTranslationRequest = {
+  expectedTrackId: string;
+  expectedTrackRevision: number;
+};
+
 export type ProjectSummary = {
   projectId: string;
   organizationId?: string | null;
@@ -422,12 +427,14 @@ export type CurrentLicense = {
   serverTimeUtc: string;
   leaseExpiresAtUtc?: string | null;
   heartbeatIntervalSeconds: number;
-  accessState?: 'Active' | 'Missing' | 'Expired' | 'Suspended' | 'Revoked' | 'DeviceLimit' | null;
+  accessState?: 'Active' | 'Missing' | 'Expired' | 'Suspended' | 'Revoked' | 'DeviceLimit' | 'SessionLimit' | 'Unavailable' | null;
   accessReasonCode?: string | null;
   accessMessage?: string | null;
   assignedOrganizationId?: string | null;
   assignedOrganizationName?: string | null;
 };
+
+export type LicenseInvalidatedMessage = { message: string; license?: CurrentLicense | null };
 
 export type LicenseOffer = {
   licensePlanId: string;

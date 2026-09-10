@@ -1,8 +1,10 @@
 import { RefreshCw, TriangleAlert } from 'lucide-react';
 import type {
   VietsubModuleState,
+  VietsubAudioMixSettings,
   VietsubOcrSettings,
   VietsubSubtitleCue,
+  VietsubSubtitleStyle,
   VietsubSubtitlePageQuery,
   VietsubTimelineCueUpdate,
   VietsubTimelineWindowQuery
@@ -11,9 +13,11 @@ import { VietsubEditorWorkspace } from './VietsubEditorWorkspace';
 import { VietsubProjectLibrary } from './VietsubProjectLibrary';
 import { VietsubTranslationResourceModal } from './VietsubTranslationResourceModal';
 import type { VietsubTranslationRunMode } from './vietsubTranslation';
+import { VietsubNotice } from './VietsubNotice';
 
 export type VietsubPageProps = {
   state: VietsubModuleState;
+  onUpdateCueVoice?: (cueIds: string[], enabled: boolean, trackId: string, revision: number) => Promise<boolean>;
   onRefresh: () => void;
   onCreateProject: (name: string) => void;
   onOpenProject: (projectId: string) => void;
@@ -24,6 +28,8 @@ export type VietsubPageProps = {
   onPreviewOcr: (settings: VietsubOcrSettings, timestampMilliseconds: number) => void;
   onStartOcr: (settings: VietsubOcrSettings) => void;
   onStartTranslation: (runMode?: VietsubTranslationRunMode) => void;
+  onStartCloudTranslation?: () => void;
+  onRefreshCloudAvailability?: () => void;
   onInstallTranslationRuntime: () => void;
   onStartVoice: () => void;
   onInstallVoiceRuntime: () => void;
@@ -41,12 +47,15 @@ export type VietsubPageProps = {
   onRequestTimelineThumbnails: (sourceSha256: string, indices: number[]) => void;
   onRequestTimelineWaveform: (sourceSha256: string) => void;
   onUpdateSubtitleCue: (cue: Pick<VietsubSubtitleCue, 'cueId' | 'originalText' | 'translatedText' | 'speaker'>) => Promise<boolean>;
+  onUpdateSubtitleStyle: (style: VietsubSubtitleStyle, audioMixSettings: VietsubAudioMixSettings) => Promise<boolean>;
   onUpdateTimelineCue: (update: VietsubTimelineCueUpdate) => Promise<boolean>;
   onSplitSubtitleCue: (cueId: string, positionMilliseconds: number) => void;
   onAlignSubtitleCue: (cueId: string, positionMilliseconds: number) => void;
   onDuplicateSubtitleCue: (cueId: string) => void;
   onDeleteSubtitleCue: (cueId: string) => void;
   onExportSrt: (mode: 'ORIGINAL' | 'TRANSLATED') => void;
+  onExportVideo: () => Promise<boolean>;
+  onCancelOperation: () => void;
   onRegisterBeforeLeave: (handler: () => Promise<boolean>) => () => void;
 };
 
@@ -56,15 +65,15 @@ export function VietsubPage(props: VietsubPageProps) {
   return (
     <div className={`page-shell vietsub-page ${state.selectedProject ? 'vietsub-page--editor' : 'vietsub-page--library'}`}>
       {state.errorMessage && (
-        <section className="card vietsub-inline-error" role="alert">
-          <TriangleAlert size={19} />
+        <VietsubNotice key={state.selectedProject?.projectId ?? 'library'} eventId={state.noticeEvents?.errorMessage?.id ?? 0}
+          className="card vietsub-inline-error" role="alert" icon={<TriangleAlert size={19} />}
+          actions={<button type="button" onClick={onRefresh}><RefreshCw size={15} /> Thử lại</button>}>
           <div><strong>Chưa hoàn tất thao tác</strong><p>{state.errorMessage}</p></div>
-          <button type="button" onClick={onRefresh}><RefreshCw size={15} /> Thử lại</button>
-        </section>
+        </VietsubNotice>
       )}
 
       {state.selectedProject ? (
-        <VietsubEditorWorkspace {...props} project={state.selectedProject} />
+        <VietsubEditorWorkspace key={state.selectedProject.projectId} {...props} project={state.selectedProject} />
       ) : (
         <VietsubProjectLibrary
           state={state}

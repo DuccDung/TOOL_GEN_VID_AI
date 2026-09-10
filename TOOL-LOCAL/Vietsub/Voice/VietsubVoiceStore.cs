@@ -5,6 +5,16 @@ namespace TOOL_LOCAL.Vietsub.Voice;
 
 internal sealed class VietsubVoiceStore(VietsubAppPaths paths, VietsubSubtitleStore subtitleStore)
 {
+    public async Task<bool> HasTimelineHistoryAsync(Guid projectId, Guid trackId, CancellationToken token)
+    {
+        await subtitleStore.InitializeAsync(projectId, token);
+        await using var connection = await OpenAsync(projectId, token);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM voice_artifacts WHERE track_id = $track AND artifact_kind = 'TIMELINE';";
+        command.Parameters.AddWithValue("$track", trackId.ToString("D"));
+        return Convert.ToInt32(await command.ExecuteScalarAsync(token)) > 0;
+    }
+
     public bool IsTrackRevisionCurrent(Guid projectId, Guid trackId, int expectedRevision)
     {
         if (projectId == Guid.Empty || trackId == Guid.Empty || expectedRevision < 1) return false;
@@ -49,6 +59,72 @@ internal sealed class VietsubVoiceStore(VietsubAppPaths paths, VietsubSubtitleSt
             """;
         command.Parameters.AddWithValue("$fingerprint", contentFingerprint);
         return await ReadSingleArtifactAsync(connection, command, cancellationToken);
+    }
+
+    public async Task<VietsubVoiceArtifact?> FindLatestTimelineBeforeRevisionAsync(
+        Guid projectId,
+        Guid trackId,
+        int trackRevision,
+        CancellationToken cancellationToken = default)
+    {
+        if (trackId == Guid.Empty || trackRevision < 2) return null;
+        await subtitleStore.InitializeAsync(projectId, cancellationToken);
+        await using var connection = await OpenAsync(projectId, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = ArtifactSelect + Environment.NewLine + """
+            WHERE track_id = $trackId
+              AND track_revision < $revision
+              AND artifact_kind = 'TIMELINE'
+              AND status = 'READY'
+            ORDER BY track_revision DESC, updated_at_utc DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
+        command.Parameters.AddWithValue("$revision", trackRevision);
+        return await ReadSingleArtifactAsync(connection, command, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<VietsubVoiceArtifact>> LoadReadyPhraseArtifactsAsync(
+        Guid projectId,
+        Guid trackId,
+        CancellationToken cancellationToken = default)
+    {
+        if (trackId == Guid.Empty) return [];
+        await subtitleStore.InitializeAsync(projectId, cancellationToken);
+        await using var connection = await OpenAsync(projectId, cancellationToken);
+        var artifactIds = new List<Guid>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT artifact_id
+                FROM voice_artifacts
+                WHERE track_id = $trackId
+                  AND artifact_kind = 'PHRASE'
+                  AND status = 'READY'
+                ORDER BY updated_at_utc DESC
+                LIMIT 2000;
+                """;
+            command.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                artifactIds.Add(Guid.Parse(reader.GetString(0)));
+            }
+        }
+
+        var artifacts = new List<VietsubVoiceArtifact>(artifactIds.Count);
+        foreach (var artifactId in artifactIds)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = ArtifactSelect + Environment.NewLine + """
+                WHERE artifact_id = $artifactId
+                LIMIT 1;
+                """;
+            command.Parameters.AddWithValue("$artifactId", artifactId.ToString("D"));
+            var artifact = await ReadSingleArtifactAsync(connection, command, cancellationToken);
+            if (artifact is not null) artifacts.Add(artifact);
+        }
+        return artifacts;
     }
 
     public async Task<bool> SaveArtifactAsync(

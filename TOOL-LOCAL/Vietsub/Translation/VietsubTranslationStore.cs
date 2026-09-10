@@ -74,7 +74,8 @@ internal sealed record VietsubTranslationCueCommit(
     double? Confidence,
     IReadOnlyList<string> Warnings,
     string EngineId,
-    string EngineVersion);
+    string EngineVersion,
+    string TranslationSource = VietsubTranslationSources.LocalAuto);
 
 internal sealed class VietsubTranslationStore(
     VietsubAppPaths paths,
@@ -555,6 +556,8 @@ internal sealed class VietsubTranslationStore(
         string checkpointJson,
         CancellationToken cancellationToken = default)
     {
+        if (result.TranslationSource is not (VietsubTranslationSources.LocalAuto or VietsubTranslationSources.CloudAuto))
+            throw new ArgumentException("Nguồn bản dịch tự động không hợp lệ.");
         if (result.QualityStatus is not (VietsubTranslationQualityStatuses.Valid
             or VietsubTranslationQualityStatuses.Review))
         {
@@ -574,7 +577,7 @@ internal sealed class VietsubTranslationStore(
                     translation_locked = 0,
                     quality_status = $qualityStatus,
                     warning_json = $warningJson,
-                    translation_source = 'LOCAL_AUTO',
+                    translation_source = $translationSource,
                     translation_engine_id = $engineId,
                     translation_engine_version = $engineVersion,
                     translation_source_fingerprint = $inputFingerprint,
@@ -588,10 +591,12 @@ internal sealed class VietsubTranslationStore(
                   AND end_ms = $expectedEndMs
                   AND speaker = $expectedSpeaker
                   AND translation_locked = 0
+                  AND ($translationSource <> 'CLOUD_AUTO' OR original_locked = 0)
                   AND (translation_source IS NULL OR translation_source <> 'MANUAL')
                   AND EXISTS (
                       SELECT 1 FROM local_jobs job
                       WHERE job.id = $jobId AND job.project_id = $projectId
+                        AND ($translationSource <> 'CLOUD_AUTO' OR job.input_track_id = subtitle_cues.track_id)
                         AND job.status IN ('RUNNING', 'PAUSING')
                   )
                   AND EXISTS (
@@ -601,6 +606,7 @@ internal sealed class VietsubTranslationStore(
                   );
                 """;
             cue.Parameters.AddWithValue("$translatedText", NormalizeRequiredText(result.TranslatedText, 8_000, "translation"));
+            cue.Parameters.AddWithValue("$translationSource", result.TranslationSource);
             cue.Parameters.AddWithValue("$qualityStatus", result.QualityStatus);
             cue.Parameters.AddWithValue("$warningJson", JsonSerializer.Serialize(result.Warnings.Take(20)));
             cue.Parameters.AddWithValue("$engineId", NormalizeRequiredText(result.EngineId, 120, "engineId"));

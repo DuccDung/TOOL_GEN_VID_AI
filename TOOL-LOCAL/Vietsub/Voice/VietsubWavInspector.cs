@@ -8,7 +8,8 @@ internal sealed record VietsubWavMetadata(
     int Channels,
     int BitsPerSample,
     long TrimStartMilliseconds,
-    long TrimEndMilliseconds)
+    long TrimEndMilliseconds,
+    long? SignalEndMilliseconds = null)
 {
     public long AudibleDurationMilliseconds => Math.Max(1, TrimEndMilliseconds - TrimStartMilliseconds);
 }
@@ -117,13 +118,16 @@ internal static class VietsubWavInspector
             return new(duration, sampleRate, channels, bitsPerSample, 0, duration);
         }
 
+        // Preserve the unpadded boundary as evidence for shortening only the tail.
+        // Unknown/all-quiet audio deliberately has no such evidence.
+        var signalEnd = (long)Math.Ceiling((last + 1) * 1000d / sampleRate);
         var leadFrames = sampleRate * 60 / 1000;
         var tailFrames = sampleRate * 120 / 1000;
         first = Math.Max(0, first - leadFrames);
         last = Math.Min(totalFrames - 1, last + tailFrames);
         var trimStart = (long)Math.Floor(first * 1000d / sampleRate);
         var trimEnd = Math.Min(duration, (long)Math.Ceiling((last + 1) * 1000d / sampleRate));
-        return new(duration, sampleRate, channels, bitsPerSample, trimStart, Math.Max(trimStart + 1, trimEnd));
+        return new(duration, sampleRate, channels, bitsPerSample, trimStart, Math.Max(trimStart + 1, trimEnd), signalEnd);
     }
 
     private static string ReadFourCc(BinaryReader reader) => Encoding.ASCII.GetString(reader.ReadBytes(4));
@@ -140,9 +144,11 @@ internal static class VietsubVoiceTimelineFitPolicy
         long? nextPhraseStartMilliseconds,
         VietsubVoiceSettingsSnapshot settings)
     {
-        var baseTarget = Math.Max(1, phrase.EndMilliseconds - phrase.StartMilliseconds);
+        var phraseEnd = phrase.HardEndMilliseconds is { } hardEnd
+            ? Math.Min(phrase.EndMilliseconds, hardEnd) : phrase.EndMilliseconds;
+        var baseTarget = Math.Max(1, phraseEnd - phrase.StartMilliseconds);
         var availableGap = nextPhraseStartMilliseconds is long nextStart
-            ? Math.Max(0, nextStart - phrase.EndMilliseconds)
+            ? Math.Max(0, nextStart - phraseEnd)
             : 0;
         var borrowCapacity = Math.Min(settings.MaximumBorrowedGapMilliseconds, availableGap);
         var natural = wav.AudibleDurationMilliseconds;

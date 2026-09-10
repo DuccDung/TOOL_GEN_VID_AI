@@ -6,12 +6,16 @@ namespace TOOL_SERVER.Vietsub.Data;
 
 public sealed class VietsubDbContext(DbContextOptions<VietsubDbContext> options) : DbContext(options)
 {
+    public DbSet<Translation.VietsubCloudJob> CloudTranslationJobs => Set<Translation.VietsubCloudJob>();
+    public DbSet<Translation.VietsubCloudBatch> CloudTranslationBatches => Set<Translation.VietsubCloudBatch>();
+    public DbSet<Translation.VietsubCloudAttempt> CloudTranslationAttempts => Set<Translation.VietsubCloudAttempt>();
     public DbSet<VietsubProject> Projects => Set<VietsubProject>();
 
     public DbSet<OrganizationAuditLog> OrganizationAuditLogs => Set<OrganizationAuditLog>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
+        Translation.VietsubCloudModelConfiguration.Configure(builder);
         builder.Entity<VietsubProject>(entity =>
         {
             entity.ToTable("Projects", "vs");

@@ -17,6 +17,27 @@ public sealed class VietsubTranslationExecutorTests : IDisposable
         $"videomaker-vietsub-translation-executor-{Guid.NewGuid():N}");
 
     [Fact]
+    public async Task ContinueLocal_PreservesCurrentCloudTranslation()
+    {
+        var provider = new FakeTranslationProvider();
+        await using var fixture = await CreateFixtureAsync(provider, [Cue(0, "Hello", "Alice"), Cue(3000, "Welcome", "Bob")]);
+        var cloud = fixture.Track.Cues[0];
+        cloud.TranslatedText = "Xin chào từ Cloud"; cloud.TranslationSource = VietsubTranslationSources.CloudAuto;
+        cloud.QualityStatus = VietsubTranslationQualityStatuses.Valid;
+        cloud.TranslationSourceFingerprint = VietsubCloudTranslationService.Fingerprint(fixture.Track.TrackId, cloud);
+        await fixture.Subtitles.SaveTrackAsync(fixture.Project.ProjectId, fixture.Track);
+        await using var session = fixture.CreateSession(); await session.StartAsync();
+        await fixture.Service.UpdateSettingsAsync(session, "owner", fixture.Project.OrganizationId, Settings(), default);
+        var job = await fixture.Service.StartAsync(session, "owner", fixture.Project.OrganizationId,
+            new("CONTINUE", fixture.Track.TrackId, fixture.Track.Revision), default);
+        Assert.Equal("COMPLETED", (await WaitForTerminalAsync(fixture.Manager, fixture.Project.ProjectId, job.Id)).Status);
+        var track = Assert.Single(await fixture.Subtitles.LoadTracksAsync(fixture.Project.ProjectId));
+        Assert.Equal("Xin chào từ Cloud", track.Cues[0].TranslatedText); Assert.Equal("CLOUD_AUTO", track.Cues[0].TranslationSource);
+        Assert.Equal("LOCAL_AUTO", track.Cues[1].TranslationSource);
+        Assert.All(provider.RequestedTargetCueIds, ids => Assert.DoesNotContain(cloud.CueId, ids));
+    }
+
+    [Fact]
     public async Task ServiceAndExecutor_TranslateTrackAndPublishAtomicVietnameseSrt()
     {
         var provider = new FakeTranslationProvider();

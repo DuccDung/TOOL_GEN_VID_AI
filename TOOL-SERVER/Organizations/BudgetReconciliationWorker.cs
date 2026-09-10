@@ -49,6 +49,20 @@ internal sealed class BudgetReconciliationWorker(
             .ToListAsync(cancellationToken);
         foreach (var reservation in expired)
         {
+            if (reservation.VietsubProjectId != null)
+            {
+                var cloud = scope.ServiceProvider.GetRequiredService<TOOL_SERVER.Vietsub.Data.VietsubDbContext>();
+                var batch = await cloud.CloudTranslationBatches.SingleOrDefaultAsync(x => x.RequestId == reservation.ProviderRequestId, cancellationToken);
+                if (batch is not null && batch.Status is "COMPLETED" or "FAILED")
+                {
+                    var job = await cloud.CloudTranslationJobs.AsNoTracking().SingleAsync(x => x.Id == batch.JobId, cancellationToken);
+                    await budgetService.SettleAsync(reservation.AiBudgetReservationId, batch.ActualCost, job.CredentialId,
+                        DeserializeJson(batch.UsageJson), DeserializeJson(job.RateSnapshotJson), cancellationToken);
+                    batch.Settled = true; await cloud.SaveChangesAsync(cancellationToken);
+                }
+                // Missing/unknown Cloud attempts are not evidence that no upstream charge occurred.
+                continue;
+            }
             var request = await videoDb.ProviderRequests.AsNoTracking().SingleOrDefaultAsync(
                 x => x.ProviderRequestId == reservation.ProviderRequestId,
                 cancellationToken);

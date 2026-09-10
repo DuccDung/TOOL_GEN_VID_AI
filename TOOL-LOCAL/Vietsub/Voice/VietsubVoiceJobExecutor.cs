@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Jobs;
@@ -61,6 +60,10 @@ internal sealed class VietsubVoiceJobExecutor(
             throw new VietsubVoiceException(VietsubVoiceErrorCodes.TrackChanged, "Phụ đề đã thay đổi. Hãy tạo voice job mới từ revision hiện tại.");
         }
         VietsubVoiceTranslationPolicy.EnsureComplete(track);
+        if ((parameters.StrategyVersion == 1 && track.Cues.Any(cue => !cue.VoiceEnabled))
+            || (parameters.StrategyVersion == 2 && parameters.SelectionFingerprint
+                != VietsubVoiceFingerprintBuilder.BuildSelectionFingerprint(track.Cues)))
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.TrackChanged, "Lựa chọn câu tạo giọng đã thay đổi. Hãy tạo tác vụ mới.");
         var expectedConfiguration = VietsubVoiceFingerprintBuilder.BuildConfigurationFingerprint(parameters.Settings);
         if (!FixedHashEquals(expectedConfiguration, parameters.ConfigurationFingerprint))
         {
@@ -103,6 +106,8 @@ internal sealed class VietsubVoiceJobExecutor(
             await context.SaveCheckpointAsync(
                 JsonSerializer.Serialize(new VietsubVoiceCheckpoint(1, phrases.Count, completed, cacheHits, "SYNTHESIS"), JsonOptions),
                 cancellationToken);
+            await context.ReportProgressAsync(new("VOICE_SYNTHESIZE", completed * 100d / phrases.Count,
+                5 + completed * 65d / phrases.Count, $"Đã phục hồi {cacheHits}/{phrases.Count} đoạn giọng đã tạo."), cancellationToken);
             if (pending.Count > 0)
             {
                 await synthesizer.SynthesizeIncrementallyAsync(
@@ -173,7 +178,11 @@ internal sealed class VietsubVoiceJobExecutor(
                 var absolute = ResolveArtifactPath(project.ProjectId, artifact.RelativePath);
                 audio.Add(new(phrase, artifact, absolute, VietsubWavInspector.Inspect(absolute, parameters.Settings.TrimSilence)));
             }
-            await context.ReportProgressAsync(new("VOICE_TIMELINE", 5, 72, "Đang phân tích khoảng lặng và độ dài giọng đọc."), cancellationToken);
+            // A checkpoint forces the throttled progress writer to persist this stage even if rendering fails immediately.
+            var timelineCheckpoint = JsonSerializer.Serialize(
+                new VietsubVoiceCheckpoint(1, phrases.Count, completed, cacheHits, "TIMELINE"), JsonOptions);
+            await context.ReportProgressAsync(new("VOICE_TIMELINE", 5, 72,
+                "Đang phân tích khoảng lặng và độ dài giọng đọc.", timelineCheckpoint), cancellationToken);
             var requestedDuration = project.SourceVideo is null
                 ? phrases.Max(item => item.EndMilliseconds)
                 : (long)Math.Ceiling(project.SourceVideo.Metadata.DurationSeconds * 1000m);
@@ -193,7 +202,9 @@ internal sealed class VietsubVoiceJobExecutor(
                 timeline.Diagnostics,
                 cancellationToken);
 
-            var timelineFingerprint = BuildTimelineFingerprint(parameters.ConfigurationFingerprint, phraseArtifacts.Values);
+            var timelineFingerprint = VietsubVoiceFingerprintBuilder.BuildTimelineFingerprint(
+                parameters.ConfigurationFingerprint,
+                phraseArtifacts.Values);
             var timelineNow = DateTime.UtcNow;
             var timelineArtifact = new VietsubVoiceArtifact(
                 Guid.NewGuid(),
@@ -280,13 +291,6 @@ internal sealed class VietsubVoiceJobExecutor(
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
-    }
-
-    private static string BuildTimelineFingerprint(string configuration, IEnumerable<VietsubVoiceArtifact> artifacts)
-    {
-        var value = string.Join('\n', new[] { "voice-timeline-v1", configuration }
-            .Concat(artifacts.OrderBy(item => item.PhraseId, StringComparer.Ordinal).Select(item => item.ContentFingerprint)));
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 
     private static bool FixedHashEquals(string left, string right)

@@ -39,6 +39,7 @@ internal sealed class ProviderCredentialRetirementWorker(
         await using var scope = scopeFactory.CreateAsyncScope();
         var governanceDb = scope.ServiceProvider.GetRequiredService<AiGovernanceDbContext>();
         var videoDb = scope.ServiceProvider.GetRequiredService<VideoFactoryDbContext>();
+        await using var cloudLock = await TOOL_SERVER.Vietsub.Translation.CloudDatabaseLock.AcquireAsync(governanceDb, "VietsubCloudDispatch", cancellationToken);
         var cutoff = timeProvider.GetUtcNow().UtcDateTime.AddHours(-1);
         var candidates = await governanceDb.OrganizationProviderCredentials
             .Where(x => x.Status == ProviderCredentialStatuses.Retiring &&
@@ -61,6 +62,12 @@ internal sealed class ProviderCredentialRetirementWorker(
             {
                 continue;
             }
+            var cloudDb = scope.ServiceProvider.GetRequiredService<TOOL_SERVER.Vietsub.Data.VietsubDbContext>();
+            // Only query the Cloud schema after migration; old installations remain compatible.
+            if (await TOOL_SERVER.Vietsub.Translation.CloudDatabaseLock.SchemaReadyAsync(videoDb, cancellationToken)
+                && await cloudDb.CloudTranslationJobs.AsNoTracking().AnyAsync(x => x.CredentialId == credential.OrganizationProviderCredentialId
+                    && (x.Active || x.LeaseOwner != null || (x.Status == "FAILED" && x.ProtectedInput != null)), cancellationToken))
+                continue;
             credential.Status = ProviderCredentialStatuses.Revoked;
             credential.EncryptedPayload = "revoked";
             credential.UpdatedAtUtc = timeProvider.GetUtcNow().UtcDateTime;

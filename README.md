@@ -55,7 +55,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 
 ### Vietsub
 
-- Registry metadata nằm trên server; workspace, SQLite, media, cue và artifact nằm local.
+- Registry metadata nằm trên server; workspace, SQLite, media, cue và artifact nằm local. Khi chọn **Dịch Cloud**, server nhận snapshot text có giới hạn và gọi OpenAI; người dùng không chọn model hay nhập key.
 - Editor hỗ trợ COPY/LINK, playback Range, SRT, timeline, thumbnail, waveform và PaddleOCR English/Chinese.
 - Dịch local Qwen chạy trong worker x64 riêng và mặc định tắt tới khi model/benchmark/smoke đạt.
 - Tạo giọng local Piper hiển thị qua feature flag mặc định bật nhưng runtime/model phải được cài, kiểm checksum và probe; `NOT_INSTALLED` không phải `READY`.
@@ -68,7 +68,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Project snapshot provider/model/policy; không tự failover hoặc đổi provider khi admin đổi policy.
 - Output provider không lộ trực tiếp. Server cache/proxy có authorization và SSRF guard; desktop xác minh file local.
 - TTS, ASR, Native Audio, Canonical Voice và local model không fallback ngầm cho nhau.
-- Vietsub giữ subtitle/media/path local; server chỉ giữ registry metadata.
+- Vietsub giữ dữ liệu biên tập và media/path local; snapshot text/kết quả Cloud tạm được mã hóa, có thời hạn lưu riêng trên server.
 
 ## Mặc định quan trọng
 
@@ -77,7 +77,8 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Canonical Voice và speech verification mặc định tắt ở server/desktop.
 - SePay mặc định `Enabled=false`.
 - Vietsub và OCR bật; dịch Qwen tắt; UI/cài đặt giọng Piper bật nhưng runtime/model không được coi là sẵn sàng khi chưa qua gate.
-- Migration đến 4.1.5 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
+- Dịch Cloud mặc định `VietsubCloudTranslation:Enabled=false`, model chưa chỉ định. Xem [hướng dẫn vận hành Cloud](HUONG_DAN_VAN_HANH_DICH_CLOUD_VIETSUB.md) trước khi bật.
+- Migration đến 4.1.6 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
 
 ## Yêu cầu phát triển
 

@@ -38,12 +38,17 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
                     "Tài khoản chưa có gói sử dụng còn hiệu lực.");
             }
 
-            if (Current is { } current && EffectiveAccessExpiry(current) > DateTime.UtcNow.AddMinutes(1))
+            if (HasValidLease && Current is { } current && EffectiveAccessExpiry(current) > DateTime.UtcNow.AddMinutes(1))
             {
                 return Current;
             }
 
-            return await RefreshCoreAsync(cancellationToken);
+            var refreshed = await RefreshCoreAsync(cancellationToken);
+            if (!HasValidLease)
+            {
+                throw Unavailable(refreshed.AccessMessage ?? "License chưa sẵn sàng.");
+            }
+            return refreshed;
         }
         finally
         {
@@ -66,64 +71,55 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
 
     private async Task<CurrentLicenseResponse> RefreshCoreAsync(CancellationToken cancellationToken)
     {
-        var wasActive = Current?.HasActiveLicense == true;
-        var license = await apiClient.GetCurrentAsync(cancellationToken);
-        if (!license.HasActiveLicense)
+        var license = Current;
+        try
         {
-            Current = license;
-            _invalidReason = license.AccessMessage ?? "License không còn hiệu lực.";
-            if (wasActive)
+            license = await apiClient.GetCurrentAsync(cancellationToken);
+            if (!license.HasActiveLicense)
             {
-                LicenseInvalidated?.Invoke(_invalidReason);
+                return SetLockedLicense(license);
             }
-            return license;
-        }
-
-        if (!license.CurrentDeviceActivated)
-        {
-            try
+            if (!license.CurrentDeviceActivated)
             {
                 license = await apiClient.ActivateCurrentDeviceAsync(cancellationToken);
             }
-            catch (AccountClientException exception) when (exception.StatusCode == 409)
-            {
-                license = license with
-                {
-                    CurrentDeviceActivated = false,
-                    LeaseExpiresAtUtc = null,
-                    AccessState = LicenseAccessStates.DeviceLimit,
-                    AccessReasonCode = exception.Code,
-                    AccessMessage = exception.Message
-                };
-                Current = license;
-                _invalidReason = exception.Message;
-                return license;
-            }
-        }
-
-        try
-        {
             license = await apiClient.HeartbeatAsync(cancellationToken);
-        }
-        catch (AccountClientException exception) when (exception.StatusCode == 409)
-        {
-            license = license with
-            {
-                CurrentDeviceActivated = false,
-                LeaseExpiresAtUtc = null,
-                AccessState = LicenseAccessStates.DeviceLimit,
-                AccessReasonCode = exception.Code,
-                AccessMessage = exception.Message
-            };
+            EnsureResponseIsUsable(license);
             Current = license;
-            _invalidReason = exception.Message;
+            _invalidReason = null;
+            StartHeartbeatIfNeeded();
             return license;
         }
-        EnsureResponseIsUsable(license);
-        Current = license;
-        _invalidReason = null;
-        StartHeartbeatIfNeeded();
-        return license;
+        catch (AccountClientException exception) when (exception.StatusCode is 403 or 409 or 423)
+        {
+            license ??= new CurrentLicenseResponse(false, null, null, null, null, null, null,
+                0, 0, 0, null, false, DateTime.UtcNow);
+            return SetLockedLicense(license with
+            {
+                LeaseExpiresAtUtc = null,
+                AccessState = exception.Code switch
+                {
+                    "concurrent_session_limit" => LicenseAccessStates.SessionLimit,
+                    "device_limit_reached" => LicenseAccessStates.DeviceLimit,
+                    "license_suspended" => LicenseAccessStates.Suspended,
+                    "license_revoked" => LicenseAccessStates.Revoked,
+                    _ => LicenseAccessStates.Unavailable
+                },
+                AccessReasonCode = exception.Code,
+                AccessMessage = exception.Message
+            });
+        }
+    }
+
+    private CurrentLicenseResponse SetLockedLicense(CurrentLicenseResponse license)
+    {
+        var reason = license.AccessMessage ?? "License không còn hiệu lực.";
+        var changed = _invalidReason != reason || Current?.AccessState != license.AccessState
+            || Current?.AccessReasonCode != license.AccessReasonCode;
+        Current = license with { LeaseExpiresAtUtc = null };
+        _invalidReason = reason;
+        if (changed) LicenseInvalidated?.Invoke(reason);
+        return Current;
     }
 
     private void StartHeartbeatIfNeeded()
@@ -146,8 +142,8 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
                 {
                     return;
                 }
-                var refreshed = await RefreshNowAsync(cancellationToken);
-                if (!refreshed.HasActiveLicense)
+                await RefreshNowAsync(cancellationToken);
+                if (IsLocked)
                 {
                     return;
                 }
@@ -195,8 +191,19 @@ public sealed class LicenseSessionManager(LicenseApiClient apiClient) : IAsyncDi
 
     private void Invalidate(string reason)
     {
-        _invalidReason = reason;
-        LicenseInvalidated?.Invoke(reason);
+        if (Current is { } current)
+        {
+            SetLockedLicense(current with
+            {
+                AccessState = LicenseAccessStates.Unavailable,
+                AccessMessage = reason
+            });
+        }
+        else
+        {
+            _invalidReason = reason;
+            LicenseInvalidated?.Invoke(reason);
+        }
     }
 
     private static AccountClientException Unavailable(string message) =>

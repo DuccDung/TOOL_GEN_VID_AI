@@ -262,7 +262,8 @@ internal sealed class VietsubProjectStore
                 exception is JsonException
                     or IOException
                     or UnauthorizedAccessException
-                    or InvalidDataException)
+                    or InvalidDataException
+                    or ArgumentException)
             {
                 // Try the next atomic-save candidate.
             }
@@ -407,6 +408,10 @@ internal sealed class VietsubProjectStore
         manifest.TranslationSettings.Normalize(manifest.SourceLanguageCode, manifest.TargetLanguageCode);
         manifest.VoiceSettings ??= new VietsubVoiceSettings();
         manifest.VoiceSettings.Normalize();
+        manifest.AudioMixSettings ??= VietsubAudioMixSettings.CreateDefault();
+        manifest.AudioMixSettings.Normalize();
+        manifest.SubtitleStyle ??= VietsubSubtitleStyle.CreateDefault();
+        manifest.SubtitleStyle.Normalize();
     }
 
     private static bool MigrateManifest(VietsubProjectManifest manifest)
@@ -438,6 +443,38 @@ internal sealed class VietsubProjectStore
         {
             manifest.VoiceSettings = new VietsubVoiceSettings();
             manifest.SchemaVersion = 3;
+            changed = true;
+        }
+
+        if (manifest.SchemaVersion == 3)
+        {
+            manifest.SubtitleStyle = VietsubSubtitleStyle.CreateDefault();
+            manifest.SchemaVersion = 4;
+            changed = true;
+        }
+
+        if (manifest.SchemaVersion == 4)
+        {
+            manifest.SubtitleStyle ??= VietsubSubtitleStyle.CreateDefault();
+            manifest.SubtitleStyle.VerticalPosition = VietsubSubtitleVerticalPositions.Bottom;
+            manifest.SubtitleStyle.PositionYPercent = Math.Clamp(
+                100 - manifest.SubtitleStyle.BottomMarginPercent,
+                2,
+                98);
+            manifest.SubtitleStyle.PositionXPercent = manifest.SubtitleStyle.Alignment switch
+            {
+                VietsubSubtitleAlignments.BottomLeft => Math.Max(2, manifest.SubtitleStyle.HorizontalMarginPercent),
+                VietsubSubtitleAlignments.BottomRight => Math.Min(98, 100 - manifest.SubtitleStyle.HorizontalMarginPercent),
+                _ => 50
+            };
+            manifest.SchemaVersion = 5;
+            changed = true;
+        }
+
+        if (manifest.SchemaVersion == 5)
+        {
+            manifest.AudioMixSettings = VietsubAudioMixSettings.CreateDefault();
+            manifest.SchemaVersion = 6;
             changed = true;
         }
 

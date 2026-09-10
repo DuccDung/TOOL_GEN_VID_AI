@@ -9,12 +9,13 @@
 - `auth`: Identity, session, device, license, payment và Data Protection keys.
 - `ai`: organization, membership, credential, budget, reservation, ledger, audit và seat provisioning.
 - `vf`: project/workflow, asset, provider catalog/model/rate/request, speech và render.
-- `vs`: Vietsub project registry; media/subtitle content vẫn ở workspace local.
+- `vs`: Vietsub project registry và job/batch/attempt Dịch Cloud; snapshot text/result tạm mã hóa có retention, media và dữ liệu biên tập vẫn ở workspace local.
 
 ## Migration
 
 - `VideoFactory.Initial.sql` khởi tạo database.
-- Migration versioned từ `4.0.0` đến `4.1.5` chạy theo thứ tự số trong runbook.
+- Migration versioned từ `4.0.0` đến `4.1.6` chạy theo thứ tự số trong runbook.
+- `4.1.6` thêm job Cloud và FK `VietsubProjectId` cho budget/ledger; giữ FK video và CHECK đúng một loại project. Không rollback binary server cũ khi đã có reservation Vietsub.
 - `4.1.0` tạo Vietsub registry; `4.1.1` tạo Scene First Frame; `4.1.2` lưu failure details; `4.1.3` thêm speech synchronization; `4.1.4` thêm bằng chứng duyệt voice profile; `4.1.5` thêm audited speech verification review.
 - `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql` là script kiểm tra, không phải migration version mới.
 - `VideoFactory.DesktopLeastPrivilege.sql` chạy sau cùng để áp quyền desktop.

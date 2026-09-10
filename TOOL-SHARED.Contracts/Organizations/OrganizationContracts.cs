@@ -123,7 +123,8 @@ public sealed record OrganizationUsageItemResponse(
     DateTime OccurredAtUtc,
     long? InputTokens = null,
     long? OutputTokens = null,
-    decimal? VideoSeconds = null);
+    decimal? VideoSeconds = null,
+    string ProjectKind = "Video");
 
 public sealed record OrganizationUsageGroupResponse(
     string ProviderCode,

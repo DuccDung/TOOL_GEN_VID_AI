@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
-import { TriangleAlert } from 'lucide-react';
-import type { VietsubProjectSummary, VietsubSaveState } from './types';
+import { ArrowLeft, LoaderCircle, TriangleAlert } from 'lucide-react';
+import type { VietsubAudioMixSettings, VietsubProjectSummary, VietsubSaveState } from './types';
 import type { VietsubPageProps } from './VietsubPage';
 import { VietsubPreviewPanel } from './VietsubPreviewPanel';
+import { VietsubSubtitleDesignerModal } from './VietsubSubtitleDesignerModal';
 import { VietsubSettingsPanel } from './VietsubSettingsPanel';
 import {
   VietsubSubtitleEditor,
   type VietsubSubtitleEditorHandle
 } from './VietsubSubtitleEditor';
 import { VietsubTimeline } from './VietsubTimeline';
+import { effectiveOriginalVolume, effectiveVoiceVolume } from './vietsubAudioMix';
+import { useSynchronizedVoice } from './useSynchronizedVoice';
+import { VietsubNotice } from './VietsubNotice';
 
 type VietsubEditorWorkspaceProps = VietsubPageProps & {
   project: VietsubProjectSummary;
@@ -75,6 +79,8 @@ export function VietsubEditorWorkspace({
   onPreviewOcr,
   onStartOcr,
   onStartTranslation,
+  onStartCloudTranslation,
+  onRefreshCloudAvailability,
   onInstallTranslationRuntime,
   onStartVoice,
   onInstallVoiceRuntime,
@@ -90,12 +96,16 @@ export function VietsubEditorWorkspace({
   onRequestTimelineThumbnails,
   onRequestTimelineWaveform,
   onUpdateSubtitleCue,
+  onUpdateSubtitleStyle,
+  onUpdateCueVoice,
   onUpdateTimelineCue,
   onSplitSubtitleCue,
   onAlignSubtitleCue,
   onDuplicateSubtitleCue,
   onDeleteSubtitleCue,
   onExportSrt,
+  onExportVideo,
+  onCancelOperation,
   onRegisterBeforeLeave
 }: VietsubEditorWorkspaceProps) {
   const [playheadMilliseconds, setPlayheadMilliseconds] = useState(0);
@@ -104,16 +114,26 @@ export function VietsubEditorWorkspace({
   );
   const [playing, setPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
-  const [volume, setVolume] = useState(1);
-  const [muted, setMuted] = useState(false);
+  const [audioPreviewSettings, setAudioPreviewSettings] = useState<VietsubAudioMixSettings>(() => ({
+    ...state.audioMixSettings
+  }));
   const [voiceEnabled, setVoiceEnabled] = useState(Boolean(
     state.voiceWorkspace?.timeline?.status === 'READY'
     && state.voiceWorkspace.timelinePlaybackUrl
+    && !state.audioMixSettings.translatedVoiceMuted
+    && state.audioMixSettings.translatedVoiceVolume > 0
   ));
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
+  const [subtitleDesignerOpen, setSubtitleDesignerOpen] = useState(false);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
+  const [selectedCueIndex, setSelectedCueIndex] = useState<number | null>(null);
+  const [navigationVersion, setNavigationVersion] = useState(0);
+  const navigationRequest = useRef(0);
   const [, setSaveState] = useState<VietsubSaveState>('saved');
   const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const [closeFailed, setCloseFailed] = useState(false);
+  const [videoExporting, setVideoExporting] = useState(false);
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const [compactPanel, setCompactPanel] = useState<'preview' | 'subtitles' | 'settings'>('preview');
   const [editorLayout, setEditorLayout] = useState<VietsubEditorLayout>(() => readVietsubEditorLayout(project.projectId));
@@ -124,13 +144,19 @@ export function VietsubEditorWorkspace({
   const subtitleEditorRef = useRef<VietsubSubtitleEditorHandle | null>(null);
   const layoutHydratedRef = useRef(false);
   const busy = state.loading || state.busy || closing;
+  const voiceSelectionBusy = busy || Boolean(state.activeJob);
   const voicePlaybackUrl = state.voiceWorkspace?.timelinePlaybackUrl ?? null;
   const voiceAvailable = Boolean(
     state.voiceWorkspace?.timeline?.status === 'READY'
     && voicePlaybackUrl
   );
+  const voiceGain = effectiveVoiceVolume(audioPreviewSettings, voiceEnabled && voiceAvailable);
+  const [voiceSignalActive, setVoiceSignalActive] = useState(false);
+  const voicePlayback = useSynchronizedVoice(videoRef, voiceAudioRef, project.sourceVideo?.playbackUrl,
+    voicePlaybackUrl, voiceGain, setVoiceSignalActive);
 
   useEffect(() => {
+    navigationRequest.current++;
     videoRef.current?.pause();
     voiceAudioRef.current?.pause();
     playheadRef.current = 0;
@@ -138,11 +164,12 @@ export function VietsubEditorWorkspace({
     setDurationMilliseconds(Math.max(0, Math.round((project.sourceVideo?.durationSeconds ?? 0) * 1000)));
     setPlaying(false);
     setPlaybackRate(1);
-    setVolume(1);
-    setMuted(false);
+    setAudioPreviewSettings({ ...state.audioMixSettings });
     setVoiceEnabled(false);
     setSubtitlesVisible(true);
+    setSubtitleDesignerOpen(false);
     setSelectedCueId(null);
+    setSelectedCueIndex(null);
     setSaveState('saved');
     setClosing(false);
     setSettingsDrawerOpen(false);
@@ -150,10 +177,31 @@ export function VietsubEditorWorkspace({
   }, [project.projectId, project.sourceVideo?.mediaId]);
 
   useEffect(() => {
-    const audio = voiceAudioRef.current;
-    audio?.pause();
-    setVoiceEnabled(voiceAvailable);
-  }, [voiceAvailable, voicePlaybackUrl]);
+    setAudioPreviewSettings({ ...state.audioMixSettings });
+  }, [
+    state.audioMixSettings.autoDuckOriginal,
+    state.audioMixSettings.originalMuted,
+    state.audioMixSettings.originalVolume,
+    state.audioMixSettings.translatedVoiceMuted,
+    state.audioMixSettings.translatedVoiceVolume
+  ]);
+
+  useEffect(() => {
+    const shouldEnableVoice = (
+      voiceAvailable
+      && !state.audioMixSettings.translatedVoiceMuted
+      && state.audioMixSettings.translatedVoiceVolume > 0
+    );
+    setVoiceEnabled(shouldEnableVoice);
+    if (!shouldEnableVoice) voiceAudioRef.current?.pause();
+  }, [
+    state.audioMixSettings.translatedVoiceMuted,
+    state.audioMixSettings.translatedVoiceVolume,
+    voiceAvailable,
+    voicePlaybackUrl,
+    project.projectId,
+    project.sourceVideo?.mediaId
+  ]);
 
   useEffect(() => {
     layoutHydratedRef.current = false;
@@ -274,37 +322,30 @@ export function VietsubEditorWorkspace({
     []
   );
 
+  const exportTimelineVideo = useCallback(() => {
+    void subtitleEditorRef.current?.exportVideo();
+  }, []);
+
   useEffect(
     () => onRegisterBeforeLeave(flushPendingEdits),
     [flushPendingEdits, onRegisterBeforeLeave]
   );
 
   const closeEditor = useCallback(async () => {
-    if (busy) return;
+    if (busy || videoExporting || closingRef.current) return;
+    closingRef.current = true;
     setClosing(true);
-    const flushed = await flushPendingEdits();
-    if (!flushed) {
-      setClosing(false);
-      return;
-    }
-    const closed = await onCloseProject();
-    if (!closed) setClosing(false);
-  }, [busy, flushPendingEdits, onCloseProject]);
-
-  const alignVoicePlayback = useCallback((positionMilliseconds: number, toleranceMilliseconds = 10) => {
-    const audio = voiceAudioRef.current;
-    if (!audio) return;
-    const nextSeconds = Math.max(0, positionMilliseconds / 1000);
-    const boundedSeconds = Number.isFinite(audio.duration) && audio.duration > 0
-      ? Math.min(nextSeconds, audio.duration)
-      : nextSeconds;
-    if (Math.abs(audio.currentTime - boundedSeconds) * 1000 < toleranceMilliseconds) return;
+    setCloseFailed(false);
     try {
-      audio.currentTime = boundedSeconds;
+      if (!await flushPendingEdits()) return;
+      if (!await onCloseProject()) setCloseFailed(true);
     } catch {
-      // Metadata may not be ready yet; onLoadedMetadata aligns it again.
+      setCloseFailed(true);
+    } finally {
+      closingRef.current = false;
+      setClosing(false);
     }
-  }, []);
+  }, [busy, videoExporting, flushPendingEdits, onCloseProject]);
 
   const seek = useCallback((positionMilliseconds: number) => {
     const next = Math.max(
@@ -319,18 +360,29 @@ export function VietsubEditorWorkspace({
     if (video && Math.abs(video.currentTime * 1000 - next) >= 10) {
       video.currentTime = next / 1000;
     }
-    alignVoicePlayback(next);
-    const voiceAudio = voiceAudioRef.current;
-    if (playing && voiceEnabled && voiceAudio?.paused) {
-      void voiceAudio.play().catch(() => { });
-    }
-  }, [alignVoicePlayback, durationMilliseconds, playing, voiceEnabled]);
+    voicePlayback.sync(true);
+  }, [durationMilliseconds, voicePlayback.sync]);
 
   const updatePlayhead = useCallback((positionMilliseconds: number) => {
     playheadRef.current = positionMilliseconds;
     setPlayheadMilliseconds(positionMilliseconds);
-    if (playing && voiceEnabled) alignVoicePlayback(positionMilliseconds, 250);
-  }, [alignVoicePlayback, playing, voiceEnabled]);
+  }, []);
+
+  const openSubtitleDesigner = useCallback(() => {
+    if (!project.sourceVideo?.playbackUrl || busy) return;
+    void flushPendingEdits().then((saved) => {
+      if (!saved) return;
+      videoRef.current?.pause();
+      voiceAudioRef.current?.pause();
+      setPlaying(false);
+      setSubtitleDesignerOpen(true);
+    });
+  }, [busy, flushPendingEdits, project.sourceVideo?.playbackUrl]);
+
+  const closeSubtitleDesigner = useCallback(() => {
+    setSubtitleDesignerOpen(false);
+    seek(playheadRef.current);
+  }, [seek]);
 
   const getPlayheadMilliseconds = useCallback(() => playheadRef.current, []);
 
@@ -342,20 +394,14 @@ export function VietsubEditorWorkspace({
       voiceAudioRef.current?.pause();
       return;
     }
-    const voiceAudio = voiceAudioRef.current;
-    if (voiceEnabled && voicePlaybackUrl && voiceAudio) {
-      alignVoicePlayback(playheadRef.current);
-      voiceAudio.playbackRate = playbackRate;
-      voiceAudio.muted = false;
-      void voiceAudio.play().catch(() => { });
-    }
     try {
+      if (video.ended) video.currentTime = 0;
       await video.play();
     } catch {
-      voiceAudio?.pause();
+      voicePlayback.stop();
       setPlaying(false);
     }
-  }, [alignVoicePlayback, playbackRate, voiceEnabled, voicePlaybackUrl]);
+  }, [voicePlayback.stop]);
 
   const changePlaybackRate = useCallback((value: number) => {
     const next = Math.max(0.5, Math.min(2, value));
@@ -366,53 +412,48 @@ export function VietsubEditorWorkspace({
 
   const changeVolume = useCallback((value: number) => {
     const next = Math.max(0, Math.min(1, value));
-    setVolume(next);
-    if (videoRef.current) videoRef.current.volume = next;
-    if (next > 0 && muted) {
-      setMuted(false);
-      if (videoRef.current) videoRef.current.muted = false;
-    }
-  }, [muted]);
+    setAudioPreviewSettings((current) => ({
+      ...current,
+      originalVolume: next,
+      originalMuted: next > 0 ? false : current.originalMuted
+    }));
+  }, []);
 
   const toggleMuted = useCallback(() => {
-    setMuted((current) => {
-      const next = !current;
-      if (videoRef.current) videoRef.current.muted = next;
-      return next;
-    });
+    setAudioPreviewSettings((current) => ({ ...current, originalMuted: !current.originalMuted }));
   }, []);
 
   const toggleVoice = useCallback(() => {
     if (!voiceAvailable) return;
-    setVoiceEnabled((current) => {
-      const next = !current;
-      const audio = voiceAudioRef.current;
-      if (!audio) return next;
-      if (!next) {
-        audio.pause();
-        return next;
-      }
-      alignVoicePlayback(playheadRef.current);
-      audio.playbackRate = playbackRate;
-      audio.muted = false;
-      if (playing) void audio.play().catch(() => { });
-      return next;
-    });
-  }, [alignVoicePlayback, playbackRate, playing, voiceAvailable]);
+    setVoiceEnabled(current => !current);
+  }, [voiceAvailable]);
 
   const updatePlaying = useCallback((next: boolean) => {
     setPlaying(next);
     if (!next) voiceAudioRef.current?.pause();
   }, []);
 
-  const selectCue = useCallback((cueId: string, positionMilliseconds: number) => {
-    setSelectedCueId(cueId);
-    seek(positionMilliseconds);
-  }, [seek]);
+  const selectCue = useCallback((cueId: string, positionMilliseconds: number, cueIndex: number) => {
+    const request = ++navigationRequest.current;
+    void flushPendingEdits().then(saved => {
+      if (!saved || request !== navigationRequest.current) return;
+      setSelectedCueId(cueId);
+      setSelectedCueIndex(cueIndex);
+      setNavigationVersion(value => value + 1);
+      seek(positionMilliseconds);
+    });
+  }, [flushPendingEdits, seek]);
+
+  const activateSubtitleTrack = useCallback((trackId: string) => {
+    navigationRequest.current++;
+    setSelectedCueId(null);
+    setSelectedCueIndex(null);
+    onActivateSubtitleTrack(trackId);
+  }, [onActivateSubtitleTrack]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (subtitleDesignerOpen || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target;
       if (target instanceof HTMLElement && (
         target.isContentEditable
@@ -435,7 +476,7 @@ export function VietsubEditorWorkspace({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [playheadMilliseconds, seek, toggleMuted, togglePlaying]);
+  }, [playheadMilliseconds, seek, subtitleDesignerOpen, toggleMuted, togglePlaying]);
 
   const activePageCue = useMemo(
     () => state.subtitlePage?.cues.find((cue) => (
@@ -454,26 +495,50 @@ export function VietsubEditorWorkspace({
     return timelineCue?.hasTranslation ? timelineCue.previewText : '';
   }, [activePageCue, playheadMilliseconds, state.timelineWindow]);
 
+  const originalPlaybackVolume = effectiveOriginalVolume(
+    audioPreviewSettings,
+    voiceGain > 0 && voiceSignalActive
+  );
+
+  const previewTimelineAudioMix = useCallback((next: VietsubAudioMixSettings) => {
+    const voiceChanged = next.translatedVoiceMuted !== audioPreviewSettings.translatedVoiceMuted
+      || next.translatedVoiceVolume !== audioPreviewSettings.translatedVoiceVolume;
+    setAudioPreviewSettings({ ...next });
+    if (voiceChanged && voiceAvailable) {
+      setVoiceEnabled(!next.translatedVoiceMuted && next.translatedVoiceVolume > 0);
+    }
+  }, [audioPreviewSettings.translatedVoiceMuted, audioPreviewSettings.translatedVoiceVolume, voiceAvailable]);
+
+  const updateTimelineAudioMix = useCallback(
+    (next: VietsubAudioMixSettings) => onUpdateSubtitleStyle(state.subtitleStyle, next),
+    [onUpdateSubtitleStyle, state.subtitleStyle]
+  );
+
   return (
     <div className="vietsub-editor-workspace">
+      {closeFailed && (
+        <div className="vietsub-inline-error" role="alert">
+          Chưa thể quay về màn hình tạo dự án. Hãy thử lại.
+        </div>
+      )}
       {voicePlaybackUrl && (
         <audio
           ref={voiceAudioRef}
           className="vietsub-voice-playback-engine"
           preload="auto"
+          crossOrigin="anonymous"
           src={voicePlaybackUrl}
           aria-hidden="true"
-          onLoadedMetadata={(event) => {
-            event.currentTarget.playbackRate = playbackRate;
-            alignVoicePlayback(playheadRef.current);
-          }}
         />
       )}
+      {voicePlayback.notice && <VietsubNotice eventId={voicePlayback.noticeId} className="vietsub-media-warning"
+        actions={<button type="button" onClick={voicePlayback.retry}>Thử lại giọng</button>}>
+        {voicePlayback.notice}
+      </VietsubNotice>}
       {project.needsRecovery && (
-        <section className="vietsub-editor-recovery" role="status">
-          <TriangleAlert size={17} />
+        <VietsubNotice eventId={project.projectId} className="vietsub-editor-recovery" icon={<TriangleAlert size={17} />}>
           <div><strong>Dự án được phục hồi sau lần đóng trước.</strong><span>Hãy kiểm tra video và nội dung gần nhất trước khi tiếp tục.</span></div>
-        </section>
+        </VietsubNotice>
       )}
 
       <nav className="vietsub-editor-panel-tabs" aria-label="Chọn bảng biên tập">
@@ -501,6 +566,18 @@ export function VietsubEditorWorkspace({
         <div className={`vietsub-settings-slot ${settingsDrawerOpen ? 'is-drawer-open' : ''} ${compactPanel === 'settings' ? 'is-compact-active' : ''}`}>
           <VietsubSettingsPanel
             project={project}
+            headerAction={
+              <button
+                type="button"
+                className="vietsub-new-project-button"
+                disabled={busy || videoExporting}
+                onClick={() => { void closeEditor(); }}
+                title="Quay về màn hình tạo dự án phụ đề"
+              >
+                {closing ? <LoaderCircle size={14} className="spin" /> : <ArrowLeft size={14} />}
+                <span>{closing ? 'Đang quay về…' : 'Tạo dự án mới'}</span>
+              </button>
+            }
             subtitleWorkspace={state.subtitleWorkspace}
             progress={state.mediaImportProgress}
             busy={busy}
@@ -509,19 +586,25 @@ export function VietsubEditorWorkspace({
             ocrRuntime={state.ocrRuntime}
             ocrPreview={state.ocrPreview}
             translationRuntime={state.translationRuntime}
+            cloudAvailability={state.cloudAvailability}
             translationInstallProgress={state.translationInstallProgress}
             translationNotice={state.translationNotice}
+            translationNoticeId={state.noticeEvents?.translationNotice?.id}
             voiceWorkspace={state.voiceWorkspace}
             voiceRuntime={state.voiceRuntime}
             voiceInstallProgress={state.voiceInstallProgress}
             voiceNotice={state.voiceNotice}
+            voiceNoticeId={state.noticeEvents?.voiceNotice?.id}
             activeJob={state.activeJob}
             activationRequest={state.ocrActivationRequest}
             playheadMilliseconds={playheadMilliseconds}
+            onSeek={seek}
             onUpdateOcrSettings={onUpdateOcrSettings}
             onPreviewOcr={onPreviewOcr}
             onStartOcr={onStartOcr}
             onStartTranslation={onStartTranslation}
+            onStartCloudTranslation={onStartCloudTranslation}
+            onRefreshCloudAvailability={onRefreshCloudAvailability}
             onInstallTranslationRuntime={onInstallTranslationRuntime}
             onStartVoice={onStartVoice}
             onInstallVoiceRuntime={onInstallVoiceRuntime}
@@ -551,10 +634,12 @@ export function VietsubEditorWorkspace({
             durationMilliseconds={durationMilliseconds}
             playing={playing}
             playbackRate={playbackRate}
-            volume={volume}
-            muted={muted}
+            volume={audioPreviewSettings.originalVolume}
+            playbackVolume={originalPlaybackVolume}
+            muted={audioPreviewSettings.originalMuted}
             subtitlesVisible={subtitlesVisible}
             activeSubtitleText={activeSubtitleText}
+            subtitleStyle={state.subtitleStyle}
             onImportMedia={onImportMedia}
             onPlayheadChange={updatePlayhead}
             onDurationChange={setDurationMilliseconds}
@@ -578,17 +663,23 @@ export function VietsubEditorWorkspace({
         />
         <div className={`vietsub-inspector-panel ${compactPanel === 'subtitles' ? 'is-compact-active' : ''}`}>
           <VietsubSubtitleEditor
+            onUpdateCueVoice={onUpdateCueVoice}
+            voiceSelectionBusy={voiceSelectionBusy}
             ref={subtitleEditorRef}
             workspace={state.subtitleWorkspace}
             page={state.subtitlePage}
             busy={busy}
             notice={state.subtitleNotice}
+            noticeId={state.noticeEvents?.subtitleNotice?.id}
+            playing={playing}
+            navigationVersion={navigationVersion}
             sourceLanguageCode={project.sourceLanguageCode}
             activeCueId={activePageCue?.cueId}
             getPlayheadMilliseconds={getPlayheadMilliseconds}
             selectedCueId={selectedCueId}
+            selectedCueIndex={selectedCueIndex}
             onImportSrt={onImportSrt}
-            onActivateTrack={onActivateSubtitleTrack}
+            onActivateTrack={activateSubtitleTrack}
             onLoadPage={onLoadSubtitlePage}
             onUpdateCue={onUpdateSubtitleCue}
             onSplitCue={onSplitSubtitleCue}
@@ -596,6 +687,11 @@ export function VietsubEditorWorkspace({
             onDuplicateCue={onDuplicateSubtitleCue}
             onDeleteCue={onDeleteSubtitleCue}
             onExportSrt={onExportSrt}
+            canExportVideo={Boolean(project.sourceVideo?.playbackUrl)}
+            onExportVideo={onExportVideo}
+            onExportStateChange={setVideoExporting}
+            canDesignSubtitle={Boolean(project.sourceVideo?.playbackUrl)}
+            onOpenSubtitleDesigner={openSubtitleDesigner}
             onSelectCue={selectCue}
             onSaveStateChange={setSaveState}
           />
@@ -612,6 +708,11 @@ export function VietsubEditorWorkspace({
         onKeyDown={adjustLayoutFromKeyboard}
       />
       <VietsubTimeline
+        canExportVideo={Boolean(project.sourceVideo?.playbackUrl && state.subtitleWorkspace?.activeTrackId)}
+        exporting={videoExporting}
+        onExportVideo={exportTimelineVideo}
+        onUpdateCueVoice={onUpdateCueVoice}
+        voiceSelectionBusy={voiceSelectionBusy}
         media={project.sourceVideo}
         mediaEvent={state.timelineMediaEvent}
         trackId={state.subtitleWorkspace?.activeTrackId}
@@ -620,6 +721,7 @@ export function VietsubEditorWorkspace({
         playing={playing}
         voiceWorkspace={state.voiceWorkspace}
         voiceEnabled={voiceEnabled}
+        audioMixSettings={state.audioMixSettings}
         busy={busy}
         selectedCueId={selectedCueId}
         onSeek={seek}
@@ -629,8 +731,28 @@ export function VietsubEditorWorkspace({
         onRequestWaveform={onRequestTimelineWaveform}
         onUpdateCue={onUpdateTimelineCue}
         onToggleVoice={toggleVoice}
+        onPreviewAudioMix={previewTimelineAudioMix}
+        onUpdateAudioMix={updateTimelineAudioMix}
       />
       </div>
+      {subtitleDesignerOpen && project.sourceVideo?.playbackUrl && (
+        <VietsubSubtitleDesignerModal
+          media={project.sourceVideo}
+          style={state.subtitleStyle}
+          audioMixSettings={state.audioMixSettings}
+          voicePlaybackUrl={state.voiceWorkspace?.timelinePlaybackUrl}
+          previewText={activeSubtitleText}
+          hasTranslatedSubtitles={Boolean(state.subtitleWorkspace?.tracks.some((track) => track.translatedCueCount > 0))}
+          initialTimeMilliseconds={playheadMilliseconds}
+          busy={busy}
+          notice={state.subtitleNotice}
+          onPreviewTimeChange={updatePlayhead}
+          onSave={onUpdateSubtitleStyle}
+          onExportVideo={onExportVideo}
+          onCancelOperation={onCancelOperation}
+          onClose={closeSubtitleDesigner}
+        />
+      )}
     </div>
   );
 }

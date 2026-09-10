@@ -16,7 +16,7 @@ internal static class VietsubProjectStatuses
 
 internal sealed class VietsubProjectManifest
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 6;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -55,6 +55,10 @@ internal sealed class VietsubProjectManifest
     public VietsubTranslationSettings TranslationSettings { get; set; } = new();
 
     public VietsubVoiceSettings VoiceSettings { get; set; } = new();
+
+    public VietsubAudioMixSettings AudioMixSettings { get; set; } = VietsubAudioMixSettings.CreateDefault();
+
+    public VietsubSubtitleStyle SubtitleStyle { get; set; } = VietsubSubtitleStyle.CreateDefault();
 
     [JsonIgnore]
     public bool RecoveryRequired { get; set; }
@@ -205,6 +209,8 @@ internal sealed class VietsubSubtitleCue
     public bool OriginalLocked { get; set; }
 
     public bool TranslationLocked { get; set; }
+
+    public bool VoiceEnabled { get; set; } = true;
 
     public string? QualityStatus { get; set; }
 

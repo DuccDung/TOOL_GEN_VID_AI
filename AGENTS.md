@@ -33,6 +33,7 @@ Không dùng `bin`, `obj`, `.vs`, `.tmp`, `node_modules`, `dist`, `artifacts`, �
 - `TOOL-VIETSUB-TRANSLATION-WORKER` là tiến trình x64 cô lập LLamaSharp/Qwen; không có Cloud client, credential hoặc database workflow.
 - Desktop không giữ hoặc gọi trực tiếp bằng provider API key. Task video bất đồng bộ do server polling kể cả khi desktop đóng.
 - Registry `vs.Projects` do server sở hữu; subtitle, media và workspace Vietsub nằm local.
+- Khi người dùng chọn Dịch Cloud, server được nhận snapshot text giới hạn cho job OpenAI, mã hóa và có retention. Không gửi media/path; credential vẫn chỉ ở server, worker Qwen vẫn cô lập.
 
 ## Bất biến bảo mật và chi phí
 

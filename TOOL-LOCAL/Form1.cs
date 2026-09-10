@@ -54,7 +54,9 @@ public partial class Form1 : Form
     private readonly VietsubJobManager? _vietsubJobManager;
     private readonly VietsubOcrService? _vietsubOcrService;
     private readonly VietsubTranslationService? _vietsubTranslationService;
+    private readonly VietsubCloudTranslationService? _vietsubCloudTranslationService;
     private readonly VietsubVoiceService? _vietsubVoiceService;
+    private readonly VietsubVideoExportService? _vietsubVideoExportService;
     private readonly LicensePaymentApiClient? _licensePaymentClient;
     private readonly VietsubMediaRuntimeLog _vietsubMediaLog = VietsubMediaRuntimeLog.CreateDefault();
     private WebView2? _webView;
@@ -101,7 +103,9 @@ public partial class Form1 : Form
         VietsubOcrService? vietsubOcrService,
         VietsubTranslationService? vietsubTranslationService,
         VietsubVoiceService? vietsubVoiceService,
-        LicensePaymentApiClient licensePaymentClient) : this()
+        VietsubVideoExportService? vietsubVideoExportService,
+        LicensePaymentApiClient licensePaymentClient,
+        VietsubCloudTranslationService? vietsubCloudTranslationService = null) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -124,7 +128,9 @@ public partial class Form1 : Form
         _vietsubJobManager = vietsubJobManager;
         _vietsubOcrService = vietsubOcrService;
         _vietsubTranslationService = vietsubTranslationService;
+        _vietsubCloudTranslationService = vietsubCloudTranslationService;
         _vietsubVoiceService = vietsubVoiceService;
+        _vietsubVideoExportService = vietsubVideoExportService;
         _licensePaymentClient = licensePaymentClient;
         _updateTimer.Interval = Math.Max(30, updateOptions.CheckIntervalSeconds) * 1000;
         ConfigureWindow();
@@ -243,7 +249,10 @@ public partial class Form1 : Form
                 _vietsubOcrService,
                 _vietsubWaveformService,
                 _vietsubTranslationService,
-                _vietsubVoiceService);
+                _vietsubVoiceService,
+                SelectVietsubVideoDestination,
+                _vietsubVideoExportService,
+                _vietsubCloudTranslationService);
 
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
             _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;
@@ -504,7 +513,8 @@ public partial class Form1 : Form
         if (!string.Equals(
             resourceType,
             VietsubPlaybackResourceTypes.Video,
-            StringComparison.Ordinal))
+            StringComparison.Ordinal)
+            && !string.Equals(resourceType, VietsubPlaybackResourceTypes.Voice, StringComparison.Ordinal))
         {
             return null;
         }
@@ -891,6 +901,20 @@ public partial class Form1 : Form
             : null;
     }
 
+    private string? SelectVietsubVideoDestination()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Xuất video có phụ đề tiếng Việt",
+            Filter = "Video MP4 (*.mp4)|*.mp4",
+            DefaultExt = "mp4",
+            AddExtension = true,
+            OverwritePrompt = true,
+            FileName = "vietsub-thanh-pham.mp4"
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
     private string? SelectFinalVideoDestination()
     {
         using var dialog = new SaveFileDialog
@@ -962,7 +986,7 @@ public partial class Form1 : Form
     }
 
     private void LicenseManagerOnInvalidated(string reason) =>
-        PostHostMessage("license.invalidated", new { message = reason });
+        PostHostMessage("license.invalidated", new LicenseInvalidatedMessage(reason, _licenseManager?.Current));
 
     private void ShowStartupError(string message)
     {

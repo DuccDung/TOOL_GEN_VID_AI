@@ -15,6 +15,9 @@ internal sealed record WebMessageRequest(
     string? RequestId,
     JsonElement Payload);
 
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+internal sealed record VietsubStartCloudTranslationRequest(Guid ExpectedTrackId, int ExpectedTrackRevision);
+
 internal sealed record WebMessageError(
     string Code,
     string Message,
@@ -25,6 +28,8 @@ internal sealed record WebMessageResponse(
     string? RequestId,
     object? Payload = null,
     WebMessageError? Error = null);
+
+internal sealed record LicenseInvalidatedMessage(string Message, CurrentLicenseResponse? License);
 
 internal sealed record DashboardStateResponse(
     UserProfileResponse Profile,

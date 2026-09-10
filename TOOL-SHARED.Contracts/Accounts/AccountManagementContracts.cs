@@ -43,4 +43,6 @@ public static class LicenseAccessStates
     public const string Suspended = "Suspended";
     public const string Revoked = "Revoked";
     public const string DeviceLimit = "DeviceLimit";
+    public const string SessionLimit = "SessionLimit";
+    public const string Unavailable = "Unavailable";
 }
