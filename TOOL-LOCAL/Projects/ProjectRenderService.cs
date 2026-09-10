@@ -129,13 +129,7 @@ internal sealed class ProjectRenderService(
                     var canonicalSpeech =
                         string.Equals(project.SpeechProductionPolicy, SpeechProductionPolicies.CanonicalVoice, StringComparison.Ordinal) &&
                         speechMode != KlingSpeechModes.None;
-                    if (canonicalSpeech && speechMode == KlingSpeechModes.OnCameraDialogue)
-                    {
-                        throw new ArgumentException(
-                            $"Cảnh {scene.SequenceNumber} có Canonical Voice đã sẵn sàng cho lip-sync nhưng chưa có video lip-sync đã duyệt.");
-                    }
-                    var canonicalNarration =
-                        canonicalSpeech && speechMode == KlingSpeechModes.NativeVoiceOver;
+                    var canonicalNarration = canonicalSpeech;
                     var asset = canonicalNarration
                         ? scene.ApprovedRenderMediaAsset
                         : scene.ApprovedRenderMediaAsset ?? generation?.OutputMediaAsset;
@@ -158,6 +152,8 @@ internal sealed class ProjectRenderService(
                          scene.ApprovedVoiceGeneration is not null &&
                          scene.ApprovedVoiceGeneration.VoiceGenerationId == scene.ApprovedVoiceGenerationId &&
                           scene.ApprovedVoiceGeneration.Status == "Approved" &&
+                          scene.ApprovedVoiceGeneration.ApprovedAtUtc != null &&
+                          scene.ApprovedVoiceGeneration.ScenePlanVersion == scene.ScenePlanVersion &&
                           scene.SpeechStatus == "SpeechApproved");
                     var expectedSpeechHash = speechMode == KlingSpeechModes.None
                         ? null
@@ -182,6 +178,9 @@ internal sealed class ProjectRenderService(
                             cancellationToken);
                     var canonicalSnapshotValid = !canonicalNarration ||
                         (scene.ApprovedVoiceGeneration is not null &&
+                         scene.ApprovedVoiceGeneration.NarrationHash == expectedSpeechHash &&
+                         (ReadStringProperty(asset?.MetadataJson, "audioSyncPolicyVersion") == LegacyApprovedSceneAudioSyncPolicyVersion ||
+                          ReadStringProperty(asset?.MetadataJson, "rawVideoMediaAssetId") == generation?.OutputMediaAssetId?.ToString("D")) &&
                          string.Equals(
                              ReadStringProperty(asset?.MetadataJson, "voiceGenerationId"),
                              scene.ApprovedVoiceGeneration.VoiceGenerationId.ToString("D"),

@@ -8,7 +8,7 @@ LocalVoiceModelTests mặc định **Skipped**, chỉ chạy khi có VM_LOCAL_VO
 
 Bổ sung triển khai 2026-09-10: `LocalVoiceDeploymentTests` kiểm cấu hình component/temp độc lập media workspace, không tự cài khi đọc trạng thái, từ chối đường dẫn không hợp lệ và lọc môi trường tiến trình con. Test model ghi thời gian và peak working set từng worker; số đo là tiến trình Python, không phải tổng RAM cả ứng dụng. Chạy test .NET với TEMP/TMP ngắn (ví dụ `D:\vmt-voice-0910`) để tránh SQLite lỗi đường dẫn dài trên Windows. Có thể dùng Python của component để chạy `TOOL-TESTS/LocalVoice/test_voice_consistency_worker.py`; không cần Python hệ thống. Helper có regression dùng tensor nhỏ, chặn `_native_multi_head_attention` và xác minh CPU profile vẫn xử lý attention được; tái hiện nhánh gây access violation khi tách âm trước bản sửa. Case này cần PyTorch, không tải model khi test. Bằng chứng sau thay đổi: [task triển khai trên máy đích](TASK_TRIEN_KHAI_VEO_LOCAL_SU_DUNG_THUC_TE.md).
 
-Trước production cần rehearsal migration trên clone, UI WebView2 thật, 2–3 clip Veo tiếng Việt cùng nhân vật, giọng nam/nữ, âm nền, lỗi/no-speech/multiple-speaker, restart/retry, nghe A/B và đo CPU/RAM/thời gian. Thiếu clip thật hoặc model test bị skip phải ghi chưa nghiệm thu. Test cloud LipSync bị loại khỏi build thử nghiệm không được tính Passed hoặc Skipped của runner.
+Trước production cần rehearsal migration trên clone, UI WebView2 thật, 2–3 clip Veo tiếng Việt cùng nhân vật, giọng nam/nữ, âm nền, lỗi/no-speech/multiple-speaker, restart/retry, nghe A/B và đo CPU/RAM/thời gian. Thiếu clip thật hoặc model test bị skip phải ghi chưa nghiệm thu. Module và test chuyên biệt cloud LipSync đã xóa; migration lịch sử được giữ nguyên. Không tính test đã loại bỏ vào Passed hoặc Skipped.
 
 > Ma trận kiểm thử và Definition of Done. Rà soát ngày 2026-09-07.
 
@@ -150,7 +150,7 @@ Unit/integration mặc định không gửi request có phí. Smoke thật chỉ
 - TTS fail closed khi thiếu model/credential/rate/budget; WAV sai MIME/hash/sample/duration/audibility bị chặn.
 - Canonical Voice không gọi transcription; video dài Provider Native cũng không quote/gọi ASR và không cần `SpeechVerificationReport`.
 - `NativeVoiceOver` dùng đúng WAV/speech/voice snapshot và asset sync v3; compatibility v2 chỉ cho exact approved lineage.
-- `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`; render không giả định đã lip-sync.
+- `OnCameraDialogue` Canonical Voice phải qua duyệt WAV, tạo video nền, ghép và duyệt clip trước render. Kiểm thử project cũ mang trạng thái chờ với WAV đã duyệt, chưa duyệt và lời thoại thay đổi; đọc dashboard không được ghi dữ liệu. Retry dùng lại WAV/provider request còn hợp lệ, không submit mới chỉ vì lỗi ghép local.
 - Nếu bật speech verification ngoài video dài: `Passed`, audited `NeedsReview`, stale version và `Failed` phải đúng policy trước outbound/render.
 
 Kết quả một provider không đại diện cho provider khác.

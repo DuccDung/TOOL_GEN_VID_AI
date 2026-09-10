@@ -259,10 +259,20 @@ public sealed class ProjectRenderServiceTests
         Assert.Contains("\"mixedSceneAudio\":true", renderJob.TechnicalReportJson, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task RenderFinalVideo_CanonicalVoiceOverUsesApprovedNarratedAsset()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RenderFinalVideo_CanonicalSpeechUsesApprovedMixedAsset(bool onCamera)
     {
         await using var fixture = await RenderFixture.CreateCanonicalAsync();
+        if (onCamera)
+        {
+            await using var db = fixture.Factory.CreateDbContext();
+            var scene = await db.Scenes.SingleAsync();
+            scene.Dialogue = scene.Narration;
+            scene.Narration = null;
+            await db.SaveChangesAsync();
+        }
 
         var result = await fixture.Service.RenderFinalVideoAsync(
             fixture.ProjectId,
@@ -277,6 +287,27 @@ public sealed class ProjectRenderServiceTests
         Assert.Contains("\"audioStrategy\":\"CanonicalVoice\"", renderJob.ManifestJson, StringComparison.Ordinal);
         Assert.Empty(dbContext.SpeechVerificationReports);
         Assert.True(File.Exists(fixture.Workspace.Resolve(result.RelativePath)));
+    }
+
+    [Theory]
+    [InlineData("voiceApproval")]
+    [InlineData("speech")]
+    [InlineData("sourceVideo")]
+    public async Task RenderFinalVideo_CanonicalDialogueRejectsStaleSourcesBeforeFfmpeg(string change)
+    {
+        await using var fixture = await RenderFixture.CreateCanonicalAsync();
+        await using (var db = fixture.Factory.CreateDbContext())
+        {
+            var scene = await db.Scenes.SingleAsync();
+            scene.Dialogue = scene.Narration;
+            scene.Narration = null;
+            if (change == "voiceApproval") (await db.VoiceGenerations.SingleAsync()).ApprovedAtUtc = null;
+            if (change == "speech") scene.Dialogue = "Lời thoại mới khác bản đã duyệt.";
+            if (change == "sourceVideo") (await db.VideoGenerations.SingleAsync()).OutputMediaAssetId = null;
+            await db.SaveChangesAsync();
+        }
+        await Assert.ThrowsAsync<ArgumentException>(() => fixture.Service.RenderFinalVideoAsync(fixture.ProjectId, fixture.UserId, default));
+        Assert.Equal(0, fixture.Renderer.CallCount);
     }
 
     [Fact]
@@ -776,6 +807,7 @@ public sealed class ProjectRenderServiceTests
                     SourceType = "Generated",
                     MetadataJson = System.Text.Json.JsonSerializer.Serialize(new
                     {
+                        rawVideoMediaAssetId = rawVideoAsset.MediaAssetId,
                         voiceGenerationId,
                         voiceSnapshotHash = snapshotHash,
                         speechHash,

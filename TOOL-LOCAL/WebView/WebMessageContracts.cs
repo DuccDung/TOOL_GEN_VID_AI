@@ -110,13 +110,15 @@ internal sealed record CreateProjectWebRequest(
     string LanguageCode,
     string? VoiceCode = null,
     decimal? VoiceSpeakingRate = null,
-    string SpeechProductionPolicy = "ProviderNativeVerified");
+    string SpeechProductionPolicy = "ProviderNativeVerified",
+    Guid? OrganizationId = null);
 
 internal sealed record CreateShortVideoWebRequest(
     string Content,
     string AspectRatio,
     int DurationSeconds,
-    bool AudioEnabled);
+    bool AudioEnabled,
+    Guid? OrganizationId = null);
 
 internal sealed record GenerateVideoWebRequest(IReadOnlyList<Guid>? SceneIds);
 

@@ -142,6 +142,8 @@ Mỗi provider có rollback flag/policy riêng. Tắt provider chặn request m�
 
 ## 7. Rollout Canonical Voice và speech verification
 
+Từ thay đổi loại bỏ lip-sync Cloud ngày 2026-09-10, triển khai server và desktop cùng phiên bản: server cũ vẫn chặn Canonical thoại nhân vật. Không cần migration dữ liệu để tiếp tục project chờ cũ; dashboard đối chiếu WAV/voice version hiện hành, sau đó thao tác tạo/duyệt ghi trạng thái theo workflow thông thường. Giữ nguyên migration 4.1.6/4.1.7 lip-sync và dữ liệu lịch sử; chúng không còn là bước cài bắt buộc của hai luồng hiện hành. Không DROP bảng hoặc xóa ledger/request cũ. Bản server/desktop đang chạy không tự được thay bằng kết quả build kiểm thử.
+
 Điều kiện Canonical Voice:
 
 - Migration 4.1.3–4.1.4 đã chạy lặp trên clone và áp đúng môi trường.
@@ -157,7 +159,7 @@ Smoke bắt buộc:
 3. Quote/xác nhận xảy ra trước TTS outbound; phát lại WAV đã tải không tạo request mới.
 4. Content plan đạt mục tiêu nhịp 85–95%; output ngoài biên 80–105% chỉ mở repair có quote, không tự gọi lần hai.
 5. WAV qua MIME/SHA-256/sample rate/duration/audibility và đúng speech/voice snapshot.
-6. `NativeVoiceOver` ghép toàn bộ WAV vào video nền; `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`.
+6. `NativeVoiceOver` và `OnCameraDialogue` ghép toàn bộ WAV vào video nền; thoại nhân vật cần duyệt WAV trước. Nghe/duyệt clip đã ghép trước render. Không có module lip-sync Cloud.
 7. Video dài `ProviderNativeVerified` không hiển thị/quote/gọi ASR và duyệt bằng audio hợp lệ cùng checklist nghe.
 
 Speech verification là rollout độc lập cho workflow không phải `OpenAiStructuredPlan`: cần migration 4.1.5, transcription credential/model/rate và `SpeechVerificationEnabled`. `NeedsReview` phải có lý do/reviewer/timestamp; stale row version và `Failed` bị chặn.

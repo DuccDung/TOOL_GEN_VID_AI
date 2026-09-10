@@ -603,6 +603,7 @@ export type ContentRepairQuote = {
 };
 
 export type CreateProjectPayload = {
+  organizationId?: string;
   topic: string;
   aspectRatio: string;
   languageCode: string;
@@ -612,6 +613,7 @@ export type CreateProjectPayload = {
 };
 
 export type CreateShortVideoPayload = {
+  organizationId?: string;
   content: string;
   aspectRatio: '9:16' | '16:9' | '1:1';
   durationSeconds: number;

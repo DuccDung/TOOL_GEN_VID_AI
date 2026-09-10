@@ -11,7 +11,7 @@ using TOOL_SHARED.Contracts.Generation;
 
 namespace TOOL_TESTS.Projects;
 
-public sealed class CanonicalVoiceApprovalTests
+public sealed partial class CanonicalVoiceApprovalTests
 {
     [Fact]
     public async Task ApproveSceneVoice_NarrationApprovesWavBeforeVideo()
@@ -102,7 +102,7 @@ public sealed class CanonicalVoiceApprovalTests
     }
 
     [Fact]
-    public async Task ApproveSceneVoice_OnCameraStopsAtSpeechReadyForLipSync()
+    public async Task ApproveSceneVoice_OnCameraOpensBackgroundVideoWithoutApprovingVideo()
     {
         using var fixture = await CreateFixtureAsync(onCamera: true, includeNarratedVideo: false);
 
@@ -115,18 +115,22 @@ public sealed class CanonicalVoiceApprovalTests
 
         await using var dbContext = fixture.Factory.CreateDbContext();
         var scene = await dbContext.Scenes.SingleAsync();
-        Assert.Equal(SceneSpeechStatuses.SpeechReadyForLipSync, scene.SpeechStatus);
-        Assert.Equal(SpeechSynchronizationErrorCodes.SpeechReadyForLipSync, scene.LastErrorCode);
+        Assert.Equal(SceneSpeechStatuses.SpeechApproved, scene.SpeechStatus);
+        Assert.Equal("PromptReady", scene.Status);
+        Assert.Null(scene.LastErrorCode);
+        Assert.NotNull(scene.ApprovedVoiceGenerationId);
         Assert.Null(scene.ApprovedGenerationId);
         Assert.Null(scene.ApprovedRenderMediaAssetId);
         Assert.Empty(dbContext.VideoGenerations);
         Assert.Equal("ScenePlanning", (await dbContext.Projects.SingleAsync()).Status);
     }
 
-    [Fact]
-    public async Task ApproveNarratedScene_PointsRenderAtMatchingNarratedAsset()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ApproveCanonicalScene_PointsRenderAtMatchingMixedAsset(bool onCamera)
     {
-        using var fixture = await CreateFixtureAsync(onCamera: false, includeNarratedVideo: true);
+        using var fixture = await CreateFixtureAsync(onCamera, includeNarratedVideo: true);
 
         await fixture.Service.ApproveSceneNativeAudioAsync(
             fixture.ProjectId,
@@ -173,7 +177,7 @@ public sealed class CanonicalVoiceApprovalTests
     }
 
     [Fact]
-    public async Task UnapproveSceneAudio_OnCameraClearsLipSyncReadinessAndVoiceApproval()
+    public async Task UnapproveSceneAudio_OnCameraClearsVoiceApproval()
     {
         using var fixture = await CreateFixtureAsync(onCamera: true, includeNarratedVideo: false);
         await fixture.Service.ApproveSceneNativeAudioAsync(
@@ -242,6 +246,7 @@ public sealed class CanonicalVoiceApprovalTests
         var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
             .UseInMemoryDatabase($"canonical-voice-approval-{Guid.NewGuid():N}")
             .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .AddInterceptors(new SqlRowVersionFixtureInterceptor())
             .Options;
         var factory = new TestDbContextFactory(options);
         var now = DateTime.UtcNow;
@@ -283,6 +288,7 @@ public sealed class CanonicalVoiceApprovalTests
                 OutputFrameRate = 25,
                 Status = "ScenePlanning",
                 CurrentScriptVersion = 1,
+                CurrentCharacterVersion = 1,
                 CurrentStyleVersion = 1,
                 CurrentScenePlanVersion = 1,
                 CurrencyCode = "USD",
@@ -537,7 +543,9 @@ public sealed class CanonicalVoiceApprovalTests
                 SourceType = "Generated",
                 MetadataJson = JsonSerializer.Serialize(new
                 {
+                    rawVideoMediaAssetId = rawAssetId,
                     voiceGenerationId,
+                    voiceSnapshotHash = new string('c', 64),
                     speechHash,
                     mixStrategy = SpeechMixStrategies.ReplaceAllNativeAudio,
                     audioSyncPolicyVersion = "scene-audio-sync-v3",

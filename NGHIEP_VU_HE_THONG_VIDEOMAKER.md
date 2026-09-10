@@ -130,7 +130,7 @@ Quy tắc Canonical Voice:
 - TTS qua đầy đủ credential/model/rate/budget/idempotency/output proxy. WAV được kiểm tra MIME, hash, sample rate, duration, audibility và ratio.
 - Canonical Voice không gửi WAV qua ASR và không phụ thuộc WER/CER. Speech verification chỉ áp dụng cho workflow không phải `OpenAiStructuredPlan` khi feature flag độc lập được bật.
 - `NativeVoiceOver` có WAV hiện hành đúng lineage đi thẳng sang tạo video nền; lệnh tạo video kiểm tra file rồi chấp nhận đúng VoiceGeneration trước outbound, không có bước duyệt WAV riêng.
-- `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`; chưa có engine thì không được render như đã lip-sync.
+- `OnCameraDialogue` dùng giọng nhân vật: chuẩn bị và duyệt WAV, tạo video nền, ghép WAV, nghe/duyệt clip rồi render. Hình và chuyển động miệng giữ theo clip provider; không có bước chỉnh khẩu hình Cloud. Trạng thái chờ của project cũ không tự chứng minh WAV đã duyệt; hệ thống phải kiểm bản ghi giọng hiện hành trước khi tiếp tục.
 - Narrated asset mới dùng `scene-audio-sync-v3`; `v2` chỉ tương thích khi là exact approved pointer và còn khớp generation, VoiceGeneration, speech/voice snapshot và hash. Phiên bản cũ hơn bị chặn.
 - Retry `NativeAudioInvalid`, repair, TTS hoặc provider lần hai là request có phí mới và cần xác nhận/idempotency phù hợp.
 

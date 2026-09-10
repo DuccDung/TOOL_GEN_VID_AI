@@ -14,7 +14,7 @@ Giới hạn đoạn Demucs 4 giây được đặt cả trên `model.segment` v
 
 LocalVoiceStore kiểm path/reparse/hash, atomic checkpoint, khóa project liên tiến trình. Runtime có khóa component, xác minh byte trước khi chạy Python; worker nhận request riêng của host, kiểm lại model ghim và chặn socket API trong inference (không phải sandbox cấp hệ điều hành). LocalVoiceMedia kiểm duration/audio/stream và promote MP4 từ .part. Asset được duyệt là SceneVideoVoiceConverted, lưu lineage metadata; ProjectRenderService kiểm lại clip, mẫu và source trước và sau render.
 
-Cloud Fal LipSync dang dở trên branch được giữ nguyên và tách khỏi build mặc định bằng EnableExperimentalFalLipSync. Đây không phải fallback hoặc dependency của local voice.
+Module Cloud Fal LipSync đã bị loại bỏ, gồm provider client, worker, input store, API/cấu hình và cờ build thử nghiệm. Migration cũ được giữ làm lịch sử; trạng thái `SpeechReadyForLipSync` chỉ được đọc tương thích, không phát sinh mới và không thay thế bằng chứng duyệt WAV.
 
 > Mô tả ranh giới module và đường gọi theo source ngày 2026-09-07.
 
@@ -192,7 +192,7 @@ Download đi qua `.part`, sau đó kiểm tra HTTP metadata, file signature, siz
 - **Provider Native:** video dài kiểm tra audio kỹ thuật rồi nghe/duyệt trực tiếp, không gọi ASR; speech verification là workflow độc lập ngoài video dài khi được bật.
 - **Render:** desktop tái xác minh approved generation và media trước ghép.
 
-Narrated asset mới dùng policy `scene-audio-sync-v3`. Tương thích `v2` chỉ áp dụng cho exact approved pointer còn khớp generation, VoiceGeneration, speech/voice snapshot và hash; `OnCameraDialogue` Canonical Voice dừng ở `SpeechReadyForLipSync` khi chưa có engine lip-sync.
+Asset đã ghép audio mới dùng policy `scene-audio-sync-v3`, áp dụng cho cả lời dẫn và thoại nhân vật Canonical Voice. Thoại nhân vật dùng WAV đã duyệt để tạo video nền rồi ghép bằng FFmpeg; hình và chuyển động miệng giữ theo clip provider. Tương thích `v2` chỉ áp dụng cho exact approved pointer còn khớp generation, VoiceGeneration, speech/voice snapshot và hash. Project cũ có trạng thái chờ được đối chiếu WAV/voice version hiện hành; dashboard chỉ chiếu trạng thái tiếp tục, không tự ghi approval vào database.
 
 ## 7. Vietsub
 
@@ -227,7 +227,7 @@ Timeline được trộn bằng FFmpeg theo từng stem giới hạn số phrase
 - SePay: tắt mặc định.
 - Desktop server URL: `https://localhost:7202/`.
 - Desktop updater: bật, channel `Stable`, platform `win-x64`.
-- Canonical Voice/speech verification: tắt ở server; Speech Synchronization: tắt ở desktop.
+- Canonical Voice/speech verification: source server bật hai flag; Speech Synchronization: source desktop tắt, có thể được ghi đè theo máy. Readiness vẫn kiểm credential/rate/budget và voice version.
 - Vietsub/OCR: bật; translation local: tắt; local voice UI/cài đặt: bật nhưng runtime thiếu component trả `NOT_INSTALLED`.
 - TikTok: item desktop hiển thị mặc định với `Features:TikTokEnabled=true`; server bật khả năng quản trị bằng `TikTok:AdminManagedCredentialsEnabled=true`, giữ legacy `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và không chứa Client Key/Secret trong cấu hình mặc định.
 

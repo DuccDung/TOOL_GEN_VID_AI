@@ -34,6 +34,8 @@ Solution: `TOOL_GEN_POST_VIDEO.slnx`.
 
 ## Luồng sản phẩm
 
+Nút **Tạo video mới** mở popup chọn **Video ngắn** hoặc **Video dài**, nhập nội dung rồi lưu và mở project mới trong tổ chức đang chọn. Tạo project chưa gọi AI; video ngắn lưu sẵn một cảnh và chỉ tạo clip khi người dùng bấm tạo video, xác nhận chi phí.
+
 ### Video dài
 
 1. Người dùng đăng nhập, có license/device lease và chọn organization.
@@ -44,11 +46,11 @@ Solution: `TOOL_GEN_POST_VIDEO.slnx`.
 6. Server reserve budget, submit clip và worker polling độc lập với desktop.
 7. Desktop tải clip qua proxy, kiểm tra hash/media/audio, duyệt và render bằng FFmpeg.
 
-`ProviderNativeVerified` dùng Native Audio, kiểm tra kỹ thuật rồi nghe/checklist/duyệt trực tiếp trong video dài, không gọi ASR. `CanonicalVoice` dùng voice profile/version đã duyệt, TTS WAV và ghép lời có lineage; `NativeVoiceOver` đi thẳng sang tạo video nền khi WAV hợp lệ, còn `OnCameraDialogue` dừng ở trạng thái chờ lip-sync.
+`ProviderNativeVerified` dùng Native Audio, kiểm tra kỹ thuật rồi nghe/checklist/duyệt trực tiếp trong video dài, không gọi ASR. `CanonicalVoice` dùng voice profile/version đã duyệt, TTS WAV và ghép lời có lineage; `NativeVoiceOver` đi sang tạo video nền khi WAV hợp lệ, còn `OnCameraDialogue` cần duyệt WAV nhân vật trước khi tạo video nền và ghép. Cả hai đều nghe/duyệt clip đã ghép trước render; hình ảnh và chuyển động miệng giữ theo clip provider. Module lip-sync Cloud đã được loại bỏ.
 
 Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ tự scene plan và bỏ qua cảnh chưa duyệt. FinalVideo có thể xuất MP4 nhiều lần sau khi kiểm lại SHA-256 mà không render hoặc gọi provider lại.
 
-Đồng nhất giọng Veo local (thử nghiệm, mặc định tắt): chọn mẫu giọng từ clip native đã duyệt cho mỗi nhân vật, chạy VAD/tách giọng/chuyển màu giọng local, nghe duyệt rồi mới render. Không TTS hay Cloud lip-sync. Cần migration 4.1.8 và runtime được cài/probe; xem [hướng dẫn bật và nghiệm thu](KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md). Có source không đồng nghĩa model tiếng Việt hoặc production đã được nghiệm thu.
+Đồng nhất giọng Veo local (thử nghiệm, đã bật flag desktop): chọn mẫu giọng từ clip native đã duyệt cho mỗi nhân vật, chạy VAD/tách giọng/chuyển màu giọng local, nghe duyệt rồi mới render. Cần bật riêng cho project, migration 4.1.8 và runtime được cài/probe; xem [hướng dẫn bật và nghiệm thu](KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md). Có source không đồng nghĩa model tiếng Việt hoặc production đã được nghiệm thu.
 
 ### Video ngắn
 
@@ -88,7 +90,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 
 - OpenAI Text/Image/Voice và Kling có catalog trong source; Kling 3.0 Native Audio 720p là video mặc định.
 - BytePlus Seedance và Fal/Veo được seed `Disabled`.
-- Canonical Voice và speech verification mặc định tắt ở server/desktop.
+- Source server có `CanonicalVoiceEnabled=true` và `SpeechVerificationEnabled=true`; desktop giữ `SpeechSynchronizationEnabled=false`. Khả dụng thực tế còn phụ thuộc cấu hình máy, credential, rate, budget và readiness.
 - SePay mặc định `Enabled=false`.
 - Vietsub và OCR bật; dịch Qwen tắt; UI/cài đặt giọng Piper bật nhưng runtime/model không được coi là sẵn sàng khi chưa qua gate.
 - Item TikTok hiển thị mặc định ở desktop; quản lý credential trong Admin được hỗ trợ nhưng integration runtime vẫn tắt cho tới khi credential được OAuth xác minh. `TikTok:EmergencyDisabled` là kill switch theo môi trường.

@@ -1,5 +1,9 @@
 # Bối cảnh hệ thống hiện hành
 
+### Loại bỏ lip-sync Cloud — 2026-09-10
+
+Source giữ hai luồng: Canonical WAV riêng ghép vào video cảnh và Veo Native Audio đồng nhất giọng local. Thoại nhân vật Canonical đã duyệt WAV tiếp tục tạo video nền/ghép/duyệt, không chờ engine Cloud. Module Cloud và cờ build thử nghiệm đã xóa; trạng thái cũ chỉ đọc tương thích, migration/dữ liệu lịch sử được giữ. Kiểm thử trong checkout riêng: Release build đạt; .NET **1091 Passed / 0 Failed / 5 Skipped**, frontend **89 Passed / 0 Failed / 0 Skipped**. Server/desktop đang chạy chưa được thay bản; chưa nghiệm thu video provider thật. Xem [biên bản và phạm vi triển khai](LOAI_BO_LIP_SYNC_CLOUD.md).
+
 ### Bổ sung 2026-09-09 trên branch fix-voice
 
 Đã bổ sung luồng thử nghiệm đồng nhất giọng Veo local: policy/migration 4.1.8, runtime/worker, anchor/job/retry/duyệt, UI và render guard. Từ 2026-09-10, `Features.VeoLocalVoiceConsistencyEnabled=true` trong cấu hình desktop của repository theo yêu cầu triển khai; flag chỉ mở tính năng, project vẫn phải bật riêng và runtime phải qua checksum/probe. Không tự chạy migration hoặc request provider có phí; chất lượng tiếng Việt/khẩu hình trên clip Veo thật còn phải nghiệm thu. Lịch sử triển khai nằm tại [KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md](KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md); tiến độ và bằng chứng mới nằm tại [TASK_TRIEN_KHAI_VEO_LOCAL_SU_DUNG_THUC_TE.md](TASK_TRIEN_KHAI_VEO_LOCAL_SU_DUNG_THUC_TE.md).
@@ -28,7 +32,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 |---|---|---|
 | Gateway AI theo tổ chức | Có auth, membership/role, ownership, pricing, budget, idempotency, credential version, reservation/settlement và request log | Rehearsal database, cấu hình từng môi trường, smoke và quan sát vận hành |
 | OpenAI content/image/speech | Adapter, catalog, policy, content pacing, TTS/transcription và luồng quyết toán đã có | Credential/rate thật và smoke có kiểm soát; speech không phải fallback mặc định |
-| Canonical Voice và speech verification | Voice profile/version, catalog/preview, TTS WAV, technical validation, audio mix/render và audited review đã có; mặc định tắt. Video dài Provider Native nghe/duyệt trực tiếp và không gọi ASR | Migration 4.1.3–4.1.5, TTS/transcription rate theo scope, staging smoke và rollout flag; `OnCameraDialogue` chưa có lip-sync engine |
+| Canonical Voice và speech verification | Voice profile/version, catalog/preview, TTS WAV, technical validation, audio mix/render và audited review đã có. Canonical Voice hỗ trợ ghép WAV cho cả lời dẫn và thoại nhân vật; module lip-sync Cloud đã loại bỏ. Video dài Provider Native nghe/duyệt trực tiếp và không gọi ASR | Migration 4.1.3–4.1.5, TTS/transcription rate theo scope, staging smoke và rollout flag; cần nghe nghiệm thu video thực tế |
 | Kling video | Luồng video dài/ngắn, Native Audio, polling, recovery và output proxy đã có | Smoke trả phí theo model/policy được duyệt |
 | BytePlus Seedance | Adapter, polling và catalog đã có; seed mặc định `Disabled` | Rate, credential, allowlist output thực tế và rollout riêng |
 | Fal/Veo | Adapter, polling và luồng `SceneFirstFrame` cho `LongForm` đã có; seed mặc định `Disabled` | Migration 4.1.1 trên môi trường đích, rate/credential và smoke trả phí |
@@ -47,7 +51,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 - OpenAI Text/Image/Voice và Kling có catalog hoạt động theo seed hiện hành; khả dụng thực tế còn phụ thuộc policy, rate và credential.
 - BytePlus và Fal được seed `Disabled`, không tự bật khi deploy.
 - Fal/Veo chỉ áp dụng `LongForm`, cần `SceneFirstFrame` Approved/current đúng tỷ lệ.
-- Server có `CanonicalVoiceEnabled=false` và `SpeechVerificationEnabled=false`; desktop có `SpeechSynchronizationEnabled=false`.
+- Source server có `CanonicalVoiceEnabled=true` và `SpeechVerificationEnabled=true`; desktop có `SpeechSynchronizationEnabled=false`. Cấu hình runtime có thể ghi đè; flag không thay thế credential, rate, budget hoặc readiness.
 - SePay mặc định `Payments:Sepay:Enabled=false`.
 - Item TikTok mặc định hiển thị với `Features:TikTokEnabled=true`; server có `TikTok:AdminManagedCredentialsEnabled=true` nhưng chưa bật runtime khi không có credential database `Active`, giữ `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và source không chứa secret.
 - Desktop có `VietsubEnabled=true`, `VietsubOcrEnabled=true`, `VietsubLocalTranslationEnabled=false`, `VietsubLocalVoiceEnabled=true`; máy chưa có Piper/model sẽ ở trạng thái `NOT_INSTALLED` và yêu cầu người dùng chủ động xác nhận cài.

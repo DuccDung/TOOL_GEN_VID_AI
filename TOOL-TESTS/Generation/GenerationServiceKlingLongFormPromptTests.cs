@@ -80,8 +80,10 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         Assert.Contains(KlingNativeAudioPromptComposer.VietnameseTemplateVersion, request.RequestJson, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task CanonicalVoiceWithoutApprovedWav_IsBlockedBeforeResolverBudgetAndOutbound()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CanonicalVoiceWithoutApprovedWav_IsBlockedBeforeResolverBudgetAndOutbound(bool onCamera)
     {
         await using var dbContext = CreateContext();
         var seeded = SeedProject(
@@ -90,11 +92,12 @@ public sealed class GenerationServiceKlingLongFormPromptTests
             "Khung cảnh thành phố Việt Nam yên tĩnh lúc bình minh.",
             narration: "Hãy bắt đầu bằng một hành động nhỏ.");
         seeded.Project.SpeechProductionPolicy = SpeechProductionPolicies.CanonicalVoice;
+        var reference = onCamera ? PrepareCanonicalDialogue(dbContext, seeded) : null;
         await dbContext.SaveChangesAsync();
         var fixture = CreateService(dbContext, seeded.Project);
 
         var exception = await Assert.ThrowsAsync<AccountApiException>(() => fixture.Service.SubmitVideoAsync(
-            CreateRequest(seeded),
+            CreateRequest(seeded, reference),
             "user-1",
             Guid.NewGuid(),
             CancellationToken.None));
@@ -106,8 +109,10 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         Assert.Empty(dbContext.ProviderRequests);
     }
 
-    [Fact]
-    public async Task CanonicalVoiceWithApprovedWav_SubmitsWithoutAsrReport()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CanonicalVoiceWithApprovedWav_SubmitsWithoutAsrReport(bool onCamera)
     {
         await using var dbContext = CreateContext();
         var seeded = SeedProject(
@@ -116,12 +121,13 @@ public sealed class GenerationServiceKlingLongFormPromptTests
             "Khung cảnh thành phố Việt Nam yên tĩnh lúc bình minh.",
             narration: "Hãy bắt đầu bằng một hành động nhỏ.");
         seeded.Project.SpeechProductionPolicy = SpeechProductionPolicies.CanonicalVoice;
+        var reference = onCamera ? PrepareCanonicalDialogue(dbContext, seeded) : null;
         SeedApprovedCanonicalVoice(dbContext, seeded);
         await dbContext.SaveChangesAsync();
         var fixture = CreateService(dbContext, seeded.Project);
 
         var response = await fixture.Service.SubmitVideoAsync(
-            CreateRequest(seeded),
+            CreateRequest(seeded, reference),
             "user-1",
             Guid.NewGuid(),
             CancellationToken.None);
@@ -130,7 +136,7 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         Assert.Equal(1, fixture.ProviderResolver.ResolveCount);
         Assert.Equal(1, fixture.Budget.ReserveCount);
         Assert.Equal(1, fixture.VideoClient.SubmitCount);
-        Assert.DoesNotContain(seeded.Scene.Narration!, fixture.VideoClient.LastPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain(seeded.Scene.Dialogue ?? seeded.Scene.Narration!, fixture.VideoClient.LastPrompt, StringComparison.Ordinal);
         Assert.Empty(dbContext.SpeechVerificationReports);
     }
 
@@ -284,6 +290,39 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         Assert.Empty(dbContext.ProviderRequests);
     }
 
+    [Theory]
+    [InlineData("characterVoice")]
+    [InlineData("speech")]
+    [InlineData("snapshot")]
+    [InlineData("approval")]
+    public async Task CanonicalDialogue_WithStaleWav_IsBlockedBeforeCost(string change)
+    {
+        await using var db = CreateContext();
+        var seeded = SeedProject(db, GenerationWorkflowTypes.OpenAiStructuredPlan,
+            "Khung cảnh thành phố Việt Nam yên tĩnh lúc bình minh.", narration: "Hãy bắt đầu bằng một hành động nhỏ.");
+        seeded.Project.SpeechProductionPolicy = SpeechProductionPolicies.CanonicalVoice;
+        var reference = PrepareCanonicalDialogue(db, seeded);
+        SeedApprovedCanonicalVoice(db, seeded);
+        await db.SaveChangesAsync();
+        var voice = await db.VoiceGenerations.SingleAsync();
+        switch (change)
+        {
+            case "characterVoice": (await db.Characters.SingleAsync()).ApprovedVoiceProfileVersionId = Guid.NewGuid(); break;
+            case "speech": seeded.Scene.Dialogue = "Nội dung lời thoại đã thay đổi."; break;
+            case "snapshot": voice.VoiceSnapshotHash = new string('f', 64); break;
+            case "approval": voice.ApprovedAtUtc = null; break;
+        }
+        await db.SaveChangesAsync();
+        var fixture = CreateService(db, seeded.Project);
+        var error = await Assert.ThrowsAsync<AccountApiException>(() => fixture.Service.SubmitVideoAsync(
+            CreateRequest(seeded, reference), "user-1", Guid.NewGuid(), default));
+        Assert.Equal(SpeechSynchronizationErrorCodes.SceneVoiceNotApproved, error.Code);
+        Assert.Equal(0, fixture.ProviderResolver.ResolveCount);
+        Assert.Equal(0, fixture.Budget.ReserveCount);
+        Assert.Equal(0, fixture.VideoClient.SubmitCount);
+        Assert.Empty(await db.ProviderRequests.Where(x => x.RequestKind == "Video").ToListAsync());
+    }
+
     private static SubmitVideoRequest CreateRequest(
         SeededProject seeded,
         VideoReferenceImageInput? referenceImage = null) =>
@@ -357,6 +396,14 @@ public sealed class GenerationServiceKlingLongFormPromptTests
             hash);
     }
 
+    private static VideoReferenceImageInput PrepareCanonicalDialogue(VideoFactoryDbContext db, SeededProject seeded)
+    {
+        seeded.Scene.Dialogue = seeded.Scene.Narration;
+        seeded.Scene.Narration = null;
+        seeded.Scene.RequiredCapabilitiesJson = "{\"speechMode\":\"OnCameraDialogue\"}";
+        return SeedApprovedCharacter(db, seeded);
+    }
+
     private static void SeedApprovedCanonicalVoice(
         VideoFactoryDbContext dbContext,
         SeededProject seeded)
@@ -370,7 +417,7 @@ public sealed class GenerationServiceKlingLongFormPromptTests
         var snapshotHash = new string('c', 64);
         var speechHash = Convert.ToHexString(
             SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
-                SpeechTextNormalization.Normalize(seeded.Scene.Narration))))
+                SpeechTextNormalization.Normalize(seeded.Scene.Dialogue ?? seeded.Scene.Narration))))
             .ToLowerInvariant();
         var profile = new VoiceProfile
         {
@@ -459,7 +506,14 @@ public sealed class GenerationServiceKlingLongFormPromptTests
             ApprovedAtUtc = now,
             RowVersion = new byte[8]
         };
-        seeded.Project.ApprovedNarratorVoiceProfileVersionId = versionId;
+        if (seeded.Scene.Dialogue is not null)
+        {
+            var character = dbContext.Characters.Single(x => x.ProjectId == seeded.Project.ProjectId);
+            character.ApprovedVoiceProfileVersionId = versionId;
+            profile.Scope = VoiceProfileScopes.Character;
+            profile.CharacterId = character.CharacterId;
+        }
+        else seeded.Project.ApprovedNarratorVoiceProfileVersionId = versionId;
         seeded.Scene.ApprovedVoiceGenerationId = voiceGenerationId;
         seeded.Scene.SpeechStatus = SceneSpeechStatuses.SpeechApproved;
         dbContext.AddRange(profile, version, request, asset, generation);
