@@ -59,6 +59,8 @@ public sealed class ProjectDashboardContentTests
         Assert.NotNull(dashboard);
         var scene = Assert.Single(dashboard.Scenes);
         Assert.Equal("Generated", scene.Status);
+        Assert.Equal("Completed", scene.VideoRequestStatus);
+        Assert.True(scene.CanResumeVideo);
         Assert.Null(scene.LastErrorCode);
         Assert.Null(scene.LastErrorMessage);
         Assert.True(scene.CanGenerate);
@@ -67,10 +69,21 @@ public sealed class ProjectDashboardContentTests
         Assert.Null(scene.SpeechPacing.ActualDurationSeconds);
     }
 
+    [Fact]
+    public async Task DownloadFailure_RemainsVisibleAndRecoverableWhenProviderCompleted()
+    {
+        await using var fixture = await CreateFixtureAsync(1, includeRecoveredVideoScene: true, downloadFailure: true);
+        var dashboard = await fixture.Service.GetDashboardAsync(fixture.ProjectId, fixture.UserId, default);
+        Assert.Contains("Video đã tạo nhưng chưa tải được", dashboard!.LastErrorMessage);
+        Assert.True(Assert.Single(dashboard.Scenes).CanResumeVideo);
+        Assert.DoesNotContain("private-path", dashboard.LastErrorMessage);
+    }
+
     private static async Task<Fixture> CreateFixtureAsync(
         int? currentScriptVersion,
         bool includeNewerSupersededScript = false,
-        bool includeRecoveredVideoScene = false)
+        bool includeRecoveredVideoScene = false,
+        bool downloadFailure = false)
     {
         var options = new DbContextOptionsBuilder<VideoFactoryDbContext>()
             .UseInMemoryDatabase($"project-dashboard-content-{Guid.NewGuid():N}")
@@ -98,6 +111,8 @@ public sealed class ProjectDashboardContentTests
                 OutputHeight = 1080,
                 OutputFrameRate = 30,
                 Status = "ScenePlanning",
+                LastErrorCode = downloadFailure ? "provider_output_cache_invalid" : null,
+                LastErrorMessage = downloadFailure ? "private-path" : null,
                 CurrentConceptVersion = 1,
                 CurrentScriptVersion = currentScriptVersion,
                 CurrentScenePlanVersion = includeRecoveredVideoScene ? 1 : null,

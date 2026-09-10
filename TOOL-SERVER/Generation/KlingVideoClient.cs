@@ -19,7 +19,8 @@ internal sealed record KlingReferenceImageData(
     Guid CharacterReferenceId,
     string MimeType,
     string Base64Data,
-    string Sha256);
+    string Sha256,
+    bool IsFirstFrame = false);
 
 internal interface IKlingVideoClient
 {
@@ -79,6 +80,8 @@ internal sealed class KlingVideoClient(IHttpClientFactory httpClientFactory) : I
         {
             var imageData = $"data:{referenceImage.MimeType};base64,{referenceImage.Base64Data}";
             var isOmni = provider.ModelCode.Contains("omni", StringComparison.OrdinalIgnoreCase);
+            if (isOmni && referenceImage.IsFirstFrame)
+                throw new ProviderHttpException(ProviderCodes.Kling, "short_video_policy_not_supported", "Model Omni chưa hỗ trợ ảnh đầu khung cho chế độ phối đồ.");
             endpoint = isOmni
                 ? $"omni-video/{Uri.EscapeDataString(provider.ModelCode)}"
                 : $"image-to-video/{Uri.EscapeDataString(provider.ModelCode)}";

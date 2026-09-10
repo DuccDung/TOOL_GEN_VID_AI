@@ -7,6 +7,20 @@ namespace TOOL_TESTS.Generation;
 public sealed class KlingVideoClientTests
 {
     [Fact]
+    public async Task OutfitFirstFrame_UsesImageToVideo_AndOmniIsRejectedBeforeHttp()
+    {
+        var handler = new StubHandler("{\"code\":0,\"data\":{\"id\":\"test-video\",\"status\":\"submitted\"}}");
+        var client = new KlingVideoClient(new StubHttpClientFactory(handler));
+        var image = new KlingReferenceImageData(Guid.NewGuid(), "image/png", "aW1hZ2U=", new string('a', 64), true);
+        await client.SubmitAsync(CreateProvider(), "motion", "9:16", 5, "720p", true, "test", image, default);
+        Assert.Equal("/image-to-video/kling-3.0", handler.RequestUri!.AbsolutePath);
+        Assert.Contains("\"type\":\"first_frame\"", handler.RequestBody!);
+        Assert.DoesNotContain("refer_image", handler.RequestBody!);
+        var rejected = new StubHandler("{}");
+        await Assert.ThrowsAsync<ProviderHttpException>(() => new KlingVideoClient(new StubHttpClientFactory(rejected)).SubmitAsync(CreateProvider() with { ModelCode = "kling-omni" }, "motion", "9:16", 5, "720p", true, "test", image, default));
+        Assert.Null(rejected.RequestUri);
+    }
+    [Fact]
     public async Task GetStatusAsync_ParsesStringBillingWithoutBlockingCompletedResult()
     {
         var handler = new StubHandler(
@@ -176,16 +190,18 @@ public sealed class KlingVideoClientTests
         HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public Uri? RequestUri { get; private set; }
+        public string? RequestBody { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             RequestUri = request.RequestUri;
-            return Task.FromResult(new HttpResponseMessage(statusCode)
+            RequestBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
-            });
+            };
         }
     }
 }

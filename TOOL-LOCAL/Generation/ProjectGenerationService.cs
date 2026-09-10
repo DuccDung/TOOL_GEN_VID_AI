@@ -23,7 +23,8 @@ internal sealed class ProjectGenerationService(
     AudioQualityValidator audioQualityValidator,
     SceneAudioMixer sceneAudioMixer,
     SceneVideoTrimmer sceneVideoTrimmer,
-    SpeechAudioExtractor? speechAudioExtractor = null) : IProjectGenerationService
+    SpeechAudioExtractor? speechAudioExtractor = null,
+    ShortVideoWorkflowService? shortVideoOutfit = null) : IProjectGenerationService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -1226,7 +1227,8 @@ internal sealed class ProjectGenerationService(
         string remoteUserId,
         IReadOnlyCollection<Guid>? sceneIds,
         Func<string, CancellationToken, Task>? reportProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool resumeOnly = false)
     {
         var requestedSceneIds = sceneIds?
             .Where(x => x != Guid.Empty)
@@ -1416,7 +1418,7 @@ internal sealed class ProjectGenerationService(
                         $"Đang tạo video cảnh {scene.SequenceNumber}/{scenes.Count}...",
                         cancellationToken);
                 }
-                await GenerateSceneAsync(projectId, remoteUserId, scene, cancellationToken);
+                await GenerateSceneAsync(projectId, remoteUserId, scene, cancellationToken, resumeOnly);
                 if (speechProductionPolicy == SpeechProductionPolicies.CanonicalVoice &&
                     !string.IsNullOrWhiteSpace(scene.SpokenText))
                 {
@@ -1717,19 +1719,31 @@ internal sealed class ProjectGenerationService(
         Guid projectId,
         string remoteUserId,
         SceneWorkItem scene,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool resumeOnly)
     {
         var prompt = scene.Prompt!;
         VideoTaskResponse task;
         await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
             var project = await RequireProjectAsync(dbContext, projectId, remoteUserId, cancellationToken);
+            var outfit = ShortVideoWorkflowService.IsOutfit(scene.RequiredCapabilitiesJson)
+                ? await (shortVideoOutfit ?? throw new ArgumentException("Chức năng phối đồ chưa được bật."))
+                    .VideoInputAsync(project, cancellationToken) : null;
+            var outfitKey = outfit is null ? null : $"outfit-video:{outfit.QuoteId:N}";
+            Guid? textQuoteId = null;
+            if (outfit is null && await dbContext.Scripts.AnyAsync(x => x.ProjectId == projectId && x.StructureType == "DirectShortVideo", cancellationToken))
+            {
+                textQuoteId = await (shortVideoOutfit ?? throw new ArgumentException("Chức năng video ngắn chưa sẵn sàng."))
+                    .TextVideoQuoteAsync(project, cancellationToken);
+                outfitKey = $"short-video:{textQuoteId:N}";
+            }
             var existingRequest = await dbContext.ProviderRequests
                 .AsNoTracking()
-                .Where(x => x.ProjectId == projectId && x.SceneId == scene.SceneId && x.RequestKind == "Video")
+                .Where(x => x.ProjectId == projectId && x.SceneId == scene.SceneId && x.RequestKind == "Video" && (outfitKey == null || x.IdempotencyKey == outfitKey))
                 .OrderByDescending(x => x.CreatedAtUtc)
                 .FirstOrDefaultAsync(cancellationToken);
-            var requiresNewAttempt = scene.Status == "NativeAudioInvalid";
+            var requiresNewAttempt = outfit is null && scene.Status == "NativeAudioInvalid";
             if (!requiresNewAttempt &&
                 existingRequest is not null &&
                 existingRequest.Status is not ("Failed" or "Cancelled" or "Expired"))
@@ -1739,6 +1753,8 @@ internal sealed class ProjectGenerationService(
             else
             {
                 VideoReferenceImageInput? referenceImage = null;
+                if (resumeOnly)
+                    throw new ArgumentException("Không có tác vụ video phù hợp để tải lại. Hãy xem báo giá và xác nhận nếu muốn tạo video mới.");
                 SceneFirstFrameInput? firstFrame = null;
                 if (string.Equals(project.VideoProviderCode, "fal", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1762,11 +1778,13 @@ internal sealed class ProjectGenerationService(
                     new SubmitVideoRequest(
                         projectId,
                         scene.SceneId,
-                        $"video:{prompt.ScenePromptId:N}:input:{firstFrame?.SceneFirstFrameId.ToString("N") ?? referenceImage?.CharacterReferenceId.ToString("N") ?? "none"}:attempt:{attempt}",
+                        outfitKey ?? $"video:{prompt.ScenePromptId:N}:input:{firstFrame?.SceneFirstFrameId.ToString("N") ?? referenceImage?.CharacterReferenceId.ToString("N") ?? "none"}:attempt:{attempt}",
                         ReferenceImage: referenceImage,
                         ScenePlanVersion: scene.ScenePlanVersion,
                         ScenePromptVersion: prompt.Version,
-                        FirstFrame: firstFrame),
+                        FirstFrame: firstFrame,
+                        ShortVideoComposition: outfit,
+                        ShortVideoQuoteId: textQuoteId),
                     cancellationToken);
             }
         }
@@ -2099,6 +2117,13 @@ internal sealed class ProjectGenerationService(
             x => x.VideoGenerationId == generationId,
             cancellationToken);
         var sceneToApprove = await writeContext.Scenes.SingleAsync(x => x.SceneId == scene.SceneId, cancellationToken);
+        var outfitReview = ShortVideoWorkflowService.RequiresImageReview(sceneToApprove.RequiredCapabilitiesJson);
+        if (outfitReview)
+        {
+            var currentProject = await RequireProjectAsync(writeContext, projectId, remoteUserId, cancellationToken);
+            await (shortVideoOutfit ?? throw new ArgumentException("Chưa có bộ kiểm tra ảnh phối đồ."))
+                .ValidateLineageAsync(currentProject, sceneToApprove, task.ProviderRequestId, cancellationToken);
+        }
         var asset = await writeContext.MediaAssets.SingleOrDefaultAsync(
             x => x.ProjectId == projectId && x.RelativePath == assetRelativePath,
             cancellationToken);
@@ -2181,17 +2206,17 @@ internal sealed class ProjectGenerationService(
         }, JsonOptions);
         var nativeAudioInvalid = outputAudioEnabled &&
                                  (!probe.HasAudio || nativeAudioQuality?.IsAudible != true);
-        generationToApprove.Status = outputAudioEnabled
+        generationToApprove.Status = outputAudioEnabled || outfitReview
             ? nativeAudioInvalid ? "NativeAudioInvalid" : "AudioReviewRequired"
             : "Approved";
         generationToApprove.CompletedAtUtc = DateTime.UtcNow;
-        sceneToApprove.ApprovedGenerationId = outputAudioEnabled
+        sceneToApprove.ApprovedGenerationId = outputAudioEnabled || outfitReview
             ? null
             : generationToApprove.VideoGenerationId;
-        sceneToApprove.ApprovedRenderMediaAssetId = outputAudioEnabled || canonicalAudio
+        sceneToApprove.ApprovedRenderMediaAssetId = outputAudioEnabled || outfitReview || canonicalAudio
             ? null
             : asset.MediaAssetId;
-        sceneToApprove.Status = outputAudioEnabled
+        sceneToApprove.Status = outputAudioEnabled || outfitReview
             ? nativeAudioInvalid ? "NativeAudioInvalid" : "AudioReviewRequired"
             : canonicalAudio ? "Generated" : "Approved";
         sceneToApprove.LastErrorCode = nativeAudioInvalid

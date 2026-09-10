@@ -1,5 +1,9 @@
 # Nghiệp vụ và kiến trúc VideoMaker
 
+## Bổ sung 2026-09-10: video ngắn phối trang phục
+
+`DirectShortVideo` có mode `TextOnly` mặc định và `CharacterOutfit` khi cờ được mở. Mode mới dùng một ảnh nhân vật và một ảnh trang phục; lưu bối cảnh/chuyển động, báo giá riêng từng bước AI, duyệt ảnh trước clip và duyệt hình/âm thanh trước xuất MP4. Từ 2026-09-11, cả hai mode tạo clip bằng Veo 3.1, một cảnh 4/6/8 giây, tỷ lệ 9:16 hoặc 16:9; tỷ lệ/audio chọn lúc tạo project. Đổi ảnh, bối cảnh hoặc chuyển động làm tăng revision và vô hiệu hóa kết quả đã duyệt. Chỉ hỗ trợ âm thanh môi trường hoặc tắt tiếng, không TTS/thoại. Feature mặc định tắt, máy Development đã bật bằng override; chưa nghiệm thu provider thật. Xem [triển khai Veo](TRIEN_KHAI_VIDEO_NGAN_VEO.md).
+
 ## Bổ sung 2026-09-09: đồng nhất giọng Veo local (thử nghiệm)
 
 - Chỉ project Fal/Veo OpenAiStructuredPlan + ProviderNativeVerified; native clip đã duyệt, cảnh thoại một nhân vật, generation 4/6/8 giây. Bật rõ cho từng project; không đổi ngầm project cũ.
@@ -109,7 +113,9 @@ Project có hai cấu trúc:
 
 ## 10. Video ngắn
 
-- `DirectShortVideo` có một scene, thời lượng 5–15 giây và Kling.
+- `DirectShortVideo` có một scene 4/6/8 giây, tỷ lệ 9:16 hoặc 16:9, dùng Veo 3.1 Standard/Fast qua Fal ở 720p theo snapshot policy `LongForm`; chỉ hỗ trợ policy Native Audio, desktop có thể tắt tiếng sau tải. Thiếu policy Veo/rate/credential phải dừng trước outbound.
+- Cả `TextOnly` và `CharacterOutfit` bắt buộc `SceneFirstFrame` Approved/current. TextOnly tạo ảnh từ nội dung qua OpenAI; CharacterOutfit dùng ảnh mặc thử đã duyệt. Ảnh và video có bước báo giá/xác nhận/duyệt riêng, kể cả clip tắt tiếng.
+- Dự án đã snapshot Kling cần thao tác **Chuyển dự án sang Veo** có xác nhận thời lượng/tỷ lệ. Không tự sửa snapshot khi mở dự án hay khi policy tổ chức đổi. Chuyển không gọi AI hoặc giữ ngân sách; giữ lịch sử, vô hiệu báo giá cũ, chỉ giữ ảnh mặc thử đã duyệt khi tỷ lệ không đổi và ảnh đúng yêu cầu. Chặn chuyển khi còn request chưa có kết quả cuối.
 - Không gọi OpenAI để viết lại content và không áp policy tiếng Việt dành riêng cho video dài.
 - Khi tắt audio, desktop strip toàn bộ audio khỏi output local; provider policy không làm thay đổi cấu trúc workflow.
 
@@ -192,6 +198,14 @@ Quy tắc Canonical Voice:
 - Khi chuyển tài khoản, lấy lại creator info, bỏ privacy/consent/disclosure và lựa chọn tương tác cũ. Lịch sử dùng tên tài khoản snapshot lúc tạo job; dữ liệu cũ thiếu snapshot không được tự suy đoán.
 - Không tự fallback sang automation trình duyệt. Public posting chỉ được bật sau app review, quyền `video.publish`, audit Content Posting API và nghiệm thu sandbox/production phù hợp.
 - Bật public posting cần Global Admin xác nhận rõ ràng và lưu metadata bằng chứng audit; không có xác nhận này thì chỉ cho phép `SELF_ONLY`.
+
+## 13B. Tải video Bilibili
+
+- Chức năng độc lập trong menu desktop, theo phiên người dùng và cần license/session hợp lệ; không thuộc organization/project AI, không reserve budget hay gọi provider AI.
+- Link video/kênh → quét metadata → người dùng chọn video/chất lượng/thư mục → hàng đợi tải local. Quét đủ các trang khả dụng; lỗi, hủy hoặc giới hạn phải ghi rõ chưa đầy đủ và giữ kết quả đã lấy được.
+- Chỉ hỗ trợ video công khai không cần đăng nhập. Không đọc cookie/trình duyệt hoặc nhập credential Bilibili. Chất lượng là mức tối đa theo nguồn public; MP4 phải có video/audio/thời lượng hợp lệ trước khi hoàn tất.
+- Hủy/thử lại theo đúng job; không tự tải toàn bộ danh sách chưa được chọn. File tạm qua kiểm size/signature/hash/probe trước promote; không ghi đè file có sẵn. Hàng đợi thuộc phiên hiện tại; đóng app hủy tác vụ local.
+- Xem [triển khai và giới hạn](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).
 
 ## 14. SePay và seat
 

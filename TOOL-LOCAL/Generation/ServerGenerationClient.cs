@@ -12,7 +12,7 @@ using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.Generation;
 
-internal sealed class ServerGenerationClient(
+internal sealed partial class ServerGenerationClient(
     HttpClient httpClient,
     AccountSessionManager sessionManager,
     LicenseSessionManager licenseManager) : IGenerationClient

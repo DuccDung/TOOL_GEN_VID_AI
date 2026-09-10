@@ -1,5 +1,29 @@
 # Kiểm thử và nghiệm thu VideoMaker
 
+### Tải video Bilibili — 2026-09-11
+
+Restore/build Release đạt; MSBuild 0 warning/error, Vite còn cảnh báo bundle trên 500 kB. Frontend **204 Passed / 0 Failed / 0 Skipped**; .NET **1.294 Passed / 0 Failed / 5 Skipped** trên toàn suite chạy collection tuần tự và TEMP/TMP riêng ở D. Lượt đầu 21 failure do ổ C thiếu dung lượng không được tính Passed. Thêm 40 native và 8 frontend test cho input/allowlist, partial scan, collection/dedup, access/stale selection, busy/cancel/retry, checksum/signature, atomic promote/không ghi đè, cleanup và menu/UI. WebView2 với fixture giả không tràn ngang ở 1440/1024 px và zoom 125%; smoke public tải MP4 thật qua checksum/probe đạt. Full-channel bị nền tảng hạn chế nên chưa nghiệm thu quét hoàn tất toàn kênh. [Lệnh, artifact và giới hạn](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).
+
+### Phục hồi kết quả video ngắn — 2026-09-11
+
+Restore/build Release và Debug đạt, 0 warning/error MSBuild; frontend 196 Passed / 0 Failed / 0 Skipped; .NET 1.254 Passed / 0 Failed / 5 Skipped. Regression kiểm GET 429 và không replay POST, khôi phục cache trên cùng request, hash không khớp, lỗi tải hiển thị trên composer và resume không tạo AI mới. Bốn bài model và một SQL rehearsal opt-in bị skip không được coi là đạt. Xem [bằng chứng và phần còn cần người dùng xem/duyệt](SUA_LOI_TAI_VIDEO_NGAN.md).
+
+### Veo cho toàn bộ video ngắn — 2026-09-11
+
+Lượt cuối: .NET **1243 Passed / 0 Failed / 5 Skipped** qua hai nhóm không giao nhau (ngoài Vietsub 950/0/2, Vietsub 293/0/3); frontend **193 Passed / 0 Failed / 0 Skipped**. Restore, npm ci, production frontend build và Release solution build riêng đạt. Kiểm gateway với provider giả xác minh SceneFirstFrame thực đã duyệt, chặn thiếu frame trước chi phí, Fal submit và idempotent replay; thêm chuyển snapshot, quote TextOnly, input lineage và UI xác nhận. Browser WebView2 kiểm composer/thư viện ở 4 kích thước × 3 mức zoom. Không nghiệm thu paid provider hoặc tính test model/SQL opt-in bị skip là đạt. [Log, phạm vi và giới hạn](TRIEN_KHAI_VIDEO_NGAN_VEO.md).
+
+### Composer và thư viện video ngắn — 2026-09-11
+
+Restore, `npm ci`, frontend build, Release solution build ở thư mục riêng và Debug/Release desktop build đều đạt. Frontend **189 Passed / 0 Failed / 0 Skipped**. .NET được chạy hết qua hai filter bổ sung nhau: nhóm ngoài Vietsub **935 Passed / 0 Failed / 2 Skipped**; Vietsub **293 Passed / 0 Failed / 3 Skipped**; tổng **1228 Passed / 0 Failed / 5 Skipped**. Không tính lượt all-in-one bị abort là Passed: lượt đầu ổ C chỉ còn ~90 MB làm 22 test fail, lượt tiếp theo test host hết tài nguyên/crash; dùng TEMP/TMP riêng trên D và tắt song song collection cho hai lượt nhóm cuối. Một lượt browser trùng lúc `npm ci` đã được chạy lại sau khi cài dependency xong và đạt. Frontend giới hạn 2 worker vì lượt mặc định thiếu bộ nhớ.
+
+Thêm kiểm persistence/scope/role/hash/version/draft/idempotent project; React entry/upload/cancel/quote/approval/stale/access; WebView2 thật với fixture tự tạo, không mạng/provider, ở 4 kích thước cửa sổ × 3 mức zoom. Bundle Debug/Release đã so hash với production frontend. Log, screenshot và hướng dẫn: [biên bản UI/thư viện](TRIEN_KHAI_UI_THU_VIEN_VIDEO_NGAN.md). Chưa nghiệm thu generation provider thật, model opt-in hoặc ảnh người dùng sau đăng nhập.
+
+### Video ngắn phối trang phục — 2026-09-10
+
+Bổ sung sau khi bật Development: sửa lối vào phối trang phục trên trang Video ngắn, thêm 3 test tích hợp App/popup/điều hướng tới hai ô chọn ảnh. Lượt cuối: frontend **183 Passed / 0 Failed / 0 Skipped**, .NET **1221 Passed / 0 Failed / 5 Skipped**; build Release toàn solution và Debug desktop đạt, bundle mới đã có ở cả hai bản. Không phát sinh yêu cầu provider thật trong kiểm tra này.
+
+Release restore/build đạt; .NET **1221 Passed / 0 Failed / 5 Skipped**, frontend **180 Passed / 0 Failed / 0 Skipped**. Thêm kiểm hai ảnh/edit HTTP, first-frame, quote/Unknown/idempotency, quyền/rate/budget, thay revision/hash, duyệt im lặng và render/export stale. Một timeout dry-run worker dịch ở lượt trước đã qua khi chạy riêng và toàn bộ lượt cuối; không sửa test timeout. Bổ sung triển khai Development 2026-09-10: backup/restore thật, CHECKDB, migration hai lần trên clone, schema/quyền sau áp trên `DUNGDEV / VideoFactory` và smoke HTTPS đều đạt. Lượt triển khai chỉ đổi cấu hình máy và áp SQL đã kiểm, không chạy lại bộ test source; các số test trên thuộc lần kiểm source trước. WebView2 nhập ảnh, SQL race, ảnh/video thật và các model opt-in chưa được nghiệm thu. [Lệnh, giới hạn và checklist chạy thật](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md).
+
 ### Hợp nhất local-2 và main — xác minh 2026-09-10
 
 Release build/restore toàn solution, `npm ci` và production build đạt. Source hợp nhất được kiểm tra ở checkout riêng: .NET **1185 Passed / 0 Failed / 5 Skipped**, frontend **174 Passed / 0 Failed / 0 Skipped**, TikTok Admin state/browser **25 Passed / 0 Failed / 0 Skipped**, smoke popup ngắn/dài đạt. Các bài model thật và SQL opt-in bị skip không được tính là đã nghiệm thu. Phạm vi sửa, lệnh chạy, lỗi phát hiện trong quá trình hợp nhất và artifact: [biên bản hợp nhất 2026-09-10](HOP_NHAT_LOCAL_2_MAIN_20260910.md).

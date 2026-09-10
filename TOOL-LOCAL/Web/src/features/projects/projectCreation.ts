@@ -9,10 +9,9 @@ export function createdProjectPage(pending: PendingProjectCreation | null, reque
   return project.workflowStructureType === 'DirectShortVideo' ? 'shortVideo' : 'longVideo';
 }
 
-// LongForm readiness can refer to Fal; the direct short-video workflow uses Kling.
-// Server generation still validates the project snapshot and organization policy.
+// Short video uses the same configured Veo variant as LongForm; the server pins each project.
 export function shortVideoProviderStatus(status: GenerationProviderStatus): GenerationProviderStatus {
-  return { ...status, videoReady: status.klingReady, videoProviderCode: 'kling', videoProviderName: 'Kling',
-    videoModel: status.klingModel, videoResolution: '720p', videoUnavailableCode: status.klingUnavailableCode,
-    videoUnavailableMessage: status.klingUnavailableMessage, estimatedVideoCostPerSecond: status.estimatedKlingCostPerSecond };
+  const veo = status.videoProviderCode?.toLowerCase() === 'fal';
+  return { ...status, videoReady: status.videoReady && veo,
+    videoUnavailableMessage: veo ? status.videoUnavailableMessage : 'Cấu hình Fal/Veo cho tổ chức trước khi tạo video ngắn.' };
 }

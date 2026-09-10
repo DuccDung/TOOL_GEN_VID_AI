@@ -35,6 +35,7 @@ public partial class Form1 : Form
     private readonly IProjectService? _projectService;
     private readonly IProjectRenderService? _projectRenderService;
     private readonly TOOL_LOCAL.LocalVoice.LocalVoiceService? _localVoiceService;
+    private readonly TOOL_LOCAL.Generation.ShortVideoWorkflowService? _shortVideoOutfit;
     private readonly IProjectGenerationService? _generationService;
     private readonly IGenerationClient? _generationClient;
     private readonly ProjectWorkspaceService? _workspaceService;
@@ -72,6 +73,8 @@ public partial class Form1 : Form
     private DashboardBridge? _bridge;
     private VietsubWebBridge? _vietsubBridge;
     private TikTokWebBridge? _tiktokBridge;
+    private readonly Bilibili.BilibiliService? _bilibiliService;
+    private Bilibili.BilibiliWebBridge? _bilibiliBridge;
     private bool _refreshing;
     private bool _closing;
     private bool _checkingUpdate;
@@ -119,13 +122,17 @@ public partial class Form1 : Form
         TikTokUploadService tiktokUploadService,
         LicensePaymentApiClient licensePaymentClient,
         VietsubCloudTranslationService? vietsubCloudTranslationService = null,
-        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoiceService = null) : this()
+        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoiceService = null,
+        TOOL_LOCAL.Generation.ShortVideoWorkflowService? shortVideoOutfit = null,
+        Bilibili.BilibiliService? bilibiliService = null) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
         _projectService = projectService;
         _projectRenderService = projectRenderService;
         _localVoiceService = localVoiceService;
+        _shortVideoOutfit = shortVideoOutfit;
+        _bilibiliService = bilibiliService;
         _generationService = generationService;
         _generationClient = generationClient;
         _workspaceService = workspaceService;
@@ -240,7 +247,9 @@ public partial class Form1 : Form
                 CloseAfterLogout,
                 _featureOptions.SpeechSynchronizationEnabled,
                 finalVideoExportSelector: SelectFinalVideoDestination,
-                localVoice: _localVoiceService);
+                localVoice: _localVoiceService,
+                shortVideoOutfit: _shortVideoOutfit,
+                shortVideoImageSelector: SelectShortVideoImage);
             _vietsubBridge = new VietsubWebBridge(
                 _featureOptions.VietsubEnabled,
                 PostJsonToWebView,
@@ -291,6 +300,14 @@ public partial class Form1 : Form
                     PostJsonToWebView);
             }
 
+            if (_bilibiliService is not null)
+                _bilibiliBridge = new Bilibili.BilibiliWebBridge(_bilibiliService,
+                    async token => { await _licenseManager.EnsureAccessAsync(token); }, SelectBilibiliFolder,
+                    folder => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = folder, UseShellExecute = true, Verb = "open"
+                    }), PostJsonToWebView);
+
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
             _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;
             var webVersion = File.GetLastWriteTimeUtc(indexPath).Ticks;
@@ -326,6 +343,8 @@ public partial class Form1 : Form
             CoreWebView2WebResourceRequestSourceKinds.All);
         coreWebView.WebResourceRequested += WebViewOnVietsubMediaRequested;
         coreWebView.WebResourceRequested += WebViewOnTikTokMediaRequested;
+        coreWebView.AddWebResourceRequestedFilter($"https://{ShortVideoAssetLibraryService.HostName}/*", CoreWebView2WebResourceContext.Image);
+        coreWebView.WebResourceRequested += WebViewOnShortLibraryRequested;
         coreWebView.WebResourceResponseReceived += WebViewOnVietsubMediaResponseReceived;
 
         var settings = coreWebView.Settings;
@@ -387,7 +406,14 @@ public partial class Form1 : Form
             return;
         }
 
+        if (_bilibiliBridge is not null && await _bilibiliBridge.TryHandleAsync(message, _shutdown.Token)) return;
         await _bridge.HandleAsync(message, _shutdown.Token);
+    }
+
+    private string? SelectBilibiliFolder()
+    {
+        using var dialog = new FolderBrowserDialog { Description = "Chọn thư mục lưu video Bilibili", UseDescriptionForTitle = true };
+        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.SelectedPath : null;
     }
 
     private void WebViewOnTikTokMediaRequested(
@@ -1052,6 +1078,12 @@ public partial class Form1 : Form
             : null;
     }
 
+    private string? SelectShortVideoImage()
+    {
+        using var dialog = new OpenFileDialog { Title = "Chọn ảnh nhân vật hoặc trang phục", Filter = "Ảnh PNG/JPEG|*.png;*.jpg;*.jpeg", CheckFileExists = true, Multiselect = false, RestoreDirectory = true };
+        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
     private void CloseAfterLogout()
     {
         if (_closing || IsDisposed)
@@ -1105,8 +1137,11 @@ public partial class Form1 : Form
         Close();
     }
 
-    private void LicenseManagerOnInvalidated(string reason) =>
+    private void LicenseManagerOnInvalidated(string reason)
+    {
+        _bilibiliService?.Cancel(null);
         PostHostMessage("license.invalidated", new LicenseInvalidatedMessage(reason, _licenseManager?.Current));
+    }
 
     private void ShowStartupError(string message)
     {
@@ -1138,6 +1173,7 @@ public partial class Form1 : Form
         _bridge?.Dispose();
         _vietsubBridge?.Dispose();
         _tiktokBridge?.Dispose();
+        _bilibiliBridge?.Dispose();
         if (_licenseManager is not null)
         {
             _licenseManager.LicenseInvalidated -= LicenseManagerOnInvalidated;

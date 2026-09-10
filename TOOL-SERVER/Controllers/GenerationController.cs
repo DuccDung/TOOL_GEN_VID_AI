@@ -36,6 +36,7 @@ public sealed class GenerationController(
         generationService.GenerateContentAsync(request, RequireUserId(), RequireDeviceId(), cancellationToken);
 
     [HttpGet("content/failure")]
+    [EnableRateLimiting("ai-status")]
     [ProducesResponseType<LatestContentLanguageFailureResponse>(StatusCodes.Status200OK)]
     public async Task<LatestContentLanguageFailureResponse> GetLatestContentLanguageFailure(
         [FromQuery] Guid projectId,
@@ -428,6 +429,7 @@ public sealed class GenerationController(
         generationService.SubmitVideoAsync(request, RequireUserId(), RequireDeviceId(), cancellationToken);
 
     [HttpGet("videos/{providerRequestId:guid}")]
+    [EnableRateLimiting("ai-status")]
     [ProducesResponseType<VideoTaskResponse>(StatusCodes.Status200OK)]
     public Task<VideoTaskResponse> GetVideoStatus(
         Guid providerRequestId,
@@ -435,6 +437,7 @@ public sealed class GenerationController(
         generationService.GetVideoStatusAsync(providerRequestId, RequireUserId(), RequireDeviceId(), cancellationToken);
 
     [HttpGet("videos/{providerRequestId:guid}/content")]
+    [EnableRateLimiting("ai-status")]
     public Task DownloadVideo(
         Guid providerRequestId,
         CancellationToken cancellationToken) =>
@@ -446,6 +449,7 @@ public sealed class GenerationController(
             cancellationToken);
 
     [HttpGet("kling/videos/{providerRequestId:guid}")]
+    [EnableRateLimiting("ai-status")]
     [ProducesResponseType<KlingVideoTaskResponse>(StatusCodes.Status200OK)]
     public Task<KlingVideoTaskResponse> GetKlingVideoStatus(
         Guid providerRequestId,
@@ -453,6 +457,7 @@ public sealed class GenerationController(
         generationService.GetKlingVideoStatusAsync(providerRequestId, RequireUserId(), RequireDeviceId(), cancellationToken);
 
     [HttpGet("kling/videos/{providerRequestId:guid}/content")]
+    [EnableRateLimiting("ai-status")]
     public Task DownloadKlingVideo(
         Guid providerRequestId,
         CancellationToken cancellationToken) =>

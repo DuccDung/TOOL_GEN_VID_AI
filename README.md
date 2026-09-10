@@ -54,9 +54,13 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 
 ### Video ngắn
 
-- Project dùng `DirectShortVideo`, một cảnh 5–15 giây và Kling.
+- Composer hai cột, hàng thumbnail Nhân vật/Trang phục, thư viện SQLite trên máy theo tài khoản/tổ chức và bản nháp phục hồi trước khi tạo project. [Hướng dẫn giao diện, lưu ảnh và kiểm chứng](TRIEN_KHAI_UI_THU_VIEN_VIDEO_NGAN.md).
+- Project dùng `DirectShortVideo`, một cảnh **4/6/8 giây**, tỷ lệ **9:16 hoặc 16:9**, tạo clip bằng **Veo 3.1 qua Fal** theo policy `LongForm` của tổ chức. Không tự chuyển sang Kling khi Veo chưa sẵn sàng.
 - Không gọi OpenAI để viết lại content.
+- Chế độ nhập nội dung: lưu dự án → báo giá/tạo/duyệt ảnh đầu cảnh bằng OpenAI → báo giá/tạo/duyệt clip Veo → dựng/xuất MP4. Mỗi lần tạo AI cần xác nhận chi phí riêng.
+- Dự án Kling cũ hiển thị nút **Chuyển dự án sang Veo** để xác nhận thời lượng/tỷ lệ mới; giữ lịch sử và ảnh mặc thử đã duyệt nếu tỷ lệ không đổi. [Triển khai và kiểm chứng Veo video ngắn](TRIEN_KHAI_VIDEO_NGAN_VEO.md).
 - Desktop có thể giữ Native Audio hoặc loại bỏ audio cục bộ.
+- Chế độ **Nhân vật mặc trang phục có sẵn** đã có source: nhập hai ảnh → báo giá/tạo/duyệt ảnh mặc thử → báo giá/tạo/duyệt clip → dựng/xuất MP4. Cần migration 4.1.9 và bật cờ server/desktop; mặc định tắt, chưa smoke provider thật. Xem [triển khai và nghiệm thu](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md).
 
 ### Vietsub
 
@@ -64,6 +68,11 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Editor hỗ trợ COPY/LINK, playback Range, SRT, timeline, thumbnail, waveform và PaddleOCR English/Chinese.
 - Dịch local Qwen chạy trong worker x64 riêng và mặc định tắt tới khi model/benchmark/smoke đạt.
 - Tạo giọng local Piper hiển thị qua feature flag mặc định bật nhưng runtime/model phải được cài, kiểm checksum và probe; `NOT_INSTALLED` không phải `READY`.
+
+### Tải video Bilibili
+
+- Mục **Tải video Bilibili** trong menu trái nhận link video/kênh/b23.tv, quét danh sách, chọn nhiều video và tải MP4 về máy với tiến độ, hủy/thử lại và chọn thư mục/chất lượng.
+- Công cụ tải có phiên bản/checksum cố định, chạy local và không phát sinh chi phí AI. Hỗ trợ video công khai; lỗi hoặc giới hạn từ Bilibili phải báo danh sách chưa đầy đủ. [Sử dụng, kiến trúc và giới hạn kiểm chứng](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).
 
 ### Đăng TikTok
 

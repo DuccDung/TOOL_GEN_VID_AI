@@ -1,5 +1,25 @@
 # Bối cảnh hệ thống hiện hành
 
+### Tải video Bilibili — 2026-09-11
+
+Thêm item menu trái và module desktop quét video/kênh, chọn nhiều, tải MP4, hủy/thử lại, chọn chất lượng/thư mục. Không cần migration hay request AI. Release solution build đạt; .NET **1.294 Passed / 0 Failed / 5 Skipped**, frontend **204 Passed / 0 Failed / 0 Skipped**. Smoke video public đã tải/ghép/probe/hash thành công; danh sách kênh lấy được hai mục trong smoke giới hạn, nhưng quét toàn kênh bị Bilibili hạn chế truy cập nên chưa nghiệm thu full-channel trên mạng hiện tại. UI WebView2 đã kiểm 1440/1024 px và zoom 125%. [Chi tiết sử dụng, nguồn gốc runtime và giới hạn](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).
+
+### Phục hồi kết quả video ngắn — 2026-09-11
+
+Đã sửa lỗi 429 khi đọc trạng thái và lỗi video Veo hoàn tất nhưng chưa tải về: tách policy đọc, GET backoff, resume không submit mới, hiển thị kết quả/lỗi tải và cấu hình kho video chung Development. Release/Debug đã cập nhật; .NET 1.254 Passed / 0 Failed / 5 Skipped, frontend 196 Passed / 0 Failed. Xem [chi tiết và giới hạn nghiệm thu](SUA_LOI_TAI_VIDEO_NGAN.md).
+
+### Video ngắn chuyển sang Veo — 2026-09-11
+
+Cả TextOnly và CharacterOutfit dùng Veo 3.1 qua Fal, policy `LongForm`, 4/6/8 giây và 9:16/16:9. Cả hai bắt buộc ảnh đầu cảnh Approved/current và xác nhận báo giá trước tạo clip. Dự án Kling cũ chuyển bằng thao tác có xác nhận, giữ ảnh mặc thử đã duyệt khi không đổi tỷ lệ; không cập nhật snapshot ngầm. Thư viện/composer được giữ. Lượt kiểm cuối: .NET **1243 Passed / 0 Failed / 5 Skipped**, frontend **193 Passed / 0 Failed / 0 Skipped**. Máy Development đã có schema 4.1.9 và policy Veo 3.1 Fast; không sửa SQL hoặc gọi provider có phí trong lần này. [Chi tiết triển khai và bằng chứng](TRIEN_KHAI_VIDEO_NGAN_VEO.md). Các số liệu bên dưới là lịch sử từng lần thay đổi.
+
+### Giao diện và thư viện video ngắn — 2026-09-11
+
+Đã triển khai composer hai cột và thư viện nhân vật/trang phục SQLite riêng trên máy theo user/org, thumbnail, version, soft delete, bản nháp trước project, phục hồi tạo project cùng ID và bản sao ảnh đầy đủ trong workspace. Project cũ mở cùng composer; quote/approval/generation vẫn qua server. Frontend **189 Passed / 0 Failed / 0 Skipped**. Toàn bộ .NET chạy thành hai nhóm không giao nhau do hạn chế tài nguyên: **1228 Passed / 0 Failed / 5 Skipped** (935 + 293 Passed). Release solution build riêng và Debug/Release desktop build đạt; hai bundle khớp source và flag máy Development vẫn bật. Không gọi provider có phí. [Biên bản, log và giới hạn kiểm chứng](TRIEN_KHAI_UI_THU_VIEN_VIDEO_NGAN.md).
+
+### Video ngắn nhân vật và trang phục — source 2026-09-10
+
+Nhánh `vid-short` đã có chế độ `DirectShortVideo/CharacterOutfit`, edit hai ảnh, quote và approval theo revision, first-frame video, duyệt clip im lặng và kiểm lineage khi render/export. Release build đạt; .NET **1221 Passed / 0 Failed / 5 Skipped**, frontend **180 Passed / 0 Failed / 0 Skipped**. Ngày 2026-09-10, theo yêu cầu người dùng, migration `4.1.9-short-video-outfit` đã áp lên `DUNGDEV / VideoFactory` sau backup/restore thật và rehearsal hai lần trên clone. Hai cờ đã bật bằng override trên máy Development, server HTTPS 7242 và desktop Release đã khởi động; cấu hình mặc định source vẫn tắt. Chưa gọi provider thật hoặc xác minh API contract Kling trên endpoint đích. [Biên bản source, triển khai Development và phần nghiệm thu còn lại](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md).
+
 ### Hợp nhất local-2 và main — 2026-09-10
 
 Đã xử lý 21 khối xung đột trong 10 file, giữ Vietsub/Cloud/xuất MP4/phục hồi phiên cùng popup tạo dự án ngắn-dài, giọng Veo local và TikTok. Sửa thêm tương tác giữa khóa license và xác minh credential TikTok cho Admin. Xác minh source tại checkout riêng: Release build đạt; .NET **1185 Passed / 0 Failed / 5 Skipped**, frontend **174 Passed / 0 Failed / 0 Skipped**; TikTok state/browser **25 Passed / 0 Failed / 0 Skipped** và smoke popup đạt. Không có tác động database/provider hoặc thay binary đang chạy. Chi tiết và giới hạn: [biên bản hợp nhất](HOP_NHAT_LOCAL_2_MAIN_20260910.md).
@@ -37,9 +57,9 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 | Gateway AI theo tổ chức | Có auth, membership/role, ownership, pricing, budget, idempotency, credential version, reservation/settlement và request log | Rehearsal database, cấu hình từng môi trường, smoke và quan sát vận hành |
 | OpenAI content/image/speech | Adapter, catalog, policy, content pacing, TTS/transcription và luồng quyết toán đã có | Credential/rate thật và smoke có kiểm soát; speech không phải fallback mặc định |
 | Canonical Voice và speech verification | Voice profile/version, catalog/preview, TTS WAV, technical validation, audio mix/render và audited review đã có. Canonical Voice hỗ trợ ghép WAV cho cả lời dẫn và thoại nhân vật; module lip-sync Cloud đã loại bỏ. Video dài Provider Native nghe/duyệt trực tiếp và không gọi ASR | Migration 4.1.3–4.1.5, TTS/transcription rate theo scope, staging smoke và rollout flag; cần nghe nghiệm thu video thực tế |
-| Kling video | Luồng video dài/ngắn, Native Audio, polling, recovery và output proxy đã có | Smoke trả phí theo model/policy được duyệt |
+| Kling video | Luồng video dài/legacy, Native Audio, polling, recovery và output proxy đã có; video ngắn mới bắt buộc Veo | Smoke trả phí theo model/policy được duyệt |
 | BytePlus Seedance | Adapter, polling và catalog đã có; seed mặc định `Disabled` | Rate, credential, allowlist output thực tế và rollout riêng |
-| Fal/Veo | Adapter, polling và luồng `SceneFirstFrame` cho `LongForm` đã có; seed mặc định `Disabled` | Migration 4.1.1 trên môi trường đích, rate/credential và smoke trả phí |
+| Fal/Veo | Adapter, polling và `SceneFirstFrame` cho video dài/ngắn đã có; dùng policy `LongForm`, seed mặc định `Disabled` | Schema hiện hành, rate/credential/policy và smoke trả phí; video ngắn cần migration 4.1.9 cho báo giá |
 | SePay/license/seat | Payment order, webhook matching, organization provisioning và seat allocation đã có trong source; mặc định `Enabled=false` | Staging rehearsal, secret/webhook validation, QR/bank config, idempotency và đối soát |
 | TikTok Direct Post | Đã có OAuth, credential Admin, upload local, server polling và quản lý nhiều tài khoản; người dùng báo luồng đăng hiện tại hoạt động | Nhiều tài khoản cần migration 4.1.8, bật MultiAccountEnabled và smoke riêng trên môi trường được phép |
 | Vietsub editor | Workspace local, manifest schema 6, SQLite, timeline/editor, thiết kế phụ đề theo project, mixer âm gốc/giọng Việt có mute/gain/auto-duck, preview hai kênh cùng playhead và xuất MP4 burn-in + audio mix qua ASS/FFmpeg với publish `.partial` đã kiểm tra | Smoke desktop trên bundle phát hành, nghe/đo audio output, nghiệm thu UX và đối chiếu preview/ASS/libass trên bộ video dọc-ngang |
@@ -55,7 +75,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 - Kling 3.0 Native Audio 720p là lựa chọn video mặc định trong catalog source.
 - OpenAI Text/Image/Voice và Kling có catalog hoạt động theo seed hiện hành; khả dụng thực tế còn phụ thuộc policy, rate và credential.
 - BytePlus và Fal được seed `Disabled`, không tự bật khi deploy.
-- Fal/Veo chỉ áp dụng `LongForm`, cần `SceneFirstFrame` Approved/current đúng tỷ lệ.
+- Fal/Veo áp dụng video dài và `DirectShortVideo` qua policy `LongForm`, cần `SceneFirstFrame` Approved/current đúng tỷ lệ. Video ngắn Kling cũ phải xác nhận chuyển snapshot từ UI.
 - Source server có `CanonicalVoiceEnabled=true` và `SpeechVerificationEnabled=true`; desktop có `SpeechSynchronizationEnabled=false`. Cấu hình runtime có thể ghi đè; flag không thay thế credential, rate, budget hoặc readiness.
 - SePay mặc định `Payments:Sepay:Enabled=false`.
 - Item TikTok mặc định hiển thị với `Features:TikTokEnabled=true`; server có `TikTok:AdminManagedCredentialsEnabled=true` nhưng chưa bật runtime khi không có credential database `Active`, giữ `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và source không chứa secret.

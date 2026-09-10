@@ -647,6 +647,12 @@ internal sealed class SceneFirstFrameService(
             frame.Status = SceneFirstFrameStatuses.Approved;
             frame.ApprovedByUserId = userId;
             frame.ApprovedAtUtc = UtcNow();
+            var scene = await dbContext.Scenes.SingleAsync(x => x.SceneId == sceneId && x.ProjectId == projectId, cancellationToken);
+            if (await dbContext.Scripts.AnyAsync(x => x.ScriptId == scene.ScriptId && x.StructureType == GenerationWorkflowTypes.DirectShortVideo, cancellationToken))
+            {
+                scene.ApprovedGenerationId = null; scene.ApprovedRenderMediaAssetId = null;
+                scene.Status = "PromptReady"; scene.LastErrorCode = null; scene.LastErrorMessage = null;
+            }
         }
         else
         {
@@ -702,16 +708,25 @@ internal sealed class SceneFirstFrameService(
         var videoSnapshot = await videoPolicyResolver.ResolveAsync(
             project,
             access.OrganizationId,
-            structureType == GenerationWorkflowTypes.OpenAiStructuredPlan
+            structureType is GenerationWorkflowTypes.OpenAiStructuredPlan or GenerationWorkflowTypes.DirectShortVideo
                 ? OrganizationVideoPolicyScopes.LongForm
                 : OrganizationVideoPolicyScopes.Default,
             cancellationToken);
-        if (!FalVeoPolicy.AppliesToLongForm(videoSnapshot.ProviderCode, structureType))
+        if (structureType == GenerationWorkflowTypes.DirectShortVideo)
+        {
+            ShortVideoVeoPolicy.Validate(videoSnapshot, project);
+            if (await dbContext.ProviderRequests.AnyAsync(x => x.SceneId == sceneId && x.RequestKind == "Video" &&
+                x.Status != "Completed" && x.Status != "Failed" && x.Status != "Cancelled" && x.Status != "Expired", cancellationToken))
+                throw Conflict("short_video_operation_pending", "Video trước đang xử lý hoặc chưa rõ kết quả. Hãy tiếp tục cùng tác vụ trước khi tạo ảnh mới.");
+            if (ShortVideoOutfitService.IsOutfit(scene.RequiredCapabilitiesJson))
+                throw Conflict("short_video_composition_required", "Hãy tạo và duyệt ảnh mặc thử trong màn hình video ngắn.");
+        }
+        if (videoSnapshot.ProviderCode != ProviderCodes.Fal || structureType is not (GenerationWorkflowTypes.OpenAiStructuredPlan or GenerationWorkflowTypes.DirectShortVideo))
         {
             throw new AccountApiException(
                 StatusCodes.Status422UnprocessableEntity,
                 "scene_first_frame_not_required",
-                "First-frame riêng chỉ áp dụng cho dự án video dài đang dùng Fal/Veo.");
+                "Ảnh đầu vào chỉ áp dụng cho dự án đang dùng Fal/Veo.");
         }
         var dimensions = project.AspectRatio switch
         {
@@ -908,6 +923,9 @@ internal sealed class SceneFirstFrameService(
         {
             return new(false, "Không còn snapshot request đã tạo first-frame.");
         }
+        if (frame.PromptTemplateVersion == ShortVideoVeoFirstFrame.Template)
+            return await ShortVideoVeoFirstFrame.IsCurrentAsync(dbContext, frame, request, cancellationToken)
+                ? new(true, null) : new(false, "Ảnh mặc thử đã thay đổi hoặc không còn được duyệt.");
         GenerateSceneFirstFrameResponse generated;
         try
         {

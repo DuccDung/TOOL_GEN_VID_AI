@@ -20,7 +20,9 @@ public sealed record CreateShortVideoCommand(
     string AspectRatio,
     int DurationSeconds,
     bool AudioEnabled,
-    Guid OrganizationId);
+    Guid OrganizationId,
+    string Mode = ShortVideoModes.TextOnly,
+    Guid? CreationId = null);
 
 public sealed record ShortVideoProjectResult(
     ProjectSummary Project,
@@ -181,7 +183,9 @@ public sealed record SceneDashboardSummary(
     SceneSpeechVerificationSummary? SpeechVerification = null,
     Guid? VoiceProfileVersionId = null,
     string? VoiceSnapshotHash = null,
-    SceneSpeechPacingSummary? SpeechPacing = null);
+    SceneSpeechPacingSummary? SpeechPacing = null,
+    string? VideoRequestStatus = null,
+    bool CanResumeVideo = false);
 
 public sealed record UpdateSceneCommand(
     Guid SceneId,
@@ -240,7 +244,8 @@ public sealed record ProjectDashboard(
     string? EffectiveGenerationLanguageCode = null,
     bool RequiresVietnameseContentRegeneration = false,
     ProjectContentSummary? Content = null,
-    IReadOnlyList<VoiceProfileDashboardSummary>? VoiceProfiles = null);
+    IReadOnlyList<VoiceProfileDashboardSummary>? VoiceProfiles = null,
+    string ShortVideoMode = ShortVideoModes.TextOnly);
 
 public sealed record AiModelSummary(
     string ProviderCode,

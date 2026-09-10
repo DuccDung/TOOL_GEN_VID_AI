@@ -1,3 +1,5 @@
+export type { BilibiliScanRequest, BilibiliDownloadRequest, BilibiliJobRequest, BilibiliState } from './features/bilibili/types';
+
 export type UserProfile = {
   userId: string;
   email: string;
@@ -211,6 +213,8 @@ export type CanonicalVoiceQuote = {
 };
 
 export type SceneSummary = {
+  videoRequestStatus?: string | null;
+  canResumeVideo?: boolean;
   sceneId: string;
   sequenceNumber: number;
   timelineStartMs: number;
@@ -391,6 +395,7 @@ export type ProjectDashboard = {
   requiresVietnameseContentRegeneration: boolean;
   content?: ProjectContentSummary | null;
   voiceProfiles?: VoiceProfileSummary[] | null;
+  shortVideoMode?: 'TextOnly' | 'CharacterOutfit';
 };
 
 export type AiModel = {
@@ -420,6 +425,7 @@ export type DashboardState = {
 };
 
 export type DashboardFeatures = {
+  shortVideoCharacterOutfitEnabled?: boolean;
   vietsubEnabled: boolean;
   speechSynchronizationEnabled: boolean;
   tikTokEnabled: boolean;
@@ -620,12 +626,32 @@ export type CreateProjectPayload = {
 };
 
 export type CreateShortVideoPayload = {
+  mode?: 'TextOnly' | 'CharacterOutfit';
   organizationId?: string;
   content: string;
   aspectRatio: '9:16' | '16:9' | '1:1';
   durationSeconds: number;
   audioEnabled: boolean;
 };
+
+export type ShortVideoImageInfo = { sha256: string; mimeType: string; sizeBytes: number; width: number; height: number };
+export type ShortVideoComposition = ShortVideoImageInfo & { compositionId: string; status: string; contentUrl: string; revision: number };
+export type ShortVideoOutfitState = {
+  projectId: string; revision: number; character: ShortVideoImageInfo | null; outfit: ShortVideoImageInfo | null;
+  background: string; motion: string; composition: ShortVideoComposition | null; enabled: boolean; message?: string;
+};
+export type ShortVideoOutfitView = { state: ShortVideoOutfitState; characterPreview: string | null; outfitPreview: string | null; compositionPreview: string | null };
+export type ShortVideoQuote = { quoteId: string; kind: 'Image' | 'Video'; estimatedCost: number; currencyCode: string; modelCode: string; resolution: string; nativeAudio: boolean; expiresAtUtc: string; revision: number };
+export type ShortVideoOutfitAction = { projectId: string; organizationId: string; revision?: number; kind?: string; quoteId?: string; compositionId?: string; confirmed?: boolean; character?: ShortVideoImageInfo; outfit?: ShortVideoImageInfo; background?: string; motion?: string; expectedProviderCode?: string | null; durationSeconds?: number; aspectRatio?: string };
+export type ShortVideoAssetKind = 'Character' | 'Outfit';
+export type ShortVideoAssetRef = { assetId: string; version: number };
+export type ShortVideoLibraryAsset = ShortVideoAssetRef & { kind: ShortVideoAssetKind; name: string; image: ShortVideoImageInfo; thumbnailUrl: string; previewUrl: string; createdAtUtc: string; updatedAtUtc: string };
+export type ShortVideoLibraryUpload = { uploadId: string; suggestedName: string; image: ShortVideoImageInfo; previewUrl: string };
+export type ShortVideoDraft = { content: string; aspectRatio: '9:16' | '16:9' | '1:1'; durationSeconds: number; audioEnabled: boolean; character: ShortVideoAssetRef | null; outfit: ShortVideoAssetRef | null; background: string; motion: string; serverRevision: number };
+export type ShortVideoDraftState = { revision: number; draft: ShortVideoDraft | null; createdProjectId?: string | null };
+export type ShortVideoLibraryState = { items: ShortVideoLibraryAsset[]; draft: ShortVideoDraftState; selections?: ShortVideoLibraryAsset[] };
+export type ShortVideoCreatedNotice = { projectId: string; organizationId: string; quote: ShortVideoQuote | null; message?: string | null };
+export type ShortVideoLibraryAction = { organizationId: string; projectId?: string; kind?: ShortVideoAssetKind; assetId?: string; version?: number; name?: string; uploadId?: string; revision?: number; draft?: ShortVideoDraft };
 
 export type UpdateScenePayload = {
   sceneId: string;

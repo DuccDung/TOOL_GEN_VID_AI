@@ -2114,6 +2114,7 @@ public partial class VideoFactoryDbContext : DbContext
             entity.Property(e => e.UserName).HasMaxLength(256);
         });
 
+        ConfigureShortVideo(modelBuilder);
         OnModelCreatingPartial(modelBuilder);
     }
 

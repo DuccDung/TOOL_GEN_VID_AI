@@ -36,23 +36,22 @@ public sealed class GenerationServiceKlingLongFormPromptTests
     }
 
     [Fact]
-    public async Task DirectShortVideoVietnamesePrompt_RemainsAllowed()
+    public async Task DirectShortVideoKlingSnapshot_IsBlockedBeforeBudgetAndOutbound()
     {
         await using var dbContext = CreateContext();
         var seeded = SeedProject(dbContext, GenerationWorkflowTypes.DirectShortVideo, "Một cô gái đang đi bộ trên phố cổ.");
         var fixture = CreateService(dbContext, seeded.Project);
 
-        var response = await fixture.Service.SubmitVideoAsync(
+        var error = await Assert.ThrowsAsync<AccountApiException>(() => fixture.Service.SubmitVideoAsync(
             CreateRequest(seeded),
             "user-1",
             Guid.NewGuid(),
-            CancellationToken.None);
+            CancellationToken.None));
 
-        Assert.Equal("Submitted", response.Status);
-        Assert.Equal(1, fixture.ProviderResolver.ResolveCount);
-        Assert.Equal(1, fixture.Budget.ReserveCount);
-        Assert.Equal(1, fixture.VideoClient.SubmitCount);
-        Assert.Contains("Một cô gái đang đi bộ trên phố cổ.", fixture.VideoClient.LastPrompt, StringComparison.Ordinal);
+        Assert.Equal("short_video_veo_required", error.Code);
+        Assert.Equal(0, fixture.ProviderResolver.ResolveCount);
+        Assert.Equal(0, fixture.Budget.ReserveCount);
+        Assert.Equal(0, fixture.VideoClient.SubmitCount);
     }
 
     [Fact]

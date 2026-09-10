@@ -47,7 +47,7 @@ internal static class Program
                 BaseAddress = new Uri(options.Server.BaseUrl),
                 Timeout = TimeSpan.FromMinutes(30)
             };
-            using var generationHttpClient = new HttpClient
+            using var generationHttpClient = new HttpClient(new GatewayReadRetryHandler { InnerHandler = new HttpClientHandler() })
             {
                 BaseAddress = new Uri(options.Server.BaseUrl),
                 Timeout = TimeSpan.FromMinutes(30)
@@ -115,10 +115,6 @@ internal static class Program
 
                 var dbContextFactory = new VideoFactoryDbContextFactory(options.Database.ConnectionString);
                 var workspaceService = new ProjectWorkspaceService(options.Storage.WorkspaceRoot);
-                var projectService = new ProjectService(
-                    dbContextFactory,
-                    workspaceService,
-                    options.Features.SpeechSynchronizationEnabled);
                 var mediaProcessRunner = new ExternalProcessRunner();
                 var mediaToolPaths = new MediaToolPathResolver(options.MediaTools).Resolve();
                 var mediaToolPreflight = new MediaToolPreflightService(
@@ -158,6 +154,8 @@ internal static class Program
                     audioQualityValidator);
                 var generationClient = new ServerGenerationClient(
                     generationHttpClient, sessionManager, licenseManager);
+                var shortVideoOutfit = new ShortVideoWorkflowService(dbContextFactory, workspaceService, generationClient, options.Features.ShortVideoCharacterOutfitEnabled);
+                var projectService = new ProjectService(dbContextFactory, workspaceService, options.Features.SpeechSynchronizationEnabled, shortVideoOutfit);
                 using var localVoiceService = new TOOL_LOCAL.LocalVoice.LocalVoiceService(
                     dbContextFactory, new TOOL_LOCAL.LocalVoice.LocalVoiceStore(workspaceService),
                     new TOOL_LOCAL.LocalVoice.LocalVoiceRuntime(workspaceService.WorkspaceRoot, options.Features.VeoLocalVoiceConsistencyEnabled,
@@ -172,7 +170,8 @@ internal static class Program
                     finalOutputInspector,
                     options.Features.SpeechSynchronizationEnabled,
                     options.SpeechSynchronization.TargetLoudnessLufs,
-                    localVoiceService);
+                    localVoiceService,
+                    shortVideoOutfit);
                 var generationService = new ProjectGenerationService(
                     dbContextFactory,
                     workspaceService,
@@ -182,7 +181,8 @@ internal static class Program
                     audioQualityValidator,
                     sceneAudioMixer,
                     sceneVideoTrimmer,
-                    speechAudioExtractor);
+                    speechAudioExtractor,
+                    shortVideoOutfit);
                 var tiktokGatewayClient = new TikTokGatewayClient(
                     tiktokGatewayHttpClient,
                     sessionManager,
@@ -332,6 +332,11 @@ internal static class Program
                         mediaToolPaths.FfmpegPath,
                         mediaProcessRunner);
                 }
+                var bilibiliRuntime = new Bilibili.BilibiliRuntime();
+                var bilibiliDownloader = new Bilibili.BilibiliDownloader(bilibiliRuntime,
+                    new Bilibili.BilibiliProcessRunner(), new Bilibili.BilibiliMediaVerifier(mediaToolPreflight, mediaProbe), mediaToolPaths.FfmpegPath);
+                using var bilibiliService = new Bilibili.BilibiliService(bilibiliRuntime, bilibiliDownloader,
+                    async token => { await licenseManager.EnsureAccessAsync(token); });
                 using var mainForm = new Form1(
                     sessionManager,
                     licenseManager,
@@ -363,7 +368,9 @@ internal static class Program
                     tiktokUploadService,
                     licensePaymentClient,
                     vietsubCloudTranslationService: vietsubCloudTranslationService,
-                    localVoiceService: localVoiceService);
+                    localVoiceService: localVoiceService,
+                    shortVideoOutfit: shortVideoOutfit,
+                    bilibiliService: bilibiliService);
                 try
                 {
                     Application.Run(mainForm);

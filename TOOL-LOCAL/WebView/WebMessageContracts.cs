@@ -16,6 +16,13 @@ internal sealed record WebMessageRequest(
     JsonElement Payload);
 
 [System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+internal sealed record BilibiliScanRequest(string Url);
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+internal sealed record BilibiliDownloadRequest(string ScanId, string[] EntryIds, string Quality);
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+internal sealed record BilibiliJobRequest(string? JobId = null);
+
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
 internal sealed record VietsubStartCloudTranslationRequest(Guid ExpectedTrackId, int ExpectedTrackRevision);
 
 internal sealed record WebMessageError(
@@ -50,7 +57,8 @@ internal sealed record DashboardStateResponse(
 internal sealed record DashboardFeatureFlagsResponse(
     bool VietsubEnabled,
     bool SpeechSynchronizationEnabled = false,
-    bool TikTokEnabled = false);
+    bool TikTokEnabled = false,
+    bool ShortVideoCharacterOutfitEnabled = false);
 
 internal sealed record TikTokPublishWebRequest(
     string Title,
@@ -123,7 +131,16 @@ internal sealed record CreateShortVideoWebRequest(
     string AspectRatio,
     int DurationSeconds,
     bool AudioEnabled,
-    Guid? OrganizationId = null);
+    Guid? OrganizationId = null,
+    string Mode = ShortVideoModes.TextOnly);
+
+internal sealed record ShortVideoOutfitAction(Guid ProjectId, Guid OrganizationId, int Revision = 0,
+    string? Kind = null, Guid? QuoteId = null, Guid? CompositionId = null, bool Confirmed = false,
+    ShortVideoImageInfo? Character = null, ShortVideoImageInfo? Outfit = null, string? Background = null, string? Motion = null,
+    string? ExpectedProviderCode = null, int DurationSeconds = 8, string AspectRatio = "9:16");
+
+// short-library.* uses ShortVideoLibraryAction / ShortVideoLibraryState /
+// ShortVideoCreatedNotice from TOOL_SHARED.Contracts.Generation. File paths and image bytes are native-only.
 
 internal sealed record GenerateVideoWebRequest(IReadOnlyList<Guid>? SceneIds);
 

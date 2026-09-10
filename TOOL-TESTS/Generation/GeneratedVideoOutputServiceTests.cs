@@ -121,6 +121,40 @@ public sealed class GeneratedVideoOutputServiceTests
         }
     }
 
+    [Fact]
+    public async Task MissingCache_CanRecoverUsingTheSameCompletedRequestAndVerifiedFile()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var path = Path.Combine(fixture.StorageRoot, fixture.Output.StorageKey);
+        File.Delete(path);
+        var failed = new DefaultHttpContext(); failed.Response.Body = new MemoryStream();
+        var error = await Assert.ThrowsAsync<AccountApiException>(() => fixture.Service.CopyToResponseAsync(
+            failed, fixture.Request.ProviderRequestId, "user-1", Guid.NewGuid(), default));
+        Assert.Equal("provider_output_cache_invalid", error.Code);
+        Assert.Null(fixture.Output.DownloadedAtUtc);
+        Assert.Equal("Completed", fixture.Request.Status);
+        await File.WriteAllBytesAsync(path, fixture.Payload);
+        var recovered = new DefaultHttpContext(); recovered.Response.Body = new MemoryStream();
+        await fixture.Service.CopyToResponseAsync(recovered, fixture.Request.ProviderRequestId, "user-1", Guid.NewGuid(), default);
+        Assert.Equal(fixture.Payload, ((MemoryStream)recovered.Response.Body).ToArray());
+        Assert.NotNull(fixture.Output.DownloadedAtUtc);
+    }
+
+    [Fact]
+    public async Task SameSizeCorruptedCache_IsRejectedBeforeSendingVideoHeadersOrBytes()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var corrupt = fixture.Payload.ToArray(); corrupt[^1] ^= 1;
+        await File.WriteAllBytesAsync(Path.Combine(fixture.StorageRoot, fixture.Output.StorageKey), corrupt);
+        var context = new DefaultHttpContext(); context.Response.Body = new MemoryStream();
+        var error = await Assert.ThrowsAsync<AccountApiException>(() => fixture.Service.CopyToResponseAsync(
+            context, fixture.Request.ProviderRequestId, "user-1", Guid.NewGuid(), default));
+        Assert.Equal("provider_output_cache_invalid", error.Code);
+        Assert.Equal(0, context.Response.Body.Length);
+        Assert.Null(context.Response.ContentLength);
+        Assert.Null(fixture.Output.DownloadedAtUtc);
+    }
+
     private static async Task<Fixture> CreateFixtureAsync()
     {
         var storageRoot = Path.Combine(Path.GetTempPath(), $"videomaker-output-test-{Guid.NewGuid():N}");
@@ -222,6 +256,7 @@ public sealed class GeneratedVideoOutputServiceTests
         byte[] payload) : IAsyncDisposable
     {
         public KlingOutputProxyService Service { get; } = service;
+        public string StorageRoot => storageRoot;
         public ProviderRequest Request { get; } = request;
         public GeneratedVideoOutput Output { get; } = output;
         public byte[] Payload { get; } = payload;

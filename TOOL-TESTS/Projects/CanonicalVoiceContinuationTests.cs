@@ -120,7 +120,7 @@ public sealed partial class CanonicalVoiceApprovalTests
 
         for (var attempt = 0; attempt < 4; attempt++)
         {
-            Assert.Equal(1, await workflow.GenerateVideosAsync(f.ProjectId, f.UserId, [f.SceneId], null, default));
+            Assert.Equal(1, await workflow.GenerateVideosAsync(f.ProjectId, f.UserId, [f.SceneId], null, default, resumeOnly: attempt > 0));
             await using var db = f.Factory.CreateDbContext();
             var scene = await db.Scenes.SingleAsync();
             Assert.Equal("AudioReviewRequired", scene.Status);
@@ -147,6 +147,39 @@ public sealed partial class CanonicalVoiceApprovalTests
         Assert.Equal("Approved", (await approved.Scenes.SingleAsync()).Status);
         Assert.Equal(4, capture.StatusCalls);
         Assert.Equal(0, capture.UnexpectedCalls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResumeOnly_RejectsMissingOrFailedRequestBeforeSubmitting(bool failed)
+    {
+        using var f = await CreateFixtureAsync(false, true);
+        await using (var db = f.Factory.CreateDbContext())
+        {
+            var scene = await db.Scenes.SingleAsync();
+            scene.ApprovedGenerationId = null;
+            scene.ApprovedRenderMediaAssetId = null;
+            scene.CharacterIdsJson = "[]";
+            (await db.Projects.SingleAsync()).SpeechProductionPolicy = SpeechProductionPolicies.ProviderNativeVerified;
+            var requests = await db.ProviderRequests.Where(x => x.RequestKind == "Video").ToListAsync();
+            if (failed) foreach (var request in requests) request.Status = "Failed";
+            else db.ProviderRequests.RemoveRange(requests);
+            await db.SaveChangesAsync();
+        }
+        var ffmpeg = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg", "ffmpeg.exe");
+        var ffprobe = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg", "ffprobe.exe");
+        var runner = new ExternalProcessRunner();
+        var probe = new FfprobeService(ffprobe, runner);
+        var audio = new AudioQualityValidator(ffmpeg, runner, probe);
+        var client = DispatchProxy.Create<IGenerationClient, CachedVideoClient>();
+        var workflow = new ProjectGenerationService(f.Factory, new ProjectWorkspaceService(f.WorkspaceRoot), client, probe,
+            new MediaToolPreflightService(new MediaToolPaths(ffmpeg, ffprobe), runner, TimeProvider.System),
+            audio, new SceneAudioMixer(ffmpeg, runner, probe, audio), new SceneVideoTrimmer(ffmpeg, runner));
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => workflow.GenerateVideosAsync(
+            f.ProjectId, f.UserId, [f.SceneId], null, default, resumeOnly: true));
+        Assert.Contains("Không có tác vụ video phù hợp", error.Message);
+        Assert.Equal(0, ((CachedVideoClient)(object)client).UnexpectedCalls);
     }
 
     public class CachedVideoClient : DispatchProxy

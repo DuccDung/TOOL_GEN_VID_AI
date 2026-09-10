@@ -475,7 +475,9 @@ public sealed record SubmitVideoRequest(
     VideoReferenceImageInput? ReferenceImage = null,
     int? ScenePlanVersion = null,
     int? ScenePromptVersion = null,
-    SceneFirstFrameInput? FirstFrame = null);
+    SceneFirstFrameInput? FirstFrame = null,
+    ShortVideoCompositionInput? ShortVideoComposition = null,
+    Guid? ShortVideoQuoteId = null);
 
 public sealed record VideoReferenceImageInput(
     Guid CharacterReferenceId,

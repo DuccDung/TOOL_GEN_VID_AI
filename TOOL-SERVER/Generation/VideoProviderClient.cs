@@ -6,7 +6,8 @@ internal sealed record VideoProviderReferenceImage(
     Guid CharacterReferenceId,
     string MimeType,
     string Base64Data,
-    string Sha256);
+    string Sha256,
+    bool IsFirstFrame = false);
 
 internal sealed record VideoProviderTaskResult(
     string ExternalRequestId,
@@ -89,7 +90,8 @@ internal sealed class KlingVideoProviderAdapter(IKlingVideoClient client) : IVid
                     referenceImage.CharacterReferenceId,
                     referenceImage.MimeType,
                     referenceImage.Base64Data,
-                    referenceImage.Sha256),
+                    referenceImage.Sha256,
+                    referenceImage.IsFirstFrame),
             cancellationToken);
         return Map(result, durationSeconds);
     }

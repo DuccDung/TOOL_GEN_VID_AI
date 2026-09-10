@@ -6,6 +6,7 @@ using TOOL_LOCAL.Data;
 using TOOL_LOCAL.Data.Models;
 using TOOL_LOCAL.Media;
 using TOOL_LOCAL.LocalVoice;
+using TOOL_LOCAL.Generation;
 using TOOL_LOCAL.Storage;
 using TOOL_SHARED.Contracts.Generation;
 
@@ -47,7 +48,8 @@ internal sealed class ProjectRenderService(
     IFinalOutputInspector outputInspector,
     bool speechVerificationEnabled = true,
     decimal targetSceneLoudnessLufs = -16m,
-    LocalVoiceService? localVoice = null) : IProjectRenderService
+    LocalVoiceService? localVoice = null,
+    IShortVideoLineageValidator? shortVideoOutfit = null) : IProjectRenderService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string SceneAudioSyncPolicyVersion = "scene-audio-sync-v3";
@@ -121,6 +123,9 @@ internal sealed class ProjectRenderService(
                 foreach (var scene in scenes)
                 {
                     var generation = scene.ApprovedGeneration;
+                    if (ShortVideoWorkflowService.RequiresImageReview(scene.RequiredCapabilitiesJson))
+                        await (shortVideoOutfit ?? throw new InvalidDataException("Thiếu kiểm tra ảnh phối đồ."))
+                            .ValidateLineageAsync(project, scene, generation?.ProviderRequestId, cancellationToken);
                     var speechMode = !string.IsNullOrWhiteSpace(scene.Dialogue)
                         ? KlingSpeechModes.OnCameraDialogue
                         : !string.IsNullOrWhiteSpace(scene.Narration)
@@ -403,6 +408,15 @@ internal sealed class ProjectRenderService(
                         source.LocalVoiceApprovalFingerprint != localVoice!.GetRenderApprovalFingerprint(input.ProjectId, source.SceneId, currentAsset.MediaAssetId))
                         throw new InvalidDataException("Nguồn hoặc mẫu giọng đã thay đổi khi dựng. Bản dựng không được công nhận.");
                 }
+                foreach (var source in input.Sources)
+                {
+                    var scene = await dbContext.Scenes.AsNoTracking().Include(x => x.ApprovedGeneration).SingleAsync(x => x.SceneId == source.SceneId, cancellationToken);
+                    if (!ShortVideoWorkflowService.RequiresImageReview(scene.RequiredCapabilitiesJson)) continue;
+                    if (scene.Status != "Approved" || scene.ApprovedGenerationId != source.VideoGenerationId || scene.ApprovedRenderMediaAssetId != source.MediaAssetId)
+                        throw new InvalidDataException("Ảnh hoặc video đã đổi trong khi dựng.");
+                    await (shortVideoOutfit ?? throw new InvalidDataException("Thiếu kiểm tra ảnh phối đồ."))
+                        .ValidateLineageAsync(project, scene, scene.ApprovedGeneration?.ProviderRequestId, cancellationToken);
+                }
                 dbContext.MediaAssets.Add(new MediaAsset
                 {
                     MediaAssetId = mediaAssetId,
@@ -598,6 +612,7 @@ internal sealed class ProjectRenderService(
                     throw new InvalidDataException("File MP4 vừa xuất không còn khớp với bản dựng đã kiểm tra.");
                 }
 
+                await ValidateShortVideoExportAsync(projectId, remoteUserId, input.FinalVideoId, cancellationToken);
                 File.Move(temporaryPath, normalizedDestinationPath, overwrite: true);
             }
             finally
@@ -637,6 +652,24 @@ internal sealed class ProjectRenderService(
         finally
         {
             _renderLock.Release();
+        }
+    }
+
+    private async Task ValidateShortVideoExportAsync(Guid projectId, string user, Guid finalId, CancellationToken ct)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(ct);
+        var project = await db.Projects.AsNoTracking().SingleAsync(x => x.ProjectId == projectId && x.RemoteUserId == user && x.DeletedAtUtc == null, ct);
+        var scenes = await db.Scenes.AsNoTracking().Include(x => x.ApprovedGeneration).Where(x => x.ProjectId == projectId && x.ScenePlanVersion == project.CurrentScenePlanVersion).ToListAsync(ct);
+        if (!scenes.Any(x => ShortVideoWorkflowService.RequiresImageReview(x.RequiredCapabilitiesJson))) return;
+        var final = await db.FinalVideos.AsNoTracking().Include(x => x.RenderJob).SingleAsync(x => x.FinalVideoId == finalId && x.ProjectId == projectId, ct);
+        using var manifest = JsonDocument.Parse(final.RenderJob.ManifestJson);
+        foreach (var scene in scenes)
+        {
+            var source = manifest.RootElement.GetProperty("scenes").EnumerateArray().Single(x => x.GetProperty("sceneId").GetGuid() == scene.SceneId);
+            if (scene.Status != "Approved" || scene.ApprovedGenerationId != source.GetProperty("videoGenerationId").GetGuid() || scene.ApprovedRenderMediaAssetId != source.GetProperty("mediaAssetId").GetGuid())
+                throw new InvalidDataException("Bản dựng không còn khớp video đã duyệt. Hãy dựng lại.");
+            await (shortVideoOutfit ?? throw new InvalidDataException("Thiếu kiểm tra ảnh phối đồ."))
+                .ValidateLineageAsync(project, scene, scene.ApprovedGeneration?.ProviderRequestId, ct);
         }
     }
 

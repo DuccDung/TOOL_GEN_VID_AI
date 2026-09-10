@@ -186,7 +186,8 @@ internal sealed class GenerationService(
     ISceneFirstFrameService? sceneFirstFrameService = null,
     IOpenAiTranscriptionClient? openAiTranscriptionClient = null,
     IOptions<OpenAiTranscriptionOptions>? transcriptionOptions = null,
-    IOptions<SpeechSynchronizationOptions>? speechSynchronizationOptions = null) : IGenerationService
+    IOptions<SpeechSynchronizationOptions>? speechSynchronizationOptions = null,
+    ShortVideoOutfitService? shortVideoOutfitService = null) : IGenerationService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly OpenAiImageOptions _imageOptions = ValidatedImageOptions(imageOptions.Value);
@@ -3355,10 +3356,12 @@ internal sealed class GenerationService(
         var snapshot = await policyResolver.ResolveAsync(
             project,
             access.OrganizationId,
-            structureType == GenerationWorkflowTypes.OpenAiStructuredPlan
+            structureType is GenerationWorkflowTypes.OpenAiStructuredPlan or GenerationWorkflowTypes.DirectShortVideo
                 ? OrganizationVideoPolicyScopes.LongForm
                 : OrganizationVideoPolicyScopes.Default,
             cancellationToken);
+        if (structureType == GenerationWorkflowTypes.DirectShortVideo)
+            ShortVideoVeoPolicy.Validate(snapshot, project);
         if (scene.Prompt is null)
         {
             throw Conflict("scene_prompt_not_ready", "Cảnh chưa có prompt được duyệt để tạo video.");
@@ -3420,6 +3423,23 @@ internal sealed class GenerationService(
         CharacterPromptSnapshot? character = null;
         VideoProviderReferenceImage? referenceImage = null;
         Guid? inputSceneFirstFrameId = null;
+        AiCostQuote? outfitQuote = null;
+        Guid? outfitCredentialId = null;
+        string? outfitMotion = null;
+        var isOutfit = structureType == "DirectShortVideo" && ShortVideoOutfitService.IsOutfit(scene.RequiredCapabilitiesJson);
+        var isTextShort = structureType == GenerationWorkflowTypes.DirectShortVideo && !isOutfit;
+        if (!isTextShort && request.ShortVideoQuoteId is not null)
+            throw Conflict("short_video_mode_invalid", "Báo giá video ngắn không thuộc chế độ dự án này.");
+        if (isOutfit)
+        {
+            if (request.ShortVideoComposition is null || request.IdempotencyKey != $"outfit-video:{request.ShortVideoComposition.QuoteId:N}" || characterIds.Count != 0 || request.ReferenceImage is not null)
+                throw Conflict("short_video_input_invalid", "Video phối đồ cần ảnh đã duyệt và mã báo giá tương ứng.");
+            var validated = await (shortVideoOutfitService ?? throw Conflict("short_video_outfit_disabled", "Chức năng phối đồ chưa khả dụng."))
+                .ValidateVideoAsync(project, request.SceneId, request.ShortVideoComposition, snapshot, userId, cancellationToken);
+            referenceImage = validated.Image; outfitMotion = validated.Motion; outfitQuote = validated.Quote; outfitCredentialId = validated.CredentialId;
+        }
+        else if (request.ShortVideoComposition is not null)
+            throw Conflict("short_video_mode_invalid", "Dự án không nhận ảnh phối trang phục.");
         if (characterIds.Count == 1)
         {
             if (!snapshot.Capabilities.ReferenceImage)
@@ -3474,6 +3494,10 @@ internal sealed class GenerationService(
                 request.FirstFrame,
                 cancellationToken);
             inputSceneFirstFrameId = firstFrame.SceneFirstFrameId;
+            if (isOutfit && (!string.Equals(firstFrame.Sha256, referenceImage!.Sha256, StringComparison.OrdinalIgnoreCase) ||
+                !await dbContext.SceneFirstFrames.AnyAsync(x => x.SceneFirstFrameId == firstFrame.SceneFirstFrameId &&
+                    x.GeneratedByProviderRequestId == request.ShortVideoComposition!.CompositionId, cancellationToken)))
+                throw Conflict("short_video_first_frame_mismatch", "Ảnh đầu vào Veo không khớp ảnh mặc thử đã duyệt.");
             referenceImage = new VideoProviderReferenceImage(
                 firstFrame.SceneFirstFrameId,
                 firstFrame.MimeType,
@@ -3498,6 +3522,12 @@ internal sealed class GenerationService(
         else if (request.FirstFrame is not null)
         {
             throw new ArgumentException("SceneFirstFrame chỉ được gửi cho project Fal/Veo.");
+        }
+        if (isTextShort)
+        {
+            var textQuote = await (shortVideoOutfitService ?? throw new InvalidOperationException("Short-video service unavailable."))
+                .ValidateTextQuoteAsync(request, project, snapshot, userId, cancellationToken);
+            outfitQuote = textQuote.Quote; outfitCredentialId = textQuote.CredentialId;
         }
         var projectAssets = await LoadSceneProjectAssetSnapshotsAsync(
             request.ProjectId,
@@ -3646,15 +3676,18 @@ internal sealed class GenerationService(
                 cancellationToken);
         }
 
+        if (isOutfit)
+            effectivePrompt = "Animate the approved first frame. Keep the same single person, face, hairstyle and exact outfit, fabric, colors and pattern. No outfit changes or extra people. No dialogue, narration or captions. Natural ambient sound only. Movement: " + outfitMotion;
+
         var provider = await providerResolver.ResolveModelAsync(
             access.OrganizationId,
             snapshot.ProviderCode,
             "Video",
             snapshot.ModelCode,
-            null,
+            outfitCredentialId,
             true,
             cancellationToken);
-        var templateVersion = snapshot.ProviderCode switch
+        var templateVersion = isOutfit ? "short-video-outfit-v1" : snapshot.ProviderCode switch
         {
             ProviderCodes.BytePlus => SeedanceNativeAudioPromptComposer.TemplateVersion,
             ProviderCodes.Fal => FalVeoPolicy.PromptTemplateVersion,
@@ -3700,7 +3733,7 @@ internal sealed class GenerationService(
             snapshot.NativeAudio,
             CharacterId = character?.CharacterId,
             CharacterVersion = character?.Version,
-            CharacterReferenceId = snapshot.ProviderCode == ProviderCodes.Fal ? null : referenceImage?.CharacterReferenceId,
+            CharacterReferenceId = snapshot.ProviderCode == ProviderCodes.Fal || isOutfit ? null : referenceImage?.CharacterReferenceId,
             SceneFirstFrameId = inputSceneFirstFrameId,
             ReferenceSha256 = referenceImage?.Sha256,
             ProjectAssets = projectAssets.Select(asset => new
@@ -3714,6 +3747,20 @@ internal sealed class GenerationService(
             ScenePromptId = scene.Prompt.ScenePromptId,
             ScenePromptVersion = scene.Prompt.Version
         }, JsonOptions);
+        if (isOutfit)
+        {
+            var outfitSnapshot = System.Text.Json.Nodes.JsonNode.Parse(requestJson)!.AsObject();
+            outfitSnapshot["shortVideoCompositionId"] = request.ShortVideoComposition!.CompositionId;
+            outfitSnapshot["shortVideoRevision"] = request.ShortVideoComposition.Revision;
+            outfitSnapshot["shortVideoQuoteId"] = request.ShortVideoComposition.QuoteId;
+            requestJson = outfitSnapshot.ToJsonString(JsonOptions);
+        }
+        if (isTextShort)
+        {
+            var textSnapshot = System.Text.Json.Nodes.JsonNode.Parse(requestJson)!.AsObject();
+            textSnapshot["shortVideoQuoteId"] = request.ShortVideoQuoteId;
+            requestJson = textSnapshot.ToJsonString(JsonOptions);
+        }
         var requestHash = Sha256Hex(requestJson);
         if (existing is not null)
         {
@@ -3721,7 +3768,17 @@ internal sealed class GenerationService(
             return ToGenericVideoResponse(existing, ProgressFor(existing.Status));
         }
 
-        var quote = await costEstimator.QuoteVideoAsync(
+        if (isOutfit)
+        {
+            await shortVideoOutfitService!.ValidateQuotedRuntimeAsync(request.ShortVideoComposition!.QuoteId, provider, cancellationToken);
+            await shortVideoOutfitService.ClaimVideoAsync(request.ShortVideoComposition, cancellationToken);
+        }
+        if (isTextShort)
+        {
+            await shortVideoOutfitService!.ValidateQuotedRuntimeAsync(request.ShortVideoQuoteId!.Value, provider, cancellationToken);
+            await shortVideoOutfitService.ClaimTextQuoteAsync(request.ShortVideoQuoteId.Value, cancellationToken);
+        }
+        var quote = outfitQuote ?? await costEstimator.QuoteVideoAsync(
             provider.ProviderCode,
             provider.ProviderModelId,
             durationSeconds,
@@ -3753,7 +3810,10 @@ internal sealed class GenerationService(
             snapshot.NativeAudio,
             estimatedOutputTokens = quote.EstimatedOutputTokens
         }, JsonOptions);
-        var reservation = await budgetService.ReserveAsync(
+        BudgetReservationResult reservation;
+        try
+        {
+            reservation = await budgetService.ReserveAsync(
             access.OrganizationId,
             userId,
             request.ProjectId,
@@ -3763,9 +3823,18 @@ internal sealed class GenerationService(
             provider.ModelCode,
             quote.EstimatedCost,
             cancellationToken);
+        }
+        catch
+        {
+            if (isOutfit) await shortVideoOutfitService!.FailVideoClaimAsync(request.ShortVideoComposition!.QuoteId, CancellationToken.None);
+            if (isTextShort) await shortVideoOutfitService!.FailVideoClaimAsync(request.ShortVideoQuoteId!.Value, CancellationToken.None);
+            throw;
+        }
         requestLog.BudgetReservationId = reservation.ReservationId;
         dbContext.ProviderRequests.Add(requestLog);
         AddProjectAssetRequestSnapshots(requestLog.ProviderRequestId, projectAssets);
+        if (isOutfit) shortVideoOutfitService!.ConsumeVideoQuote(request.ShortVideoComposition!.QuoteId);
+        if (isTextShort) shortVideoOutfitService!.ConsumeVideoQuote(request.ShortVideoQuoteId!.Value);
         project.EstimatedCost += quote.EstimatedCost;
         try
         {

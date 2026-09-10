@@ -1,5 +1,21 @@
 # Kiến trúc kỹ thuật VideoMaker
 
+## Bổ sung 2026-09-11: toàn bộ video ngắn dùng Veo
+
+`ShortVideoVeoPolicy` yêu cầu Fal/Veo 3.1 Standard/Fast, 720p, Native Audio, 4/6/8 giây và 9:16/16:9. `DirectShortVideo` dùng policy `LongForm` hiện có nhưng vẫn giữ workflow một cảnh, không áp content/speech rewrite của video dài. `GenerationService` luôn kiểm `SceneFirstFrame` Approved/current; ảnh mặc thử được ánh xạ thành `MediaAsset`/`SceneFirstFrame` qua `ShortVideoVeoFirstFrame`, giữ provider request/hash/revision nguồn. TextOnly đi qua `SceneFirstFrameService`, rồi quote video bền vững trong `vf.ShortVideoOperations`; desktop chỉ gửi quote đã xác nhận với idempotency key tương ứng. Bridge cũ `short-video.generate` không còn tạo clip trực tiếp.
+
+API `migrate-veo` chuyển snapshot dự án sau xác nhận; transaction kiểm pending requests, runtime/rate, thời lượng/tỷ lệ, vô hiệu quote/kết quả duyệt cũ, giữ ảnh mặc thử khi phù hợp. Không cập nhật hàng loạt database hoặc đổi provider ngầm. Native kiểm lineage ảnh đầu cảnh cho cả hai mode trước duyệt/render/export. Xem [biên bản triển khai](TRIEN_KHAI_VIDEO_NGAN_VEO.md).
+
+## Bổ sung 2026-09-11: thư viện và composer video ngắn
+
+`ShortVideoAssetLibraryService` quản lý SQLite/ảnh/thumbnails riêng theo user + organization trong AppData. `short-library.*` qua `DashboardBridge.ShortVideoLibrary`; `short-library.app.local` qua resolver native kiểm scope/hash, không map cả thư mục. Project nhận bản sao ảnh đầy đủ đã kiểm, giữ ref/version trong draft local. Draft dùng revision và ID tạo project bền vững; `CreateShortVideoAsync` kiểm payload/scope khi retry cùng ID. Composer React dùng cùng bố cục cho draft và project, vẫn giữ quote/approval server. Không thêm SQL Server migration hoặc đường gọi provider từ desktop. [Chi tiết](TRIEN_KHAI_UI_THU_VIEN_VIDEO_NGAN.md).
+
+## Bổ sung 2026-09-10: DirectShortVideo/CharacterOutfit
+
+`ShortVideoOutfitContracts` định nghĩa metadata nguồn, settings/revision, quote ảnh/video và approved composition input. `ShortVideoOutfitService` cùng controller tại `api/generation/short-video` giữ access, quote/claim/idempotency/rate/budget/credential và approval ở server. Migration 4.1.9 thêm `vf.ShortVideoOutfits` và `vf.ShortVideoOperations`, không cấp SQL desktop cho hai bảng này. Request snapshot giữ hash/role nguồn, model/rate/credential version; binary ảnh kết quả dùng `GeneratedImageOutputs`/retention và authenticated content endpoint hiện hành.
+
+Native `ShortVideoWorkflowService` quản lý hai ảnh trong workspace, kiểm orientation/MIME/size/hash, lưu quote video trước submit và kiểm lineage. React component riêng nối qua `DashboardBridge.ShortVideo`; không nhận absolute path/provider key/Base64. Từ 2026-09-11, `GenerationService` gửi ảnh phối đồ Approved/current qua `SceneFirstFrame` thật sang Fal/Veo, giữ worker/output proxy và toàn bộ gate first-frame. Render/export kiểm lại composition/revision, approved generation và manifest. Chất lượng ảnh/video thật còn cần nghiệm thu; [biên bản cơ chế phối đồ ban đầu](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md), [triển khai Veo hiện hành](TRIEN_KHAI_VIDEO_NGAN_VEO.md).
+
 ## Bổ sung 2026-09-09: local Veo voice consistency
 
 React LocalVoicePanel → bridge local-voice.* → LocalVoiceService. Server POST /api/generation/local-voice/access chỉ kiểm session/device/license/membership/role/project qua access service hiện hành; không reserve budget, gọi provider hoặc nhận media.
@@ -150,7 +166,7 @@ Mọi nhánh lỗi trước outbound phải không tạo chi phí. Lỗi sau res
 - OpenAI dùng cho content có schema, image, Canonical Voice TTS và transcription ở workflow được phép.
 - Kling là video provider mặc định.
 - BytePlus Seedance có adapter riêng, catalog mặc định tắt.
-- Fal/Veo có adapter riêng, catalog mặc định tắt và chỉ nhận first frame hợp lệ cho `LongForm`.
+- Fal/Veo có adapter riêng, catalog mặc định tắt và nhận first frame hợp lệ cho `OpenAiStructuredPlan` lẫn `DirectShortVideo`; cả hai lấy policy scope `LongForm` nhưng giữ workflow riêng.
 
 Provider/model được chọn bởi project snapshot và organization policy trên server, không bởi desktop. Không có failover provider ngầm.
 
@@ -193,6 +209,10 @@ Download đi qua `.part`, sau đó kiểm tra HTTP metadata, file signature, siz
 - **Render:** desktop tái xác minh approved generation và media trước ghép.
 
 Asset đã ghép audio mới dùng policy `scene-audio-sync-v3`, áp dụng cho cả lời dẫn và thoại nhân vật Canonical Voice. Thoại nhân vật dùng WAV đã duyệt để tạo video nền rồi ghép bằng FFmpeg; hình và chuyển động miệng giữ theo clip provider. Tương thích `v2` chỉ áp dụng cho exact approved pointer còn khớp generation, VoiceGeneration, speech/voice snapshot và hash. Project cũ có trạng thái chờ được đối chiếu WAV/voice version hiện hành; dashboard chỉ chiếu trạng thái tiếp tục, không tự ghi approval vào database.
+
+### 6.4 Tải Bilibili trên desktop
+
+`App.tsx` → `useBilibiliModule` → `BilibiliWebBridge` → `BilibiliService` → `BilibiliDownloader`/process yt-dlp ghim checksum → kiểm MP4/FFprobe → thư mục local. Form1 dispatch bridge riêng, license invalidation hủy process; không có API server, SQL hoặc chi phí AI mới. State dùng request ID/revision, ID video đã quét và ID job; path/command/URL CDN không nhận từ DOM. Quét streaming có phân trang/collection và giữ partial khi lỗi; hàng đợi là state của phiên theo user. [Chi tiết và bằng chứng](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).
 
 ## 7. Vietsub
 
