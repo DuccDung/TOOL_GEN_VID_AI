@@ -18,6 +18,8 @@ public sealed class LocalVoiceModelTests(ITestOutputHelper output)
         await runtime.ProbeInstalledAsync(default);
         Assert.Equal("READY", runtime.GetStatus().Status);
         output.WriteLine("Verified runtime/probe: {0:0.0}s", timer.Elapsed.TotalSeconds);
+        Assert.True(runtime.LastProcessPeakBytes > 16 * 1048576L, "Measure the model worker, not the venv launcher.");
+        output.WriteLine("Probe worker peak working set: {0:0.0} MiB; process CPU: {1:0.0}s", runtime.LastProcessPeakBytes / 1048576d, runtime.LastProcessCpuSeconds);
         var native = await f.Runner.RunAsync(f.Ffmpeg, ["-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=8",
             "-i", source, "-map", "0:v:0", "-map", "1:a:0", "-t", "8", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", f.Source], TimeSpan.FromMinutes(1));
         Assert.Equal(0, native.ExitCode);
@@ -26,10 +28,12 @@ public sealed class LocalVoiceModelTests(ITestOutputHelper output)
         var anchorAudio = await f.Runner.RunAsync(f.Ffmpeg, ["-y", "-i", reference, "-t", "8", "-vn", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", Path.Combine(anchorDirectory, "source.wav")], TimeSpan.FromMinutes(1));
         Assert.Equal(0, anchorAudio.ExitCode);
         await runtime.RunAsync("anchor", anchorDirectory, stage => output.WriteLine("Anchor: " + stage), default);
+        output.WriteLine("Anchor worker peak working set: {0:0.0} MiB; process CPU: {1:0.0}s", runtime.LastProcessPeakBytes / 1048576d, runtime.LastProcessCpuSeconds);
         Assert.True(File.Exists(Path.Combine(anchorDirectory, "anchor.wav")));
         await f.Media.PrepareAsync(f.Source, Path.Combine(conversionDirectory, "source.wav"), 8000, default);
         File.Copy(Path.Combine(anchorDirectory, "anchor.wav"), Path.Combine(conversionDirectory, "anchor.wav"));
         await runtime.RunAsync("convert", conversionDirectory, stage => output.WriteLine("Conversion: " + stage), default);
+        output.WriteLine("Conversion worker peak working set: {0:0.0} MiB; process CPU: {1:0.0}s", runtime.LastProcessPeakBytes / 1048576d, runtime.LastProcessCpuSeconds);
         var convertedWav = Path.Combine(conversionDirectory, "converted.wav");
         var convertedVideo = Path.Combine(conversionDirectory, "converted.mp4");
         Assert.NotEqual(await LocalVoiceStore.FileHashAsync(Path.Combine(conversionDirectory, "source.wav"), default),

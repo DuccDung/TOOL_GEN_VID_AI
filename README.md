@@ -131,6 +131,8 @@ dotnet run --project TOOL-SERVER --launch-profile https
 
 Desktop mặc định kết nối `https://localhost:7202/`. Có thể dùng `TOOL-LOCAL\appsettings.user.json` để ghi đè cấu hình máy không chứa secret. Không khởi động server trước khi database đúng version vì startup bootstrap có thể ghi catalog.
 
+Đồng nhất giọng Veo local đã bật trong cấu hình desktop; model vẫn phải cài và probe trước khi dùng. Xem [hướng dẫn chạy trên máy đích](HUONG_DAN_CHAY_DONG_NHAT_GIONG_VEO_LOCAL.md) để kiểm tra READY và chọn mẫu giọng từ cảnh Native Audio đã duyệt. Trên máy đã cấu hình, nhấp đúp [Mo-VideoMaker.cmd](Mo-VideoMaker.cmd) để mở Account Server nền và desktop Release. Launcher kiểm schema trước khi khởi động và dùng URL của desktop; máy triển khai hiện dùng HTTPS 7242 với database Development đã xác minh.
+
 ## Phát hành
 
 Không publish chỉ từ một build xanh. Phải hoàn tất migration rehearsal đến 4.1.8, cấu hình rate/credential/budget, xác minh TikTok Developer App qua Global Admin nếu bật, smoke môi trường, kiểm tra FFmpeg `Approval scope: Release`, package integrity và rollback theo [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md).

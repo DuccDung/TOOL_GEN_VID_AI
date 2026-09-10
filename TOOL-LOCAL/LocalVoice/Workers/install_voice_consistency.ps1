@@ -1,8 +1,34 @@
-param([Parameter(Mandatory=$true)][string]$ComponentRoot)
+param(
+    [Parameter(Mandatory=$true)][string]$ComponentRoot,
+    [string]$TemporaryRoot
+)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $componentPath = [IO.Path]::GetFullPath($ComponentRoot)
+if (-not [IO.Path]::IsPathRooted($ComponentRoot) -or $componentPath.StartsWith('\\') -or
+    $componentPath.TrimEnd('\') -eq [IO.Path]::GetPathRoot($componentPath).TrimEnd('\')) {
+    throw 'A dedicated local component directory is required.'
+}
+if ([string]::IsNullOrWhiteSpace($TemporaryRoot)) { $TemporaryRoot = Join-Path ([IO.Path]::GetTempPath()) 'vm-veo-voice' }
+$temporaryPath = [IO.Path]::GetFullPath($TemporaryRoot)
+if (-not [IO.Path]::IsPathRooted($TemporaryRoot) -or $temporaryPath.StartsWith('\\') -or
+    $temporaryPath.TrimEnd('\') -eq [IO.Path]::GetPathRoot($temporaryPath).TrimEnd('\') -or
+    $temporaryPath.TrimEnd('\').Equals($componentPath.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -or
+    $temporaryPath.StartsWith($componentPath.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'A separate local temporary directory outside the component is required.'
+}
+foreach ($directoryPath in @($componentPath, $temporaryPath)) {
+    $ancestor = [IO.DirectoryInfo]::new($directoryPath)
+    while ($null -ne $ancestor) {
+        if ($ancestor.Exists -and ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Linked component/temp directories are not supported.' }
+        $ancestor = $ancestor.Parent
+    }
+}
+New-Item -ItemType Directory -Path $temporaryPath -Force | Out-Null
+$env:TEMP = $temporaryPath
+$env:TMP = $temporaryPath
+$env:PYTHONDONTWRITEBYTECODE = '1'
 New-Item -ItemType Directory -Path $componentPath -Force | Out-Null
 $allowedHosts = @('github.com','codeload.github.com','objects.githubusercontent.com','release-assets.githubusercontent.com','huggingface.co','cdn-lfs.hf.co','cas-bridge.xethub.hf.co','us.aws.cdn.hf.co','dl.fbaipublicfiles.com')
 function Download-Checked([string]$Url,[string]$Name,[long]$Size,[string]$Sha256) {

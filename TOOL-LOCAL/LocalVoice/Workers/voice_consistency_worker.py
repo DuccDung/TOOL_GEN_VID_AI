@@ -11,16 +11,61 @@ import os
 from pathlib import Path
 import socket
 import sys
+import time
 
 PROTOCOL = 1
 
 
 def emit(kind, **values):
+    if kind == "completed":
+        values["peakWorkingSetBytes"] = peak_working_set_bytes()
+        values["processCpuSeconds"] = round(time.process_time(), 3)
     print(json.dumps(dict(protocolVersion=PROTOCOL, type=kind, **values)), flush=True)
+
+
+def peak_working_set_bytes():
+    # A Windows venv launcher has its own tiny working set; report the model process itself.
+    if os.name != "nt":
+        return 0
+    import ctypes
+
+    class ProcessMemoryCounters(ctypes.Structure):
+        _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong)] + [
+            (name, ctypes.c_size_t) for name in (
+                "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+
+    try:
+        counters = ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        query = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
+        query.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessMemoryCounters), ctypes.c_ulong]
+        query.restype = ctypes.c_int
+        if query(ctypes.c_void_p(-1), ctypes.byref(counters), counters.cb):
+            return counters.PeakWorkingSetSize
+    except (OSError, AttributeError):
+        pass
+    return 0  # Metrics must not change the media result or expose native diagnostics.
 
 
 def deny_network(*_args, **_kwargs):
     raise RuntimeError("network_disabled")
+
+
+def configure_cpu(torch):
+    torch.set_num_threads(1)
+    # Windows CPU profile: oneDNN fails in the OpenVoice reference encoder,
+    # and native MHA intermittently access-violates inside Demucs self-attention.
+    # Use PyTorch's standard implementations with the same pinned weights.
+    torch.backends.mkldnn.enabled = False
+    torch.backends.mha.set_fastpath_enabled(False)
+    # MHA's standard path can still dispatch to fused SDPA. Use math attention
+    # throughout this CPU profile; PyTorch exposes the global switches under cuda.
+    torch.backends.cuda.enable_flash_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_cudnn_sdp(False)
+    torch.backends.cuda.enable_math_sdp(True)
+    torch.manual_seed(0)
 
 
 @functools.lru_cache(maxsize=16384)
@@ -131,11 +176,7 @@ def run(request):
     import torch
     import torchaudio
     from silero_vad import load_silero_vad, get_speech_timestamps
-    torch.set_num_threads(min(4, os.cpu_count() or 1))
-    # Explicit Windows CPU compatibility profile: oneDNN primitive creation in
-    # OpenVoice's reference encoder is not reliable on the validated laptop.
-    torch.backends.mkldnn.enabled = False
-    torch.manual_seed(0)
+    configure_cpu(torch)
     device = "cpu"  # Reproducible MVP; CUDA admission requires its own measured profile.
     vad = load_silero_vad()
     from demucs.pretrained import get_model
@@ -151,6 +192,9 @@ def run(request):
     # The Demucs checkpoint is pinned and verified above; its official loader needs architecture metadata.
     with contextlib.redirect_stdout(sys.stderr):
         separation = get_model("955717e8", repo=root / "demucs").to(device).eval()
+    # HTDemucs pads each forward pass to model.segment internally. Merely passing
+    # segment=4 to apply_model still allocates attention for the full training segment.
+    separation.segment = min(float(separation.segment), 4.0)
     if request["action"] == "probe":
         # Exercise VAD and spectrogram path; content-quality acceptance is a separate opt-in smoke.
         get_speech_timestamps(torch.zeros(16000), vad, sampling_rate=16000)
@@ -179,7 +223,7 @@ def run(request):
         mixture = torchaudio.functional.resample(torch.from_numpy(data.T), sr, separation.samplerate)
         with torch.inference_mode():
             separated = apply_model(separation, mixture[None], device=device, shifts=0,
-                                    split=True, segment=4.0, overlap=0.25, progress=False, num_workers=0)[0]
+                                    split=True, segment=separation.segment, overlap=0.25, progress=False, num_workers=0)[0]
         vocals = separated[separation.sources.index("vocals")]
         speech = torchaudio.functional.resample(vocals, separation.samplerate, sr).T.numpy()[:len(data)]
         residual = data - speech

@@ -1,8 +1,12 @@
 """Pure worker tests; no models, network, TTS or provider credentials."""
 import importlib.util
+import contextlib
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[2] / "TOOL-LOCAL/LocalVoice/Workers/voice_consistency_worker.py"
 spec = importlib.util.spec_from_file_location("voice_consistency_worker", SOURCE)
@@ -11,6 +15,36 @@ spec.loader.exec_module(worker)
 
 
 class VoiceWorkerTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "Pinned CPU runtime is needed for attention regression")
+    def test_cpu_attention_avoids_native_kernel_that_crashed_demucs(self):
+        import torch
+        from torch.utils._python_dispatch import TorchDispatchMode
+
+        class RejectFusedAttention(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                if "scaled_dot_product_flash_attention" in str(func):
+                    raise AssertionError("unsafe fused attention")
+                return func(*args, **(kwargs or {}))
+
+        worker.configure_cpu(torch)
+        attention = torch.nn.MultiheadAttention(16, 2, batch_first=True).eval()
+        values = torch.randn(1, 20, 16)
+        with patch.object(torch, "_native_multi_head_attention", side_effect=AssertionError("unsafe native MHA")):
+            with torch.inference_mode(), RejectFusedAttention():
+                result, _ = attention(values, values, values, need_weights=False)
+        self.assertEqual(values.shape, result.shape)
+        self.assertTrue(torch.isfinite(result).all().item())
+
+    @unittest.skipUnless(worker.os.name == "nt", "Windows process-memory diagnostic")
+    def test_completed_reports_memory_of_actual_worker_not_venv_launcher(self):
+        allocation = bytearray(16 * 1024 * 1024)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            worker.emit("completed")
+        event = json.loads(output.getvalue())
+        self.assertEqual("completed", event["type"])
+        self.assertGreaterEqual(event["peakWorkingSetBytes"], len(allocation))
+
     def test_fit_length_only_pads_small_tail_never_time_stretches(self):
         import numpy as np
         value = np.arange(100, dtype=np.float32)

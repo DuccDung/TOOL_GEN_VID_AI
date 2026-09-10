@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using TOOL_LOCAL.Media;
 using TOOL_SHARED.Contracts.Generation;
 
 namespace TOOL_LOCAL.LocalVoice;
@@ -14,18 +13,34 @@ internal interface ILocalVoiceRuntime
     Task RunAsync(string action, string workDirectory, Action<string>? progress, CancellationToken token);
 }
 
-internal sealed class LocalVoiceRuntime(string workspaceRoot, bool featureEnabled, string? componentRootOverride = null,
-    string? workerPathOverride = null) : ILocalVoiceRuntime
+internal sealed class LocalVoiceRuntime : ILocalVoiceRuntime
 {
-    private readonly string _root = componentRootOverride ?? Path.Combine(workspaceRoot, "components", "veo-local-voice", "v1");
+    private readonly string _root;
+    private readonly string _temporaryRoot;
+    private readonly string? _workerPathOverride;
+    private readonly bool _featureEnabled;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private string Worker => workerPathOverride ?? Path.Combine(AppContext.BaseDirectory, "workers", "voice_consistency_worker.py");
+    private string Worker => _workerPathOverride ?? Path.Combine(AppContext.BaseDirectory, "workers", "voice_consistency_worker.py");
     private string Python => Path.Combine(_root, "venv", "Scripts", "python.exe");
-    public bool FeatureEnabled => featureEnabled;
+    public bool FeatureEnabled => _featureEnabled;
     internal long LastProcessPeakBytes { get; private set; }
+    internal double LastProcessCpuSeconds { get; private set; }
+
+    public LocalVoiceRuntime(string workspaceRoot, bool featureEnabled, string? componentRootOverride = null,
+        string? workerPathOverride = null, string? temporaryRootOverride = null)
+    {
+        _root = LocalVoiceRuntimePaths.ResolveDirectory(string.IsNullOrWhiteSpace(componentRootOverride)
+            ? Path.Combine(workspaceRoot, "components", "veo-local-voice", "v1") : componentRootOverride);
+        _temporaryRoot = LocalVoiceRuntimePaths.ResolveDirectory(string.IsNullOrWhiteSpace(temporaryRootOverride)
+            ? Path.Combine(Path.GetTempPath(), "vm-veo-voice") : temporaryRootOverride);
+        if (LocalVoiceRuntimePaths.IsWithin(_temporaryRoot, _root))
+            throw new ArgumentException("Thư mục temp phải nằm ngoài runtime để giữ manifest ổn định.");
+        _workerPathOverride = workerPathOverride;
+        _featureEnabled = featureEnabled;
+    }
     public LocalVoiceRuntimeSummary GetStatus()
     {
-        if (!featureEnabled) return new("DISABLED", "Đồng nhất giọng Veo local đang tắt trong cấu hình desktop.");
+        if (!_featureEnabled) return new("DISABLED", "Đồng nhất giọng Veo local đang tắt trong cấu hình desktop.");
         try
         {
             if (!File.Exists(Python) || !File.Exists(Path.Combine(_root, "manifest.json")) || !File.Exists(Worker))
@@ -44,7 +59,7 @@ internal sealed class LocalVoiceRuntime(string workspaceRoot, bool featureEnable
 
     public async Task InstallAsync(CancellationToken token)
     {
-        if (!featureEnabled) throw new InvalidOperationException("Tính năng đồng nhất giọng local đang tắt.");
+        if (!_featureEnabled) throw new InvalidOperationException("Tính năng đồng nhất giọng local đang tắt.");
         await _gate.WaitAsync(token);
         try
         {
@@ -52,13 +67,8 @@ internal sealed class LocalVoiceRuntime(string workspaceRoot, bool featureEnable
             var readyPath = Path.Combine(_root, "ready.json");
             if (File.Exists(readyPath)) File.Delete(readyPath);
             var installer = Path.Combine(AppContext.BaseDirectory, "workers", "install_voice_consistency.ps1");
-            var runner = new ExternalProcessRunner();
-            var result = await runner.RunAsync(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "WindowsPowerShell", "v1.0", "powershell.exe"),
-                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", installer, "-ComponentRoot", _root],
-                TimeSpan.FromMinutes(60), token);
-            if (result.ExitCode != 0) throw new InvalidOperationException("Không cài được runtime local. Kiểm tra mạng, dung lượng và thử lại.");
-            await ProbeInstalledAsync(token);
+            await RunInstallerAsync(installer, token);
+            await ProbeCoreAsync(token);
         }
         finally { _gate.Release(); }
     }
@@ -73,11 +83,18 @@ internal sealed class LocalVoiceRuntime(string workspaceRoot, bool featureEnable
 
     private FileStream AcquireComponentLock()
     {
+        LocalVoiceRuntimePaths.RequireNoReparsePoints(_root);
         Directory.CreateDirectory(_root);
         return new FileStream(Path.Combine(_root, "runtime.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
 
     internal async Task ProbeInstalledAsync(CancellationToken token)
+    {
+        using var componentLock = AcquireComponentLock();
+        await ProbeCoreAsync(token);
+    }
+
+    private async Task ProbeCoreAsync(CancellationToken token)
     {
         await ExecuteAsync("probe", _root, null, token);
         var readyPath = Path.Combine(_root, "ready.json");
@@ -96,17 +113,15 @@ internal sealed class LocalVoiceRuntime(string workspaceRoot, bool featureEnable
             protocolVersion = 1, action, componentRoot = _root, workDirectory = work, fingerprint = Fingerprint(),
             hostVerifiedManifestSha256 = await LocalVoiceStore.FileHashAsync(Path.Combine(_root, "manifest.json"), token)
         }), new UTF8Encoding(false), token);
-        var info = new ProcessStartInfo(Python) { UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8 };
+        PrepareTemporaryDirectory();
+        var info = CreateProcessStartInfo(Python);
         info.ArgumentList.Add("-I"); info.ArgumentList.Add("-X"); info.ArgumentList.Add("utf8");
         info.ArgumentList.Add(Worker); info.ArgumentList.Add(requestPath);
-        var retained = new[] { "SystemRoot", "WINDIR", "TEMP", "TMP", "PATH" }.ToDictionary(x => x, x => Environment.GetEnvironmentVariable(x));
-        info.Environment.Clear();
-        foreach (var entry in retained) if (entry.Value is not null) info.Environment[entry.Key] = entry.Value;
-        info.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
         info.Environment["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1";
         info.Environment["MPLCONFIGDIR"] = Path.Combine(_root, "plot-cache");
         using var process = new Process { StartInfo = info };
+        LastProcessPeakBytes = 0;
+        LastProcessCpuSeconds = 0;
         try
         {
             process.Start();
@@ -121,11 +136,19 @@ internal sealed class LocalVoiceRuntime(string workspaceRoot, bool featureEnable
                 var kind = doc.RootElement.GetProperty("type").GetString();
                 if (kind == "error") throw new InvalidDataException("Xử lý giọng local thất bại: " + doc.RootElement.GetProperty("code").GetString());
                 if (kind == "progress") progress?.Invoke(doc.RootElement.GetProperty("stage").GetString()!);
-                if (kind == "completed") completed = true;
+                if (kind == "completed")
+                {
+                    completed = true;
+                    // The venv executable may only be a launcher. Measure inside the actual worker.
+                    if (doc.RootElement.TryGetProperty("peakWorkingSetBytes", out var peak) &&
+                        peak.TryGetInt64(out var bytes) && bytes > 0) LastProcessPeakBytes = bytes;
+                    if (doc.RootElement.TryGetProperty("processCpuSeconds", out var cpu) &&
+                        cpu.TryGetDouble(out var seconds) && double.IsFinite(seconds) && seconds >= 0)
+                        LastProcessCpuSeconds = seconds;
+                }
             }
             await process.WaitForExitAsync(timeout.Token);
             var diagnostic = await errors;
-            try { LastProcessPeakBytes = process.PeakWorkingSet64; } catch (InvalidOperationException) { LastProcessPeakBytes = 0; }
             if (process.ExitCode != 0 || !completed)
                 throw new InvalidDataException($"Worker local kết thúc khi chưa hoàn tất (exit={process.ExitCode}, {diagnostic}).");
         }
@@ -133,6 +156,52 @@ internal sealed class LocalVoiceRuntime(string workspaceRoot, bool featureEnable
         {
             try { if (process.Id != 0 && !process.HasExited) { process.Kill(true); await process.WaitForExitAsync(CancellationToken.None); } } catch (InvalidOperationException) { }
             if (File.Exists(requestPath)) File.Delete(requestPath);
+        }
+    }
+
+    internal ProcessStartInfo CreateProcessStartInfo(string executable)
+    {
+        var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
+        info.Environment.Clear();
+        foreach (var name in new[] { "SystemRoot", "WINDIR", "PATH", "COMSPEC", "PATHEXT" })
+            if (Environment.GetEnvironmentVariable(name) is { } value) info.Environment[name] = value;
+        info.Environment["TEMP"] = _temporaryRoot;
+        info.Environment["TMP"] = _temporaryRoot;
+        info.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
+        return info;
+    }
+
+    private void PrepareTemporaryDirectory()
+    {
+        LocalVoiceRuntimePaths.RequireNoReparsePoints(_temporaryRoot);
+        Directory.CreateDirectory(_temporaryRoot);
+    }
+
+    private async Task RunInstallerAsync(string installer, CancellationToken token)
+    {
+        PrepareTemporaryDirectory();
+        var info = CreateProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell", "v1.0", "powershell.exe"));
+        foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", installer,
+                     "-ComponentRoot", _root, "-TemporaryRoot", _temporaryRoot }) info.ArgumentList.Add(argument);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromHours(1));
+        using var process = new Process { StartInfo = info };
+        process.Start();
+        try
+        {
+            var stdout = DrainAsync(process.StandardOutput, timeout.Token);
+            var stderr = DrainAsync(process.StandardError, timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
+            await Task.WhenAll(stdout, stderr);
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException("Không cài được runtime local. Kiểm tra mạng, dung lượng và thử lại.");
+        }
+        finally
+        {
+            if (!process.HasExited) { process.Kill(true); await process.WaitForExitAsync(CancellationToken.None); }
         }
     }
 

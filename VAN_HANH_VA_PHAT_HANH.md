@@ -6,6 +6,8 @@ Rehearsal trên database clone được phê duyệt trước: áp dụng migrat
 
 Chỉ bật Features.VeoLocalVoiceConsistencyEnabled ở desktop nghiệm thu, khởi động lại, bật rõ trong project rồi cài runtime từ UI. Installer tải dependency có lock/hash và model ghim; cần mạng/dung lượng trống khi cài, không upload media. Inference chạy CPU và vẫn cần server authorization cho thao tác. Không phát hành profile GPU hoặc chứng nhận model chỉ dựa vào probe. Lưu license/provenance component, nghe thử tiếng Việt/âm nền/khẩu hình và rà soát quyền phân phối trước rollout; xem nhật ký triển khai.
 
+Bổ sung 2026-09-10: cấu hình desktop trong repository đã bật flag theo yêu cầu triển khai. Máy này đặt `LocalVoice:ComponentRoot=D:\VideoMakerLocalVoice\v1`, `LocalVoice:TemporaryRoot=D:\VideoMakerLocalVoice\tmp` trong `appsettings.user.json` được Git bỏ qua; không đưa đường dẫn máy vào cấu hình phát hành. Có thể chuẩn bị component trước đăng nhập bằng `powershell -NoProfile -File scripts/Prepare-VeoLocalVoice.ps1 -Mode Prepare`; `-Mode Verify` kiểm byte và nạp lại model, `-Mode Status` chỉ đọc trạng thái. Ba lệnh đều chạy binary đã build và đọc cấu hình bên cạnh binary. Không ghi tay READY. Hướng dẫn máy đích và phần nghiệm thu còn lại: [HUONG_DAN_CHAY_DONG_NHAT_GIONG_VEO_LOCAL.md](HUONG_DAN_CHAY_DONG_NHAT_GIONG_VEO_LOCAL.md).
+
 > Runbook chuẩn cho database, secret, provider, speech, SePay, desktop bundle và rollback. Rà soát ngày 2026-09-07.
 
 Không chạy nội dung tài liệu này trên production nếu chưa xác định rõ instance/database, người phê duyệt, backup đã kiểm tra và phương án restore. Các giá trị trong dấu `<...>` là placeholder, không được commit secret thật.

@@ -23,8 +23,13 @@ namespace TOOL_LOCAL;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (TOOL_LOCAL.LocalVoice.LocalVoiceMaintenance.IsMaintenanceCommand(args))
+        {
+            Environment.ExitCode = TOOL_LOCAL.LocalVoice.LocalVoiceMaintenance.RunAsync(args[0]).GetAwaiter().GetResult();
+            return;
+        }
         ApplicationConfiguration.Initialize();
 
         try
@@ -155,7 +160,8 @@ internal static class Program
                     generationHttpClient, sessionManager, licenseManager);
                 using var localVoiceService = new TOOL_LOCAL.LocalVoice.LocalVoiceService(
                     dbContextFactory, new TOOL_LOCAL.LocalVoice.LocalVoiceStore(workspaceService),
-                    new TOOL_LOCAL.LocalVoice.LocalVoiceRuntime(workspaceService.WorkspaceRoot, options.Features.VeoLocalVoiceConsistencyEnabled),
+                    new TOOL_LOCAL.LocalVoice.LocalVoiceRuntime(workspaceService.WorkspaceRoot, options.Features.VeoLocalVoiceConsistencyEnabled,
+                        componentRootOverride: options.LocalVoice.ComponentRoot, temporaryRootOverride: options.LocalVoice.TemporaryRoot),
                     new TOOL_LOCAL.LocalVoice.LocalVoiceMedia(mediaToolPaths.FfmpegPath, mediaProcessRunner, mediaProbe, audioQualityValidator),
                     generationClient);
                 var projectRenderService = new ProjectRenderService(
