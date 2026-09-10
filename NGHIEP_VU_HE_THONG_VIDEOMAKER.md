@@ -1,5 +1,15 @@
 # Nghiệp vụ và kiến trúc VideoMaker
 
+## Bổ sung 2026-09-09: đồng nhất giọng Veo local (thử nghiệm)
+
+- Chỉ project Fal/Veo OpenAiStructuredPlan + ProviderNativeVerified; native clip đã duyệt, cảnh thoại một nhân vật, generation 4/6/8 giây. Bật rõ cho từng project; không đổi ngầm project cũ.
+- Mỗi nhân vật dùng Voice Anchor lấy từ đoạn nói sạch của clip native. Người dùng xác nhận quyền dùng giọng, clip một người nói, nghe mẫu rồi duyệt; không nhận mẫu giọng ngoài trong MVP.
+- Chỉ speech-to-speech: VAD, separation, voice conversion, giữ residual và trộn lại, remux hình gốc. Không TTS, ASR Cloud hay fallback lip-sync có phí; không hứa bảo đảm khẩu hình chỉ từ thời lượng.
+- Kết quả chạy xong ở ReviewRequired; phải nghe kiểm tra câu chữ, mẫu giọng, khẩu hình và âm nền. Duyệt mẫu khác, sửa lời/prompt/nhân vật hoặc đổi nguồn làm kết quả cũ hết hiệu lực.
+- Batch do người dùng chọn; lỗi/hủy có checkpoint và chạy lại local, không tạo request Veo. Ngoại lệ dùng native phải có xác nhận, lý do, người duyệt và thời gian.
+- Khi policy local bật, native approval không tự trở thành final approval. Render chỉ dùng converted result hoặc ngoại lệ native được duyệt còn khớp hash/snapshot; bỏ qua cảnh chưa đủ duyệt và báo lỗi nếu không còn cảnh nào.
+- Giữ native, anchor, checkpoint và kết quả; dọn intermediate theo thao tác xác nhận có allowlist. Model mặc định tắt cho đến khi có nghiệm thu thật; chi tiết trạng thái ở nhật ký triển khai.
+
 > Nguồn sự thật nghiệp vụ hiện hành. Rà soát theo source ngày 2026-09-07.
 
 Trạng thái triển khai nằm trong `BOI_CANH_HE_THONG_HIEN_HANH.md`; kiến trúc kỹ thuật nằm trong `KIEN_TRUC_KY_THUAT.md`; hướng dẫn vận hành nằm trong `VAN_HANH_VA_PHAT_HANH.md`.
@@ -120,7 +130,7 @@ Quy tắc Canonical Voice:
 - TTS qua đầy đủ credential/model/rate/budget/idempotency/output proxy. WAV được kiểm tra MIME, hash, sample rate, duration, audibility và ratio.
 - Canonical Voice không gửi WAV qua ASR và không phụ thuộc WER/CER. Speech verification chỉ áp dụng cho workflow không phải `OpenAiStructuredPlan` khi feature flag độc lập được bật.
 - `NativeVoiceOver` có WAV hiện hành đúng lineage đi thẳng sang tạo video nền; lệnh tạo video kiểm tra file rồi chấp nhận đúng VoiceGeneration trước outbound, không có bước duyệt WAV riêng.
-- `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`; chưa có engine thì không được render như đã lip-sync.
+- `OnCameraDialogue` dùng giọng nhân vật: chuẩn bị và duyệt WAV, tạo video nền, ghép WAV, nghe/duyệt clip rồi render. Hình và chuyển động miệng giữ theo clip provider; không có bước chỉnh khẩu hình Cloud. Trạng thái chờ của project cũ không tự chứng minh WAV đã duyệt; hệ thống phải kiểm bản ghi giọng hiện hành trước khi tiếp tục.
 - Narrated asset mới dùng `scene-audio-sync-v3`; `v2` chỉ tương thích khi là exact approved pointer và còn khớp generation, VoiceGeneration, speech/voice snapshot và hash. Phiên bản cũ hơn bị chặn.
 - Retry `NativeAudioInvalid`, repair, TTS hoặc provider lần hai là request có phí mới và cần xác nhận/idempotency phù hợp.
 
@@ -166,6 +176,22 @@ Quy tắc Canonical Voice:
 - Chỉnh timing nhưng giữ nguyên cue/nội dung không được làm mất voice: trường hợp chỉ nới `end` được chuyển tiếp WAV đã xác minh sang revision mới; các thay đổi timing khác dựng lại timeline bằng FFmpeg từ phrase WAV cache, không gọi lại Piper hoặc tải model. Đổi nội dung/speaker hay cấu trúc cue vẫn làm timeline cũ mất hiệu lực.
 - Hệ thống mượn khoảng trống kế tiếp và tăng tốc tối đa `1.20x`; phrase dài hơn vẫn publish ở tốc độ tối đa, giữ diagnostic và không cắt phần tiếng nói. Nếu tràn vào câu bỏ qua, có thể rút tối đa 120 ms đuôi WAV đã được bộ phân tích xác định nằm sau tín hiệu tiếng nói, giữ thêm 5 ms đệm; không sửa WAV phrase gốc. Thiếu khoảng lặng thì giữ phần tràn, lưu diagnostic `REVIEW_REQUIRED` không chặn và hoàn thành tạo giọng bình thường. Quy tắc này dùng chung cho tạo mới, thử lại và dựng lại cache, kể cả câu bắt đầu trong vùng bỏ qua.
 - `VietsubLocalVoiceEnabled=true` làm workflow cài đặt/ trạng thái hiển thị. Thiếu component phải trả `NOT_INSTALLED`; chỉ trả READY sau checksum/probe và vẫn cần legal review, benchmark, nghe nghiệm thu, smoke trước production.
+
+## 13A. Đăng video TikTok
+
+- Chức năng là item độc lập theo user, không phụ thuộc organization/project. Mỗi user có thể quản lý nhiều kết nối TikTok sau khi bật `TikTok:MultiAccountEnabled`; mỗi bài đăng phải chọn một `ConnectionId` thuộc user hiện hành.
+- Kết nối tài khoản phải dùng Login Kit Desktop OAuth + PKCE và trình duyệt hệ thống. Không nhận cookie, browser session, access token hoặc refresh token do người dùng tự nhập.
+- Server giữ TikTok app secret và mã hóa token theo user; desktop không nhận các giá trị này. Chuyển tài khoản không ngắt kết nối hoặc đổi tài khoản của job cũ. Kết nối lại phải khớp danh tính TikTok/app đã lưu; đăng nhập nhầm tài khoản phải bị từ chối.
+- Chỉ Global Admin quản lý TikTok Developer App credential. Credential mới được mã hóa trên server ở trạng thái `Pending`, response chỉ có hint; một OAuth code exchange thật do chính Admin yêu cầu xác minh thực hiện mới được chuyển sang `Active`.
+- Yêu cầu xác minh có hạn 15 phút và tạm khóa integration. Không được xoay credential khi còn kết nối TikTok chưa thu hồi hoặc publish job chưa terminal; kích hoạt credential mới luôn reset xác nhận public posting về false.
+- File video, absolute path và preview chỉ ở desktop. Server chỉ nhận metadata cần để khởi tạo Direct Post; desktop upload trực tiếp đến exact HTTPS TikTok upload host bằng signed URL tạm thời.
+- Trước mỗi bài đăng phải query creator info mới; privacy bắt buộc do người dùng chọn, interaction mặc định bỏ chọn và không được bật khi TikTok cấm. Người dùng phải xác nhận consent/disclosure liên quan.
+- `ClientRequestId` ổn định theo lần đăng, tách khỏi `MediaId`; retry cùng ID chỉ chấp nhận cùng tài khoản và payload. Mỗi lần khởi tạo được ghi bền vững trước outbound. Timeout không rõ kết quả không được tự khởi tạo lại; người dùng kiểm tra trên TikTok trước khi chủ động chuẩn bị lần đăng mới.
+- Desktop chỉ upload một video tại một thời điểm; sau upload có thể chọn tài khoản khác trong khi server tiếp tục theo dõi nhiều job. Mở lại desktop đọc các job đang chạy và lịch sử; có nhiều tài khoản thì yêu cầu chọn rõ tài khoản nhận bài.
+- Ngắt một tài khoản chỉ xóa quyền của kết nối đó trên server và dừng theo dõi các job chưa terminal của nó; giữ metadata lịch sử. Video đã gửi vẫn có thể tiếp tục được TikTok xử lý. Không tuyên bố thao tác ngắt là xóa hoặc hủy bài trên TikTok.
+- Khi chuyển tài khoản, lấy lại creator info, bỏ privacy/consent/disclosure và lựa chọn tương tác cũ. Lịch sử dùng tên tài khoản snapshot lúc tạo job; dữ liệu cũ thiếu snapshot không được tự suy đoán.
+- Không tự fallback sang automation trình duyệt. Public posting chỉ được bật sau app review, quyền `video.publish`, audit Content Posting API và nghiệm thu sandbox/production phù hợp.
+- Bật public posting cần Global Admin xác nhận rõ ràng và lưu metadata bằng chứng audit; không có xác nhận này thì chỉ cho phép `SELF_ONLY`.
 
 ## 14. SePay và seat
 

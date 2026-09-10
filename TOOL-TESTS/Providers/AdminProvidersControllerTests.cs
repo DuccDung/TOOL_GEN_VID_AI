@@ -30,6 +30,17 @@ public sealed class AdminProvidersControllerTests
     }
 
     [Fact]
+    public void TikTokController_RequiresGlobalAdminRole()
+    {
+        var attribute = Assert.Single(
+            typeof(AdminTikTokController)
+                .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+                .Cast<AuthorizeAttribute>());
+
+        Assert.Equal("Admin", attribute.Roles);
+    }
+
+    [Fact]
     public void OrganizationGenerationController_IsAuthenticatedAndDiscoverable()
     {
         Assert.Empty(typeof(GenerationController).GetCustomAttributes(typeof(NonControllerAttribute), inherit: true));

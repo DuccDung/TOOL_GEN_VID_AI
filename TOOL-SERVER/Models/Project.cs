@@ -29,6 +29,8 @@ public partial class Project
 
     public string SpeechProductionPolicy { get; set; } = "ProviderNativeVerified";
 
+    public string? LocalVoicePolicyVersion { get; set; }
+
     public Guid? ApprovedNarratorVoiceProfileVersionId { get; set; }
 
     public string? VideoProviderCode { get; set; }

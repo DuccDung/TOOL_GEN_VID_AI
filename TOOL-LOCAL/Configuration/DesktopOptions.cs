@@ -19,6 +19,8 @@ public sealed class DesktopOptions
 
     public DesktopSpeechSynchronizationOptions SpeechSynchronization { get; init; } = new();
 
+    public DesktopLocalVoiceOptions LocalVoice { get; init; } = new();
+
     public static DesktopOptions Load() => Load(AppContext.BaseDirectory);
 
     internal static DesktopOptions Load(string applicationDirectory)
@@ -74,6 +76,7 @@ public sealed class DesktopOptions
             throw new InvalidOperationException("Cấu hình SpeechSynchronization của desktop không hợp lệ.");
         }
 
+        options.LocalVoice.Validate();
         return options;
     }
 
@@ -128,6 +131,8 @@ public sealed class DesktopUpdateOptions
 
 public sealed class DesktopFeatureOptions
 {
+    public bool TikTokEnabled { get; init; } = true;
+
     public bool VietsubEnabled { get; init; }
 
     public bool VietsubOcrEnabled { get; init; }
@@ -137,6 +142,8 @@ public sealed class DesktopFeatureOptions
     public bool VietsubLocalVoiceEnabled { get; init; } = true;
 
     public bool SpeechSynchronizationEnabled { get; init; }
+
+    public bool VeoLocalVoiceConsistencyEnabled { get; init; }
 }
 
 public sealed class DesktopSpeechSynchronizationOptions
@@ -150,4 +157,19 @@ public sealed class DesktopSpeechSynchronizationOptions
     public int TargetSpeechLeadInMs { get; init; } = 150;
 
     public int SpeechBoundaryPaddingMs { get; init; } = 80;
+}
+
+public sealed class DesktopLocalVoiceOptions
+{
+    public string? ComponentRoot { get; init; }
+
+    public string? TemporaryRoot { get; init; }
+
+    internal void Validate()
+    {
+        if (!string.IsNullOrWhiteSpace(ComponentRoot))
+            LocalVoice.LocalVoiceRuntimePaths.ResolveDirectory(ComponentRoot);
+        if (!string.IsNullOrWhiteSpace(TemporaryRoot))
+            LocalVoice.LocalVoiceRuntimePaths.ResolveDirectory(TemporaryRoot);
+    }
 }

@@ -6,11 +6,14 @@ import App from './App';
 import { postToHost } from './bridge';
 import type { CurrentLicense, DashboardState, HostMessage } from './types';
 
-const bridge = vi.hoisted(() => ({ receive: (_message: HostMessage) => {}, sequence: 0 }));
+const bridge = vi.hoisted(() => ({ listeners: new Set<(message: HostMessage) => void>(), sequence: 0 }));
 vi.mock('./bridge', () => ({
   isHosted: true,
   postToHost: vi.fn(() => `request-${++bridge.sequence}`),
-  subscribeToHost: (callback: typeof bridge.receive) => { bridge.receive = callback; return () => {}; }
+  subscribeToHost: (callback: (message: HostMessage) => void) => {
+    bridge.listeners.add(callback);
+    return () => { bridge.listeners.delete(callback); };
+  }
 }));
 vi.mock('./features/vietsub/useVietsubModule', () => ({
   useVietsubModule: () => ({ state: { enabled: false, loading: false, busy: false } })
@@ -28,13 +31,15 @@ const dashboard = (license: CurrentLicense): DashboardState => ({
   organizations: [], selectedOrganizationId: '', projects: [], selectedProject: null, models: [], assetLibrary: null,
   providerStatus: { openAiReady: false, klingReady: false, videoReady: false },
   mediaTools: { ready: false, message: 'Chưa kiểm tra công cụ media.', checkedAtUtc: '' }, generationRunning: false,
-  features: { vietsubEnabled: false, speechSynchronizationEnabled: false }, sceneFirstFrames: [], license
+  features: { vietsubEnabled: false, speechSynchronizationEnabled: false, tikTokEnabled: false }, sceneFirstFrames: [], license
 });
 
 describe('license access recovery', () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
-  const emit = async (message: HostMessage) => { await act(async () => bridge.receive(message)); };
+  const emit = async (message: HostMessage) => {
+    await act(async () => { for (const listener of bridge.listeners) listener(message); });
+  };
   const dialog = () => container.querySelector<HTMLElement>('[role="dialog"]')!;
   const button = (label: string) => [...dialog().querySelectorAll('button')].find(b => b.textContent === label)!;
   beforeEach(async () => {
@@ -90,6 +95,29 @@ describe('license access recovery', () => {
     id = vi.mocked(postToHost).mock.results.at(-1)!.value as string;
     await emit({ type: 'dashboard.state', requestId: id, payload: dashboard(active) });
     expect(dialog()).toBeNull();
+  });
+
+  it.each([
+    ['Admin', true],
+    ['Member', false]
+  ] as const)('retains TikTok readiness while locked and restricts verification to Admin (%s)', async (role, canVerify) => {
+    const state = dashboard(locked);
+    state.profile.roles = [role];
+    state.features.tikTokEnabled = true;
+    await emit({ type: 'dashboard.state', payload: state });
+    const requests = vi.mocked(postToHost).mock;
+    const requestIndex = requests.calls.findIndex(call => call[0] === 'tiktok.state.get');
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    await emit({ type: 'tiktok.state', requestId: requests.results[requestIndex].value as string,
+      payload: { enabled: true, configured: false, isCredentialVerification: true, connections: [], connection: null } });
+    expect(dialog()).not.toBeNull();
+    const verify = button('Mở xác minh TikTok');
+    expect(Boolean(verify)).toBe(canVerify);
+    if (canVerify) {
+      await act(async () => verify.click());
+      expect(dialog()).toBeNull();
+      expect(container.textContent).toContain('TikTok');
+    }
   });
 
   it.each([

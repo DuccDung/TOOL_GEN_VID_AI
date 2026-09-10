@@ -237,6 +237,7 @@ public sealed class ProjectService(
                     x.Status,
                     x.ApprovedGenerationId,
                     x.ApprovedRenderMediaAssetId,
+                    x.ApprovedVoiceGenerationId,
                     x.SpeechStatus,
                     x.LastErrorCode,
                     x.LastErrorMessage,
@@ -312,6 +313,7 @@ public sealed class ProjectService(
                     x.ScenePlanVersion,
                     x.NarrationHash,
                     x.Status,
+                    x.ApprovedAtUtc,
                     SourceMediaAssetId = x.OutputMediaAssetId!.Value,
                     SourceMediaSha256 = x.OutputMediaAsset!.Sha256,
                     x.VoiceProfileVersionId,
@@ -523,9 +525,20 @@ public sealed class ProjectService(
                 // hành động tạo video. Lệnh tạo video sẽ kiểm tra kỹ thuật lại file cục bộ,
                 // tự chấp nhận đúng VoiceGeneration rồi mới đi qua server cost gate.
                 var canonicalNarrationReadyForVideo = canonicalSpeech &&
-                                                       speechMode == KlingSpeechModes.NativeVoiceOver &&
-                                                       voice?.Status == "Completed";
-                var requiresAudioReview = scene.Status == "AudioReviewRequired" &&
+                    (speechMode == KlingSpeechModes.NativeVoiceOver && voice?.Status == "Completed" ||
+                     voice?.Status == "Approved" && voice.ApprovedAtUtc is not null &&
+                     voice.VoiceGenerationId == scene.ApprovedVoiceGenerationId &&
+                     voiceProfileRows.Any(x => x.VoiceProfileVersionId == voice.VoiceProfileVersionId &&
+                         x.Status == VoiceProfileVersionStatuses.Approved && x.SnapshotHash == voice.VoiceSnapshotHash) &&
+                     asset?.AssetType != "SceneVideoNarrated" && scene.Status != "Approved");
+                // Old waiting states are projected only; reads never approve a WAV or change project data.
+                var legacySpeechState = canonicalSpeech && scene.SpeechStatus == SceneSpeechStatuses.LegacySpeechReadyForLipSync;
+                var dashboardSpeechStatus = legacySpeechState
+                    ? canonicalNarrationReadyForVideo ? SceneSpeechStatuses.SpeechApproved
+                        : voice is null ? SceneSpeechStatuses.SpeechMissing : SceneSpeechStatuses.SpeechReviewRequired
+                    : scene.SpeechStatus;
+                var requiresAudioReview = (scene.Status == "AudioReviewRequired" || legacySpeechState) &&
+                                          !(legacySpeechState && voice is null) &&
                                           !canonicalNarrationReadyForVideo;
                 var requiresSpeechVerification = !canonicalSpeech &&
                                                  speechVerificationEnabled &&
@@ -546,7 +559,7 @@ public sealed class ProjectService(
                 var canonicalReviewStageReady = canonicalSpeech && voice is not null &&
                                                 (voice.Status == "Completed" ||
                                                  voice.Status == "Approved" &&
-                                                 asset?.AssetType == "SceneVideoNarrated");
+                                                 (asset?.AssetType == "SceneVideoNarrated" || legacySpeechState));
                 var canApproveNativeAudio = requiresAudioReview &&
                                             reviewAudioAvailable &&
                                             (speechVerified || speechReviewCanBeOverridden) &&
@@ -603,6 +616,8 @@ public sealed class ProjectService(
                     ? "Generated"
                     : canonicalNarrationReadyForVideo
                         ? "PromptReady"
+                        : legacySpeechState
+                            ? voice is null ? "PromptReady" : "AudioReviewRequired"
                         : scene.Status;
                 return new SceneDashboardSummary(
                     scene.SceneId,
@@ -630,14 +645,14 @@ public sealed class ProjectService(
                         : CreatePreview(
                             project.WorkspaceRelativePath,
                             new PreviewAsset(null, asset.RelativePath, asset.DurationMs, asset.MimeType)),
-                    providerVideoCompleted || canonicalNarrationReadyForVideo || string.IsNullOrWhiteSpace(scene.LastErrorMessage)
+                    providerVideoCompleted || canonicalNarrationReadyForVideo || legacySpeechState || string.IsNullOrWhiteSpace(scene.LastErrorMessage)
                         ? null
                         : IsMediaToolError(scene.LastErrorCode) ||
                           IsNativeAudioError(scene.LastErrorCode) ||
                           IsVideoProviderRetryError(scene.LastErrorCode)
                             ? scene.LastErrorMessage
                             : "Không thể hoàn tất clip cho cảnh này. Hãy kiểm tra prompt và thử lại.",
-                    providerVideoCompleted || canonicalNarrationReadyForVideo ? null : scene.LastErrorCode,
+                    providerVideoCompleted || canonicalNarrationReadyForVideo || legacySpeechState ? null : scene.LastErrorCode,
                     false,
                     speechMode,
                     nativeAudioPresent,
@@ -648,7 +663,7 @@ public sealed class ProjectService(
                     ReadStringProperty(scene.RequiredCapabilitiesJson, "voiceStyle"),
                     ReadStringProperty(scene.RequiredCapabilitiesJson, "ambientAudio"),
                     ReadStringProperty(scene.RequiredCapabilitiesJson, "soundEffects"),
-                    scene.SpeechStatus,
+                    dashboardSpeechStatus,
                     voice is not null,
                     voice is null
                         ? null
@@ -1132,7 +1147,7 @@ public sealed class ProjectService(
         var canonicalSpeech =
             string.Equals(project.SpeechProductionPolicy, SpeechProductionPolicies.CanonicalVoice, StringComparison.Ordinal) &&
             speechMode != KlingSpeechModes.None;
-        var canonicalNarration = canonicalSpeech && speechMode == KlingSpeechModes.NativeVoiceOver;
+        var canonicalNarration = canonicalSpeech;
         var canonicalOnCamera = canonicalSpeech && speechMode == KlingSpeechModes.OnCameraDialogue;
         var legacyCanonicalVoiceReview = canonicalSpeech &&
                                          scene.Status == "NativeAudioInvalid" &&
@@ -1194,6 +1209,8 @@ public sealed class ProjectService(
                             x.ScenePlanVersion == scene.ScenePlanVersion &&
                             x.NarrationHash == expectedSpeechHash &&
                             x.VoiceProfileVersionId == expectedVoiceProfileVersionId &&
+                            x.VoiceProfileVersion!.Status == VoiceProfileVersionStatuses.Approved &&
+                            x.VoiceSnapshotHash == x.VoiceProfileVersion.SnapshotHash &&
                             (x.Status == "Completed" || x.Status == "Approved") &&
                             x.OutputMediaAssetId != null &&
                             x.OutputMediaAsset!.Status == "Ready" &&
@@ -1244,21 +1261,18 @@ public sealed class ProjectService(
         }
 
         var now = DateTime.UtcNow;
-        if (canonicalSpeech && voiceGeneration!.Status != "Approved")
+        if (canonicalSpeech && (voiceGeneration!.Status != "Approved" || voiceGeneration.ApprovedAtUtc is null ||
+            scene.ApprovedVoiceGenerationId != voiceGeneration.VoiceGenerationId))
         {
             voiceGeneration.Status = "Approved";
             voiceGeneration.ApprovedAtUtc = now;
             scene.ApprovedVoiceGenerationId = voiceGeneration.VoiceGenerationId;
             scene.ApprovedGenerationId = null;
             scene.ApprovedRenderMediaAssetId = null;
-            scene.SpeechStatus = canonicalOnCamera
-                ? SceneSpeechStatuses.SpeechReadyForLipSync
-                : SceneSpeechStatuses.SpeechApproved;
-            scene.Status = canonicalOnCamera ? "AudioReviewRequired" : "PromptReady";
-            scene.LastErrorCode = canonicalOnCamera ? SpeechSynchronizationErrorCodes.SpeechReadyForLipSync : null;
-            scene.LastErrorMessage = canonicalOnCamera
-                ? "Canonical Voice đã duyệt và sẵn sàng cho bước lip-sync; phiên bản này chưa tự thay audio video có khẩu hình."
-                : null;
+            scene.SpeechStatus = SceneSpeechStatuses.SpeechApproved;
+            scene.Status = "PromptReady";
+            scene.LastErrorCode = null;
+            scene.LastErrorMessage = null;
             scene.UpdatedAtUtc = now;
             project.Status = "ScenePlanning";
             project.LastErrorCode = null;
@@ -1266,11 +1280,6 @@ public sealed class ProjectService(
             project.UpdatedAtUtc = now;
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return;
-        }
-
-        if (canonicalOnCamera)
-        {
             return;
         }
 
@@ -1291,6 +1300,8 @@ public sealed class ProjectService(
                 .OrderByDescending(x => x.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
             approvedRenderAsset = narratedAssets.FirstOrDefault(x =>
+                ReadStringProperty(x.MetadataJson, "rawVideoMediaAssetId") == generation.OutputMediaAssetId?.ToString("D") &&
+                ReadStringProperty(x.MetadataJson, "voiceSnapshotHash") == voiceGeneration!.VoiceSnapshotHash &&
                 string.Equals(
                     ReadStringProperty(x.MetadataJson, "voiceGenerationId"),
                     voiceGeneration!.VoiceGenerationId.ToString("D"),
@@ -1379,7 +1390,7 @@ public sealed class ProjectService(
         if (scene.ApprovedGenerationId is null &&
             scene.ApprovedVoiceGenerationId is null &&
             scene.ApprovedRenderMediaAssetId is null &&
-            scene.SpeechStatus != SceneSpeechStatuses.SpeechReadyForLipSync)
+            scene.SpeechStatus != SceneSpeechStatuses.LegacySpeechReadyForLipSync)
         {
             throw new ArgumentException("Cảnh chưa có audio hoặc video đã duyệt để hủy.");
         }

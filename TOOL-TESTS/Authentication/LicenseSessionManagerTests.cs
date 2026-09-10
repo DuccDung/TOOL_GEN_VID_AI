@@ -172,7 +172,7 @@ public sealed class LicenseSessionManagerTests
         await manager.InitializeAsync();
         var messages = new List<string>();
         var returnedToLogin = false;
-        using var bridge = new DashboardBridge(session, manager, null!, null!, null!, null!, null!, null!, false,
+        using var bridge = new DashboardBridge(session, manager, null!, null!, null!, null!, null!, null!, false, false,
             messages.Add, () => returnedToLogin = true);
 
         await bridge.HandleAsync("""{"type":"auth.logout","requestId":"logout-test","payload":{}}""");

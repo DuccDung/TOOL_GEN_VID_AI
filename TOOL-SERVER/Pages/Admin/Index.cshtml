@@ -38,6 +38,7 @@
         <symbol id="icon-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></symbol>
         <symbol id="icon-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" /><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5" /></symbol>
         <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></symbol>
+        <symbol id="icon-video-up" viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="2" /><path d="m17 10 4-2v8l-4-2M10 15V9m-3 3 3-3 3 3" /></symbol>
     </svg>
 
     <section class="login-screen" id="loginScreen">
@@ -71,6 +72,7 @@
                         <button type="button" class="nav-subitem" id="organizationCostGuideScopeItem" data-organization-scope="cost-guide">Cách tính chi phí</button>
                     </div>
                 </div>
+                <button class="nav-item" data-view="tiktok"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-video-up"></use></svg></span><span>Tích hợp TikTok</span></button>
                 <button class="nav-item" data-view="plans"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-id-card"></use></svg></span><span>Gói sử dụng</span></button>
                 <button class="nav-item" data-view="releases"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-package-up"></use></svg></span><span>Desktop Releases</span></button>
             </nav>
@@ -201,6 +203,13 @@
                 </div>
             </section>
 
+            <section class="view-panel hidden" data-panel="tiktok">
+                <section class="panel tiktok-admin-panel">
+                    <div class="tt-page-heading"><div><span class="tt-eyebrow">KẾT NỐI &amp; CHIA SẺ</span><h2>Ứng dụng TikTok</h2><p>Thiết lập một lần để người dùng kết nối và đăng video từ VideoMaker Desktop.</p></div><button class="ghost-button" id="addTikTokCredentialButton" type="button" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-key"></use></svg><span>Nhập thông tin ứng dụng</span></button></div>
+                    <div id="tiktokAdminConsole"><div class="tt-loading" role="status"><span class="tt-loading-bar"></span><span class="tt-loading-bar short"></span><p>Đang tải cấu hình TikTok…</p></div></div>
+                </section>
+            </section>
+
             <section class="view-panel hidden" data-panel="plans">
                 <section class="panel management-panel"><div class="section-heading"><div><span class="eyebrow">LICENSE POLICY</span><h2>Gói sử dụng</h2></div><button class="primary-button" id="addPlanButton"><svg class="ui-icon"><use href="#icon-plus"></use></svg><span>Tạo gói</span></button></div><p class="form-hint">Giới hạn thiết bị và phiên đồng thời được server áp dụng cho mỗi license.</p><div id="planTable"></div></section>
             </section>
@@ -217,6 +226,20 @@
         <form id="grantForm" method="dialog"><div class="dialog-heading"><div><span class="eyebrow">GRANT LICENSE</span><h2>Cấp gói sử dụng</h2></div><button type="button" class="dialog-close" data-close><svg class="ui-icon"><use href="#icon-x"></use></svg></button></div>
             <input type="hidden" id="grantUserId" /><div class="form-grid"><label class="full">Gói<select id="grantPlan" required></select></label><label>Số ngày sử dụng<input id="grantDuration" type="number" min="1" max="3650" value="30" required /></label><label>Ngày bắt đầu<input id="grantStart" type="datetime-local" /></label><label class="toggle-row full"><input id="grantTrial" type="checkbox" /><span class="toggle"></span><span>Đánh dấu là gói dùng thử</span></label></div><p class="form-message dialog-message"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Cấp license</button></div>
         </form>
+    </dialog>
+
+    <dialog id="tiktokCredentialDialog" class="admin-dialog tt-dialog" aria-labelledby="tiktokCredentialTitle" aria-describedby="tiktokCredentialHelp">
+        <form id="tiktokCredentialForm" method="dialog" autocomplete="off" novalidate><div class="dialog-heading"><div><span class="tt-eyebrow">THIẾT LẬP ỨNG DỤNG</span><h2 id="tiktokCredentialTitle">Nhập thông tin TikTok</h2></div><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon" aria-hidden="true"><use href="#icon-x"></use></svg></button></div>
+            <p id="tiktokCredentialHelp">Lấy hai giá trị trong trang quản lý ứng dụng tại <a href="https://developers.tiktok.com/" target="_blank" rel="noopener noreferrer">TikTok Developer Portal ↗</a>.</p>
+            <p id="tiktokReplaceNote" class="tt-inline-warning" hidden>Bạn đang có một bản chờ xác minh. Lưu lần này sẽ thay thế bản chờ đó và kết thúc phiên xác minh của bản cũ.</p>
+            <div class="tt-dialog-fields"><label for="tiktokClientKey">Client Key <span aria-hidden="true">*</span></label><input id="tiktokClientKey" type="password" minlength="8" maxlength="200" autocomplete="new-password" autocapitalize="off" spellcheck="false" aria-describedby="tiktokClientKeyError" required /><p id="tiktokClientKeyError" class="tt-field-error"></p>
+            <label for="tiktokClientSecret">Client Secret <span aria-hidden="true">*</span></label><input id="tiktokClientSecret" type="password" minlength="8" maxlength="500" autocomplete="new-password" autocapitalize="off" spellcheck="false" aria-describedby="tiktokSecretHelp tiktokClientSecretError" required /><p id="tiktokClientSecretError" class="tt-field-error"></p><small id="tiktokSecretHelp">Thông tin được gửi qua HTTPS và mã hóa trên server. Secret không thể xem lại sau khi lưu; nếu gửi lỗi, bạn cần nhập lại.</small></div>
+            <p class="tt-next-note"><strong>Bước tiếp theo:</strong> xác minh kết nối trên VideoMaker Desktop để kích hoạt thông tin này.</p><p class="form-message dialog-message" role="status"></p><div class="dialog-actions"><button type="button" class="ghost-button" data-close>Hủy</button><button class="primary-button" type="submit">Lưu thông tin ứng dụng</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="tiktokConfirmDialog" class="admin-dialog tt-dialog" aria-labelledby="tiktokConfirmTitle" aria-describedby="tiktokConfirmDescription">
+        <form method="dialog"><div class="dialog-heading"><h2 id="tiktokConfirmTitle">Xác nhận thao tác</h2><button type="button" class="dialog-close" data-close aria-label="Đóng"><svg class="ui-icon" aria-hidden="true"><use href="#icon-x"></use></svg></button></div><p id="tiktokConfirmDescription"></p><div class="dialog-actions"><button class="ghost-button" type="submit" value="cancel" autofocus>Quay lại</button><button id="tiktokConfirmAction" class="primary-button" type="submit" value="proceed">Tiếp tục</button></div></form>
     </dialog>
 
     <dialog id="planDialog" class="admin-dialog">
@@ -281,6 +304,8 @@
 
     <div class="toast-stack" id="toastStack" aria-live="polite"></div>
     <script src="~/admin/admin.js" asp-append-version="true"></script>
+    <script src="~/admin/admin-tiktok-state.js" asp-append-version="true"></script>
+    <script src="~/admin/admin-tiktok.js" asp-append-version="true"></script>
     <script src="~/admin/admin-organizations.js" asp-append-version="true"></script>
 </body>
 </html>

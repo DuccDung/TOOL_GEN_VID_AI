@@ -49,7 +49,53 @@ internal sealed record DashboardStateResponse(
 
 internal sealed record DashboardFeatureFlagsResponse(
     bool VietsubEnabled,
-    bool SpeechSynchronizationEnabled = false);
+    bool SpeechSynchronizationEnabled = false,
+    bool TikTokEnabled = false);
+
+internal sealed record TikTokPublishWebRequest(
+    string Title,
+    string PrivacyLevel,
+    bool AllowComment,
+    bool AllowDuet,
+    bool AllowStitch,
+    bool CommercialContent,
+    bool BrandContent,
+    bool BrandOrganic,
+    bool IsAiGenerated,
+    bool ConsentConfirmed,
+    Guid ConnectionId = default,
+    Guid ClientRequestId = default,
+    Guid MediaId = default);
+
+internal sealed record TikTokConnectionWebRequest(Guid ConnectionId);
+internal sealed record TikTokConnectWebRequest(Guid? TargetConnectionId = null);
+internal sealed record TikTokHistoryWebRequest(Guid? ConnectionId = null, int Page = 1);
+internal sealed record TikTokCancelWebRequest(string? OperationRequestId);
+
+internal sealed record TikTokPublishStatusWebRequest(Guid PublishJobId);
+
+internal sealed record TikTokPolicyWebRequest(string Policy);
+
+internal sealed record TikTokMediaWebResponse(
+    Guid MediaId,
+    string FileName,
+    string MimeType,
+    long SizeBytes,
+    decimal DurationSeconds,
+    int Width,
+    int Height,
+    decimal FramesPerSecond,
+    string VideoCodec,
+    string PreviewUrl);
+
+internal sealed record TikTokUploadProgressWebResponse(
+    Guid PublishJobId,
+    long UploadedBytes,
+    long TotalBytes,
+    int Percent,
+    int CompletedChunks,
+    int TotalChunks,
+    Guid? ConnectionId = null);
 
 internal sealed record DesktopFeatureSettingsResponse(
     bool SpeechSynchronizationEnabled,
@@ -69,13 +115,15 @@ internal sealed record CreateProjectWebRequest(
     string LanguageCode,
     string? VoiceCode = null,
     decimal? VoiceSpeakingRate = null,
-    string SpeechProductionPolicy = "ProviderNativeVerified");
+    string SpeechProductionPolicy = "ProviderNativeVerified",
+    Guid? OrganizationId = null);
 
 internal sealed record CreateShortVideoWebRequest(
     string Content,
     string AspectRatio,
     int DurationSeconds,
-    bool AudioEnabled);
+    bool AudioEnabled,
+    Guid? OrganizationId = null);
 
 internal sealed record GenerateVideoWebRequest(IReadOnlyList<Guid>? SceneIds);
 

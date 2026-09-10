@@ -5,7 +5,13 @@ using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.Generation;
 
-internal interface IGenerationClient
+internal interface ILocalVoiceAccessClient
+{
+    Task<LocalVoiceAccessResponse> AuthorizeLocalVoiceAsync(Guid projectId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Local voice authorization is unavailable.");
+}
+
+internal interface IGenerationClient : ILocalVoiceAccessClient
 {
     Guid? SelectedOrganizationId { get; }
     Task<IReadOnlyList<OrganizationSummaryResponse>> GetOrganizationsAsync(CancellationToken cancellationToken);

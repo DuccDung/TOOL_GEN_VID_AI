@@ -534,6 +534,7 @@ public partial class VideoFactoryDbContext : DbContext
                 .HasDefaultValue("vi-VN", "DF_Projects_Language");
             entity.Property(e => e.VoiceCode).HasMaxLength(100);
             entity.Property(e => e.VoiceSpeakingRate).HasColumnType("decimal(6, 3)");
+            entity.Property(e => e.LocalVoicePolicyVersion).HasMaxLength(50).IsUnicode(false);
             entity.Property(e => e.SpeechProductionPolicy)
                 .HasMaxLength(40)
                 .IsUnicode(false)

@@ -30,8 +30,9 @@ export function needsCanonicalVoicePreparation(
 ): boolean {
   if (!isCanonicalSpeechScene(scene, speechProductionPolicy) || isLocalVideoCompletion(scene)) return false;
   if (scene.preview?.url) return false;
+  if (!scene.canonicalVoicePreview?.url) return true;
   if (scene.speechMode === 'NativeVoiceOver' && scene.canonicalVoicePreview?.url) return false;
-  return scene.speechStatus !== 'SpeechApproved' && scene.speechStatus !== 'SpeechReadyForLipSync';
+  return scene.speechStatus !== 'SpeechApproved';
 }
 
 export function getStoryboardActionSummary(
@@ -64,9 +65,7 @@ export function getCanonicalVoiceJourney(
 ): { steps: WorkflowStep[]; nextAction: string } {
   const hasVoice = Boolean(scene.canonicalVoicePreview?.url);
   const hasVideo = Boolean(scene.preview?.url);
-  const voiceApproved = hasVideo ||
-    scene.speechStatus === 'SpeechApproved' ||
-    scene.speechStatus === 'SpeechReadyForLipSync';
+  const voiceApproved = hasVideo || (hasVoice && scene.speechStatus === 'SpeechApproved');
   const finalApproved = scene.status.toLowerCase() === 'approved';
   const onCamera = scene.speechMode === 'OnCameraDialogue';
 
@@ -104,7 +103,7 @@ export function getCanonicalVoiceJourney(
   const steps: WorkflowStep[] = [
     { id: 'voice', label: 'Tạo WAV', state: hasVoice ? 'complete' : currentId === 'voice' ? 'current' : 'pending' },
     { id: 'voice-review', label: 'Duyệt WAV', state: voiceApproved ? 'complete' : currentId === 'voice-review' ? 'current' : 'pending' },
-    { id: 'video', label: 'Lip-sync', state: hasVideo ? 'complete' : currentId === 'video' ? 'current' : 'pending' },
+    { id: 'video', label: 'Tạo video nền và ghép WAV', state: hasVideo ? 'complete' : currentId === 'video' ? 'current' : 'pending' },
     { id: 'final-review', label: 'Duyệt video', state: finalApproved ? 'complete' : currentId === 'final-review' ? 'current' : 'pending' }
   ];
 
@@ -118,7 +117,7 @@ export function getCanonicalVoiceJourney(
     return { steps, nextAction: 'Bước tiếp theo: hoàn tất checklist và duyệt Canonical WAV.' };
   }
   if (!hasVideo) {
-    return { steps, nextAction: 'Canonical WAV đã duyệt. Cảnh đang chờ module lip-sync; hệ thống chưa sinh video ở giai đoạn này.' };
+    return { steps, nextAction: 'Canonical WAV đã duyệt. Bấm “Tạo video nền”; hệ thống sẽ ghép WAV hiện hành vào clip và không gọi TTS mới. Hình ảnh và chuyển động miệng giữ theo video được tạo.' };
   }
   if (!finalApproved && !requiredPlaybackConfirmed) {
     return { steps, nextAction: 'Video đã ghép tiếng. Hãy phát video ít nhất một lần trước khi duyệt kết quả cuối.' };

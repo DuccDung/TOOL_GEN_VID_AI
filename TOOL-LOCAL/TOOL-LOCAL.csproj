@@ -57,6 +57,9 @@
 
   <ItemGroup>
     <Content Include="Vietsub\Voice\Workers\piper_worker.py" Link="workers\piper_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="LocalVoice\Workers\voice_consistency_worker.py" Link="workers\voice_consistency_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="LocalVoice\Workers\install_voice_consistency.ps1" Link="workers\install_voice_consistency.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="LocalVoice\Workers\requirements.lock" Link="workers\requirements.lock" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

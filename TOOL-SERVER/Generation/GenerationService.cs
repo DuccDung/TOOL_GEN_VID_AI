@@ -5116,13 +5116,8 @@ internal sealed class GenerationService(
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(dialogue))
-        {
-            throw Conflict(
-                SpeechSynchronizationErrorCodes.SpeechReadyForLipSync,
-                "Cảnh thoại trực diện dùng Canonical Voice chỉ được chuẩn bị WAV và dừng ở bước chờ lip-sync.");
-        }
-        if (string.IsNullOrWhiteSpace(narration))
+        var spokenText = !string.IsNullOrWhiteSpace(dialogue) ? dialogue : narration;
+        if (string.IsNullOrWhiteSpace(spokenText))
         {
             return;
         }
@@ -5133,7 +5128,23 @@ internal sealed class GenerationService(
                 "Hãy nghe và duyệt Canonical WAV trước khi sinh video nền.");
         }
 
-        var expectedSpeechHash = Sha256Hex(NormalizeNarration(narration));
+        var expectedSpeechHash = Sha256Hex(NormalizeNarration(spokenText));
+        Guid? expectedVoiceProfileVersionId;
+        if (!string.IsNullOrWhiteSpace(dialogue))
+        {
+            var characterIdsJson = await dbContext.Scenes.Where(x => x.ProjectId == projectId && x.SceneId == sceneId)
+                .Select(x => x.CharacterIdsJson).SingleAsync(cancellationToken);
+            var characterIds = ParseGuidList(characterIdsJson);
+            expectedVoiceProfileVersionId = characterIds.Count == 1
+                ? await dbContext.Characters.Where(x => x.ProjectId == projectId && x.CharacterId == characterIds[0])
+                    .Select(x => x.ApprovedVoiceProfileVersionId).SingleOrDefaultAsync(cancellationToken)
+                : null;
+        }
+        else
+        {
+            expectedVoiceProfileVersionId = await dbContext.Projects.Where(x => x.ProjectId == projectId)
+                .Select(x => x.ApprovedNarratorVoiceProfileVersionId).SingleAsync(cancellationToken);
+        }
         var approvedVoiceExists = await dbContext.VoiceGenerations
             .AsNoTracking()
             .AnyAsync(x => x.VoiceGenerationId == approvedVoiceGenerationId &&
@@ -5146,7 +5157,8 @@ internal sealed class GenerationService(
                            x.OutputMediaAssetId != null &&
                            x.OutputMediaAsset!.Status == "Ready" &&
                            x.OutputMediaAsset.DeletedAtUtc == null &&
-                           x.VoiceProfileVersionId != null &&
+                           expectedVoiceProfileVersionId != null &&
+                           x.VoiceProfileVersionId == expectedVoiceProfileVersionId &&
                            x.VoiceProfileVersion!.Status == VoiceProfileVersionStatuses.Approved &&
                            x.VoiceSnapshotHash == x.VoiceProfileVersion.SnapshotHash,
                 cancellationToken);

@@ -1,0 +1,16 @@
+.local-voice-panel { margin-block: 18px; padding: 20px; border: 1px solid var(--border-color, #d4dbe6); border-radius: 12px; background: var(--surface, #fff); color: var(--text-primary, #182234); }
+.local-voice-panel h2, .local-voice-panel h3, .local-voice-panel h4 { margin: 0 0 10px; }
+.local-voice-panel h3 { margin-top: 24px; }
+.local-voice-panel p { line-height: 1.55; margin: 8px 0 12px; }
+.local-voice-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 12px; }
+.local-voice-panel button, .local-voice-panel select { padding: 9px 12px; border: 1px solid #bac6d8; border-radius: 7px; background: #f3f6fc; color: #17325a; }
+.local-voice-panel button:disabled { opacity: .5; cursor: not-allowed; }
+.local-voice-panel label { display: flex; gap: 9px; align-items: flex-start; line-height: 1.5; }
+.local-voice-panel input[type=checkbox] { margin-top: 5px; flex: 0 0 auto; }
+.local-voice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
+.local-voice-box { border: 1px solid #d4dbe6; border-radius: 9px; padding: 14px; margin-block: 10px; overflow-wrap: anywhere; }
+.local-voice-panel video { width: 100%; max-height: 320px; background: #111; margin-block: 8px; }
+.local-voice-panel audio { width: 100%; margin-block: 8px; }
+.local-voice-scenes { display: grid; gap: 10px; margin-block: 14px; }
+.local-voice-panel textarea { display: block; width: 100%; min-height: 65px; margin-block: 10px; }
+.local-voice-error { color: #ac2438; }
