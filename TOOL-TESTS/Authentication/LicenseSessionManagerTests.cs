@@ -185,6 +185,50 @@ public sealed class LicenseSessionManagerTests
         Assert.Equal("logout-test", response.RootElement.GetProperty("requestId").GetString());
     }
 
+    [Fact]
+    public async Task LocalOnlyDashboard_LoadsAndSwitchesOrganizationWithoutWorkflowSqlOrProviderConfiguration()
+    {
+        using var session = await CreateAuthenticatedSessionAsync();
+        using var licenseHttp = CreateHttpClient(new RecordingHandler(_ => JsonResponse(ActiveLicense(DateTime.UtcNow, true))));
+        await using var license = new LicenseSessionManager(new LicenseApiClient(licenseHttp, session));
+        await license.InitializeAsync();
+        var organizations = new[] { Guid.NewGuid(), Guid.NewGuid() }.Select(id =>
+            new TOOL_SHARED.Contracts.Organizations.OrganizationSummaryResponse(id, "fixture", "Fixture", "Member", "Active",
+                0, 0, 0, 0, "USD", DateTime.UtcNow, DateTime.UtcNow.AddMonths(1))).ToArray();
+        var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("/api/organizations", request.RequestUri!.AbsolutePath);
+            return JsonResponse(organizations);
+        });
+        using var gatewayHttp = CreateHttpClient(new TOOL_LOCAL.Configuration.LocalOnlyGatewayHandler(new()) { InnerHandler = handler });
+        var gateway = new TOOL_LOCAL.Generation.ServerGenerationClient(gatewayHttp, session, license);
+        var messages = new List<string>();
+        // Null video services prove this path never touches workflow SQL, catalog or generation.
+        using var bridge = new DashboardBridge(session, license, null!, null!, null!, gateway, new LocalMediaPreflight(), null!, true,
+            messages.Add, () => { }, localOnly: true);
+        await bridge.HandleAsync("""{"type":"app.ready","requestId":"startup","payload":{}}""");
+        await bridge.HandleAsync(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type = "organization.select", requestId = "switch", payload = new { organizationId = organizations[1].OrganizationId }
+        }));
+        Assert.Equal(2, messages.Count);
+        using var result = System.Text.Json.JsonDocument.Parse(messages[^1]);
+        var payload = result.RootElement.GetProperty("payload");
+        Assert.Equal(organizations[1].OrganizationId, payload.GetProperty("selectedOrganizationId").GetGuid());
+        Assert.True(payload.GetProperty("features").GetProperty("vietsubLocalOnly").GetBoolean());
+        Assert.Equal(0, payload.GetProperty("projects").GetArrayLength());
+        Assert.Equal(0, payload.GetProperty("models").GetArrayLength());
+        Assert.True(license.HasValidLease);
+        Assert.All(handler.Requests, request => Assert.Equal("GET /api/organizations", request));
+    }
+
+    private sealed class LocalMediaPreflight : TOOL_LOCAL.Media.IMediaToolPreflightService
+    {
+        public Task<TOOL_LOCAL.Media.MediaToolStatusSummary> GetStatusAsync(bool force, CancellationToken ct) =>
+            Task.FromResult(new TOOL_LOCAL.Media.MediaToolStatusSummary(true, null, "Ready", "fixture", "fixture", DateTime.UtcNow));
+        public Task<TOOL_LOCAL.Media.MediaToolStatusSummary> RequireReadyAsync(CancellationToken ct) => GetStatusAsync(false, ct);
+    }
+
     private static CurrentLicenseResponse MissingLicense(DateTime now) => new(
         false,
         null,

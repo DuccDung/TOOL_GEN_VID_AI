@@ -587,6 +587,7 @@ export function VietsubEditorWorkspace({
             ocrPreview={state.ocrPreview}
             translationRuntime={state.translationRuntime}
             cloudAvailability={state.cloudAvailability}
+            localOnly={state.localOnly}
             translationInstallProgress={state.translationInstallProgress}
             translationNotice={state.translationNotice}
             translationNoticeId={state.noticeEvents?.translationNotice?.id}

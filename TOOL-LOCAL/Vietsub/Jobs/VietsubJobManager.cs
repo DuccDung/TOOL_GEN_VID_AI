@@ -13,6 +13,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
     private readonly VietsubJobStore _store;
     private readonly VietsubJobExecutorRegistry _executors;
     private readonly SemaphoreSlim _executionSlots;
+    private readonly bool _localOnly;
     private readonly ConcurrentDictionary<Guid, ActiveExecution> _active = new();
     private readonly ConcurrentDictionary<string, byte> _recordedDiagnostics = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
@@ -21,7 +22,8 @@ internal sealed class VietsubJobManager : IAsyncDisposable
     public VietsubJobManager(
         VietsubJobStore store,
         VietsubJobExecutorRegistry executors,
-        int maximumConcurrentJobs = 1)
+        int maximumConcurrentJobs = 1,
+        bool localOnly = false)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(executors);
@@ -31,6 +33,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         }
 
         _store = store;
+        _localOnly = localOnly;
         _executors = executors;
         _executionSlots = new SemaphoreSlim(maximumConcurrentJobs, maximumConcurrentJobs);
     }
@@ -49,6 +52,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        EnsureJobAllowed(jobType);
         var job = await _store.CreateAsync(
             projectId,
             jobType,
@@ -74,6 +78,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         var job = await GetRequiredAsync(projectId, jobId, cancellationToken);
+        EnsureJobAllowed(job.Type);
         if (job.Status != VietsubJobStatus.Pending)
         {
             throw InvalidTransition("Chỉ job đang chờ mới có thể bắt đầu.");
@@ -131,6 +136,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
     {
         ThrowIfDisposed();
         var job = await GetRequiredAsync(projectId, jobId, cancellationToken);
+        EnsureJobAllowed(job.Type);
         if (job.Status is not (VietsubJobStatus.Paused or VietsubJobStatus.Interrupted))
         {
             throw InvalidTransition("Chỉ job đã tạm dừng hoặc bị gián đoạn mới có thể tiếp tục.");
@@ -148,6 +154,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
     {
         ThrowIfDisposed();
         var job = await GetRequiredAsync(projectId, jobId, cancellationToken);
+        EnsureJobAllowed(job.Type);
         if (job.Status != VietsubJobStatus.Failed)
         {
             throw InvalidTransition("Chỉ job thất bại mới có thể chạy lại.");
@@ -156,6 +163,13 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         job = await MoveBackToPendingAsync(projectId, job, "RETRY_QUEUED", cancellationToken);
         await StartAsync(projectId, jobId, cancellationToken);
         return VietsubJobSummary.From(job);
+    }
+
+    private void EnsureJobAllowed(string type)
+    {
+        if (_localOnly && type == VietsubJobTypes.TranslateCloud)
+            throw new VietsubJobException(TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyErrorCode,
+                TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyMessage);
     }
 
     public async Task<VietsubJobSummary> CancelAsync(

@@ -1,5 +1,7 @@
 # VideoMaker
 
+**Chế độ mặc định hiện hành: Vietsub local.** Tạo video AI và Dịch Cloud bị khóa; OCR, Qwen, Piper và xuất MP4 chạy trên máy, auth/license/registry vẫn dùng server. Xem [hướng dẫn cấu hình và kiểm chứng](HUONG_DAN_VIETSUB_LOCAL_ONLY.md). Các workflow video bên dưới mô tả khả năng được giữ trong source khi mở lại chế độ đầy đủ.
+
 > Điểm vào repository. Cập nhật ngữ cảnh: 2026-09-07.
 
 VideoMaker là hệ thống desktop/server hỗ trợ tạo video bằng AI và xử lý media cục bộ. OpenAI tạo nội dung có cấu trúc và giọng Canonical; Kling, BytePlus hoặc Fal/Veo tạo clip theo policy của tổ chức; desktop tải output qua server, yêu cầu người dùng duyệt và dựng video bằng FFmpeg. Module Vietsub cung cấp editor/OCR, dịch ngữ cảnh Qwen và tạo giọng Việt Piper theo mô hình local-first.
@@ -57,7 +59,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 
 - Registry metadata nằm trên server; workspace, SQLite, media, cue và artifact nằm local. Khi chọn **Dịch Cloud**, server nhận snapshot text có giới hạn và gọi OpenAI; người dùng không chọn model hay nhập key.
 - Editor hỗ trợ COPY/LINK, playback Range, SRT, timeline, thumbnail, waveform và PaddleOCR English/Chinese.
-- Dịch local Qwen chạy trong worker x64 riêng và mặc định tắt tới khi model/benchmark/smoke đạt.
+- Dịch Qwen chạy trong worker x64 riêng; chế độ Vietsub local mở workflow cài/chạy qua readiness. Trong chế độ đầy đủ, flag legacy vẫn mặc định tắt tới khi model/benchmark/smoke đạt.
 - Tạo giọng local Piper hiển thị qua feature flag mặc định bật nhưng runtime/model phải được cài, kiểm checksum và probe; `NOT_INSTALLED` không phải `READY`.
 
 ## Nguyên tắc hệ thống
@@ -76,8 +78,8 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - BytePlus Seedance và Fal/Veo được seed `Disabled`.
 - Canonical Voice và speech verification mặc định tắt ở server/desktop.
 - SePay mặc định `Enabled=false`.
-- Vietsub và OCR bật; dịch Qwen tắt; UI/cài đặt giọng Piper bật nhưng runtime/model không được coi là sẵn sàng khi chưa qua gate.
-- Dịch Cloud mặc định `VietsubCloudTranslation:Enabled=false`, model chưa chỉ định. Xem [hướng dẫn vận hành Cloud](HUONG_DAN_VAN_HANH_DICH_CLOUD_VIETSUB.md) trước khi bật.
+- `Application:VietsubLocalOnly=true` trên desktop/server. Vietsub, OCR, workflow cài/chạy Qwen và Piper khả dụng; runtime/model phải qua gate. Flag Qwen legacy vẫn tắt khi chuyển lại chế độ đầy đủ.
+- Dịch Cloud `VietsubCloudTranslation:Enabled=false` và bị khóa bởi chế độ local; model cấu hình được giữ lại để tương thích. Xem [hướng dẫn vận hành Cloud](HUONG_DAN_VAN_HANH_DICH_CLOUD_VIETSUB.md) trước khi mở lại.
 - Migration đến 4.1.6 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
 
 ## Yêu cầu phát triển

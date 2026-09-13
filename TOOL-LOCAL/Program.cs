@@ -41,7 +41,10 @@ internal static class Program
                 BaseAddress = new Uri(options.Server.BaseUrl),
                 Timeout = TimeSpan.FromMinutes(30)
             };
-            using var generationHttpClient = new HttpClient
+            using var generationHttpClient = new HttpClient(new LocalOnlyGatewayHandler(options.Application)
+            {
+                InnerHandler = new HttpClientHandler()
+            })
             {
                 BaseAddress = new Uri(options.Server.BaseUrl),
                 Timeout = TimeSpan.FromMinutes(30)
@@ -89,7 +92,8 @@ internal static class Program
                     return;
                 }
 
-                var dbContextFactory = new VideoFactoryDbContextFactory(options.Database.ConnectionString);
+                var dbContextFactory = new VideoFactoryDbContextFactory(options.Database.ConnectionString,
+                    disabled: options.Application.VietsubLocalOnly);
                 var workspaceService = new ProjectWorkspaceService(options.Storage.WorkspaceRoot);
                 var projectService = new ProjectService(
                     dbContextFactory,
@@ -204,7 +208,7 @@ internal static class Program
                     var translationStore = new VietsubTranslationStore(
                         vietsubPaths,
                         vietsubSubtitleStore);
-                    if (options.Features.VietsubLocalTranslationEnabled)
+                    if (options.Features.VietsubLocalTranslationEnabled || options.Application.VietsubLocalOnly)
                     {
                         vietsubTranslationProvider = new QwenGgufVietsubTranslationProvider(
                             new VietsubTranslationComponentStore(
@@ -212,7 +216,7 @@ internal static class Program
                     }
                     var translationProviderRegistry = new VietsubTranslationProviderRegistry(
                         vietsubTranslationProvider is null ? [] : [vietsubTranslationProvider],
-                        featureEnabled: options.Features.VietsubLocalTranslationEnabled);
+                        featureEnabled: options.Features.VietsubLocalTranslationEnabled || options.Application.VietsubLocalOnly);
                     var translationExecutor = new VietsubTranslationJobExecutor(
                         vietsubProjectStore,
                         vietsubSubtitleStore,
@@ -248,9 +252,11 @@ internal static class Program
                     var cloudExecutor = new VietsubCloudTranslationJobExecutor(vietsubProjectStore, vietsubSubtitleStore,
                         translationStore, vietsubPaths, localJobAuthorizer, cloudClient, vietsubJobStore);
                     vietsubJobManager = new VietsubJobManager(vietsubJobStore,
-                        new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, cloudExecutor, voiceExecutor]));
+                        new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, cloudExecutor, voiceExecutor]),
+                        localOnly: options.Application.VietsubLocalOnly);
                     vietsubCloudTranslationService = new VietsubCloudTranslationService(localJobAuthorizer, cloudClient,
-                        vietsubSubtitleStore, vietsubPaths, vietsubJobStore, vietsubJobManager);
+                        vietsubSubtitleStore, vietsubPaths, vietsubJobStore, vietsubJobManager,
+                        localOnly: options.Application.VietsubLocalOnly);
                     vietsubVideoExportService = new VietsubVideoExportService(
                         localJobAuthorizer,
                         vietsubProjectStore,
@@ -320,7 +326,8 @@ internal static class Program
                     vietsubVoiceService,
                     vietsubVideoExportService,
                     licensePaymentClient,
-                    vietsubCloudTranslationService);
+                    vietsubCloudTranslationService,
+                    localOnly: options.Application.VietsubLocalOnly);
                 try
                 {
                     Application.Run(mainForm);

@@ -1,5 +1,7 @@
 # Nghiệp vụ và kiến trúc VideoMaker
 
+Chế độ sử dụng mặc định hiện hành là [Vietsub local](HUONG_DAN_VIETSUB_LOCAL_ONLY.md). Video AI và Dịch Cloud bị khóa; nhập/OCR/biên tập/dịch Qwen/giọng Piper/xuất MP4 local được giữ với toàn bộ kiểm tra quyền và readiness. Những nghiệp vụ video/Cloud mô tả bên dưới chỉ được mở khi tắt chế độ local và đáp ứng điều kiện riêng. `VietsubLocalTranslationEnabled=false` tiếp tục áp dụng cho chế độ đầy đủ; chế độ local cho phép cài/chạy Qwen qua các gate runtime hiện có.
+
 > Nguồn sự thật nghiệp vụ hiện hành. Rà soát theo source ngày 2026-09-07.
 
 Trạng thái triển khai nằm trong `BOI_CANH_HE_THONG_HIEN_HANH.md`; kiến trúc kỹ thuật nằm trong `KIEN_TRUC_KY_THUAT.md`; hướng dẫn vận hành nằm trong `VAN_HANH_VA_PHAT_HANH.md`.
@@ -139,7 +141,7 @@ Quy tắc Canonical Voice:
 - Playback dùng virtual HTTPS URL và HTTP Range, không lộ absolute path; mọi mutation dùng track revision.
 - Cue manual/locked không bị job ghi đè. Local job có state/checkpoint/pause/resume/retry/cancel và recovery.
 - OCR local chỉ chạy khi session/license/membership/role/owner hợp lệ; Viewer bị chặn.
-- Panel **Thiết lập dự án** chỉ hiển thị ba tác vụ **Quét OCR**, **Dịch tiếng Việt** và **Tạo giọng Việt**; không lặp lại card video nguồn, track phụ đề, revision hay trạng thái runtime đã sẵn sàng. **Quét OCR** mở popup có video hiện tại, điều khiển phát/tua và khung chỉnh vùng subtitle cứng; quét thử phải dùng đúng timestamp đang chọn. **Dịch tiếng Việt** mở popup chọn Local hoặc Cloud. Cloud dùng readiness server độc lập Local, bấm một lần để lưu draft và tạo job; không có model picker/API key. Thiếu flag/config/quyền/ngân sách thì khóa Cloud với lý do an toàn.
+- Panel **Thiết lập dự án** chỉ hiển thị ba tác vụ **Quét OCR**, **Dịch tiếng Việt** và **Tạo giọng Việt**; không lặp lại card video nguồn, track phụ đề, revision hay trạng thái runtime đã sẵn sàng. **Quét OCR** mở popup có video hiện tại, điều khiển phát/tua và khung chỉnh vùng subtitle cứng; quét thử phải dùng đúng timestamp đang chọn. **Dịch tiếng Việt** chỉ hiện Local trong chế độ Vietsub local. Khi mở lại chế độ đầy đủ, popup mới có Cloud với readiness server độc lập Local, bấm một lần để lưu draft và tạo job; không có model picker/API key. Thiếu flag/config/quyền/ngân sách thì khóa Cloud với lý do an toàn.
 - **Thiết kế phụ đề** chỉ mở khi dự án có video phát được. Người dùng có thể tua video, ẩn/hiện phụ đề, chọn chế độ vừa khung/lấp đầy, thu phóng, chọn preset rồi chỉnh font trong allowlist, màu/độ trong suốt, viền, bóng, nền, căn chữ, chiều rộng và số dòng mục tiêu. Vị trí được kéo trực tiếp trên video hoặc tinh chỉnh bằng phím mũi tên và lưu theo phần trăm của content box. Cùng modal có bộ trộn hai kênh để chỉnh riêng âm thanh gốc `0–100%`, giọng dịch `0–150%`, tắt/bật từng kênh và bật tự giảm âm gốc khi có tín hiệu giọng Việt. Bản nháp phụ đề/âm thanh chỉ tác động preview; phải bấm **Lưu thay đổi** mới ghi theo project. Khi đóng lúc còn thay đổi, UI phải xác nhận bỏ bản nháp. Preview chính và adapter render phải dùng cùng cấu hình đã lưu.
 - Phần đầu card **Biên tập phụ đề** đặt tiêu đề và nhóm nút trên cùng một hàng; số câu, trạng thái dịch và cảnh báo nằm ở hàng nhỏ bên dưới. Không lặp thêm nhãn PHỤ ĐỀ phía trên tiêu đề.
 - Nút **Xuất video** nằm ngay cạnh **Thiết kế phụ đề** và menu **Tệp phụ đề** trên thanh công cụ biên tập, đồng thời có thêm nút ở cuối thanh công cụ Timeline. Hai nút dùng chung luồng lưu các chỉnh sửa phụ đề đang chờ trước khi mở hộp thoại chọn nơi lưu MP4; lưu lỗi thì dừng để người dùng sửa. Cả hai cùng có trạng thái **Đang xuất…**, khóa bấm lặp kể cả khi bấm xen kẽ và dùng cùng chức năng xuất với **Xuất MP4** trong thiết kế thành phẩm. Thiếu video/track hoặc đang xử lý thao tác khác thì khóa nút; nhãn xuất luôn hiển thị ở panel hẹp.
@@ -153,7 +155,7 @@ Quy tắc Canonical Voice:
 - READY phải khớp model/worker/protocol/config/backend/native fingerprint và probe runtime/English/Chinese.
 - Resource warning RAM/commit cần người dùng xác nhận và snapshot theo job; không bỏ qua platform, disk, checksum/probe hoặc OOM thật.
 - Output stale/invalid không apply; translation memory/cache tách theo fingerprint/profile và SRT ghi atomically.
-- `VietsubLocalTranslationEnabled=false` cho tới khi model integration, benchmark và smoke desktop đạt; `Skipped` không phải pass.
+- Trong chế độ đầy đủ, `VietsubLocalTranslationEnabled=false` cho tới khi model integration, benchmark và smoke desktop đạt. Chế độ Vietsub local cho phép cài/chạy Qwen qua readiness; không bỏ qua probe hoặc cảnh báo tài nguyên. `Skipped` không phải pass.
 
 ### Tạo giọng Việt Piper
 

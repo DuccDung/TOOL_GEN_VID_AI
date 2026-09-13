@@ -108,6 +108,21 @@ function renderSettings(
 }
 
 describe('Vietsub project tools', () => {
+  it.each(['PAUSED', 'INTERRUPTED', 'FAILED'] as const)('local mode prevents restarting an old Cloud job (%s) while retaining cancel', (status) => {
+    const html = renderSettings(null, {
+      localOnly: true,
+      activeJob: {
+        id: 'cloud-job', projectId: 'project', type: 'TRANSLATE_CLOUD', status,
+        progressPercent: 20, attemptCount: 1, maxAttempts: 3,
+        createdAtUtc: new Date(0).toISOString(), updatedAtUtc: new Date(0).toISOString(), steps: []
+      }
+    });
+    expect(html).toContain('Dịch Cloud đã bị khóa trong chế độ local.');
+    expect(html).not.toContain('Tiếp tục</button>');
+    expect(html).not.toContain('Thử lại</button>');
+    expect(html).toContain('Hủy</button>');
+  });
+
   it('chỉ hiện ba tác vụ chính và ẩn dữ liệu kỹ thuật khỏi phần thiết lập', () => {
     const html = renderSettings({
       activeTrackId: 'track',

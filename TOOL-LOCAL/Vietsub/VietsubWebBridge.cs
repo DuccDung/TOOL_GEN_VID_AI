@@ -121,6 +121,7 @@ internal sealed class VietsubWebBridge : IDisposable
     private string? _activeOperationRequestId;
     private VietsubProjectSession? _projectSession;
     private bool _disposed;
+    private readonly bool _localOnly;
 
     public VietsubWebBridge(
         bool enabled,
@@ -142,9 +143,11 @@ internal sealed class VietsubWebBridge : IDisposable
         VietsubVoiceService? voiceService = null,
         Func<string?>? videoExportSelector = null,
         VietsubVideoExportService? videoExportService = null,
-        VietsubCloudTranslationService? cloudTranslationService = null)
+        VietsubCloudTranslationService? cloudTranslationService = null,
+        bool localOnly = false)
     {
         _enabled = enabled;
+        _localOnly = localOnly;
         _postJson = postJson;
         _projectStore = projectStore;
         _contextProvider = contextProvider;
@@ -409,7 +412,7 @@ internal sealed class VietsubWebBridge : IDisposable
                     break;
                 case "vietsub.cloud.availability":
                     var cloudSession = RequireProjectSession();
-                    var cloudStatus = _cloudTranslationService is null
+                    var cloudStatus = _localOnly || _cloudTranslationService is null
                         ? new TOOL_SHARED.Contracts.Vietsub.VietsubCloudAvailability(false, "CLOUD_DISABLED", "Dịch Cloud chưa được bật.")
                         : await _cloudTranslationService.AvailabilityAsync(cloudSession, cancellationToken);
                     Post(new WebMessageResponse("vietsub.cloud.availability", request.RequestId,
@@ -1414,6 +1417,9 @@ internal sealed class VietsubWebBridge : IDisposable
 
     private async Task StartCloudTranslationAsync(WebMessageRequest request, string requestId, CancellationToken ct)
     {
+        if (_localOnly)
+            throw new VietsubTranslationException(TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyErrorCode,
+                TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyMessage);
         var session = RequireProjectSession();
         var context = RequireContext();
         var input = request.Payload.Deserialize<VietsubStartCloudTranslationRequest>(_jsonOptions) ?? throw new JsonException();
@@ -1523,7 +1529,7 @@ internal sealed class VietsubWebBridge : IDisposable
 
         var manager = RequireJobManager();
         var projectId = session.Manifest.ProjectId;
-        if (_cloudTranslationService is not null)
+        if (_cloudTranslationService is not null && (!_localOnly || action is "CANCEL" or "PAUSE"))
             await _cloudTranslationService.ControlRemoteAsync(projectId, payload.JobId, action, cancellationToken);
         var job = action switch
         {

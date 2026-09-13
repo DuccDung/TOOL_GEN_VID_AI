@@ -16,7 +16,7 @@ vi.mock('../../bridge', () => ({ isHosted: true,
 }));
 let root: Root, container: HTMLDivElement;
 let module: ReturnType<typeof useVietsubModule>;
-function Harness({ org = 'org' }: { org?: string }) { module = useVietsubModule(true, org); return null; }
+function Harness({ org = 'org', localOnly = false }: { org?: string; localOnly?: boolean }) { module = useVietsubModule(true, org, localOnly); return null; }
 const workspace = (revision: number) => ({ activeTrackId: 'track', tracks: [{ trackId: 'track', source: 'PADDLE_OCR_LOCAL',
   languageCode: 'en', revision, cueCount: 100, translatedCueCount: 0, warningCueCount: 0, displayName: 'OCR', updatedAtUtc: '' }] });
 const stateMessage = (revision = 1, projectId = 'project') => ({ type: 'vietsub.state', payload: {
@@ -31,6 +31,29 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 
 describe('Dịch Cloud', () => {
+  it('chế độ local ẩn Cloud dù server báo sẵn sàng và vẫn cho cài Qwen', async () => {
+    const install = vi.fn(), cloud = vi.fn();
+    await act(async () => root.render(createElement(VietsubTranslationModeModal, {
+      localOnly: true, busy: false,
+      runtime: { status: 'NOT_INSTALLED', ready: false, engineId: 'local', engineVersion: '1', sourceLanguages: ['en'], supportsSceneContext: true, supportsReviewPass: false, message: 'Chưa cài Local' },
+      cloudAvailability: { available: true }, onStartCloud: cloud, onStartLocal: vi.fn(), onInstallLocal: install, onDismiss: vi.fn()
+    })));
+    expect(document.body.textContent).not.toContain('Dịch Cloud');
+    const localButton = document.querySelector<HTMLButtonElement>('.is-local button')!;
+    expect(localButton.disabled).toBe(false);
+    await act(async () => localButton.click());
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(cloud).not.toHaveBeenCalled();
+  });
+
+  it('chế độ local không hỏi readiness hoặc gửi Cloud khi mở dự án hay gọi callback trực tiếp', async () => {
+    await act(async () => root.render(createElement(Harness, { localOnly: true })));
+    await emit(stateMessage());
+    await act(async () => { module.refreshCloudAvailability(); await module.startCloudTranslation(); });
+    expect(module.state.localOnly).toBe(true);
+    expect(bridge.posts.filter(p => p.type === 'vietsub.cloud.availability' || p.type === 'vietsub.job.translate.cloud')).toEqual([]);
+    expect(bridge.posts.some(p => p.type === 'vietsub.state.get')).toBe(true);
+  });
   it('cho phép dịch bằng một nút dù Local chưa cài, không có bộ chọn model hoặc API key', async () => {
     const cloud = vi.fn(), local = vi.fn();
     await act(async () => root.render(createElement(VietsubTranslationModeModal, {

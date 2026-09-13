@@ -1,5 +1,9 @@
 # Bối cảnh hệ thống hiện hành
 
+Mặc định source hiện dùng `Application:VietsubLocalOnly=true`: khóa video AI/Dịch Cloud, mở workflow Vietsub local và bỏ phụ thuộc SQL workflow video của desktop. Auth/license/registry và đối soát request cũ được giữ. Xem [hướng dẫn Vietsub local](HUONG_DAN_VIETSUB_LOCAL_ONLY.md); các bảng trạng thái lịch sử bên dưới không thay thế kết quả kiểm chứng thay đổi này.
+
+Qwen Anh/Trung và Piper model thật đã qua kiểm thử opt-in trên máy local ngày 2026-09-13. Báo cáo thay đổi, benchmark, full suite và giới hạn nghiệm thu nằm trong mục 23 của [KIEM_THU_VA_NGHIEM_THU.md](KIEM_THU_VA_NGHIEM_THU.md). Chưa rollout hoặc smoke bằng tài khoản/video người dùng.
+
 > Chỉ mục trạng thái liên module. Rà soát theo source ngày 2026-09-08.
 
 Tài liệu này phân biệt rõ bốn mức: **đã có trong source**, **đã có kiểm thử tự động**, **đã xác minh thủ công trên môi trường**, và **đã rollout production**. Không được suy từ mức trước sang mức sau nếu thiếu bằng chứng.
@@ -29,7 +33,7 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 | SePay/license/seat | Payment order, webhook matching, organization provisioning và seat allocation đã có trong source; mặc định `Enabled=false` | Staging rehearsal, secret/webhook validation, QR/bank config, idempotency và đối soát |
 | Vietsub editor | Workspace local, manifest schema 6, SQLite, timeline/editor, thiết kế phụ đề theo project, mixer âm gốc/giọng Việt có mute/gain/auto-duck, preview hai kênh cùng playhead và xuất MP4 burn-in + audio mix qua ASS/FFmpeg với publish `.partial` đã kiểm tra | Smoke desktop trên bundle phát hành, nghe/đo audio output, nghiệm thu UX và đối chiếu preview/ASS/libass trên bộ video dọc-ngang |
 | Paddle OCR local | Luồng OCR local và test liên quan đã có; feature mặc định bật | Runtime/model bundle thật, smoke Anh/Trung và đo tài nguyên |
-| Dịch local Qwen | Worker x64 cô lập, IPC, readiness fingerprint, apply/retry/cancel và hai resource profile Standard/Low-memory đã có; RAM/commit thấp là cảnh báo có xác nhận được snapshot vào job, còn hard blocker thực tế vẫn chặn; feature mặc định tắt | Verify model thật, benchmark mức khuyến nghị Low-memory 6 GB, probe Anh/Trung và smoke desktop cả nhánh cảnh báo; test opt-in đang có thể `Skipped` |
+| Dịch local Qwen | Worker x64 cô lập, IPC, readiness fingerprint, apply/retry/cancel và hai resource profile Standard/Low-memory đã có; chế độ local mở workflow, flag legacy vẫn tắt trong chế độ đầy đủ; RAM/commit thấp cần xác nhận, hard blocker thực tế vẫn chặn | Đã verify model Anh/Trung trên máy hiện tại; còn smoke desktop và thử trên máy Low-memory 6 GB trước rollout |
 | Giọng local Piper | Pipeline phrase/cache/checkpoint, worker Python cô lập, kiểm tra WAV/SHA-256, fit tối đa 1.20x với diagnostic không chặn, FFmpeg timeline, playback nội bộ và UI đã có; một giọng Việt, feature mặc định bật nhưng runtime/model chỉ tải sau xác nhận | Verify runtime/model thật, kiểm kê license/dependency Python, benchmark CPU, nghe nghiệm thu và smoke desktop trên bundle phát hành |
 | Dịch Cloud OpenAI | Contract/API/worker, budget Vietsub, apply CAS/SRT và CTA Cloud đã nối; 4.1.6 đã rehearsal và áp local `DUNGDEV / VideoFactory` ngày 2026-09-10; mặc định disabled | Cấu hình model/rate/credential/budget, nhiều instance SQL và smoke OpenAI có phí; chưa rollout môi trường khác |
 | Updater/setup/distribution | Source kiểm tra manifest, checksum, backup/rollback và package đã có | Bundle release thật, ký/phê duyệt, smoke install/update/rollback |

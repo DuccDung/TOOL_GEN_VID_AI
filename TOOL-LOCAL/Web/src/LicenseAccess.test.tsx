@@ -13,7 +13,7 @@ vi.mock('./bridge', () => ({
   subscribeToHost: (callback: typeof bridge.receive) => { bridge.receive = callback; return () => {}; }
 }));
 vi.mock('./features/vietsub/useVietsubModule', () => ({
-  useVietsubModule: () => ({ state: { enabled: false, loading: false, busy: false } })
+  useVietsubModule: () => ({ state: { enabled: false, loading: false, busy: false, projects: [] } })
 }));
 
 const active: CurrentLicense = {

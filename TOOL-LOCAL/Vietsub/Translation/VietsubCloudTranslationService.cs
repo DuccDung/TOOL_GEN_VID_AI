@@ -14,7 +14,7 @@ internal sealed record VietsubCloudLocalSnapshot(VietsubCloudStartRequest Reques
 
 internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer authorizer,
     IVietsubCloudTranslationClient client, VietsubSubtitleStore subtitles, VietsubAppPaths paths,
-    VietsubJobStore jobs, VietsubJobManager manager)
+    VietsubJobStore jobs, VietsubJobManager manager, bool localOnly = false)
 {
     public Task<VietsubCloudAvailability> AvailabilityAsync(VietsubProjectSession session, CancellationToken ct) =>
         client.AvailabilityAsync(session.Manifest.ProjectId, session.Manifest.OrganizationId, ct);
@@ -22,6 +22,9 @@ internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer 
     public async Task<VietsubJobSummary?> StartAsync(VietsubProjectSession session, string userId, Guid org,
         VietsubStartTranslationInput input, CancellationToken ct)
     {
+        if (localOnly)
+            throw new VietsubTranslationException(TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyErrorCode,
+                TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyMessage);
         await authorizer.AuthorizeAsync(userId, org, session.Manifest, ct);
         var project = session.Manifest;
         var track = (await subtitles.LoadTracksAsync(project.ProjectId, ct)).SingleOrDefault(x => x.TrackId == input.ExpectedTrackId);
@@ -81,6 +84,9 @@ internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer 
     {
         var local = await jobs.GetAsync(projectId, jobId, ct);
         if (local?.Type != VietsubJobTypes.TranslateCloud) return;
+        if (localOnly && action is "RESUME" or "RETRY")
+            throw new VietsubTranslationException(TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyErrorCode,
+                TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.LocalOnlyMessage);
         var p = JsonSerializer.Deserialize<VietsubCloudJobParameters>(local.ParametersJson, VietsubCloudSnapshot.JsonOptions)!;
         var remote = await client.FindAsync(projectId, p.OrganizationId, p.OperationId, ct);
         if (remote is null) return;

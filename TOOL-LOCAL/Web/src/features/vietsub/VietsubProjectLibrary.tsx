@@ -30,7 +30,7 @@ const workflowSteps: Array<{
   icon: LucideIcon;
 }> = [
   { title: 'Thêm video', description: 'Chọn video nguồn trong workspace Vietsub riêng.', icon: FileVideo2 },
-  { title: 'Nhận dạng phụ đề', description: 'Nhận dạng lời nói hoặc chữ có sẵn trên khung hình.', icon: Captions },
+  { title: 'Nhận dạng phụ đề', description: 'Quét chữ có sẵn trên khung hình bằng OCR local.', icon: Captions },
   { title: 'Dịch sang tiếng Việt', description: 'Biên dịch, kiểm tra và chỉnh từng câu trước khi xuất.', icon: Languages },
   { title: 'Tạo giọng đọc', description: 'Ghép giọng tiếng Việt theo mốc thời gian của phụ đề.', icon: Mic2 },
   { title: 'Xuất thành phẩm', description: 'Xuất video, SRT hoặc bản nội dung đã hoàn thiện.', icon: AudioLines }

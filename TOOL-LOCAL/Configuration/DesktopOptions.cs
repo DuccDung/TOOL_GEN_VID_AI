@@ -5,6 +5,7 @@ namespace TOOL_LOCAL.Configuration;
 
 public sealed class DesktopOptions
 {
+    public TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy Application { get; init; } = new();
     public ServerOptions Server { get; init; } = new();
 
     public DatabaseOptions Database { get; init; } = new();
@@ -49,7 +50,7 @@ public sealed class DesktopOptions
             throw new InvalidOperationException("Server:BaseUrl phải là HTTPS URL hợp lệ.");
         }
 
-        if (string.IsNullOrWhiteSpace(options.Database.ConnectionString))
+        if (!options.Application.VietsubLocalOnly && string.IsNullOrWhiteSpace(options.Database.ConnectionString))
         {
             throw new InvalidOperationException("Database:ConnectionString chưa được cấu hình.");
         }

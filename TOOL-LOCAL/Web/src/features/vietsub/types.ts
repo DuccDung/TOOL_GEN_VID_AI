@@ -1,6 +1,7 @@
 import type { VietsubNoticeEvents } from './vietsubNoticeEvents';
 
 export type VietsubModuleState = {
+  localOnly?: boolean;
   cloudAvailability?: VietsubCloudAvailability | null;
   noticeEvents?: VietsubNoticeEvents;
   enabled: boolean;

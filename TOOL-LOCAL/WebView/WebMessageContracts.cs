@@ -49,7 +49,8 @@ internal sealed record DashboardStateResponse(
 
 internal sealed record DashboardFeatureFlagsResponse(
     bool VietsubEnabled,
-    bool SpeechSynchronizationEnabled = false);
+    bool SpeechSynchronizationEnabled = false,
+    bool VietsubLocalOnly = false);
 
 internal sealed record DesktopFeatureSettingsResponse(
     bool SpeechSynchronizationEnabled,

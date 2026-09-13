@@ -1,5 +1,7 @@
 # Vận hành và phát hành VideoMaker
 
+Source hiện mặc định [Vietsub local](HUONG_DAN_VIETSUB_LOCAL_ONLY.md). Đối chiếu `Application:VietsubLocalOnly` ở cả desktop/server và các override trước triển khai. Chế độ này mở workflow cài/chạy Qwen qua readiness hiện có; model thật, benchmark và nghe nghiệm thu vẫn là các cổng phát hành. Không cần migration riêng cho mode; không dừng đối soát/settlement/cleanup khi khóa Cloud.
+
 > Runbook chuẩn cho database, secret, provider, speech, SePay, desktop bundle và rollback. Rà soát ngày 2026-09-07.
 
 Không chạy nội dung tài liệu này trên production nếu chưa xác định rõ instance/database, người phê duyệt, backup đã kiểm tra và phương án restore. Các giá trị trong dấu `<...>` là placeholder, không được commit secret thật.
@@ -181,7 +183,7 @@ Script không được hướng đến remote nếu chưa chủ động cho phé
 - FFmpeg/FFprobe phải nằm ở `tools/ffmpeg`, đúng win-x64, provenance và checksum.
 - OCR/model/native runtime phải đúng bundle/fingerprint.
 - Profile Low-memory 6 GB chỉ được bật trong bundle đã benchmark; không hạ thêm ngưỡng qua WebView, manifest project hoặc cấu hình người dùng.
-- Giữ `VietsubLocalTranslationEnabled=false` đến khi verify model, benchmark và desktop smoke đạt trên chính bundle định phát hành.
+- Giữ flag legacy `VietsubLocalTranslationEnabled=false` trong chế độ đầy đủ đến khi verify model, benchmark và desktop smoke đạt trên chính bundle định phát hành. Chế độ Vietsub local mở workflow qua readiness; vẫn cần các bước nghiệm thu này trước phát hành.
 - `VietsubLocalVoiceEnabled=true` chỉ mở UI/cài đặt. Máy thiếu runtime/model phải trả `NOT_INSTALLED`; chỉ rollout sau verify checksum/probe, kiểm kê license/dependency Python, benchmark CPU, nghe nghiệm thu và smoke timeline/playback.
 - Không dùng marker `READY` từ máy/build khác.
 

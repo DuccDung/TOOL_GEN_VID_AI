@@ -64,6 +64,7 @@ public partial class Form1 : Form
     private Label? _loadingLabel;
     private DashboardBridge? _bridge;
     private VietsubWebBridge? _vietsubBridge;
+    private readonly bool _localOnly;
     private bool _refreshing;
     private bool _closing;
     private bool _checkingUpdate;
@@ -105,7 +106,8 @@ public partial class Form1 : Form
         VietsubVoiceService? vietsubVoiceService,
         VietsubVideoExportService? vietsubVideoExportService,
         LicensePaymentApiClient licensePaymentClient,
-        VietsubCloudTranslationService? vietsubCloudTranslationService = null) : this()
+        VietsubCloudTranslationService? vietsubCloudTranslationService = null,
+        bool localOnly = false) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -119,6 +121,7 @@ public partial class Form1 : Form
         _updateOptions = updateOptions;
         _mediaToolPreflight = mediaToolPreflight;
         _featureOptions = featureOptions;
+        _localOnly = localOnly;
         _vietsubProjectStore = vietsubProjectStore;
         _vietsubProjectRegistryClient = vietsubProjectRegistryClient;
         _vietsubMediaImportService = vietsubMediaImportService;
@@ -218,7 +221,8 @@ public partial class Form1 : Form
                 PostJsonToWebView,
                 CloseAfterLogout,
                 _featureOptions.SpeechSynchronizationEnabled,
-                finalVideoExportSelector: SelectFinalVideoDestination);
+                finalVideoExportSelector: SelectFinalVideoDestination,
+                localOnly: _localOnly);
             _vietsubBridge = new VietsubWebBridge(
                 _featureOptions.VietsubEnabled,
                 PostJsonToWebView,
@@ -252,7 +256,8 @@ public partial class Form1 : Form
                 _vietsubVoiceService,
                 SelectVietsubVideoDestination,
                 _vietsubVideoExportService,
-                _vietsubCloudTranslationService);
+                _vietsubCloudTranslationService,
+                localOnly: _localOnly);
 
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
             _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;

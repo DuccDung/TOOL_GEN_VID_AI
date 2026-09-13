@@ -10,6 +10,7 @@ using TOOL_LOCAL.Payments;
 using TOOL_LOCAL.Configuration;
 using TOOL_SHARED.Contracts.Accounts;
 using TOOL_SHARED.Contracts.Projects;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_LOCAL.WebView;
 
@@ -25,6 +26,7 @@ internal sealed class DashboardBridge : IDisposable
     private readonly IMediaToolPreflightService _mediaToolPreflight;
     private readonly LicensePaymentApiClient _licensePaymentClient;
     private readonly bool _vietsubEnabled;
+    private readonly bool _localOnly;
     private readonly bool _speechSynchronizationEnabled;
     private readonly string _applicationDirectory;
     private readonly Action<string> _postJson;
@@ -54,7 +56,8 @@ internal sealed class DashboardBridge : IDisposable
         Action closeApplication,
         bool speechSynchronizationEnabled = false,
         string? applicationDirectory = null,
-        Func<string?>? finalVideoExportSelector = null)
+        Func<string?>? finalVideoExportSelector = null,
+        bool localOnly = false)
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -65,6 +68,7 @@ internal sealed class DashboardBridge : IDisposable
         _mediaToolPreflight = mediaToolPreflight;
         _licensePaymentClient = licensePaymentClient;
         _vietsubEnabled = vietsubEnabled;
+        _localOnly = localOnly;
         _speechSynchronizationEnabled = speechSynchronizationEnabled;
         _applicationDirectory = applicationDirectory ?? AppContext.BaseDirectory;
         _postJson = postJson;
@@ -94,6 +98,12 @@ internal sealed class DashboardBridge : IDisposable
         if (request is null || string.IsNullOrWhiteSpace(request.Type))
         {
             PostError(request?.RequestId, "invalid_message", "Yêu cầu từ giao diện không hợp lệ.");
+            return;
+        }
+
+        if (_localOnly && !ApplicationFeaturePolicy.IsLocalDesktopCommand(request.Type))
+        {
+            PostError(request.RequestId, ApplicationFeaturePolicy.LocalOnlyErrorCode, ApplicationFeaturePolicy.LocalOnlyMessage);
             return;
         }
 
@@ -1788,7 +1798,7 @@ internal sealed class DashboardBridge : IDisposable
                             DateTime.UtcNow),
                         _licenseManager.Current,
                         false,
-                        new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled),
+                        new DashboardFeatureFlagsResponse(_vietsubEnabled, !_localOnly && _speechSynchronizationEnabled, _localOnly),
                         [])));
                 return;
             }
@@ -1805,6 +1815,18 @@ internal sealed class DashboardBridge : IDisposable
             {
                 selectedOrganizationId = organizations[0].OrganizationId;
                 await _generationClient.SelectOrganizationAsync(selectedOrganizationId.Value, cancellationToken);
+            }
+
+            if (_localOnly)
+            {
+                _selectedProjectId = null;
+                var localMediaStatus = await _mediaToolPreflight.GetStatusAsync(force: false, cancellationToken);
+                Post(new WebMessageResponse("dashboard.state", requestId,
+                    new DashboardStateResponse(current.User, organizations, selectedOrganizationId.Value,
+                        [], null, null, [], new GenerationProviderStatusResponse(false, null, false, null),
+                        localMediaStatus, _licenseManager.Current, false,
+                        new DashboardFeatureFlagsResponse(_vietsubEnabled, false, true), [])));
+                return;
             }
 
             var allProjects = await _projectService.ListAsync(current.User.UserId, cancellationToken);
@@ -1878,7 +1900,7 @@ internal sealed class DashboardBridge : IDisposable
                     mediaToolStatus,
                     _licenseManager.Current,
                     _generationRunning,
-                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled),
+                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _localOnly),
                     sceneFirstFrames,
                     contentLanguageFailure)));
         }

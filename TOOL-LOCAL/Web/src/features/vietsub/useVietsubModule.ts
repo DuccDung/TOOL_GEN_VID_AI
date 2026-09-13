@@ -92,7 +92,7 @@ const disabledState: VietsubModuleState = {
   timelineMediaEvent: null
 };
 
-export function useVietsubModule(featureEnabled: boolean, organizationId: string) {
+export function useVietsubModule(featureEnabled: boolean, organizationId: string, localOnly = false) {
   const [state, setRawState] = useState<VietsubModuleState>(disabledState);
   const setState = useCallback((update: SetStateAction<VietsubModuleState>) => {
     setRawState(current => trackNoticeChanges(current, typeof update === 'function' ? update(current) : update));
@@ -970,13 +970,13 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
   }, [runProjectOperation, state.subtitleWorkspace, state.translationRuntime]);
 
   const refreshCloudAvailability = useCallback(() => {
-    if (!featureEnabled || !selectedProjectIdRef.current) return;
+    if (localOnly || !featureEnabled || !selectedProjectIdRef.current) return;
     setState(current => ({ ...current, cloudAvailability: null }));
     cloudAvailabilityRequestRef.current = postToHost('vietsub.cloud.availability');
-  }, [featureEnabled]);
+  }, [featureEnabled, localOnly]);
 
   const startCloudTranslation = useCallback(async () => {
-    if (cloudSubmittingRef.current || busyRef.current) return;
+    if (localOnly || cloudSubmittingRef.current || busyRef.current) return;
     const projectId = selectedProjectIdRef.current;
     const orgId = organizationIdRef.current;
     cloudSubmittingRef.current = true;
@@ -994,7 +994,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
         expectedTrackId: payload.expectedTrackId, expectedTrackRevision: payload.expectedTrackRevision
       } satisfies import('../../types').VietsubStartCloudTranslationRequest);
     } finally { cloudSubmittingRef.current = false; }
-  }, [runProjectOperation]);
+  }, [runProjectOperation, localOnly]);
 
   const installTranslationRuntime = useCallback(() => {
     const resourceWarning = createVietsubTranslationResourceAlert(
@@ -1302,7 +1302,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
   }, [runAwaitableOperation]);
 
   return {
-    state,
+    state: { ...state, localOnly },
     refresh,
     cancel,
     createProject,

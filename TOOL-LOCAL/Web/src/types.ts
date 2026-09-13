@@ -402,6 +402,7 @@ export type DashboardState = {
 };
 
 export type DashboardFeatures = {
+  vietsubLocalOnly?: boolean;
   vietsubEnabled: boolean;
   speechSynchronizationEnabled: boolean;
 };

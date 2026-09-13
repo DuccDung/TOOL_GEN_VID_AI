@@ -55,6 +55,7 @@ import { VietsubVoiceInstallModal } from './VietsubVoiceInstallModal';
 import { VietsubNotice } from './VietsubNotice';
 
 type VietsubSettingsPanelProps = {
+  localOnly?: boolean;
   headerAction?: ReactNode;
   cloudAvailability?: VietsubCloudAvailability | null;
   onStartCloudTranslation?: () => void;
@@ -103,6 +104,7 @@ export function VietsubSettingsPanel({
   ocrRuntime,
   ocrPreview,
   translationRuntime,
+  localOnly = false,
   cloudAvailability,
   onStartCloudTranslation,
   onRefreshCloudAvailability,
@@ -259,18 +261,18 @@ export function VietsubSettingsPanel({
           aria-haspopup="dialog"
           aria-controls="vietsub-translation-mode-dialog"
           disabled={busy || Boolean(activeJob)}
-          onClick={() => { setTranslationDialogOpen(true); onRefreshCloudAvailability?.(); }}
+          onClick={() => { setTranslationDialogOpen(true); if (!localOnly) onRefreshCloudAvailability?.(); }}
         >
           <span className="vietsub-tool-action-icon"><Languages size={20} /></span>
           <span className="vietsub-tool-action-copy">
             <strong>Dịch tiếng Việt</strong>
-            <small>Chọn dịch Local hoặc Cloud.</small>
+            <small>{localOnly ? 'Dịch phụ đề trực tiếp trên máy.' : 'Chọn dịch Local hoặc Cloud.'}</small>
           </span>
           {translationInstallProgress
             ? <span className="vietsub-tool-action-badge is-running">{translationInstallProgress.percent.toFixed(0)}%</span>
             : translationJob
               ? <span className="vietsub-tool-action-badge is-running">{translationJob.progressPercent.toFixed(0)}%</span>
-              : cloudAvailability?.available
+              : !localOnly && cloudAvailability?.available
                 ? <Play className="vietsub-tool-action-arrow" size={16} />
                 : translationRuntimeView.canInstall
                 ? <span className="vietsub-tool-action-badge is-warning">
@@ -349,6 +351,7 @@ export function VietsubSettingsPanel({
         {translationJob && <VietsubLocalJobStatus
           busy={busy}
           job={translationJob}
+          restartLocked={localOnly && translationJob.type === 'TRANSLATE_CLOUD'}
           title="Dịch tiếng Việt"
           onPause={onPauseJob}
           onResume={onResumeJob}
@@ -435,6 +438,7 @@ export function VietsubSettingsPanel({
 
       {translationDialogOpen && (
         <VietsubTranslationModeModal
+          localOnly={localOnly}
           runtime={translationRuntime}
           cloudAvailability={cloudAvailability}
           onStartCloud={() => {
@@ -707,6 +711,7 @@ export function VietsubOcrScanModal({
 }
 
 export function VietsubTranslationModeModal({
+  localOnly = false,
   runtime,
   cloudAvailability,
   onStartCloud,
@@ -716,6 +721,7 @@ export function VietsubTranslationModeModal({
   onStartLocal,
   onInstallLocal
 }: {
+  localOnly?: boolean;
   cloudAvailability?: VietsubCloudAvailability | null;
   onStartCloud?: () => void;
   runtime?: VietsubTranslationRuntimeStatus | null;
@@ -770,12 +776,12 @@ export function VietsubTranslationModeModal({
           <span className="vietsub-task-modal-icon"><Languages size={22} /></span>
           <div>
             <span className="confirmation-eyebrow">PHƯƠNG THỨC DỊCH</span>
-            <h2 id="vietsub-translation-mode-title">Bạn muốn dịch bằng cách nào?</h2>
-            <p id="vietsub-translation-mode-description">Chọn phương thức phù hợp cho phụ đề của video hiện tại.</p>
+            <h2 id="vietsub-translation-mode-title">{localOnly ? 'Dịch tiếng Việt trên máy' : 'Bạn muốn dịch bằng cách nào?'}</h2>
+            <p id="vietsub-translation-mode-description">{localOnly ? 'Cài thành phần dịch hoặc bắt đầu dịch phụ đề bằng Qwen.' : 'Chọn phương thức phù hợp cho phụ đề của video hiện tại.'}</p>
           </div>
         </div>
 
-        <div className="vietsub-translation-mode-grid" role="group" aria-label="Phương thức dịch">
+        <div className="vietsub-translation-mode-grid" style={localOnly ? { gridTemplateColumns: '1fr' } : undefined} role="group" aria-label="Phương thức dịch">
           <section className="vietsub-translation-mode-option is-local">
             <div className="vietsub-translation-mode-option-heading">
               <span><Cpu size={21} /></span>
@@ -816,7 +822,7 @@ export function VietsubTranslationModeModal({
             </button>
           </section>
 
-          <section className={`vietsub-translation-mode-option is-cloud${cloudAvailability?.available ? ' is-available' : ''}`} aria-disabled={!cloudAvailability?.available}>
+          {!localOnly && <section className={`vietsub-translation-mode-option is-cloud${cloudAvailability?.available ? ' is-available' : ''}`} aria-disabled={!cloudAvailability?.available}>
             <div className="vietsub-translation-mode-option-heading">
               <span><Cloud size={21} /></span>
               <div><strong>Dịch Cloud</strong><small>Dịch vụ trực tuyến</small></div>
@@ -827,7 +833,7 @@ export function VietsubTranslationModeModal({
             <button type="button" disabled={busy || !cloudAvailability?.available || !onStartCloud} onClick={onStartCloud}>
               <Cloud size={16} /> Dịch Cloud
             </button>
-          </section>
+          </section>}
         </div>
 
         <div className="confirmation-actions vietsub-task-modal-actions is-compact">
@@ -1099,6 +1105,7 @@ function useVietsubModalAccessibility(onDismiss: () => void) {
 function VietsubLocalJobStatus({
   job,
   busy,
+  restartLocked = false,
   title,
   onPause,
   onResume,
@@ -1107,6 +1114,7 @@ function VietsubLocalJobStatus({
 }: {
   job: VietsubJobSummary;
   busy: boolean;
+  restartLocked?: boolean;
   title: string;
   onPause: (jobId: string) => void;
   onResume: (jobId: string) => void;
@@ -1118,10 +1126,11 @@ function VietsubLocalJobStatus({
       <div><strong>{title} · {formatJobStatus(job.status, job.type)}</strong><span>{job.progressPercent.toFixed(0)}%</span></div>
       <div className="vietsub-progress-track"><span style={{ width: `${job.progressPercent}%` }} /></div>
       <small>{job.statusMessage ?? job.errorMessage ?? `Lần chạy ${job.attemptCount}/${job.maxAttempts}`}</small>
+      {restartLocked && !['COMPLETED', 'CANCELLED'].includes(job.status) && <small>Dịch Cloud đã bị khóa trong chế độ local.</small>}
       <div className="vietsub-settings-actions">
         {job.status === 'RUNNING' && <button type="button" disabled={busy} onClick={() => onPause(job.id)}><Pause size={13} /> Tạm dừng</button>}
-        {(job.status === 'PAUSED' || job.status === 'INTERRUPTED') && <button type="button" disabled={busy} onClick={() => onResume(job.id)}><Play size={13} /> Tiếp tục</button>}
-        {job.status === 'FAILED' && job.errorCode !== 'CLOUD_UNKNOWN' && job.attemptCount < job.maxAttempts && <button type="button" disabled={busy} onClick={() => onRetry(job.id)}><RotateCcw size={13} /> Thử lại</button>}
+        {!restartLocked && (job.status === 'PAUSED' || job.status === 'INTERRUPTED') && <button type="button" disabled={busy} onClick={() => onResume(job.id)}><Play size={13} /> Tiếp tục</button>}
+        {!restartLocked && job.status === 'FAILED' && job.errorCode !== 'CLOUD_UNKNOWN' && job.attemptCount < job.maxAttempts && <button type="button" disabled={busy} onClick={() => onRetry(job.id)}><RotateCcw size={13} /> Thử lại</button>}
         {!['COMPLETED', 'CANCELLED'].includes(job.status) && job.errorCode !== 'CLOUD_UNKNOWN' && <button type="button" disabled={busy} onClick={() => onCancel(job.id)}><Square size={13} /> Hủy</button>}
       </div>
     </div>

@@ -2,6 +2,8 @@
 
 > Ma trận kiểm thử và Definition of Done. Rà soát ngày 2026-09-07.
 
+Kết quả cho chế độ [Vietsub local](HUONG_DAN_VIETSUB_LOCAL_ONLY.md) ngày 2026-09-13 nằm ở mục 23. Các kết quả trước đó là lịch sử của từng thay đổi.
+
 Kết quả phải ghi rõ thời điểm, commit/worktree, môi trường và số Passed/Failed/Skipped. Không dùng mốc lịch sử như kết quả của lần thay đổi mới.
 
 ## 1. Bộ lệnh chuẩn
@@ -444,3 +446,41 @@ Toolbar phân bổ khoảng trống vào cột nhãn Timeline bên trái, đưa 
 - Edge headless dùng bundle App production và bridge giả: viewport 1600×1000 và 1920×1080 có mixer rộng **520 CSS px**, cách nhóm nút **12 px**. 720×900/zoom 125% chuyển hàng, không chồng nhóm nút hoặc tràn toolbar. Đã xem ảnh `wide.png`, `narrow.png`; ảnh/JSON ở `.tmp/mixer-right-alignment-verification`.
 - .NET Release toàn bộ, `--no-build -- xUnit.ParallelizeTestCollections=false`, TEMP/TMP riêng có đường dẫn ngắn trên D: **1.033 Passed / 0 Failed / 3 Skipped / 1.036 Total**, 3 phút 3 giây. TRX tại `.tmp/mixer-right-alignment-verification/mixer-right-alignment-suite.trx`. Fixture WebView2 Timeline hiện có đạt ở zoom 100/125/150/200%, kiểm các chiều rộng 420/640/820/1160 px, nút xuất và mixer không chồng nhau; ảnh trong thư mục `timeline` cùng artifact.
 - `git diff --check`: **Passed**. Ba test model opt-in Qwen/Piper vẫn Skipped; không tính là model đã đạt. Không thay dữ liệu project hoặc cấu hình âm lượng người dùng. Chạy lại desktop để nạp bundle mới.
+
+## 23. Khóa video AI và Dịch Cloud, giữ Vietsub local — 2026-09-13
+
+Worktree triển khai trên HEAD `f602016`, chưa commit hoặc phát hành. Máy Windows `10.0.26200.0`, .NET SDK `10.0.301`, Node `v24.16.0`, npm `11.13.0`; CPU Intel Core i7-11800H 8 nhân/16 luồng, RAM vật lý 15,77 GiB. Múi giờ Asia/Bangkok (UTC+07).
+
+Chế độ `Application:VietsubLocalOnly=true` được kiểm ở điều hướng React, WebView bridge, local job manager, gateway HTTP desktop, resource filter server, provider resolver và HTTP runtime. Regression xác minh từ chối trước service/SQL/outbound; job Cloud cũ không thể tiếp tục/thử lại nhưng vẫn hủy được; đăng nhập/lease và chuyển tổ chức với ngân sách AI 0 không cần service SQL video/provider. Cài Qwen, dịch local và tạo giọng Piper vẫn đi qua readiness hiện có. Fixture trước đó tiếp tục bảo vệ OCR, revision/cue khóa, SRT atomically, waveform/voice và xuất MP4 qua FFmpeg.
+
+Model Qwen và Piper có sẵn trên máy, đã kiểm size/SHA-256 theo script verify trước khi chạy category opt-in. Kiểm thử Qwen dùng cue Anh/Trung, parse/grammar, hủy và job ghi SRT thực trong workspace tạm. Piper sinh WAV PCM tiếng Việt và kiểm cấu trúc/thời lượng. Không gọi provider Cloud, không dùng project hoặc nội dung của người dùng.
+
+Lần benchmark Low-memory đầu phát hiện harness gán profile `qf4-benchmark` cho cấu hình production 768 token, nên worker từ chối đúng allowlist. Sửa riêng harness để nhận diện cấu hình production bằng record của `VietsubTranslationWorkerProfiles`, giữ các candidate trong profile benchmark riêng. Không nới allowlist, ngưỡng tài nguyên hoặc thay thuật toán dịch. Benchmark production Low-memory chạy lại đủ 20 cảnh đã Passed; giữ TRX lỗi ban đầu và TRX chạy lại để đối chiếu.
+
+Không chạy năm cấu hình candidate dùng cho tuning vì thay đổi này giữ nguyên hai profile production. Kết quả fixture/model không thay thế nghiệm thu ngôn ngữ, nghe giọng/MP4, thao tác desktop với tài khoản/video thật hoặc thử trên máy RAM 6 GB. Không chạy migration, thay dữ liệu SQL thật, restart server/IDE, hay publish release. Cấu hình mới có hiệu lực khi khởi động đúng binary desktop/server mới.
+
+| Phạm vi | Kết quả thực chạy |
+|---|---|
+| `npm ci --no-audit --no-fund`, `npm run build` | Passed; Vite còn cảnh báo chunk >500 kB |
+| `npm test` sau thay đổi cuối | 27 file, 148 Passed / 0 Failed / 0 Skipped |
+| Full .NET Release sau thay đổi cuối | 1.069 Passed / 0 Failed / 3 Skipped / 1.072 Total; 2 phút 47 giây |
+| Restore solution, build solution Release `--no-restore` | Passed; MSBuild 0 warning / 0 error |
+| Build desktop Debug `--no-restore` | Passed; MSBuild 0 warning / 0 error |
+| SHA-256 Web/dist so với wwwroot Debug và Release | Mỗi cấu hình 3 file, 0 sai khác |
+| Qwen thật, `Category=LocalModelIntegration` | 1 Passed / 0 Failed / 0 Skipped; khoảng 1 phút 52 giây |
+| Piper thật, `Category=LocalVoiceIntegration` | 1 Passed / 0 Failed / 0 Skipped; khoảng 4 giây |
+| Benchmark Qwen production Low-memory sau sửa harness | 1 Passed / 0 Failed / 0 Skipped, đủ 20 cảnh |
+| Benchmark Qwen production Standard | 1 Passed / 0 Failed / 0 Skipped, đủ 20 cảnh |
+
+Hai benchmark dùng context 4096, ubatch 64 và model Qwen3-4B-Q4_K_M đã pin; chạy tuần tự, không chạy model đồng thời với build/OCR/FFmpeg nặng. Mỗi cảnh fixture có hai cue Anh hoặc Trung, không log nội dung phụ đề.
+
+| Profile production | Threads / batch / max token | Nạp worker mới | Tổng 20 cảnh, gồm nạp | Trung bình/cảnh, bỏ nạp | Peak working set | Private bytes cuối |
+|---|---|---|---|---|---|---|
+| Low-memory | 4 / 128 / 768 | 7,485 giây | 488,376 giây | 24,04 giây | 4,674 GiB | 1,731 GiB |
+| Standard | 8 / 256 / 1024 | 7,407 giây | 324,332 giây | 15,85 giây | 4,671 GiB | 1,723 GiB |
+
+Thông lượng sau nạp tương ứng khoảng 2,50 và 3,79 cảnh/phút. Standard nhanh hơn trong fixture này; giữ lựa chọn profile theo resource probe hiện có. Peak working set trên đây chỉ đo worker, chưa cộng desktop/OS hoặc workload khác. Cache file của OS không bị xóa giữa các lượt; số nạp là tiến trình worker mới, không phải phép đo máy vừa khởi động. Không suy ra ngưỡng 6 GB đã đủ từ phép đo trên máy 15,77 GiB và không đổi safety margin trong source.
+
+Full suite chạy `dotnet test TOOL-TESTS\TOOL-TESTS.csproj -c Release --no-build -- xUnit.ParallelizeTestCollections=false`, với TEMP/TMP riêng dưới đường dẫn ngắn trên D. Ba test Skipped là Qwen integration, Qwen benchmark và Piper integration do full suite không bật biến môi trường opt-in; từng category đã được chạy riêng với model thật và Passed như bảng trên. Không đổi timeout hoặc giảm assertion. `git diff --check` Passed.
+
+TRX lưu tại [artifacts/vietsub-local-only](artifacts/vietsub-local-only): `full-final.trx`, `qwen-real.trx`, `piper-real.trx`, `qwen-low-memory.trx` (lượt lỗi harness ban đầu), `qwen-low-memory-fixed.trx` và `qwen-standard.trx`. Đây là artifact local được Git ignore. Lượt full suite đầu còn có bản gốc dưới `.tmp/vietsub-local-only`.

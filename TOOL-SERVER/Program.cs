@@ -27,7 +27,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddRazorPages();
-builder.Services.AddControllers();
+builder.Services.AddControllers(options => options.Filters.Add<TOOL_SERVER.Infrastructure.LocalOnlyFeatureFilter>());
+builder.Services.Configure<TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy>(
+    builder.Configuration.GetSection(TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy.SectionName));
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddRateLimiter(options =>
@@ -262,6 +264,11 @@ builder.Services.AddScoped<IAiBudgetService, AiBudgetService>();
 builder.Services.AddScoped<IGenerationAccessService, GenerationAccessService>();
 builder.Services.AddScoped<IVietsubProjectService, VietsubProjectService>();
 builder.Services.Configure<TOOL_SERVER.Vietsub.Translation.VietsubCloudTranslationOptions>(builder.Configuration.GetSection("VietsubCloudTranslation"));
+builder.Services.AddOptions<TOOL_SERVER.Vietsub.Translation.VietsubCloudTranslationOptions>()
+    .PostConfigure<Microsoft.Extensions.Options.IOptions<TOOL_SHARED.Contracts.Common.ApplicationFeaturePolicy>>((cloud, policy) =>
+    {
+        if (policy.Value.VietsubLocalOnly) cloud.Enabled = false;
+    });
 builder.Services.AddScoped<TOOL_SERVER.Vietsub.Translation.IOpenAiSubtitleTranslationClient, TOOL_SERVER.Vietsub.Translation.OpenAiSubtitleTranslationClient>();
 builder.Services.AddScoped<TOOL_SERVER.Vietsub.Translation.VietsubCloudTranslationService>();
 builder.Services.AddHostedService<TOOL_SERVER.Vietsub.Translation.VietsubCloudTranslationWorker>();
@@ -357,6 +364,9 @@ builder.Services.AddHttpClient("ProviderCredentialTest", client =>
     AllowAutoRedirect = false
 });
 builder.Services.AddSingleton<IDesktopReleaseStorage, DesktopReleaseStorage>();
+builder.Services.AddTransient<TOOL_SERVER.Infrastructure.LocalOnlyProviderHandler>();
+foreach (var runtimeClient in new[] { "OpenAiRuntime", "VietsubOpenAiRuntime", "KlingRuntime", "BytePlusRuntime", "FalRuntime", "ProviderCredentialTest" })
+    builder.Services.AddHttpClient(runtimeClient).AddHttpMessageHandler<TOOL_SERVER.Infrastructure.LocalOnlyProviderHandler>();
 builder.Services.AddScoped<IDesktopReleaseService, DesktopReleaseService>();
 
 var app = builder.Build();

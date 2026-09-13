@@ -627,12 +627,19 @@ public sealed partial class VietsubTranslationRuntimeTests(ITestOutputHelper out
             "qwen3-vietsub-context-v2-no-think",
             "deterministic-gbnf-v1");
         var component = VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km;
-        var resourceRequirements = string.Equals(
+        var productionProfile = string.Equals(
             Environment.GetEnvironmentVariable("VIDEOMAKER_TRANSLATION_RESOURCE_PROFILE"),
             "low-memory",
             StringComparison.OrdinalIgnoreCase)
-                ? VietsubTranslationResourceRequirements.LowMemoryCpu
-                : VietsubTranslationResourceRequirements.StandardCpu;
+                ? VietsubTranslationWorkerProfiles.CreateLowMemoryCpuRuntimeProfile(config.Threads + 2)
+                : VietsubTranslationWorkerProfiles.CreateStandardCpuRuntimeProfile(config.Threads + 2);
+        // Benchmark exact production settings through their real allowlisted profile.
+        // Candidate settings retain the separate opt-in benchmark profile.
+        if (config with { ProfileId = productionProfile.ProfileId } == productionProfile.InferenceConfig)
+        {
+            config = productionProfile.InferenceConfig;
+        }
+        var resourceRequirements = productionProfile.ResourceRequirements;
         var options = VietsubTranslationWorkerClientOptions.CreateDefault() with
         {
             WorkerExecutablePath = Path.Combine(
@@ -693,7 +700,7 @@ public sealed partial class VietsubTranslationRuntimeTests(ITestOutputHelper out
 
         total.Stop();
         output.WriteLine(
-            $"config={VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(config)}; context={config.ContextSize}; maxTokens={config.MaximumGeneratedTokens}; batch={config.BatchSize}; ubatch={config.UBatchSize}; threads={config.Threads}; coldLoadMs={loadElapsed.TotalMilliseconds:F0}; total20Ms={total.Elapsed.TotalMilliseconds:F0}; peakWorkingSetBytes={peakWorkingSet}; endingPrivateBytes={endingPrivateBytes}");
+            $"profile={config.ProfileId}; config={VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(config)}; context={config.ContextSize}; maxTokens={config.MaximumGeneratedTokens}; batch={config.BatchSize}; ubatch={config.UBatchSize}; threads={config.Threads}; coldLoadMs={loadElapsed.TotalMilliseconds:F0}; total20Ms={total.Elapsed.TotalMilliseconds:F0}; peakWorkingSetBytes={peakWorkingSet}; endingPrivateBytes={endingPrivateBytes}");
     }
 
     private static async Task VerifyRealTranslationJobAsync(

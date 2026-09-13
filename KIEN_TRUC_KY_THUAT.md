@@ -1,5 +1,7 @@
 # Kiến trúc kỹ thuật VideoMaker
 
+Chế độ mặc định [Vietsub local](HUONG_DAN_VIETSUB_LOCAL_ONLY.md) dùng policy chung `Application:VietsubLocalOnly`. Dashboard trả danh sách video/model rỗng và chỉ tải tổ chức/media; factory SQL workflow bị vô hiệu hóa. Bridge, gateway HTTP, server resource filter/provider resolver/runtime HTTP và job manager chặn nghiệp vụ video/Cloud mới. Qwen/Piper/FFmpeg vẫn chạy local, server giữ auth/license/registry và đối soát request cũ.
+
 > Mô tả ranh giới module và đường gọi theo source ngày 2026-09-07.
 
 ## 1. Tổng thể

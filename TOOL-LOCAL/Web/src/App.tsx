@@ -250,6 +250,7 @@ const emptyState: DashboardState = {
   },
   generationRunning: false,
   features: {
+    vietsubLocalOnly: true,
     vietsubEnabled: false,
     speechSynchronizationEnabled: false
   },
@@ -373,7 +374,7 @@ type ModelDisplay = {
 function App() {
   const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
   const latestDashboardRef = useRef(dashboard);
-  const [page, setPage] = useState<Page>('create');
+  const [page, setPage] = useState<Page>('vietsub');
   const [busy, setBusy] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -424,7 +425,8 @@ function App() {
   const pendingVideoVoiceQuoteRef = useRef(new Map<string, string[]>());
   const vietsub = useVietsubModule(
     dashboard.features.vietsubEnabled,
-    dashboard.selectedOrganizationId
+    dashboard.selectedOrganizationId,
+    dashboard.features.vietsubLocalOnly === true
   );
   const selectedProjectRequestRef = useRef<string | null>(null);
   const licenseRequestsRef = useRef(new Map<string, LicenseRequestKind>());
@@ -932,10 +934,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (dashboard.features.vietsubLocalOnly) {
+      if (page !== 'vietsub' && page !== 'settings') setPage('vietsub');
+      return;
+    }
     if (page === 'vietsub' && !dashboard.features.vietsubEnabled) {
       setPage('create');
     }
-  }, [dashboard.features.vietsubEnabled, page]);
+  }, [dashboard.features.vietsubEnabled, dashboard.features.vietsubLocalOnly, page]);
 
   useEffect(() => {
     try {
@@ -984,7 +990,13 @@ function App() {
     setLicensePaymentError(null);
   };
 
-  const handleNavigation = (label: string, target?: Page) => {
+  const handleNavigation = async (label: string, target?: Page) => {
+    if (dashboard.features.vietsubLocalOnly) {
+      if (target !== 'vietsub' && target !== 'settings') return;
+      if (label === 'Tạo dự án mới' && vietsub.state.selectedProject) {
+        if (!await vietsub.prepareToLeaveEditor() || !await vietsub.closeProject()) return;
+      }
+    }
     setSidebarOpen(false);
     if (target) {
       setPage(target);
@@ -1764,7 +1776,7 @@ function App() {
           page={page}
           busy={pageBusy}
           onMenu={() => setSidebarOpen(true)}
-          onCreate={() => setPage('longVideo')}
+          onCreate={() => { void handleNavigation(dashboard.features.vietsubLocalOnly ? 'Tạo dự án mới' : 'Tạo Video Dài', dashboard.features.vietsubLocalOnly ? 'vietsub' : 'longVideo'); }}
           onRefresh={() => {
             if (page === 'vietsub') {
               vietsub.refresh();
@@ -1866,6 +1878,7 @@ function App() {
           />
         ) : page === 'settings' ? (
           <DesktopSettingsPage
+            localOnly={dashboard.features.vietsubLocalOnly}
             settings={desktopSettings}
             busy={busy}
             onSpeechSynchronizationChange={updateSpeechSynchronizationSetting}
@@ -2670,7 +2683,7 @@ function Sidebar({
       <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}>
         <div className="brand">
           <div className="brand-mark"><Clapperboard size={25} /></div>
-          <div className="brand-copy"><strong>VideoMaker</strong><span>Tự động tạo video</span></div>
+          <div className="brand-copy"><strong>VideoMaker</strong><span>{dashboard.features.vietsubLocalOnly ? 'Vietsub local' : 'Tự động tạo video'}</span></div>
           <button
             className="sidebar-toggle"
             type="button"
@@ -2686,15 +2699,16 @@ function Sidebar({
         <button
           className="new-video-button"
           type="button"
-          onClick={() => onNavigate('Tạo Video Dài', 'longVideo')}
-          aria-label="Tạo video mới"
-          title={collapsed ? 'Tạo video mới' : undefined}
+          onClick={() => onNavigate(dashboard.features.vietsubLocalOnly ? 'Tạo dự án mới' : 'Tạo Video Dài', dashboard.features.vietsubLocalOnly ? 'vietsub' : 'longVideo')}
+          aria-label={dashboard.features.vietsubLocalOnly ? 'Tạo dự án mới' : 'Tạo video mới'}
+          title={collapsed ? (dashboard.features.vietsubLocalOnly ? 'Tạo dự án mới' : 'Tạo video mới') : undefined}
         >
-          <Plus size={18} /> <span className="new-video-label">Tạo video mới</span>
+          <Plus size={18} /> <span className="new-video-label">{dashboard.features.vietsubLocalOnly ? 'Tạo dự án mới' : 'Tạo video mới'}</span>
         </button>
 
         <nav className="sidebar-nav">
           {primaryMenu
+            .filter(({ page: target }) => !dashboard.features.vietsubLocalOnly || target === 'vietsub')
             .filter(({ feature }) => !feature || dashboard.features[feature])
             .map(({ label, icon: Icon, page: target }) => (
               <button
@@ -2708,7 +2722,7 @@ function Sidebar({
               </button>
             ))}
           <div className="nav-divider" />
-          {secondaryMenu.map(({ label, icon: Icon, page: target }) => (
+          {secondaryMenu.filter(({ page: target }) => !dashboard.features.vietsubLocalOnly || target === 'settings').map(({ label, icon: Icon, page: target }) => (
             <button
               className={target === page ? 'active' : ''}
               key={label}
@@ -6481,14 +6495,20 @@ function ProjectsPage({ projects, onSelect, onCreate }: { projects: ProjectSumma
 }
 
 function DesktopSettingsPage({
+  localOnly = false,
   settings,
   busy,
   onSpeechSynchronizationChange
 }: {
+  localOnly?: boolean;
   settings: DesktopFeatureSettings;
   busy: boolean;
   onSpeechSynchronizationChange: (enabled: boolean) => void;
 }) {
+  if (localOnly) return <div className="page-shell desktop-settings-page"><section className="card desktop-setting-card">
+    <h2>Vietsub local</h2><p>OCR, dịch tiếng Việt, tạo giọng và xuất video được xử lý trên máy.</p>
+    <p>Mở Thiết lập dự án để cài và kiểm tra thành phần dịch, giọng Việt.</p>
+  </section></div>;
   const configured = settings.speechSynchronizationEnabled;
   const statusLabel = settings.restartRequired
     ? 'Chờ khởi động lại'

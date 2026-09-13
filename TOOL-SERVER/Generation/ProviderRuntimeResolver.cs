@@ -6,6 +6,8 @@ using TOOL_SERVER.Domain.Providers;
 using TOOL_SERVER.Providers;
 using TOOL_SHARED.Contracts.Generation;
 using TOOL_SHARED.Contracts.Organizations;
+using Microsoft.Extensions.Options;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Generation;
 
@@ -48,7 +50,8 @@ internal interface IProviderRuntimeResolver
 internal sealed class ProviderRuntimeResolver(
     ProviderAdminDbContext dbContext,
     AiGovernanceDbContext governanceDbContext,
-    IProviderCredentialProtector credentialProtector) : IProviderRuntimeResolver
+    IProviderCredentialProtector credentialProtector,
+    IOptions<ApplicationFeaturePolicy>? applicationFeatures = null) : IProviderRuntimeResolver
 {
     public async Task<ProviderRuntimeConfiguration> ResolveAsync(
         Guid organizationId,
@@ -91,6 +94,10 @@ internal sealed class ProviderRuntimeResolver(
         bool requireEnabled,
         CancellationToken cancellationToken)
     {
+        // Existing video requests use requireEnabled=false for polling/settlement.
+        if (requireEnabled && applicationFeatures?.Value.VietsubLocalOnly == true)
+            throw new AccountApiException(403, ApplicationFeaturePolicy.LocalOnlyErrorCode, ApplicationFeaturePolicy.LocalOnlyMessage);
+
         var provider = await dbContext.Providers
             .AsNoTracking()
             .Include(x => x.Models)
