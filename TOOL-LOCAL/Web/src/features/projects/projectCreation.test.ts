@@ -26,13 +26,13 @@ describe('new project completion', () => {
 });
 
 describe('short-video readiness', () => {
-  it('uses Kling readiness and price when the organization uses Fal for long video', () => {
+  it('uses Veo readiness and price independently from Kling', () => {
     const result = shortVideoProviderStatus({ videoReady: true, videoProviderCode: 'fal', videoModel: 'veo',
       estimatedVideoCostPerSecond: 0.9, klingReady: true, klingModel: 'kling-3.0', estimatedKlingCostPerSecond: 0.2 } as GenerationProviderStatus);
-    expect(result).toMatchObject({ videoReady: true, videoProviderCode: 'kling', videoModel: 'kling-3.0', estimatedVideoCostPerSecond: 0.2 });
+    expect(result).toMatchObject({ videoReady: true, videoProviderCode: 'fal', videoModel: 'veo', estimatedVideoCostPerSecond: 0.9 });
   });
-  it('keeps short video unavailable if only Fal is ready', () => {
-    expect(shortVideoProviderStatus({ videoReady: true, klingReady: false, klingUnavailableMessage: 'Thiếu cấu hình Kling' } as GenerationProviderStatus))
-      .toMatchObject({ videoReady: false, videoUnavailableMessage: 'Thiếu cấu hình Kling' });
+  it('keeps short video unavailable when only Kling is configured', () => {
+    expect(shortVideoProviderStatus({ videoReady: true, videoProviderCode: 'kling', klingReady: true } as GenerationProviderStatus))
+      .toMatchObject({ videoReady: false, videoUnavailableMessage: 'Cấu hình Fal/Veo cho tổ chức trước khi tạo video ngắn.' });
   });
 });

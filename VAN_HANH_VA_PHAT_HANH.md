@@ -1,5 +1,27 @@
 # Vận hành và phát hành VideoMaker
 
+### Tải Bilibili — 2026-09-11
+
+Không cần migration/server flag. Desktop tải yt-dlp 2026.08.19 bằng thao tác **Chuẩn bị công cụ tải**, kiểm pinned size/SHA-256, giữ license/provenance bên runtime; không tự nâng bản. Chỉ triển khai frontend cùng native bridge mới. Chức năng dùng video public và có thể bị Bilibili hạn chế theo mạng; giữ partial, không báo quét đủ khi chưa hoàn tất. Hàng đợi trong phiên, MP4 lưu ở máy; rollback desktop không xóa video đã tải. [Hướng dẫn, nguồn gốc và giới hạn smoke](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).
+
+### Phục hồi kết quả video ngắn — 2026-09-11
+
+Mọi server/worker chia sẻ database phải cùng truy cập kho video qua `Generation:VideoOutputs:StorageRoot` tuyệt đối. Máy Development đã thống nhất kho hiện hữu của server `vid-long`, giữ nguyên bản gốc và kiểm hash các tệp còn hạn; không sửa SQL hay tạo lại tác vụ. Khi chuyển kho cần bảo toàn các tệp đang được database tham chiếu. Xem [biên bản phục hồi và cấu hình](SUA_LOI_TAI_VIDEO_NGAN.md).
+
+### Video ngắn dùng Veo — 2026-09-11
+
+Triển khai đồng bộ server/contracts/desktop/frontend. Video ngắn yêu cầu policy `LongForm` Fal/Veo 3.1 Standard hoặc Fast, Native Audio 720p, credential/model/rate Active và budget. Không dùng policy Default Kling để fallback. Schema 4.1.9 đã có là điều kiện bắt buộc cho báo giá video ngắn cả TextOnly; thay đổi này không thêm migration. Máy Development `DUNGDEV / VideoFactory` đã có schema này và policy Veo 3.1 Fast qua Fal; lần triển khai này chỉ kiểm SQL đọc, không sửa SQL, rate hoặc credential.
+
+Dự án cũ được chuyển bằng **Chuyển dự án sang Veo** trong UI, sau xác nhận thời lượng/tỷ lệ và kiểm không có tác vụ pending/Unknown. Không chạy SQL cập nhật hàng loạt snapshot; không tự gửi lại request lỗi để kiểm thử. Khi rollback, giữ schema, lịch sử request/ledger và thư viện; binary cũ không hiểu quote/lineage Veo video ngắn không được dùng để tạo hoặc render các dự án đã chuyển. [Quy trình và bằng chứng kiểm thử](TRIEN_KHAI_VIDEO_NGAN_VEO.md).
+
+### Thư viện nhân vật/trang phục cục bộ — 2026-09-11
+
+Kho mới ở `%LOCALAPPDATA%\VideoMaker\ShortVideoLibrary`, tách scope user/org, không cần SQL Server migration. Backup/restore cả SQLite và thư mục ảnh khi ứng dụng đóng; backup workspace riêng để giữ project/output. Thay/xóa mục thư viện giữ version cũ, nên chưa tự thu hồi dung lượng. Không chép riêng bundle frontend vào binary desktop cũ vì bridge có contract mới. [Bản chạy, kiểm chứng và hướng dẫn](TRIEN_KHAI_UI_THU_VIEN_VIDEO_NGAN.md).
+
+## Video ngắn phối trang phục — source 2026-09-10
+
+Hai cờ `Generation:ShortVideoCharacterOutfit:Enabled` (server) và `Features:ShortVideoCharacterOutfitEnabled` (desktop) mặc định tắt. Trước bật môi trường mới, rehearsal `VideoFactory.4.1.9.ShortVideoCharacterOutfit.sql` hai lần trên clone có backup/restore đã thử, rồi áp least-privilege; deploy server/desktop cùng contract và xác minh rate/credential/budget cùng API contract Kling thực tế. Riêng máy Development `DUNGDEV / VideoFactory` đã được người dùng yêu cầu áp migration và bật ngày 2026-09-10 sau backup/restore, rehearsal và kiểm schema/quyền. Override server nằm trong Development user-secrets, override desktop nằm trong `appsettings.user.json` của source và cạnh binary Debug/Release; không đổi mặc định phát hành. Đã khởi động lại server/desktop và smoke HTTPS, chưa gọi provider có phí hoặc nghiệm thu ảnh/video thật. Khi tắt cờ, giữ polling video/cleanup/reconciliation và dữ liệu lịch sử; không rollback binary không hiểu lineage để render project mới. [Các bước triển khai, đối soát Unknown và phần cần người vận hành xác nhận](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md).
+
 ### Veo local voice — bổ sung 2026-09-09
 
 Rehearsal trên database clone được phê duyệt trước: áp dụng migration VideoFactory.4.1.8.LocalVoiceConsistency.sql idempotently sau baseline hiện hành, rồi triển khai server/desktop cùng contract. Mapping mới cần cột LocalVoicePolicyVersion kể cả khi feature tắt; không chạy binary mới lên schema cũ. Migration không phụ thuộc cloud LipSync thử nghiệm 4.1.6/4.1.7. Không xóa cột/policy/lineage khi rollback; desktop cũ không có render guard không được dùng để render project đã bật local policy.

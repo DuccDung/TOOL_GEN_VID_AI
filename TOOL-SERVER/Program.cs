@@ -37,6 +37,8 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = async (context, cancellationToken) =>
     {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
         await context.HttpContext.Response.WriteAsJsonAsync(
             new ApiErrorResponse(
                 "rate_limit_exceeded",
@@ -318,6 +320,9 @@ builder.Services.AddScoped<IVideoProviderClient, FalVeoVideoClient>();
 builder.Services.AddScoped<IVideoProviderRouter, VideoProviderRouter>();
 builder.Services.AddScoped<IGenerationService, GenerationService>();
 builder.Services.AddScoped<ISceneFirstFrameService, SceneFirstFrameService>();
+builder.Services.Configure<ShortVideoOutfitOptions>(builder.Configuration.GetSection(ShortVideoOutfitOptions.SectionName));
+builder.Services.AddScoped<ShortVideoOutfitService>();
+builder.Services.AddScoped<IShortVideoOutfitService>(sp => sp.GetRequiredService<ShortVideoOutfitService>());
 builder.Services.AddScoped<IGeneratedImageContentService, GeneratedImageContentService>();
 builder.Services.AddScoped<IGeneratedVoiceContentService, GeneratedVoiceContentService>();
 builder.Services.AddScoped<KlingOutputProxyService>();
@@ -416,6 +421,9 @@ builder.Services.AddSingleton<IDesktopReleaseStorage, DesktopReleaseStorage>();
 builder.Services.AddScoped<IDesktopReleaseService, DesktopReleaseService>();
 
 var app = builder.Build();
+var videoStorageRoot = builder.Configuration[$"{VideoOutputOptions.SectionName}:StorageRoot"];
+if (string.IsNullOrWhiteSpace(videoStorageRoot) || !Path.IsPathFullyQualified(videoStorageRoot))
+    app.Logger.LogWarning("VideoOutputs uses a local relative storage root. All server/worker instances sharing a database must use the same absolute Generation:VideoOutputs:StorageRoot and filesystem.");
 
 await AdminBootstrapper.EnsureAsync(app.Services, app.Configuration, app.Logger);
 await LicensePlanBootstrapper.EnsureAsync(app.Services);

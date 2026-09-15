@@ -11,7 +11,8 @@ public enum GeneratedImageContentKind
 {
     Any,
     CharacterReference,
-    SceneFirstFrame
+    SceneFirstFrame,
+    ShortVideoOutfit
 }
 
 public interface IGeneratedImageContentService
@@ -36,6 +37,11 @@ internal sealed class GeneratedImageContentService(
         CancellationToken cancellationToken,
         GeneratedImageContentKind kind = GeneratedImageContentKind.Any)
     {
+        if (kind == GeneratedImageContentKind.ShortVideoOutfit)
+        {
+            if (!await dbContext.ShortVideoOperations.AnyAsync(x => x.OperationId == providerRequestId && x.Kind == "Image", cancellationToken)) throw NotFound();
+            kind = GeneratedImageContentKind.Any;
+        }
         var request = await dbContext.ProviderRequests
             .Include(x => x.GeneratedImageOutput)
             .SingleOrDefaultAsync(
@@ -78,7 +84,7 @@ internal sealed class GeneratedImageContentService(
                 "generated_image_expired",
                 "Ảnh tạm trên server đã hết hạn. Hãy tạo lại ảnh.");
         }
-        var maximumBytes = request.SceneId is null ? 10L * 1024 * 1024 : 8L * 1024 * 1024;
+        var maximumBytes = request.SceneId is null || request.IdempotencyKey.StartsWith("outfit-image:", StringComparison.Ordinal) ? 10L * 1024 * 1024 : 8L * 1024 * 1024;
         if (output.Payload.LongLength != output.SizeBytes || output.Payload.LongLength > maximumBytes)
         {
             throw new AccountApiException(

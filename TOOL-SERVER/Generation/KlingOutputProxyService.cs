@@ -371,13 +371,8 @@ internal sealed class KlingOutputProxyService(
             throw new AccountApiException(
                 StatusCodes.Status502BadGateway,
                 "provider_output_cache_invalid",
-                "Video đã lưu trên server không còn nguyên vẹn.");
+                "Video đã tạo xong nhưng server chưa đọc được tệp đã lưu. Hãy tải lại video đã gửi; nếu vẫn lỗi, cần kiểm tra kho video dùng chung trên server.");
         }
-        httpContext.Response.ContentType = output.MimeType;
-        httpContext.Response.ContentLength = output.SizeBytes;
-        httpContext.Response.Headers.CacheControl = "private, no-store";
-        httpContext.Response.Headers.XContentTypeOptions = "nosniff";
-        httpContext.Response.Headers.ETag = $"\"{output.Sha256}\"";
         await using var stream = new FileStream(
             path,
             FileMode.Open,
@@ -385,6 +380,16 @@ internal sealed class KlingOutputProxyService(
             FileShare.Read,
             128 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var hash = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream, cancellationToken));
+        if (!string.Equals(hash, output.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new AccountApiException(StatusCodes.Status502BadGateway, "provider_output_cache_invalid",
+                "Tệp video trên server không khớp dữ liệu đã tạo. Cần khôi phục tệp gốc trước khi tải lại.");
+        stream.Position = 0;
+        httpContext.Response.ContentType = output.MimeType;
+        httpContext.Response.ContentLength = output.SizeBytes;
+        httpContext.Response.Headers.CacheControl = "private, no-store";
+        httpContext.Response.Headers.XContentTypeOptions = "nosniff";
+        httpContext.Response.Headers.ETag = $"\"{output.Sha256}\"";
         await stream.CopyToAsync(httpContext.Response.Body, 128 * 1024, cancellationToken);
     }
 

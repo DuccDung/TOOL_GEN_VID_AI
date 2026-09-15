@@ -57,7 +57,9 @@ internal sealed partial class DashboardBridge : IDisposable
         bool speechSynchronizationEnabled = false,
         string? applicationDirectory = null,
         Func<string?>? finalVideoExportSelector = null,
-        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoice = null)
+        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoice = null,
+        ShortVideoWorkflowService? shortVideoOutfit = null,
+        Func<string?>? shortVideoImageSelector = null)
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -75,6 +77,8 @@ internal sealed partial class DashboardBridge : IDisposable
         _closeApplication = closeApplication;
         _finalVideoExportSelector = finalVideoExportSelector;
         _localVoice = localVoice;
+        _shortVideoOutfit = shortVideoOutfit;
+        _shortVideoImageSelector = shortVideoImageSelector;
     }
 
     public async Task HandleAsync(string json, CancellationToken cancellationToken = default)
@@ -118,13 +122,26 @@ internal sealed partial class DashboardBridge : IDisposable
 
         try
         {
+            if (request.Type.StartsWith("short-library.", StringComparison.Ordinal))
+            {
+                await HandleShortVideoLibraryAsync(request, cancellationToken);
+                return;
+            }
+            if (request.Type.StartsWith("outfit.", StringComparison.Ordinal))
+            {
+                await HandleShortVideoOutfitAsync(request, cancellationToken);
+                return;
+            }
             if (request.Type.StartsWith("local-voice.", StringComparison.Ordinal))
             {
                 await HandleLocalVoiceAsync(request, cancellationToken);
                 return;
             }
             if (request.Type is "project.select" or "organization.select" or "auth.logout")
+            {
                 if (_selectedProjectId is { } previousProject) _localVoice?.Cancel(previousProject);
+                if (_shortVideoOutfit is not null) await _shortVideoOutfit.Library.ClearTransientAsync(cancellationToken);
+            }
             if (_localVoice?.IsRunning == true && request.Type is "generation.video" or "generation.content" or "render.final" or "project.create" or "short-video.create")
                 throw new ArgumentException("Hãy chờ hoặc hủy tác vụ giọng local trước khi tạo hoặc dựng video.");
             switch (request.Type)
@@ -568,91 +585,15 @@ internal sealed partial class DashboardBridge : IDisposable
         var current = _sessionManager.Current
             ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
         var result = await _projectService.CreateShortVideoAsync(
-            new CreateShortVideoCommand(payload.Content, payload.AspectRatio, payload.DurationSeconds, payload.AudioEnabled, organizationId),
+            new CreateShortVideoCommand(payload.Content, payload.AspectRatio, payload.DurationSeconds, payload.AudioEnabled, organizationId,
+                payload.Mode == ShortVideoModes.CharacterOutfit && _shortVideoOutfit?.Enabled != true ? throw new ArgumentException("Chức năng phối đồ chưa được bật.") : payload.Mode),
             current.User, current.DeviceId, cancellationToken);
         _selectedProjectId = result.Project.ProjectId;
         Post(new WebMessageResponse("operation.notice", request.RequestId, new { message = "Đã tạo dự án video ngắn." }));
     }
 
-    private Task GenerateShortVideoAsync(WebMessageRequest request, CancellationToken cancellationToken)
-    {
-        var payload = request.Payload.Deserialize<CreateShortVideoWebRequest>(_jsonOptions)
-            ?? throw new ArgumentException("Thông tin tạo video ngắn không hợp lệ.");
-        var content = payload.Content?.Trim() ?? string.Empty;
-        if (content.Length is < 1 or > 2000)
-        {
-            throw new ArgumentException("Nội dung video phải có từ 1 đến 2.000 ký tự.");
-        }
-        var aspectRatio = payload.AspectRatio is "16:9" or "9:16" or "1:1"
-            ? payload.AspectRatio
-            : throw new ArgumentException("Tỷ lệ khung hình không được hỗ trợ.");
-        if (payload.DurationSeconds is < 5 or > 15)
-        {
-            throw new ArgumentException("Thời lượng video phải nằm trong khoảng 5–15 giây.");
-        }
-
-        return RunExclusiveGenerationAsync(
-            request.RequestId,
-            async token =>
-            {
-                var current = _sessionManager.Current
-                    ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
-                var organizationId = _generationClient.SelectedOrganizationId
-                    ?? throw new ArgumentException("Hãy chọn tổ chức trước khi tạo video.");
-
-                await _mediaToolPreflight.RequireReadyAsync(token);
-                var providerStatus = await _generationService.GetProviderStatusAsync(token);
-                if (!providerStatus.KlingReady)
-                {
-                    throw new AccountClientException(
-                        providerStatus.KlingUnavailableCode ?? "video_provider_not_ready",
-                        providerStatus.KlingUnavailableMessage ??
-                        "Kling chưa sẵn sàng cho tổ chức hiện tại. Hãy kiểm tra provider, model và rate Active.",
-                        409);
-                }
-                var result = await _projectService.CreateShortVideoAsync(
-                    new CreateShortVideoCommand(
-                        content,
-                        aspectRatio,
-                        payload.DurationSeconds,
-                        payload.AudioEnabled,
-                        organizationId),
-                    current.User,
-                    current.DeviceId,
-                    token);
-                _selectedProjectId = result.Project.ProjectId;
-                Post(new WebMessageResponse(
-                    "short-video.started",
-                    request.RequestId,
-                    new { projectId = result.Project.ProjectId, sceneId = result.SceneId }));
-                await RefreshAsync(request.RequestId, token);
-
-                Post(new WebMessageResponse(
-                    "operation.notice",
-                    request.RequestId,
-                    new { message = $"Đã tạo workflow một cảnh. Kling đang xử lý clip {payload.DurationSeconds} giây..." }));
-                var count = await _generationService.GenerateVideosAsync(
-                    result.Project.ProjectId,
-                    current.User.UserId,
-                    [result.SceneId],
-                    async (message, progressToken) =>
-                    {
-                        Post(new WebMessageResponse("operation.notice", request.RequestId, new { message }));
-                        await RefreshAsync(request.RequestId, progressToken);
-                    },
-                    token);
-                Post(new WebMessageResponse(
-                    "operation.notice",
-                    request.RequestId,
-                    new
-                    {
-                        message = payload.AudioEnabled
-                            ? $"Đã tạo xong {count} clip Kling {payload.DurationSeconds} giây. Hãy phát video để kiểm tra hình và Native Audio."
-                            : $"Đã tạo xong {count} clip Kling {payload.DurationSeconds} giây. VideoMaker đã loại bỏ audio và tự động duyệt clip đầu ra."
-                    }));
-            },
-            cancellationToken);
-    }
+    private Task GenerateShortVideoAsync(WebMessageRequest request, CancellationToken cancellationToken) =>
+        throw new ArgumentException("Video ngắn Veo cần lưu dự án, tạo và duyệt ảnh đầu vào trước. Hãy mở lại màn hình Video ngắn.");
 
     private async Task LogoutAsync(string? requestId, CancellationToken cancellationToken)
     {
@@ -1840,7 +1781,7 @@ internal sealed partial class DashboardBridge : IDisposable
                             DateTime.UtcNow),
                         _licenseManager.Current,
                         false,
-                        new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled),
+                        new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled, _shortVideoOutfit?.Enabled == true),
                         [])));
                 return;
             }
@@ -1930,7 +1871,7 @@ internal sealed partial class DashboardBridge : IDisposable
                     mediaToolStatus,
                     _licenseManager.Current,
                     _generationRunning,
-                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled),
+                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled, _shortVideoOutfit?.Enabled == true),
                     sceneFirstFrames,
                     contentLanguageFailure)));
         }

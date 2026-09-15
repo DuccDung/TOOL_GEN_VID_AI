@@ -226,11 +226,9 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("reason: 'required' | 'language_invalid'", types);
         Assert.Contains("Mã đối chiếu", app);
 
-        var shortVideoStart = app.IndexOf("function ShortVideoPage", StringComparison.Ordinal);
-        var shortVideoEnd = app.IndexOf("function LongVideoPage", shortVideoStart, StringComparison.Ordinal);
-        Assert.True(shortVideoStart >= 0 && shortVideoEnd > shortVideoStart);
-        var shortVideoComponent = app[shortVideoStart..shortVideoEnd];
-        Assert.Contains("Nội dung này được gửi thẳng vào prompt Kling, không qua OpenAI.", shortVideoComponent);
+        var shortVideoComponent = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "features", "shortVideo", "TextShortVideo.tsx");
+        Assert.Contains("<TextShortVideo", app);
+        Assert.Contains("Veo tạo chuyển động từ ảnh đã duyệt", shortVideoComponent);
         Assert.DoesNotContain("short-video-hero", shortVideoComponent, StringComparison.Ordinal);
         Assert.DoesNotContain("requiresVietnameseContentRegeneration", shortVideoComponent, StringComparison.Ordinal);
     }
@@ -348,10 +346,8 @@ public sealed class DesktopStoryboardUiTests
         Assert.Contains("Khẩu hình và biểu cảm chấp nhận được", app);
         Assert.Contains("KlingLongFormSpeechIntentValidator.FindViolation", projectService);
 
-        var shortVideoStart = app.IndexOf("function ShortVideoPage", StringComparison.Ordinal);
-        var shortVideoEnd = app.IndexOf("function LongVideoPage", shortVideoStart, StringComparison.Ordinal);
-        Assert.True(shortVideoStart >= 0 && shortVideoEnd > shortVideoStart);
-        Assert.DoesNotContain("enforceKlingLongFormSpeechPolicy", app[shortVideoStart..shortVideoEnd], StringComparison.Ordinal);
+        var shortVideoComponent = ReadRepositoryFile("TOOL-LOCAL", "Web", "src", "features", "shortVideo", "TextShortVideo.tsx");
+        Assert.DoesNotContain("enforceKlingLongFormSpeechPolicy", shortVideoComponent, StringComparison.Ordinal);
     }
 
     [Fact]

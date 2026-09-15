@@ -338,7 +338,8 @@ public sealed class GenerationServiceKlingNativeAudioTests
             ScriptId = Guid.NewGuid(),
             ProjectId = project.ProjectId,
             Version = 1,
-            StructureType = GenerationWorkflowTypes.DirectShortVideo,
+            // Retain Kling adapter/audio coverage for legacy workflows; DirectShortVideo now requires Veo.
+            StructureType = "LegacyStoryboard",
             FullText = "Test",
             StoryBeatsJson = "[]",
             Status = "Approved",

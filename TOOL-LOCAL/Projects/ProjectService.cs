@@ -7,6 +7,7 @@ using TOOL_LOCAL.Data;
 using TOOL_LOCAL.Data.Models;
 using TOOL_LOCAL.Jobs;
 using TOOL_LOCAL.Storage;
+using TOOL_LOCAL.Generation;
 using TOOL_SHARED.Contracts.Authentication;
 using TOOL_SHARED.Contracts.Generation;
 
@@ -15,7 +16,8 @@ namespace TOOL_LOCAL.Projects;
 public sealed class ProjectService(
     IDbContextFactory<VideoFactoryDbContext> dbContextFactory,
     ProjectWorkspaceService workspaceService,
-    bool speechVerificationEnabled = true) : IProjectService
+    bool speechVerificationEnabled = true,
+    IShortVideoLineageValidator? shortVideoLineage = null) : IProjectService
 {
     private const string SceneAudioSyncPolicyVersion = "scene-audio-sync-v3";
 
@@ -85,7 +87,8 @@ public sealed class ProjectService(
                 x.CurrentCharacterVersion,
                 x.CreatedAtUtc,
                 x.UpdatedAtUtc,
-                x.LastErrorMessage
+                x.LastErrorMessage,
+                x.LastErrorCode
             })
             .SingleOrDefaultAsync(cancellationToken);
         if (project is null)
@@ -689,7 +692,10 @@ public sealed class ProjectService(
                             Convert.ToBase64String(verification.RowVersion ?? [])),
                     voice?.VoiceProfileVersionId,
                     voice?.VoiceSnapshotHash,
-                    speechPacing);
+                    speechPacing,
+                    scene.LatestVideoRequestStatus,
+                    asset is null && scene.Status != "PromptReady" &&
+                        scene.LatestVideoRequestStatus is "Submitted" or "Queued" or "Processing" or "Unknown" or "Completed");
             })
             .ToArray();
 
@@ -833,7 +839,11 @@ public sealed class ProjectService(
             finalVideoPreview,
             string.IsNullOrWhiteSpace(project.LastErrorMessage)
                 ? null
-                : "Dự án gặp lỗi ở bước xử lý gần nhất.",
+                : project.LastErrorCode is "provider_output_cache_invalid" or "provider_output_download_failed" or "kling_download_failed"
+                    ? "Video đã tạo nhưng chưa tải được về máy. Bấm tải lại video đã gửi để tiếp tục, không cần tạo video mới."
+                    : project.LastErrorCode == "rate_limit_exceeded"
+                        ? "Đang tạm giới hạn yêu cầu. Hãy chờ một phút rồi tiếp tục tải video đã gửi."
+                        : "Dự án gặp lỗi ở bước xử lý gần nhất.",
             project.VoiceCode,
             project.VoiceSpeakingRate,
             audioStrategy,
@@ -846,7 +856,9 @@ public sealed class ProjectService(
                 : project.LanguageCode,
             requiresVietnameseContentRegeneration,
             content,
-            voiceProfileSummaries);
+            voiceProfileSummaries,
+            workflowStructureType == "DirectShortVideo" && await dbContext.Scenes.AnyAsync(x => x.ProjectId == projectId && x.ScenePlanVersion == project.CurrentScenePlanVersion && x.RequiredCapabilitiesJson != null && x.RequiredCapabilitiesJson.Contains("CharacterOutfit"), cancellationToken)
+                ? ShortVideoModes.CharacterOutfit : ShortVideoModes.TextOnly);
     }
 
     public async Task UpdateSceneAsync(
@@ -1328,10 +1340,18 @@ public sealed class ProjectService(
             ? approvedRenderAsset is not null &&
               ReadBooleanProperty(approvedRenderAsset.MetadataJson, "canonicalVoiceAudible")
             : ReadBooleanProperty(generation.OutputMediaAsset!.MetadataJson, "nativeAudioAudible");
-        if (!audioAudible)
+        var outfitSilent = ShortVideoWorkflowService.RequiresImageReview(scene.RequiredCapabilitiesJson) &&
+            ReadBooleanProperty(scene.RequiredCapabilitiesJson, "muteOutputAudio") &&
+            ReadStringProperty(generation.OutputMediaAsset!.MetadataJson, "audioStrategy") == "SilentOutput" &&
+            !ReadBooleanProperty(generation.OutputMediaAsset.MetadataJson, "nativeAudioPresent");
+        if (!audioAudible && !outfitSilent)
         {
             throw new ArgumentException("Cảnh chưa có audio đã kiểm tra vật lý nên không thể duyệt.");
         }
+
+        if (ShortVideoWorkflowService.RequiresImageReview(scene.RequiredCapabilitiesJson))
+            await (shortVideoLineage ?? throw new ArgumentException("Chưa có bộ kiểm tra ảnh phối đồ."))
+                .ValidateLineageAsync(project, scene, generation.ProviderRequestId, cancellationToken);
 
         generation.Status = "Approved";
         generation.CompletedAtUtc ??= now;
@@ -1747,7 +1767,8 @@ public sealed class ProjectService(
     {
         Validate(command);
         var content = command.Content.Trim();
-        var projectId = Guid.NewGuid();
+        var projectId = command.CreationId ?? Guid.NewGuid();
+        if (projectId == Guid.Empty) throw new ArgumentException("Mã tạo dự án không hợp lệ.");
         var conceptId = Guid.NewGuid();
         var scriptId = Guid.NewGuid();
         var styleProfileId = Guid.NewGuid();
@@ -1756,6 +1777,7 @@ public sealed class ProjectService(
         var relativeWorkspace = workspaceService.Create(projectId);
         var now = DateTime.UtcNow;
         var projectName = CreateShortVideoName(content);
+        if (!ShortVideoModes.IsSupported(command.Mode)) throw new ArgumentException("Chế độ video ngắn không hợp lệ.");
         var providerDurationSeconds = command.DurationSeconds;
         var contentDurationMs = command.DurationSeconds * 1000L;
         var generationDurationMs = providerDurationSeconds * 1000L;
@@ -1896,8 +1918,10 @@ public sealed class ProjectService(
             ExitStateJson = "{}",
             RequiredCapabilitiesJson = JsonSerializer.Serialize(new
             {
-                textToVideo = true,
-                maxDurationSeconds = 15,
+                shortVideoMode = command.Mode,
+                textToVideo = false,
+                requiresFirstFrame = true,
+                maxDurationSeconds = 8,
                 requestedDurationSeconds = command.DurationSeconds,
                 providerDurationSeconds,
                 aspectRatio = command.AspectRatio,
@@ -1933,7 +1957,26 @@ public sealed class ProjectService(
         };
 
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = dbContext.Database.IsRelational()
+            ? await dbContext.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken)
+            : await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        if (command.CreationId.HasValue)
+        {
+            var existing = await dbContext.Projects.SingleOrDefaultAsync(x => x.ProjectId == projectId, cancellationToken);
+            if (existing is not null)
+            {
+                if (existing.RemoteUserId != owner.UserId || existing.OrganizationId != command.OrganizationId || existing.DeletedAtUtc.HasValue ||
+                    existing.Topic != content || existing.AspectRatio != command.AspectRatio || existing.TargetDurationSeconds != command.DurationSeconds)
+                    throw new ArgumentException("Dự án đã tạo không khớp bản nháp hiện hành.");
+                var existingScene = await dbContext.Scenes.SingleAsync(x => x.ProjectId == projectId && x.ScenePlanVersion == existing.CurrentScenePlanVersion, cancellationToken);
+                var originalInput = await dbContext.ScenePrompts.Where(x => x.SceneId == existingScene.SceneId && x.Version == 1).Select(x => x.CanonicalInputJson).SingleAsync(cancellationToken);
+                if (originalInput != canonicalInputJson) throw new ArgumentException("Thiết lập bản nháp không khớp dự án đã tạo.");
+                if (ShortVideoWorkflowService.IsOutfit(existingScene.RequiredCapabilitiesJson) != (command.Mode == ShortVideoModes.CharacterOutfit))
+                    throw new ArgumentException("Chế độ dự án không khớp bản nháp.");
+                return new(new(existing.ProjectId, existing.OrganizationId, existing.Name, existing.Topic, existing.Platform, existing.AspectRatio,
+                    existing.TargetDurationSeconds, existing.Status, existing.ActualCost, existing.BudgetLimit, existing.UpdatedAtUtc), existingScene.SceneId);
+            }
+        }
         dbContext.AddRange(project, concept, script, styleProfile, scene, prompt);
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -2028,13 +2071,13 @@ public sealed class ProjectService(
         {
             throw new ArgumentException("Nội dung video phải có từ 1 đến 2.000 ký tự.", nameof(command));
         }
-        if (command.AspectRatio is not ("9:16" or "16:9" or "1:1"))
+        if (!ShortVideoVeo.SupportsAspectRatio(command.AspectRatio))
         {
             throw new ArgumentException("Tỷ lệ khung hình không được hỗ trợ.", nameof(command));
         }
-        if (command.DurationSeconds is < 5 or > 15)
+        if (!ShortVideoVeo.SupportsDuration(command.DurationSeconds))
         {
-            throw new ArgumentException("Thời lượng video phải nằm trong khoảng 5–15 giây.", nameof(command));
+            throw new ArgumentException("Veo hỗ trợ thời lượng 4, 6 hoặc 8 giây.", nameof(command));
         }
     }
 

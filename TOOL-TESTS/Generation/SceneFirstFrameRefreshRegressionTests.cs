@@ -54,6 +54,11 @@ public sealed class SceneFirstFrameRefreshRegressionTests
         Assert.Equal("ai-status", frameList?.GetCustomAttribute<EnableRateLimitingAttribute>()?.PolicyName);
         Assert.Equal("ai-status", providerStatus?.GetCustomAttribute<EnableRateLimitingAttribute>()?.PolicyName);
         Assert.Contains("options.AddPolicy(\"ai-status\"", program, StringComparison.Ordinal);
+        foreach (var method in new[] { "GetLatestContentLanguageFailure", "GetVideoStatus", "DownloadVideo", "GetKlingVideoStatus", "DownloadKlingVideo" })
+            Assert.Equal("ai-status", typeof(GenerationController).GetMethod(method)?.GetCustomAttribute<EnableRateLimitingAttribute>()?.PolicyName);
+        foreach (var method in new[] { "Get", "Image" })
+            Assert.Equal("ai-status", typeof(ShortVideoOutfitController).GetMethod(method)?.GetCustomAttribute<EnableRateLimitingAttribute>()?.PolicyName);
+        Assert.Equal("ai-gateway", typeof(ShortVideoOutfitController).GetCustomAttribute<EnableRateLimitingAttribute>()?.PolicyName);
     }
 
     private static string Slice(string source, string startMarker, string endMarker)

@@ -131,6 +131,7 @@ public sealed class DesktopUpdateOptions
 
 public sealed class DesktopFeatureOptions
 {
+    public bool ShortVideoCharacterOutfitEnabled { get; init; }
     public bool TikTokEnabled { get; init; } = true;
 
     public bool VietsubEnabled { get; init; }

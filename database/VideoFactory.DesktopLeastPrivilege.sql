@@ -49,6 +49,10 @@ IF OBJECT_ID(N'[vf].[GeneratedImageOutputs]', N'U') IS NOT NULL
 
 IF OBJECT_ID(N'[vf].[SceneFirstFrames]', N'U') IS NOT NULL
     DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[SceneFirstFrames] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[vf].[ShortVideoOutfits]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[ShortVideoOutfits] TO [VideoMakerDesktopRole];
+IF OBJECT_ID(N'[vf].[ShortVideoOperations]', N'U') IS NOT NULL
+    DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[ShortVideoOperations] TO [VideoMakerDesktopRole];
 IF OBJECT_ID(N'[vf].[GeneratedVoiceOutputs]', N'U') IS NOT NULL
     DENY SELECT, INSERT, UPDATE, DELETE ON OBJECT::[vf].[GeneratedVoiceOutputs] TO [VideoMakerDesktopRole];
 IF OBJECT_ID(N'[vf].[GeneratedVideoOutputs]', N'U') IS NOT NULL

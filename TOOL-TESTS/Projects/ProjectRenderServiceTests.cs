@@ -5,6 +5,7 @@ using TOOL_LOCAL.Data;
 using TOOL_LOCAL.Data.Models;
 using TOOL_LOCAL.Media;
 using TOOL_LOCAL.Projects;
+using TOOL_LOCAL.Generation;
 using TOOL_LOCAL.Storage;
 using TOOL_SHARED.Contracts.Generation;
 
@@ -12,6 +13,53 @@ namespace TOOL_TESTS.Projects;
 
 public sealed class ProjectRenderServiceTests
 {
+    [Fact]
+    public async Task OutfitScene_WithoutLineageGuard_IsRejectedBeforeRendering()
+    {
+        await using var f = await RenderFixture.CreateAsync("SceneVideo", true);
+        await using (var db = f.Factory.CreateDbContext())
+        { (await db.Scenes.SingleAsync()).RequiredCapabilitiesJson = "{\"shortVideoMode\":\"CharacterOutfit\"}"; await db.SaveChangesAsync(); }
+        await Assert.ThrowsAsync<InvalidDataException>(() => f.Service.RenderFinalVideoAsync(f.ProjectId, f.UserId, default));
+        Assert.Equal(0, f.Renderer.CallCount);
+    }
+
+    [Fact]
+    public async Task OutfitScene_ChangedDuringRendering_DoesNotPublishFinalVideo()
+    {
+        await using var f = await RenderFixture.CreateAsync("SceneVideo", true);
+        await using (var db = f.Factory.CreateDbContext())
+        { var scene = await db.Scenes.Include(x => x.ApprovedGeneration).SingleAsync(); scene.RequiredCapabilitiesJson = "{\"shortVideoMode\":\"CharacterOutfit\"}"; scene.ApprovedRenderMediaAssetId = scene.ApprovedGeneration!.OutputMediaAssetId; await db.SaveChangesAsync(); }
+        var renderer = new CaptureRenderer { BeforeReturn = async () => { await using var db = f.Factory.CreateDbContext(); (await db.Scenes.SingleAsync()).ApprovedGenerationId = null; await db.SaveChangesAsync(); } };
+        var service = new ProjectRenderService(f.Factory, f.Workspace, new ReadyMediaToolPreflight(), renderer, new StubOutputInspector(true), shortVideoOutfit: new OutfitGuard());
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.RenderFinalVideoAsync(f.ProjectId, f.UserId, default));
+        Assert.Equal(1, renderer.CallCount);
+        await using var check = f.Factory.CreateDbContext(); Assert.Empty(await check.FinalVideos.ToListAsync());
+    }
+
+    [Fact]
+    public async Task OutfitSilentVideo_ExportsOnlyWhileTheRenderedGenerationIsStillApproved()
+    {
+        await using var f = await RenderFixture.CreateAsync("SceneVideo", false, false, silentOutput: true, workflowStructureType: "DirectShortVideo");
+        await using (var db = f.Factory.CreateDbContext())
+        { var scene = await db.Scenes.Include(x => x.ApprovedGeneration).SingleAsync(); scene.RequiredCapabilitiesJson = "{\"shortVideoMode\":\"CharacterOutfit\",\"muteOutputAudio\":true}"; scene.ApprovedRenderMediaAssetId = scene.ApprovedGeneration!.OutputMediaAssetId; await db.SaveChangesAsync(); }
+        var guard = new OutfitGuard();
+        var service = new ProjectRenderService(f.Factory, f.Workspace, new ReadyMediaToolPreflight(), f.Renderer, new StubOutputInspector(false, false), shortVideoOutfit: guard);
+        await service.RenderFinalVideoAsync(f.ProjectId, f.UserId, default);
+        var destination = Path.Combine(f.Root, "approved.mp4");
+        await service.ExportFinalVideoAsync(f.ProjectId, f.UserId, destination, default);
+        Assert.True(File.Exists(destination)); Assert.True(guard.Calls >= 3);
+        await using (var db = f.Factory.CreateDbContext())
+        { (await db.Scenes.SingleAsync()).ApprovedGenerationId = null; await db.SaveChangesAsync(); }
+        var rejectedDestination = Path.Combine(f.Root, "stale.mp4");
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.ExportFinalVideoAsync(f.ProjectId, f.UserId, rejectedDestination, default));
+        Assert.False(File.Exists(rejectedDestination));
+    }
+
+    private sealed class OutfitGuard : IShortVideoLineageValidator
+    {
+        public int Calls;
+        public Task ValidateLineageAsync(Project project, Scene scene, Guid? requestId, CancellationToken ct) { Calls++; return Task.CompletedTask; }
+    }
     [Fact]
     public async Task LocalVoicePolicy_WithoutGuard_DoesNotFallBackToNativeApproval()
     {

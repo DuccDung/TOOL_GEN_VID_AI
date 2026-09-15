@@ -9,6 +9,23 @@ namespace TOOL_TESTS.Generation;
 
 public sealed class OpenAiImageClientTests
 {
+    [Theory]
+    [InlineData("9:16", 720, 1280)]
+    [InlineData("16:9", 1280, 720)]
+    [InlineData("1:1", 1024, 1024)]
+    public async Task OutfitEdit_SendsBothNamedInputsToEditEndpoint(string ratio, int width, int height)
+    {
+        var handler = SuccessfulHandler(CreatePngHeader(width, height));
+        var client = CreateClient(handler);
+        var result = await client.GenerateOutfitAsync(CreateProvider(), "preserve identity and clothing", ratio,
+            [new(CreatePngHeader(512, 512), "image/png", "character.png"), new(CreatePngHeader(512, 768), "image/png", "outfit.png")], default);
+        Assert.Equal("/v1/images/edits", handler.RequestUri!.AbsolutePath);
+        Assert.Contains("character.png", handler.RequestBody!); Assert.Contains("outfit.png", handler.RequestBody!);
+        Assert.Contains("image[]", handler.RequestBody!); Assert.Contains($"{width}x{height}", handler.RequestBody!);
+        Assert.DoesNotContain("input_fidelity", handler.RequestBody!);
+        Assert.Equal(width, result.Image.Width); Assert.Equal(height, result.Image.Height);
+    }
+
     [Fact]
     public async Task GenerateAsync_SendsFixedMvpVariantAndValidatesPng()
     {

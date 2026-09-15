@@ -46,6 +46,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\third_party\bilibili\LICENSE" LogicalName="Bilibili.LICENSE" />
+    <EmbeddedResource Include="..\third_party\bilibili\THIRD_PARTY_LICENSES.txt" LogicalName="Bilibili.THIRD_PARTY_LICENSES.txt" />
+    <EmbeddedResource Include="..\third_party\bilibili\PROVENANCE.md" LogicalName="Bilibili.PROVENANCE.md" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

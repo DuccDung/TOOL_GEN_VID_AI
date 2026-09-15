@@ -178,5 +178,6 @@ internal interface IProjectGenerationService
         string remoteUserId,
         IReadOnlyCollection<Guid>? sceneIds,
         Func<string, CancellationToken, Task>? reportProgress,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        bool resumeOnly = false);
 }

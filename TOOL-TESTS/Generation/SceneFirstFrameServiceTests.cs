@@ -15,6 +15,22 @@ namespace TOOL_TESTS.Generation;
 public sealed class SceneFirstFrameServiceTests
 {
     [Fact]
+    public async Task DirectShortVideo_CreatesReviewsAndValidatesVeoFirstFrame()
+    {
+        await using var db = CreateContext(); var seeded = SeedBrollScene(db);
+        (await db.Scripts.SingleAsync()).StructureType = GenerationWorkflowTypes.DirectShortVideo;
+        seeded.Project.TargetDurationSeconds = 8;
+        seeded.Scene.ContentDurationMs = seeded.Scene.GenerationDurationMs = 8000;
+        await db.SaveChangesAsync();
+        var images = new StubImageClient(); var service = CreateService(db, seeded.Project, images, new StubBudgetService(), .25m);
+        var frame = await GenerateAndMaterializeAsync(service, seeded, images, "short-veo-image");
+        Assert.Equal(SceneFirstFrameStatuses.PendingReview, frame.Status);
+        var approved = await service.ApproveAsync(seeded.Project.ProjectId, seeded.Scene.SceneId, frame.SceneFirstFrameId,
+            new ChangeSceneFirstFrameStatusRequest(frame.RowVersion, seeded.Project.OrganizationId), "user-1", Guid.NewGuid(), default);
+        Assert.Equal(SceneFirstFrameStatuses.Approved, approved.Status); Assert.True(approved.IsCurrent);
+        Assert.Equal(1, images.CallCount);
+    }
+    [Fact]
     public async Task Generate_Broll_IsIdempotentAndDoesNotPersistPromptOrImagePayload()
     {
         await using var dbContext = CreateContext();

@@ -20,6 +20,9 @@ internal sealed record OpenAiImageEditInput(
 
 internal interface IOpenAiImageClient
 {
+    Task<OpenAiImageResult> GenerateOutfitAsync(ProviderRuntimeConfiguration provider, string prompt,
+        string aspectRatio, IReadOnlyList<OpenAiImageEditInput> sources, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Image client chưa hỗ trợ phối trang phục.");
     Task<OpenAiImageResult> GenerateAsync(
         ProviderRuntimeConfiguration provider,
         string prompt,
@@ -40,6 +43,21 @@ internal sealed class OpenAiImageClient(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly OpenAiImageOptions _options = ValidateOptions(options.Value);
+
+    public async Task<OpenAiImageResult> GenerateOutfitAsync(ProviderRuntimeConfiguration provider, string prompt,
+        string aspectRatio, IReadOnlyList<OpenAiImageEditInput> sources, CancellationToken cancellationToken)
+    {
+        ValidateRuntime(provider, prompt);
+        if (sources.Count != 2) throw new ArgumentException("Cần đúng hai ảnh nhân vật và trang phục.");
+        var size = aspectRatio switch { "9:16" => "720x1280", "16:9" => "1280x720", "1:1" => "1024x1024", _ => throw new ArgumentException("Tỷ lệ không hợp lệ.") };
+        using var request = CreateEditRequest(provider, prompt, size, sources[0]);
+        var image = new ByteArrayContent(sources[1].Bytes);
+        image.Headers.ContentType = MediaTypeHeaderValue.Parse(sources[1].MimeType);
+        ((MultipartFormDataContent)request.Content!).Add(image, "image[]", sources[1].FileName);
+        return await SendAsync(request, provider, bytes => aspectRatio == "1:1"
+            ? GeneratedImageValidator.ValidateCharacterReference(bytes, 8 * 1024 * 1024)
+            : GeneratedImageValidator.ValidateSceneFirstFrame(bytes, 8 * 1024 * 1024, aspectRatio), cancellationToken);
+    }
 
     public async Task<OpenAiImageResult> GenerateAsync(
         ProviderRuntimeConfiguration provider,

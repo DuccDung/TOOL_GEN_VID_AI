@@ -672,6 +672,14 @@ button { color: inherit; }
 }
 
 .short-video-page { max-width: 1320px; padding-top: 10px; padding-bottom: 18px; }
+.short-video-outfit-entry { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 16px; padding: 18px; border-color: #bad4f6; background: #f1f7ff; }
+.short-video-outfit-entry-icon { display: grid; place-items: center; flex: 0 0 46px; height: 46px; border-radius: 12px; background: #dcecff; color: #286bc3; }
+.short-video-outfit-entry-copy { flex: 1 1 260px; }
+.short-video-outfit-entry h2 { margin: 0 0 6px; font-size: 16px; color: #183b65; }
+.short-video-outfit-entry p { margin: 0; font-size: 12px; line-height: 1.6; color: #536b87; }
+.short-video-outfit-entry .start-button { flex: 0 1 auto; white-space: normal; }
+.short-video-outfit-entry button:focus-visible { outline: 3px solid #183b65; outline-offset: 3px; }
+@media (max-width: 620px) { .short-video-outfit-entry .start-button { width: 100%; } }
 .short-video-layout { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(330px,.75fr); align-items: start; gap: 14px; }
 .short-video-form-card,.short-video-result-card { padding: 16px; }
 .short-video-result-card { position: sticky; top: 102px; }
