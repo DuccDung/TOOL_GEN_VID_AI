@@ -16,7 +16,8 @@ internal sealed class VietsubVoiceService(
     VietsubVoiceComponentStore components,
     VietsubVoicePlaybackRegistry playbackRegistry,
     VietsubVoiceTimelineRenderer timelineRenderer,
-    VietsubJobManager jobManager)
+    VietsubJobManager jobManager,
+    VietsubKokoroRuntime? kokoroRuntime = null)
 {
     internal TOOL_LOCAL.SystemSetup.SystemSetupCoordinator? SetupCoordinator { get; set; }
     public async Task<int> SetCueVoiceEnabledAsync(VietsubProjectSession session, string userId,
@@ -34,13 +35,48 @@ internal sealed class VietsubVoiceService(
 
     public VietsubVoicePlaybackRegistry PlaybackRegistry => playbackRegistry;
 
+    public async Task<VietsubVoiceSettings> SelectVoiceAsync(VietsubProjectSession session,
+        string userId, Guid organizationId, string voiceId, CancellationToken token)
+    {
+        await AuthorizeAsync(session.Manifest, userId, organizationId, token);
+        if (!components.FeatureEnabled)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.FeatureDisabled,
+                "Tạo giọng local đang bị khóa bởi feature flag.");
+        if (voiceId != VietsubVoiceCatalog.PiperVoiceId
+            && VietsubVoiceModelCatalog.Find(voiceId) is null)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelNotApproved,
+                "Giọng local không thuộc danh mục đã duyệt.");
+        if (await jobManager.HasActiveAsync(session.Manifest.ProjectId, token))
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.JobConflict,
+                "Hãy chờ tác vụ Vietsub hiện tại kết thúc trước khi đổi giọng.");
+        await session.UpdateAsync(manifest =>
+        {
+            manifest.VoiceSettings.EngineId = voiceId == VietsubVoiceCatalog.PiperVoiceId
+                ? VietsubVoiceEngines.Piper : VietsubVoiceEngines.Kokoro;
+            manifest.VoiceSettings.ModelId = voiceId == VietsubVoiceCatalog.PiperVoiceId
+                ? VietsubVoiceCatalog.PiperModelId : VietsubVoiceModelCatalog.ModelId;
+            manifest.VoiceSettings.VoiceId = voiceId;
+            manifest.VoiceSettings.Normalize();
+        }, token);
+        await session.FlushAsync(token);
+        playbackRegistry.ClearProject(session.Manifest.ProjectId);
+        return session.Manifest.VoiceSettings;
+    }
+
     public VietsubVoiceRuntimeStatus GetRuntimeStatus() => components.GetStatus();
 
     public async Task<IReadOnlyList<VietsubVoiceModelStatus>> GetModelStatusesAsync(
         VietsubProjectSession session, string userId, Guid organizationId, CancellationToken token)
     {
         await AuthorizeAsync(session.Manifest, userId, organizationId, token);
-        return await Task.Run(components.GetModelStatuses, token);
+        return await Task.Run(() => components.GetModelStatuses().Select(model =>
+        {
+            var runtime = model.EngineId == VietsubVoiceEngines.Piper
+                ? components.GetStatus()
+                : kokoroRuntime?.GetStatus(model.VoiceId);
+            return model with { SynthesisReady = runtime?.Ready == true,
+                SynthesisMessage = runtime?.Message ?? "Runtime Kokoro chưa khả dụng." };
+        }).ToArray(), token);
     }
 
     public async Task<VietsubVoiceModelStatus> InstallModelAsync(
@@ -55,7 +91,17 @@ internal sealed class VietsubVoiceService(
         try
         {
             using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
-            return await components.InstallModelAsync(voiceId, progress, token);
+            var model = await components.InstallModelAsync(voiceId, progress, token);
+            if (model.EngineId == VietsubVoiceEngines.Kokoro)
+            {
+                if (kokoroRuntime is null)
+                    throw new VietsubVoiceException(VietsubVoiceErrorCodes.RuntimeNotInstalled,
+                        "Runtime Kokoro chưa được tích hợp.");
+                var runtime = await kokoroRuntime.InstallAsync(voiceId, progress, token);
+                return model with { SynthesisReady = runtime.Ready, SynthesisMessage = runtime.Message };
+            }
+            var piper = components.GetStatus();
+            return model with { SynthesisReady = piper.Ready, SynthesisMessage = piper.Message };
         }
         catch (TOOL_LOCAL.SystemSetup.SetupException exception)
         {
@@ -196,6 +242,9 @@ internal sealed class VietsubVoiceService(
             || sourceTimeline.Status != VietsubVoiceArtifactStatuses.Ready
             || sourceTimeline.TrackId != project.ActiveSubtitleTrackId
             || sourceTimeline.TrackRevision != update.TrackRevision - 1
+            || sourceTimeline.EngineId != project.VoiceSettings.EngineId
+            || sourceTimeline.ModelId != project.VoiceSettings.ModelId
+            || sourceTimeline.VoiceId != project.VoiceSettings.VoiceId
             || !sourceTimeline.CueIds.Contains(cueId))
         {
             return false;
@@ -233,7 +282,15 @@ internal sealed class VietsubVoiceService(
         ArgumentNullException.ThrowIfNull(input);
         var project = session.Manifest;
         await AuthorizeAsync(project, userId, organizationId, cancellationToken);
-        var runtime = components.GetStatus();
+        if (!components.FeatureEnabled)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.FeatureDisabled,
+                "Tạo giọng local đang bị khóa bởi feature flag.");
+        project.VoiceSettings.Normalize();
+        var runtime = project.VoiceSettings.EngineId == VietsubVoiceEngines.Piper
+            ? components.GetStatus()
+            : kokoroRuntime?.GetStatus(project.VoiceSettings.VoiceId)
+                ?? throw new VietsubVoiceException(VietsubVoiceErrorCodes.RuntimeNotInstalled,
+                    "Runtime Kokoro chưa được tích hợp.");
         if (!runtime.Ready)
         {
             throw new VietsubVoiceException(runtime.ErrorCode ?? VietsubVoiceErrorCodes.RuntimeNotInstalled, runtime.Message);
@@ -254,7 +311,7 @@ internal sealed class VietsubVoiceService(
 
         var snapshot = CreateSettingsSnapshot(project.VoiceSettings);
         var parameters = new VietsubVoiceJobParameters(
-            2,
+            snapshot.EngineId == VietsubVoiceEngines.Piper ? 2 : 3,
             track.TrackId,
             track.Revision,
             VietsubVoiceFingerprintBuilder.BuildConfigurationFingerprint(snapshot),
@@ -492,11 +549,12 @@ internal sealed class VietsubVoiceService(
     private static VietsubVoiceSettingsSnapshot CreateSettingsSnapshot(VietsubVoiceSettings settings)
     {
         settings.Normalize();
+        var piper = settings.EngineId == VietsubVoiceEngines.Piper;
         return new(
             settings.EngineId,
-            VietsubVoiceCatalog.PiperEngineVersion,
+            piper ? VietsubVoiceCatalog.PiperEngineVersion : VietsubVoiceCatalog.KokoroEngineVersion,
             settings.ModelId,
-            VietsubVoiceCatalog.PiperModelVersion,
+            piper ? VietsubVoiceCatalog.PiperModelVersion : VietsubVoiceModelCatalog.Revision,
             settings.VoiceId,
             settings.MaximumPhraseGapMilliseconds,
             settings.MaximumPhraseDurationMilliseconds,

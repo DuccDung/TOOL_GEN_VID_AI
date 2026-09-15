@@ -18,6 +18,11 @@ export type VietsubInstallVoiceModelRequest = {
   voiceId: string;
 };
 
+export type VietsubSelectVoiceRequest = {
+  expectedProjectId: string;
+  voiceId: string;
+};
+
 export type ProjectSummary = {
   projectId: string;
   organizationId?: string | null;

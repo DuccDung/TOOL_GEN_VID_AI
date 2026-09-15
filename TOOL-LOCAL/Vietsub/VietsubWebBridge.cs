@@ -386,6 +386,13 @@ internal sealed class VietsubWebBridge : IDisposable
                         cancellationToken,
                         notifyCompletion: true);
                     break;
+                case "vietsub.voice.select":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => SelectVoiceAsync(request, request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
+                    break;
                 case "vietsub.voice.runtime.install":
                     await RunProjectOperationAsync(
                         request.RequestId,
@@ -1379,6 +1386,21 @@ internal sealed class VietsubWebBridge : IDisposable
             await PostVoiceModelStatusesAsync(requestId, CancellationToken.None);
             throw;
         }
+    }
+
+    private async Task SelectVoiceAsync(WebMessageRequest request, string requestId, CancellationToken token)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var input = request.Payload.Deserialize<VietsubSelectVoiceRequest>(_jsonOptions)
+            ?? throw new JsonException("Thiếu giọng local cần chọn.");
+        if (input.ExpectedProjectId != session.Manifest.ProjectId || input.ExpectedProjectId == Guid.Empty
+            || string.IsNullOrWhiteSpace(input.VoiceId) || input.VoiceId.Length > 80)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelNotApproved,
+                "Dự án hoặc giọng local cần chọn không hợp lệ.");
+        await RequireVoiceService().SelectVoiceAsync(session, context.UserId,
+            context.OrganizationId, input.VoiceId, token);
+        await PostStateAsync(requestId, token);
     }
 
     private async Task InstallVoiceRuntimeAsync(

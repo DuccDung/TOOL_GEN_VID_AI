@@ -280,7 +280,9 @@ Trên đúng bundle x64 định phát hành:
 
 Chỉ sau các bước này mới xem xét bật `VietsubLocalTranslationEnabled` cho môi trường cụ thể.
 
-### Tạo giọng local Piper
+### Tạo giọng local theo giọng đã chọn
+
+Luồng chọn giọng cần kiểm cả 15 ID đã pin, job snapshot engine/model/version/voice, chặn đổi khi có job active và loại timeline khác voice khỏi preview/export. Modal chỉ cho tạo khi giọng đang chọn có model đã xác minh và runtime đã probe; trạng thái file `READY` riêng không đủ. Bài `KokoroFixture_UsesSelectedVoicepackAndProducesVietnamesePcmWav` là opt-in và cần workspace có model/runtime Kokoro đã cài/probe trước: `VIDEOMAKER_RUN_LOCAL_VOICE_TESTS=1` cùng `VIDEOMAKER_VOICE_WORKSPACE_ROOT`, tùy chọn `VIDEOMAKER_KOKORO_TEST_VOICE_ID` cho một voice ID đã pin, chạy riêng với filter tên bài Kokoro. Script `Verify-VietsubVoiceModel.ps1` giữ phạm vi Piper. Bài bị `Skipped` không xác minh được chất lượng giọng. Trước phát hành cần benchmark CPU, nghe hai giọng khác nhau để xác nhận không dùng nhầm voicepack, smoke WebView2/MP4 trên máy sạch và rà soát quyền voicepack/preview WAV.
 
 `VietsubVoiceBoundaryTests` tái hiện WAV 1834 ms, sau trim đầu còn 1832 ms nhưng chỉ có cửa sổ 1500 ms: ở 1.20x sẽ tràn 27 ms; thêm trường hợp tràn 135 ms như lỗi người dùng báo. Kiểm cả đuôi dưới ngưỡng tín hiệu, tiếng nói còn ở cuối, tắt phân tích khoảng lặng, cue tiếp giáp/chồng nhau/nằm trong vùng bỏ qua và nhiều câu bỏ qua liên tiếp. FFmpeg thật phải giữ đúng thời lượng, khoảng im lặng đầu và tín hiệu cuối, kể cả phần tiếng nói tràn sang câu bỏ qua. Kiểm tạo mới, cache, bật lại, hash phrase không đổi và job hoàn thành 100% với diagnostic không chặn. Test xuất MP4 dùng bộ dựng tham số production, giải mã lại audio để kiểm phần giọng tràn còn nghe được và âm gốc khi bật/tắt nền. WAV tone và MP4 fixture không thay thế nghe nghiệm thu Piper.
 

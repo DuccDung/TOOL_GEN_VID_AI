@@ -1873,6 +1873,7 @@ function App() {
             onInstallVoiceRuntime={vietsub.installVoiceRuntime}
             onRefreshVoiceModels={vietsub.refreshVoiceModels}
             onInstallVoiceModel={vietsub.installVoiceModel}
+            onSelectVoice={vietsub.selectVoice}
             onDismissTranslationResourceAlert={vietsub.dismissTranslationResourceAlert}
             onContinueTranslationAfterResourceWarning={vietsub.continueTranslationAfterResourceWarning}
             onPauseJob={vietsub.pauseJob}

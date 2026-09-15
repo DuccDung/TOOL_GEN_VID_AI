@@ -209,6 +209,7 @@ internal static class Program
                 VietsubVoiceService? vietsubVoiceService = null;
                 VietsubVideoExportService? vietsubVideoExportService = null;
                 VietsubVoiceComponentStore? vietsubVoiceComponents = null;
+                VietsubKokoroRuntime? vietsubKokoroRuntime = null;
                 IVietsubOcrRecognizer? setupOcrRecognizer = null;
                 if (options.Features.VietsubEnabled)
                 {
@@ -263,6 +264,7 @@ internal static class Program
                     vietsubVoiceComponents = new VietsubVoiceComponentStore(
                         vietsubPaths,
                         options.Features.VietsubLocalVoiceEnabled, useUserComponentsRoot: true);
+                    vietsubKokoroRuntime = new VietsubKokoroRuntime(vietsubVoiceComponents);
                     var voiceSynthesizer = new VietsubPiperVoiceSynthesizer(vietsubVoiceComponents);
                     var voiceTimelineRenderer = new VietsubVoiceTimelineRenderer(
                         vietsubPaths,
@@ -276,7 +278,8 @@ internal static class Program
                         voiceSynthesizer,
                         voiceTimelineRenderer,
                         vietsubJobStore,
-                        vietsubPaths);
+                        vietsubPaths,
+                        vietsubKokoroRuntime);
                     var localJobAuthorizer = new VietsubLocalJobAuthorizer(
                         new DesktopVietsubLocalAccessContext(
                             sessionManager,
@@ -319,7 +322,8 @@ internal static class Program
                         vietsubVoiceComponents,
                         voicePlaybackRegistry,
                         voiceTimelineRenderer,
-                        vietsubJobManager);
+                        vietsubJobManager,
+                        vietsubKokoroRuntime);
                     vietsubThumbnailService = new VietsubTimelineThumbnailService(
                         vietsubPaths,
                         vietsubMediaImportService,

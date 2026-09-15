@@ -21,7 +21,8 @@ internal sealed class VietsubVoiceJobExecutor(
     IVietsubVoiceSynthesizer synthesizer,
     VietsubVoiceTimelineRenderer timelineRenderer,
     VietsubJobStore jobStore,
-    VietsubAppPaths paths) : IVietsubJobExecutor
+    VietsubAppPaths paths,
+    VietsubKokoroRuntime? kokoroRuntime = null) : IVietsubJobExecutor
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -52,6 +53,7 @@ internal sealed class VietsubVoiceJobExecutor(
             cancellationToken);
 
         var project = await projectStore.LoadForBackgroundJobAsync(context.Job.ProjectId, cancellationToken);
+        EnsureSelectedVoice(project.VoiceSettings, parameters.Settings);
         var tracks = await subtitleStore.LoadTracksAsync(project.ProjectId, cancellationToken);
         var track = tracks.SingleOrDefault(item => item.TrackId == parameters.InputTrackId)
             ?? throw new VietsubVoiceException(VietsubVoiceErrorCodes.JobNotResumable, "Subtitle track của voice job không còn tồn tại.");
@@ -61,7 +63,7 @@ internal sealed class VietsubVoiceJobExecutor(
         }
         VietsubVoiceTranslationPolicy.EnsureComplete(track);
         if ((parameters.StrategyVersion == 1 && track.Cues.Any(cue => !cue.VoiceEnabled))
-            || (parameters.StrategyVersion == 2 && parameters.SelectionFingerprint
+            || (parameters.StrategyVersion >= 2 && parameters.SelectionFingerprint
                 != VietsubVoiceFingerprintBuilder.BuildSelectionFingerprint(track.Cues)))
             throw new VietsubVoiceException(VietsubVoiceErrorCodes.TrackChanged, "Lựa chọn câu tạo giọng đã thay đổi. Hãy tạo tác vụ mới.");
         var expectedConfiguration = VietsubVoiceFingerprintBuilder.BuildConfigurationFingerprint(parameters.Settings);
@@ -110,13 +112,23 @@ internal sealed class VietsubVoiceJobExecutor(
                 5 + completed * 65d / phrases.Count, $"Đã phục hồi {cacheHits}/{phrases.Count} đoạn giọng đã tạo."), cancellationToken);
             if (pending.Count > 0)
             {
-                await synthesizer.SynthesizeIncrementallyAsync(
+                IVietsubVoiceSynthesizer selectedSynthesizer = parameters.Settings.EngineId switch
+                {
+                    VietsubVoiceEngines.Piper => synthesizer,
+                    VietsubVoiceEngines.Kokoro when kokoroRuntime is not null =>
+                        new VietsubKokoroVoiceSynthesizer(kokoroRuntime.RequireReady(parameters.Settings.VoiceId)),
+                    _ => throw new VietsubVoiceException(VietsubVoiceErrorCodes.RuntimeNotInstalled,
+                        "Runtime cho giọng đã chọn chưa được cài và probe.")
+                };
+                await selectedSynthesizer.SynthesizeIncrementallyAsync(
                     pending.Select(item => item.Item).ToArray(),
                     async item =>
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         var entry = pending.Single(value => value.Item.Index == item.Index);
                         var metadata = VietsubWavInspector.Inspect(item.OutputPath, parameters.Settings.TrimSilence);
+                        EnsureSelectedVoice((await projectStore.LoadForBackgroundJobAsync(
+                            project.ProjectId, cancellationToken)).VoiceSettings, parameters.Settings);
                         var finalPath = Path.Combine(outputDirectory, $"phrase-{entry.Phrase.PhraseId}-{entry.Fingerprint[..12]}-{Guid.NewGuid():N}.wav");
                         File.Move(item.OutputPath, finalPath);
                         var now = DateTime.UtcNow;
@@ -237,6 +249,16 @@ internal sealed class VietsubVoiceJobExecutor(
                 timelineNow,
                 timelineNow,
                 phrases.SelectMany(item => item.CueIds).Distinct().ToArray());
+            try
+            {
+                EnsureSelectedVoice((await projectStore.LoadForBackgroundJobAsync(
+                    project.ProjectId, cancellationToken)).VoiceSettings, parameters.Settings);
+            }
+            catch
+            {
+                TryDelete(timeline.AbsolutePath);
+                throw;
+            }
             if (!await voiceStore.SaveArtifactAsync(project.ProjectId, timelineArtifact, track.Revision, cancellationToken))
             {
                 TryDelete(timeline.AbsolutePath);
@@ -263,6 +285,15 @@ internal sealed class VietsubVoiceJobExecutor(
         {
             TryDeleteDirectory(tempDirectory);
         }
+    }
+
+    private static void EnsureSelectedVoice(VietsubVoiceSettings current, VietsubVoiceSettingsSnapshot snapshot)
+    {
+        current.Normalize();
+        if (current.EngineId != snapshot.EngineId || current.ModelId != snapshot.ModelId
+            || current.VoiceId != snapshot.VoiceId)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.TrackChanged,
+                "Giọng được chọn đã thay đổi. Hãy tạo tác vụ giọng mới.");
     }
 
     private async Task<bool> IsArtifactUsableAsync(

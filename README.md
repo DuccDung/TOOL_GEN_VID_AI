@@ -2,7 +2,7 @@
 
 > Điểm vào repository. Rà soát context theo source ngày 2026-09-15.
 
-VideoMaker là hệ thống desktop/server hỗ trợ tạo video bằng AI và xử lý media cục bộ. OpenAI tạo nội dung có cấu trúc và giọng Canonical; Kling, BytePlus hoặc Fal/Veo tạo clip theo policy của tổ chức; desktop tải output qua server, yêu cầu người dùng duyệt và dựng video bằng FFmpeg. Module Vietsub cung cấp editor/OCR, dịch ngữ cảnh Qwen và tạo giọng Việt Piper theo mô hình local-first.
+VideoMaker là hệ thống desktop/server hỗ trợ tạo video bằng AI và xử lý media cục bộ. OpenAI tạo nội dung có cấu trúc và giọng Canonical; Kling, BytePlus hoặc Fal/Veo tạo clip theo policy của tổ chức; desktop tải output qua server, yêu cầu người dùng duyệt và dựng video bằng FFmpeg. Module Vietsub cung cấp editor/OCR, dịch ngữ cảnh Qwen và tạo giọng Việt local theo giọng đã chọn (Piper hoặc Kokoro) khi runtime tương ứng đã được kiểm tra.
 
 ## Đọc tài liệu theo thứ tự
 
@@ -69,7 +69,7 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Registry metadata nằm trên server; workspace, SQLite, media, cue và artifact nằm local. Khi chọn **Dịch Cloud**, server nhận snapshot text có giới hạn và gọi OpenAI; người dùng không chọn model hay nhập key.
 - Editor hỗ trợ COPY/LINK, playback Range, SRT, timeline, thumbnail, waveform và PaddleOCR English/Chinese.
 - Dịch local Qwen chạy trong worker x64 riêng và mặc định tắt tới khi model/benchmark/smoke đạt.
-- Tạo giọng local Piper hiển thị qua feature flag mặc định bật nhưng runtime/model phải được cài, kiểm checksum và probe; `NOT_INSTALLED` không phải `READY`.
+- Chọn giọng Vietsub lưu vào project local; job tạo audio dùng đúng engine/model/voice đã snapshot. Piper hoặc Kokoro chỉ sẵn sàng khi model và runtime của giọng đó được cài, kiểm checksum và probe WAV; `NOT_INSTALLED` không phải `READY`. Kokoro vẫn cần benchmark, nghe nghiệm thu, smoke desktop và rà soát quyền voicepack trước phát hành.
 
 ### Setup hệ thống khi mở desktop
 
@@ -135,7 +135,7 @@ npm run build
 npm test
 ```
 
-Build `TOOL-LOCAL` tự chạy production build của web. Test model Qwen/Piper thật và benchmark là opt-in; xem `KIEM_THU_VA_NGHIEM_THU.md`.
+Build `TOOL-LOCAL` tự chạy production build của web. Test model Qwen/Piper/Kokoro thật và benchmark là opt-in; xem `KIEM_THU_VA_NGHIEM_THU.md`.
 
 ## Chạy development
 

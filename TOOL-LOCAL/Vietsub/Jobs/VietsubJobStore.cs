@@ -145,6 +145,22 @@ internal sealed class VietsubJobStore(
         return jobs;
     }
 
+    public async Task<bool> HasActiveAsync(Guid projectId, CancellationToken cancellationToken = default)
+    {
+        ValidateProjectId(projectId);
+        await InitializeAsync(projectId, cancellationToken);
+        await using var connection = await OpenAsync(projectId, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM local_jobs
+                WHERE project_id = $projectId
+                  AND status IN ('PENDING', 'RUNNING', 'PAUSING', 'PAUSED'));
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 0;
+    }
+
     public async Task<VietsubLocalJob> TransitionAsync(
         Guid projectId,
         Guid jobId,

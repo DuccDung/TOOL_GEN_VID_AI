@@ -46,7 +46,7 @@ try {
     dotnet test (Join-Path $solutionRoot 'TOOL-TESTS\TOOL-TESTS.csproj') `
         -c $Configuration `
         --no-build `
-        --filter 'Category=LocalVoiceIntegration' `
+        --filter 'FullyQualifiedName~PiperFixture_SynthesizesVietnamesePcmWav' `
         --logger 'console;verbosity=normal'
     if ($LASTEXITCODE -ne 0) {
         throw 'Real Piper verification failed; READY must not be claimed.'

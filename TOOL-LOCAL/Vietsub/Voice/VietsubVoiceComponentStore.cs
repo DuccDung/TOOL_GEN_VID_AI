@@ -15,6 +15,8 @@ internal sealed record VietsubPiperComponentPaths(
     string ConfigPath,
     string RequestDirectory);
 
+internal sealed record VietsubKokoroModelPaths(string OnnxPath, string ConfigPath, string VoicePackPath);
+
 internal sealed class VietsubVoiceComponentStore : IDisposable
 {
     private const int ProtocolVersion = 1;
@@ -223,6 +225,28 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
     }
 
     internal string ComponentDirectory => _componentRoot;
+
+    internal bool FeatureEnabled => _featureEnabled;
+
+
+    internal VietsubKokoroModelPaths RequireKokoroModel(string voiceId)
+    {
+        var voice = VietsubVoiceModelCatalog.Find(voiceId)
+            ?? throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelNotApproved, "Giọng Kokoro không thuộc danh mục đã duyệt.");
+        var status = GetModelStatuses().Single(item => item.VoiceId == voiceId);
+        if (status.Status != "READY")
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelInvalid, "Tài nguyên giọng Kokoro chưa được cài và xác minh.");
+        return new(ModelFilePath(VietsubVoiceModelCatalog.CoreModel),
+            ModelFilePath(VietsubVoiceModelCatalog.Config), ModelFilePath(voice.VoicePack));
+    }
+
+    internal string RequireUvInstaller()
+    {
+        if (!IsVerifiedFile(UvPath, UvExecutableSize, UvExecutableSha256))
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.RuntimeNotInstalled,
+                "Cần cài runtime Piper trước khi cài runtime Kokoro.");
+        return UvPath;
+    }
 
     public async Task<VietsubVoiceRuntimeStatus> InstallAsync(
         IProgress<VietsubVoiceRuntimeInstallProgress>? progress,

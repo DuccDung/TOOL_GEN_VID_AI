@@ -27,6 +27,7 @@ internal sealed record VietsubStartCloudTranslationRequest(Guid ExpectedTrackId,
 
 [System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
 internal sealed record VietsubInstallVoiceModelRequest(Guid ExpectedProjectId, string VoiceId);
+internal sealed record VietsubSelectVoiceRequest(Guid ExpectedProjectId, string VoiceId);
 
 internal sealed record WebMessageError(
     string Code,

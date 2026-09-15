@@ -221,6 +221,9 @@ internal sealed class VietsubJobManager : IAsyncDisposable
             .Select(VietsubJobSummary.From)
             .ToArray();
 
+    public Task<bool> HasActiveAsync(Guid projectId, CancellationToken cancellationToken = default) =>
+        _store.HasActiveAsync(projectId, cancellationToken);
+
     public async Task<VietsubJobSummary?> GetAsync(
         Guid projectId,
         Guid jobId,

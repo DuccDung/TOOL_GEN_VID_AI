@@ -12,6 +12,10 @@ export function VietsubVoiceInstallModal({
   onDismiss,
   onRefresh,
   onInstall,
+  selectedVoiceId,
+  canCreate,
+  onSelect,
+  onCreate,
   onCancelInstall
 }: {
   models?: VietsubVoiceModelStatus[] | null;
@@ -21,6 +25,10 @@ export function VietsubVoiceInstallModal({
   onDismiss: () => void;
   onRefresh: () => void;
   onInstall: (voiceId: string) => void;
+  selectedVoiceId?: string | null;
+  canCreate?: boolean;
+  onSelect?: (voiceId: string) => void;
+  onCreate?: () => void;
   onCancelInstall?: () => void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
@@ -158,10 +166,10 @@ export function VietsubVoiceInstallModal({
           <Volume2 size={25} />
         </div>
         <span className="confirmation-eyebrow vietsub-voice-install-eyebrow">TÀI NGUYÊN GIỌNG LOCAL</span>
-        <h2 id="vietsub-voice-model-title">Chọn giọng local để cài</h2>
+        <h2 id="vietsub-voice-model-title">Chọn giọng tạo phụ đề</h2>
         <p id="vietsub-voice-model-description">
-          Nghe thử từng giọng trước khi cài model. Giọng đã cài và kiểm tra model sẽ hiện Sẵn sàng.
-          Nút Cài giọng chỉ tải tài nguyên; chưa bắt đầu tạo âm thanh cho phụ đề.
+          Nghe thử, chọn giọng cho dự án rồi cài nếu cần. Chỉ giọng đã qua kiểm tra runtime
+          mới được dùng để tạo âm thanh cho phụ đề.
         </p>
 
         <div className="vietsub-voice-model-toolbar">
@@ -197,30 +205,36 @@ export function VietsubVoiceInstallModal({
         <div className="vietsub-voice-model-list" aria-label="Danh sách giọng local">
           {models?.map((model) => {
             const installing = installProgress?.voiceId === model.voiceId;
-            const canInstall = model.status === 'NOT_INSTALLED' || model.status === 'INVALID';
+            const canInstall = model.status === 'NOT_INSTALLED' || model.status === 'INVALID'
+              || (model.status === 'READY' && !model.synthesisReady);
+            const selected = selectedVoiceId === model.voiceId;
             const previewPlaying = playingVoiceId === model.voiceId;
             const previewLoading = loadingVoiceId === model.voiceId;
             const previewActive = currentPreviewVoiceIdRef.current === model.voiceId;
             const previewLabel = previewPlaying || previewLoading ? 'Tạm dừng'
               : previewActive ? 'Tiếp tục' : 'Nghe thử';
+            const resourceLabel = `${model.engineId === 'PIPER_LOCAL' ? 'Piper' : 'Kokoro Vietnamese'} · Bộ tài nguyên ${formatDownloadSize(model.requiredBytes)}`;
+            const hasPreviewError = !installing && previewError?.voiceId === model.voiceId;
+            const detailMessage = installing ? installProgress.message
+              : hasPreviewError ? previewError.message : model.synthesisMessage ?? model.message;
             return (
-              <div className="vietsub-voice-model-row" key={model.voiceId}>
+              <div className={`vietsub-voice-model-row${selected ? ' is-selected' : ''}`} key={model.voiceId}>
                 <div className="vietsub-voice-model-info">
                   <div className="vietsub-voice-model-heading">
                     <strong>{model.displayName}</strong>
+                    {selected && <span className="vietsub-voice-model-status is-selected">Đang chọn</span>}
                     {model.status === 'READY' ? (
-                      <span className="vietsub-voice-model-status is-ready"><CircleCheck size={16} /> Sẵn sàng</span>
+                      <span className="vietsub-voice-model-status is-ready"><CircleCheck size={16} />
+                        {model.synthesisReady ? 'Sẵn sàng tạo giọng' : 'Model đã cài'}</span>
                     ) : model.status === 'DISABLED' ? (
                       <span className="vietsub-voice-model-status">Chưa khả dụng</span>
                     ) : model.status === 'INVALID' ? (
                       <span className="vietsub-voice-model-status is-invalid"><TriangleAlert size={15} /> Cần cài lại</span>
                     ) : null}
                   </div>
-                  <small>{model.engineId === 'PIPER_LOCAL' ? 'Piper' : 'Kokoro Vietnamese'} · Bộ tài nguyên {formatDownloadSize(model.requiredBytes)}</small>
-                  <small>{installing ? installProgress.message : model.message}</small>
-                  {previewError?.voiceId === model.voiceId && (
-                    <small className="vietsub-voice-preview-error" role="alert">{previewError.message}</small>
-                  )}
+                  <small className="vietsub-voice-model-detail" title={resourceLabel}>{resourceLabel}</small>
+                  <small className={`vietsub-voice-model-detail${hasPreviewError ? ' vietsub-voice-preview-error' : ''}`}
+                    title={detailMessage} role={hasPreviewError ? 'alert' : undefined}>{detailMessage}</small>
                 </div>
                 <div className="vietsub-voice-model-action">
                   <button type="button" className="vietsub-voice-model-button vietsub-voice-model-preview"
@@ -231,10 +245,17 @@ export function VietsubVoiceInstallModal({
                     {previewPlaying || previewLoading ? <Pause size={15} /> : <Play size={15} />}
                     {previewLoading ? 'Đang tải...' : previewLabel}
                   </button>
+                  <button type="button" className="vietsub-voice-model-button vietsub-voice-model-select"
+                    disabled={busy || model.status === 'DISABLED' || selected}
+                    aria-pressed={selected}
+                    onClick={() => onSelect?.(model.voiceId)}>
+                    {selected ? 'Đang chọn' : 'Chọn giọng'}
+                  </button>
                   {canInstall && (
                     <button type="button" className="vietsub-voice-model-button vietsub-voice-model-install"
                       disabled={busy} onClick={() => onInstall(model.voiceId)}>
-                      <Download size={16} /> {installing ? `${installProgress.percent.toFixed(0)}%` : model.status === 'INVALID' ? 'Cài lại' : 'Cài giọng'}
+                      <Download size={16} /> {installing ? `${installProgress.percent.toFixed(0)}%`
+                        : model.status === 'INVALID' ? 'Cài lại' : model.status === 'READY' ? 'Kiểm tra runtime' : 'Cài giọng'}
                     </button>
                   )}
                 </div>
@@ -244,6 +265,10 @@ export function VietsubVoiceInstallModal({
         </div>
 
         <div className="confirmation-actions">
+          <button className="confirmation-submit" type="button"
+            disabled={busy || !canCreate || !models?.some(model =>
+              model.voiceId === selectedVoiceId && model.synthesisReady)}
+            onClick={() => onCreate?.()}>Tạo giọng bằng giọng đã chọn</button>
           {busy && installProgress && onCancelInstall && (
             <button className="confirmation-cancel" type="button" onClick={onCancelInstall}>Hủy tải</button>
           )}

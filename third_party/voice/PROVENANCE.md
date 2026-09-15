@@ -22,7 +22,7 @@
 
 The model and config are downloaded through an HTTPS host allowlist with each redirect checked, written to `.partial`, checked for exact size and SHA-256, and atomically published. A `READY` marker is accepted only when protocol, runtime, worker, model and config fingerprints match and an x64 worker probe has loaded the pinned model and produced a valid Vietnamese PCM WAV.
 
-## Additional Vietnamese model resources (download-only stage)
+## Kokoro Vietnamese optional synthesis
 
 - Repository: `https://huggingface.co/contextboxai/Kokoro-Vietnamese`
 - Pinned revision: `9f210d622209fcc216fe2ac6159fed2ff381cb8a`
@@ -31,7 +31,13 @@ The model and config are downloaded through an HTTPS host allowlist with each re
 - Voicepacks: the 14 pinned `voicepacks/*.pt` files and their individual exact sizes/SHA-256 are listed in `VietsubVoiceModelCatalog.cs`.
 - Upstream model card declares Apache-2.0. Its card says the voicepacks derive from a LarVoice multi-speaker training set; the underlying data and voice rights have not been independently verified for public redistribution.
 
-This stage only downloads the model files selected by the user. The ONNX model and config are shared across the voicepacks. `READY` in the model selection modal means only that the pinned files match their sizes and SHA-256 on the current machine. It does not mean Kokoro inference, audio quality, dataset rights, or production rollout have passed. No voicepack is loaded as a PyTorch pickle, no Kokoro runtime is installed, and the Vietsub synthesis job remains pinned to Piper VAIS-1000 until a separate generation change is reviewed.
+The ONNX model and config are shared across voicepacks. The modal distinguishes verified model files from `SynthesisReady`, which requires a per-voice WAV probe on the current machine. A selected Kokoro voice is stored in the local project manifest and the voice job snapshots that exact engine/model/voice. The worker loads only its pinned voicepack with `torch.load(weights_only=True)` in an isolated Python process; there is no fallback to Piper. A timeline from another voice is excluded from playback and export.
+
+- Inference reference: `https://github.com/iamdinhthuan/Kokoro-Vietnamese`, Git commit `a249afe5555aec6c435165c2f61ec0f71284812f`, Apache-2.0. `TOOL-LOCAL/Vietsub/Voice/Workers/kokoro_worker.py` adapts the upstream phoneme/style/ONNX CPU inference and crossfade logic.
+- Runtime: Python 3.11.15 x64 in a dedicated `uv` environment. `TOOL-LOCAL/SystemSetup/kokoro-requirements.in` pins ONNX Runtime 1.30.0, torch 2.14.0, vig2p 0.1.2 and numpy 2.4.6; `kokoro-requirements.lock` resolves transitive wheels with SHA-256 hashes. Installation happens only when the user requests a Kokoro voice and uses the already verified `uv` executable from the Piper component.
+- Worker I/O: bounded JSONL; requests and WAVs stay local. Worker stderr is drained but never exposed to the UI. A probe checks 24 kHz mono PCM WAV before the selected voice can start a job.
+
+This repository now contains the Kokoro synthesis source. Model/runtime verification, CPU benchmark, listening review, clean-machine desktop smoke and public redistribution remain **unverified** on this checkout. The upstream Apache-2.0 model card does not settle LarVoice-derived voice/data rights; release review is still required.
 
 ## Bundled voice preview samples
 
@@ -41,7 +47,7 @@ This stage only downloads the model files selected by the user. The ONNX model a
 - Kokoro clips were synthesized offline with the pinned ONNX model/config and each pinned voicepack above, using the upstream `Kokoro-Vietnamese` inference code at Git commit `a249afe5555aec6c435165c2f61ec0f71284812f`, ONNX Runtime 1.30.0, torch 2.14.0 and vig2p 0.1.2. Voicepacks were loaded with `torch.load(weights_only=True)` only in this isolated sample-preparation environment.
 - The Piper clip was synthesized offline with pinned VAIS-1000 ONNX/config above and `piper-tts` 1.6.0. The preparation environment and model copies were kept outside application source/runtime; the modal only plays the resulting bundled WAV files.
 
-These clips are source assets for preview before installation, not evidence that Kokoro inference is ready inside VideoMaker. The upstream Kokoro model card declares Apache-2.0 but identifies LarVoice-derived voicepacks; voice/data rights for public redistribution of the generated clips remain to be independently reviewed before publishing a release containing them. Piper attribution remains VAIS-1000 CC BY 4.0 as recorded above.
+These clips are source assets for preview before installation, not evidence that Kokoro inference has been probed on a user's machine. The upstream Kokoro model card declares Apache-2.0 but identifies LarVoice-derived voicepacks; voice/data rights for public redistribution of the generated clips remain to be independently reviewed before publishing a release containing them. Piper attribution remains VAIS-1000 CC BY 4.0 as recorded above.
 
 ## Resource and rollout policy
 

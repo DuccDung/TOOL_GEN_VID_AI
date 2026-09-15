@@ -302,11 +302,25 @@ internal sealed class VietsubVoiceStore(VietsubAppPaths paths, VietsubSubtitleSt
               AND track_revision = $revision
               AND artifact_kind = 'TIMELINE'
               AND status = 'READY'
+              AND engine_id = $engine
+              AND engine_version = $engineVersion
+              AND model_id = $model
+              AND model_version = $modelVersion
+              AND voice_id = $voice
             ORDER BY updated_at_utc DESC
             LIMIT 1;
             """;
+        settings.Normalize();
+        var piper = settings.EngineId == VietsubVoiceEngines.Piper;
         timelineCommand.Parameters.AddWithValue("$trackId", activeTrackId.Value.ToString("D"));
         timelineCommand.Parameters.AddWithValue("$revision", activeTrackRevision.Value);
+        timelineCommand.Parameters.AddWithValue("$engine", settings.EngineId);
+        timelineCommand.Parameters.AddWithValue("$engineVersion", piper
+            ? VietsubVoiceCatalog.PiperEngineVersion : VietsubVoiceCatalog.KokoroEngineVersion);
+        timelineCommand.Parameters.AddWithValue("$model", settings.ModelId);
+        timelineCommand.Parameters.AddWithValue("$modelVersion", piper
+            ? VietsubVoiceCatalog.PiperModelVersion : VietsubVoiceModelCatalog.Revision);
+        timelineCommand.Parameters.AddWithValue("$voice", settings.VoiceId);
         var timeline = await ReadSingleArtifactAsync(connection, timelineCommand, cancellationToken);
 
         var diagnostics = new List<VietsubVoiceTimingDiagnostic>();

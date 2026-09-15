@@ -1122,12 +1122,22 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
 
   const installVoiceModel = useCallback((voiceId: string) => {
     const projectId = selectedProjectIdRef.current;
-    if (!projectId || !state.voiceModels?.some(model => model.voiceId === voiceId && model.status !== 'READY')) return;
+    if (!projectId || !state.voiceModels?.some(model => model.voiceId === voiceId
+      && (model.status !== 'READY' || !model.synthesisReady))) return;
     setState((current) => ({ ...current, voiceNotice: null }));
     runProjectOperation('vietsub.voice.model.install', {
       expectedProjectId: projectId, voiceId
     } satisfies import('../../types').VietsubInstallVoiceModelRequest);
   }, [runProjectOperation, state.voiceModels]);
+
+  const selectVoice = useCallback((voiceId: string): Promise<boolean> => {
+    const projectId = selectedProjectIdRef.current;
+    if (!projectId || !state.voiceModels?.some(model => model.voiceId === voiceId))
+      return Promise.resolve(false);
+    return runAwaitableOperation('vietsub.voice.select', {
+      expectedProjectId: projectId, voiceId
+    } satisfies import('../../types').VietsubSelectVoiceRequest);
+  }, [runAwaitableOperation, state.voiceModels]);
 
   const dismissTranslationResourceAlert = useCallback(() => {
     translationResourceActionRef.current = null;
@@ -1415,6 +1425,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     installVoiceRuntime,
     refreshVoiceModels,
     installVoiceModel,
+    selectVoice,
     dismissTranslationResourceAlert,
     continueTranslationAfterResourceWarning,
     pauseJob,

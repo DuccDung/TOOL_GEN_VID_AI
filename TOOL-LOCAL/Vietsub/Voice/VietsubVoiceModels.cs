@@ -7,6 +7,7 @@ namespace TOOL_LOCAL.Vietsub.Voice;
 internal static class VietsubVoiceEngines
 {
     public const string Piper = "PIPER_LOCAL";
+    public const string Kokoro = "KOKORO_LOCAL_MODEL";
 }
 
 internal static class VietsubVoiceArtifactKinds
@@ -69,16 +70,20 @@ internal sealed class VietsubVoiceSettings
 
     public void Normalize()
     {
-        if (!string.Equals(EngineId?.Trim(), VietsubVoiceEngines.Piper, StringComparison.Ordinal)
-            || !string.Equals(ModelId?.Trim(), VietsubVoiceCatalog.PiperModelId, StringComparison.Ordinal)
-            || !string.Equals(VoiceId?.Trim(), VietsubVoiceCatalog.PiperVoiceId, StringComparison.Ordinal))
+        var piper = string.Equals(EngineId?.Trim(), VietsubVoiceEngines.Piper, StringComparison.Ordinal)
+            && string.Equals(ModelId?.Trim(), VietsubVoiceCatalog.PiperModelId, StringComparison.Ordinal)
+            && string.Equals(VoiceId?.Trim(), VietsubVoiceCatalog.PiperVoiceId, StringComparison.Ordinal);
+        var kokoro = string.Equals(EngineId?.Trim(), VietsubVoiceEngines.Kokoro, StringComparison.Ordinal)
+            && string.Equals(ModelId?.Trim(), VietsubVoiceModelCatalog.ModelId, StringComparison.Ordinal)
+            && VietsubVoiceModelCatalog.Find(VoiceId?.Trim() ?? string.Empty) is not null;
+        if (!piper && !kokoro)
         {
             throw new InvalidDataException("Cấu hình giọng local chứa engine, model hoặc voice chưa được duyệt.");
         }
 
-        EngineId = VietsubVoiceEngines.Piper;
-        ModelId = VietsubVoiceCatalog.PiperModelId;
-        VoiceId = VietsubVoiceCatalog.PiperVoiceId;
+        EngineId = piper ? VietsubVoiceEngines.Piper : VietsubVoiceEngines.Kokoro;
+        ModelId = piper ? VietsubVoiceCatalog.PiperModelId : VietsubVoiceModelCatalog.ModelId;
+        VoiceId = piper ? VietsubVoiceCatalog.PiperVoiceId : VoiceId!.Trim();
         MaximumPhraseGapMilliseconds = Math.Clamp(MaximumPhraseGapMilliseconds, 0, 2_000);
         MaximumPhraseDurationMilliseconds = Math.Clamp(MaximumPhraseDurationMilliseconds, 1_000, 20_000);
         MaximumPhraseCharacters = Math.Clamp(MaximumPhraseCharacters, 100, 4_500);
@@ -107,6 +112,7 @@ internal static class VietsubVoiceCatalog
     public const string PiperModelId = "piper-vi-vais1000-medium";
     public const string PiperModelVersion = "vi_VN-vais1000-medium@ea046e8";
     public const string PiperEngineVersion = "piper-tts-1.6.0";
+    public const string KokoroEngineVersion = "kokoro-vietnamese-onnx@a249afe5555aec6c435165c2f61ec0f71284812f";
 
     public static readonly IReadOnlyList<VietsubVoiceCatalogItem> Items =
     [
@@ -117,7 +123,11 @@ internal static class VietsubVoiceCatalog
             "Piper · Nữ tiếng Việt",
             "vi-VN",
             "FEMALE",
-            "VAIS-1000 CC BY 4.0; Piper runtime GPL-3.0")
+            "VAIS-1000 CC BY 4.0; Piper runtime GPL-3.0"),
+        .. VietsubVoiceModelCatalog.Voices.Select(voice => new VietsubVoiceCatalogItem(
+            voice.VoiceId, VietsubVoiceEngines.Kokoro,
+            VietsubVoiceModelCatalog.ModelId, voice.DisplayName,
+            "vi-VN", "UNSPECIFIED", VietsubVoiceModelCatalog.License))
     ];
 }
 
@@ -141,8 +151,8 @@ internal sealed record VietsubVoiceRuntimeInstallProgress(
     long BytesProcessed,
     long TotalBytes);
 
-// READY here means that the pinned model files are installed and hash-verified.
-// It is separate from the Piper runtime READY state and does not authorize synthesis.
+// Status describes pinned model files. SynthesisReady additionally requires a
+// successful probe of the selected voice in its isolated runtime.
 internal sealed record VietsubVoiceModelStatus(
     string VoiceId,
     string DisplayName,
@@ -153,7 +163,9 @@ internal sealed record VietsubVoiceModelStatus(
     long InstalledBytes,
     long RequiredBytes,
     string License,
-    string Message);
+    string Message,
+    bool SynthesisReady = false,
+    string? SynthesisMessage = null);
 
 internal sealed record VietsubVoiceModelInstallProgress(
     string VoiceId,
@@ -197,17 +209,18 @@ internal sealed record VietsubVoiceJobParameters(
         {
             var value = JsonSerializer.Deserialize<VietsubVoiceJobParameters>(json, JsonOptions)
                 ?? throw new JsonException("Voice job parameters rỗng.");
-            if (value.StrategyVersion is not (1 or 2)
-                || (value.StrategyVersion == 2 && (value.SelectionFingerprint?.Length != 64
+            if (value.StrategyVersion is not (1 or 2 or 3)
+                || (value.StrategyVersion >= 2 && (value.SelectionFingerprint?.Length != 64
                     || !value.SelectionFingerprint.All(Uri.IsHexDigit)))
                 || value.InputTrackId == Guid.Empty
                 || value.InputRevision < 1
                 || value.Settings is null
                 || value.ConfigurationFingerprint.Length != 64
                 || !value.ConfigurationFingerprint.All(Uri.IsHexDigit)
-                || value.Settings.EngineId != VietsubVoiceEngines.Piper
-                || value.Settings.ModelId != VietsubVoiceCatalog.PiperModelId
-                || value.Settings.VoiceId != VietsubVoiceCatalog.PiperVoiceId)
+                || (value.StrategyVersion < 3 && (value.Settings.EngineId != VietsubVoiceEngines.Piper
+                    || value.Settings.ModelId != VietsubVoiceCatalog.PiperModelId
+                    || value.Settings.VoiceId != VietsubVoiceCatalog.PiperVoiceId))
+                || (value.StrategyVersion == 3 && !IsApprovedSnapshot(value.Settings)))
             {
                 throw new JsonException("Voice job parameters không hợp lệ.");
             }
@@ -221,6 +234,13 @@ internal sealed record VietsubVoiceJobParameters(
                 innerException: exception);
         }
     }
+
+    private static bool IsApprovedSnapshot(VietsubVoiceSettingsSnapshot settings) =>
+        settings.EngineId == VietsubVoiceEngines.Kokoro
+        && settings.EngineVersion == VietsubVoiceCatalog.KokoroEngineVersion
+        && settings.ModelId == VietsubVoiceModelCatalog.ModelId
+        && settings.ModelVersion == VietsubVoiceModelCatalog.Revision
+        && VietsubVoiceModelCatalog.Find(settings.VoiceId) is not null;
 }
 
 internal sealed record VietsubVoicePhrase(

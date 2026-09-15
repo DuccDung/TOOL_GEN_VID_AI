@@ -129,7 +129,7 @@ export type VietsubVoiceRuntimeInstallProgress = {
   totalBytes: number;
 };
 
-// READY describes pinned, hash-verified model assets only. Voice synthesis uses its own runtime gate.
+// Model status and actual synthesis readiness are separate.
 export type VietsubVoiceModelStatus = {
   voiceId: string;
   displayName: string;
@@ -141,6 +141,8 @@ export type VietsubVoiceModelStatus = {
   requiredBytes: number;
   license: string;
   message: string;
+  synthesisReady?: boolean;
+  synthesisMessage?: string | null;
 };
 
 export type VietsubVoiceModelInstallProgress = {

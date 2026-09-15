@@ -1,5 +1,11 @@
 # Bối cảnh hệ thống hiện hành
 
+## Lựa chọn giọng và tạo audio Vietsub — source checkout 2026-09-15
+
+Rà soát và triển khai trên nhánh `main`, HEAD `52f0931`, working tree sạch trước thay đổi; phần triển khai này **chưa commit**. Source đã nối modal 15 giọng với `VoiceSettings` của project local, job snapshot đúng voice và executor chọn Piper hoặc Kokoro CPU theo snapshot. Kokoro dùng runtime Python x64 riêng với dependency hash-locked và probe WAV theo voice; `READY` của file model không tự thành `SynthesisReady`. Timeline khác engine/model/version/voice được loại khỏi preview/export; không có fallback engine khi runtime lỗi.
+
+`dotnet restore`, Release build toàn solution và `npm ci`/frontend build đã đạt trên checkout này; build .NET 0 warning, 0 error. Trên binary cuối: .NET chạy regression trừ hai fixture timing **1.357 Passed / 0 Failed / 8 Skipped / 1.365 Total**; hai fixture translation runtime và nhãn WebView2 chạy riêng đều **Passed**, phủ đủ **1.359 Passed / 0 Failed / 8 Skipped / 1.367 Total** theo các lượt không giao nhau. Lệnh full suite mặc định có một lượt **1 Failed** ở translation runtime; full suite tuần tự có một lượt **1 Failed** ở phép đo căn nhãn WebView2 dưới 1 px. Cả hai đạt khi chạy riêng trên cùng binary cuối, nên chưa có bằng chứng một lượt full suite không lỗi; các lượt chia nhóm không chứng minh đã chạy model thật. Frontend **229 Passed / 0 Failed / 0 Skipped**. Chưa cài/probe Kokoro hoặc Piper trên máy đích, chưa nghe nghiệm thu, benchmark CPU, smoke desktop/bundle hay rollout production. Quyền LarVoice-derived voicepack cho phát hành công khai vẫn chưa được xác minh; xem `third_party/voice/PROVENANCE.md`.
+
 ## Snapshot source được rà soát — 2026-09-15
 
 Checkout được rà soát để cập nhật context là nhánh `main`, commit `8f10cc9`; `git status --short` sạch trước khi sửa tài liệu. Đây là snapshot **source/project file/cấu hình mặc định/migration**, không phải ảnh chụp server, desktop hoặc SQL đang chạy. Không chạy build/test, migration, provider/model thật hoặc smoke UI trong lượt rà soát tài liệu này. Các số Passed/Failed/Skipped bên dưới thuộc những lần kiểm thử có commit/môi trường riêng; không dùng chúng làm kết quả hiện hành của checkout này.

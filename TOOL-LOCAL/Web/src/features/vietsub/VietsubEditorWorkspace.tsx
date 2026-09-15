@@ -86,6 +86,7 @@ export function VietsubEditorWorkspace({
   onInstallVoiceRuntime,
   onRefreshVoiceModels,
   onInstallVoiceModel,
+  onSelectVoice,
   onPauseJob,
   onResumeJob,
   onRetryJob,
@@ -618,6 +619,7 @@ export function VietsubEditorWorkspace({
             onInstallVoiceRuntime={onInstallVoiceRuntime}
             onRefreshVoiceModels={onRefreshVoiceModels}
             onInstallVoiceModel={onInstallVoiceModel}
+            onSelectVoice={onSelectVoice}
             onCancelVoiceModelInstall={onCancelOperation}
             onPauseJob={onPauseJob}
             onResumeJob={onResumeJob}

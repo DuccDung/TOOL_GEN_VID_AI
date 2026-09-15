@@ -36,6 +36,7 @@ export type VietsubPageProps = {
   onInstallVoiceRuntime: () => void;
   onRefreshVoiceModels?: () => void;
   onInstallVoiceModel?: (voiceId: string) => void;
+  onSelectVoice?: (voiceId: string) => Promise<boolean>;
   onDismissTranslationResourceAlert: () => void;
   onContinueTranslationAfterResourceWarning: () => void;
   onPauseJob: (jobId: string) => void;

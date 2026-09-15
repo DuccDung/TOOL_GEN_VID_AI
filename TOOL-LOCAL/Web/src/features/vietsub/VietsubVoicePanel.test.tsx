@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { VietsubSettingsPanel } from './VietsubSettingsPanel';
 import { VietsubVoiceInstallModal } from './VietsubVoiceInstallModal';
+import type { VietsubVoiceModelStatus } from './types';
 
 const noOp = () => { };
 
@@ -36,18 +37,18 @@ describe('Vietsub local voice panel', () => {
 
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="true"');
-    expect(html).toContain('Chọn giọng local để cài');
+    expect(html).toContain('Chọn giọng tạo phụ đề');
     expect(html).toContain('Piper nữ');
     expect(html).toContain('Hưng Thịnh');
     expect(html).toContain('Mai Linh');
-    expect(html).toContain('Sẵn sàng');
+    expect(html).toContain('Model đã cài');
     expect(html).toContain('Cài giọng');
     expect(html).toContain('Cần cài lại');
     expect(html.match(/vietsub-voice-model-preview/g)).toHaveLength(3);
     expect(html).toContain('Nghe thử giọng Piper nữ');
     expect(html).toContain('Nghe thử giọng Hưng Thịnh');
-    expect(html).toContain('chưa bắt đầu tạo âm thanh');
-    expect(html).not.toContain('Xác nhận tạo giọng');
+    expect(html).toContain('Tạo giọng bằng giọng đã chọn');
+    expect(html).toContain('disabled=""');
   });
 
   it('previews installed and uninstalled voices independently of model installation', async () => {
@@ -98,8 +99,10 @@ describe('Vietsub local voice panel', () => {
       expect(dismiss).toHaveBeenCalledOnce();
       expect(audio.hasAttribute('src')).toBe(false);
       expect(install).not.toHaveBeenCalled();
-      expect(document.querySelector('#vietsub-voice-model-dialog .is-ready')?.textContent).toContain('Sẵn sàng');
-      expect(document.querySelector('#vietsub-voice-model-dialog .vietsub-voice-model-install')?.textContent).toContain('Cài giọng');
+      expect(document.querySelector('#vietsub-voice-model-dialog .is-ready')?.textContent).toContain('Model đã cài');
+      expect(document.querySelector('#vietsub-voice-model-dialog .vietsub-voice-model-install')?.textContent).toContain('Kiểm tra runtime');
+      expect(document.querySelectorAll('#vietsub-voice-model-dialog .vietsub-voice-model-install')[1]?.textContent)
+        .toContain('Cài giọng');
     } finally {
       await act(async () => root.unmount());
       container.remove();
@@ -185,6 +188,55 @@ describe('Vietsub local voice panel', () => {
     }
   });
 
+  it('creates audio only after the selected voice is runtime-ready', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const select = vi.fn();
+    const create = vi.fn();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => { });
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => { });
+    const models: VietsubVoiceModelStatus[] = [
+      { voiceId: 'piper:vi-vn-vais1000', displayName: 'Piper nữ', engineId: 'PIPER_LOCAL',
+        modelId: 'piper-model', modelVersion: 'pin', status: 'READY', installedBytes: 1,
+        requiredBytes: 1, license: 'CC BY 4.0', message: 'Model đã cài', synthesisReady: true },
+      { voiceId: 'kokoro-vi:duc_an', displayName: 'Đức An', engineId: 'KOKORO_LOCAL_MODEL',
+        modelId: 'kokoro-model', modelVersion: 'pin', status: 'READY', installedBytes: 1,
+        requiredBytes: 1, license: 'Apache-2.0', message: 'Model đã cài', synthesisReady: false }
+    ];
+    try {
+      await act(async () => root.render(createElement(VietsubVoiceInstallModal, {
+        models, selectedVoiceId: 'kokoro-vi:duc_an', canCreate: true,
+        busy: false, onDismiss: noOp, onRefresh: noOp, onInstall: noOp,
+        onSelect: select, onCreate: create
+      })));
+      const createButton = document.querySelector<HTMLButtonElement>(
+        '#vietsub-voice-model-dialog .confirmation-submit')!;
+      expect(createButton.disabled).toBe(true);
+      await act(async () => createButton.click());
+      expect(create).not.toHaveBeenCalled();
+      await act(async () => root.render(createElement(VietsubVoiceInstallModal, {
+        models: models.map(model => model.voiceId === 'kokoro-vi:duc_an'
+          ? { ...model, synthesisReady: true } : model),
+        selectedVoiceId: 'kokoro-vi:duc_an', canCreate: true,
+        busy: false, onDismiss: noOp, onRefresh: noOp, onInstall: noOp,
+        onSelect: select, onCreate: create
+      })));
+      expect(createButton.disabled).toBe(false);
+      await act(async () => createButton.click());
+      expect(create).toHaveBeenCalledOnce();
+      const choosePiper = Array.from(document.querySelectorAll<HTMLButtonElement>(
+        '#vietsub-voice-model-dialog .vietsub-voice-model-action button'))
+        .find(button => button.textContent === 'Chọn giọng')!;
+      await act(async () => choosePiper.click());
+      expect(select).toHaveBeenCalledExactlyOnceWith('piper:vi-vn-vais1000');
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('asks the user to install Piper when the enabled runtime has no model', () => {
     const html = renderToStaticMarkup(createElement(VietsubSettingsPanel, {
       project: {
@@ -235,7 +287,7 @@ describe('Vietsub local voice panel', () => {
     }));
 
     expect(html).toContain('Tạo giọng Việt');
-    expect(html).toContain('Mở danh sách giọng local');
+    expect(html).toContain('Chọn giọng local và tạo âm thanh cho phụ đề');
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).toContain('aria-controls="vietsub-voice-model-dialog"');
     expect(html).not.toContain('Piper local chưa được cài đầy đủ');

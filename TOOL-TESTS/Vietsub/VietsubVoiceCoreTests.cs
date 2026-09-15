@@ -808,6 +808,39 @@ public sealed class VietsubVoiceCoreTests : IDisposable
         Assert.True(stopwatch.Elapsed < TimeSpan.FromMinutes(10));
     }
 
+    [LocalVoiceModelFact]
+    [Trait("Category", "LocalVoiceIntegration")]
+    public async Task KokoroFixture_UsesSelectedVoicepackAndProducesVietnamesePcmWav()
+    {
+        var workspaceRoot = Environment.GetEnvironmentVariable("VIDEOMAKER_VOICE_WORKSPACE_ROOT");
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+            throw new InvalidOperationException(
+                "VIDEOMAKER_VOICE_WORKSPACE_ROOT is required for real Kokoro verification.");
+
+        using var components = new VietsubVoiceComponentStore(
+            new VietsubAppPaths(workspaceRoot), featureEnabled: true);
+        var selectedVoiceId = Environment.GetEnvironmentVariable("VIDEOMAKER_KOKORO_TEST_VOICE_ID")
+            ?? VietsubVoiceModelCatalog.Voices[0].VoiceId;
+        Assert.NotNull(VietsubVoiceModelCatalog.Find(selectedVoiceId));
+        var runtime = new VietsubKokoroRuntime(components);
+        var status = runtime.GetStatus(selectedVoiceId);
+        Assert.True(status.Ready, status.Message);
+        var output = Path.Combine(_root, "kokoro-selected.wav");
+        Directory.CreateDirectory(_root);
+        var completed = new List<int>();
+        await new VietsubKokoroVoiceSynthesizer(runtime.RequireReady(selectedVoiceId))
+            .SynthesizeIncrementallyAsync(
+                [new VietsubVoiceSynthesisItem(0, "selected", "Xin chào, đây là giọng đã chọn.", output)],
+                item => { completed.Add(item.Index); return ValueTask.CompletedTask; },
+                CancellationToken.None);
+        Assert.Equal([0], completed);
+        var metadata = VietsubWavInspector.Inspect(output, analyzeSilence: true);
+        Assert.Equal(24_000, metadata.SampleRate);
+        Assert.Equal(1, metadata.Channels);
+        Assert.Equal(16, metadata.BitsPerSample);
+        Assert.True(metadata.DurationMilliseconds > 300);
+    }
+
     private static VietsubVoiceSettingsSnapshot Settings() => new(
         VietsubVoiceEngines.Piper,
         VietsubVoiceCatalog.PiperEngineVersion,

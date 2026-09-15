@@ -93,6 +93,7 @@ type VietsubSettingsPanelProps = {
   onInstallVoiceRuntime: () => void;
   onRefreshVoiceModels?: () => void;
   onInstallVoiceModel?: (voiceId: string) => void;
+  onSelectVoice?: (voiceId: string) => Promise<boolean>;
   onCancelVoiceModelInstall?: () => void;
   onPauseJob: (jobId: string) => void;
   onResumeJob: (jobId: string) => void;
@@ -132,8 +133,11 @@ export function VietsubSettingsPanel({
   onStartOcr,
   onStartTranslation,
   onInstallTranslationRuntime,
+  onStartVoice,
+  onInstallVoiceRuntime,
   onRefreshVoiceModels,
   onInstallVoiceModel,
+  onSelectVoice,
   onCancelVoiceModelInstall,
   onPauseJob,
   onResumeJob,
@@ -296,7 +300,7 @@ export function VietsubSettingsPanel({
           <span className="vietsub-tool-action-icon"><Volume2 size={20} /></span>
           <span className="vietsub-tool-action-copy">
             <strong>{voiceWorkspace?.requiresRebuild ? 'Cập nhật giọng Việt' : voiceComplete ? 'Tạo lại giọng Việt' : 'Tạo giọng Việt'}</strong>
-            <small>Mở danh sách giọng local và cài tài nguyên model.</small>
+            <small>Chọn giọng local và tạo âm thanh cho phụ đề.</small>
           </span>
           {voiceModelInstallProgress
             ? <span className="vietsub-tool-action-badge is-running">{voiceModelInstallProgress.percent.toFixed(0)}%</span>
@@ -458,7 +462,17 @@ export function VietsubSettingsPanel({
           busy={busy || Boolean(activeJob)}
           onDismiss={closeVoiceInstallDialog}
           onRefresh={() => onRefreshVoiceModels?.()}
-          onInstall={(voiceId) => onInstallVoiceModel?.(voiceId)}
+          onInstall={(voiceId) => voiceId === 'piper:vi-vn-vais1000'
+            ? onInstallVoiceRuntime() : onInstallVoiceModel?.(voiceId)}
+          selectedVoiceId={voiceWorkspace?.settings.voiceId}
+          canCreate={Boolean(activeTrack && (activeTrack.voiceEnabledCueCount ?? activeTrack.cueCount) > 0
+            && (activeTrack.voiceTranslatedCueCount ?? activeTrack.translatedCueCount)
+              === (activeTrack.voiceEnabledCueCount ?? activeTrack.cueCount))}
+          onSelect={(voiceId) => { void onSelectVoice?.(voiceId); }}
+          onCreate={() => {
+            closeVoiceInstallDialog();
+            onStartVoice();
+          }}
           onCancelInstall={onCancelVoiceModelInstall}
         />
       )}
