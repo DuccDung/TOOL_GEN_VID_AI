@@ -185,6 +185,26 @@ builder.Services.AddDbContext<VietsubDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddDbContext<TikTokDbContext>(options =>
     options.UseSqlServer(connectionString));
+builder.Services.AddDbContext<TOOL_SERVER.Publishing.PublishingDbContext>(options => options.UseSqlServer(connectionString));
+builder.Services.Configure<TOOL_SERVER.Publishing.PublishingOptions>(builder.Configuration.GetSection("Publishing"));
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingService>();
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingSocialService>();
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingProduction>();
+builder.Services.AddScoped<TOOL_SERVER.Publishing.IPublishingProduction>(sp => sp.GetRequiredService<TOOL_SERVER.Publishing.PublishingProduction>());
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingMedia>();
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingPublisher>();
+builder.Services.AddScoped<TOOL_SERVER.Publishing.IPublishingPublisher>(sp => sp.GetRequiredService<TOOL_SERVER.Publishing.PublishingPublisher>());
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingReviewService>();
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingDispatcher>();
+builder.Services.AddScoped<TOOL_SERVER.Publishing.PublishingRetention>();
+builder.Services.AddHostedService<TOOL_SERVER.Publishing.PublishingWorker>();
+builder.Services.AddHttpClient("publishing-platform", client => client.Timeout = TimeSpan.FromMinutes(4))
+    .RemoveAllLoggers()
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false, UseCookies = false, UseProxy = false,
+        ConnectCallback = KlingOutputProxyService.ConnectPublicHostAsync
+    });
 builder.Services.AddDbContext<DataProtectionKeyDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services

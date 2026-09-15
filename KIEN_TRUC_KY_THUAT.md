@@ -1,5 +1,9 @@
 # Kiến trúc kỹ thuật VideoMaker
 
+## Bổ sung 2026-09-11: lập lịch xuất bản thuộc server
+
+`PublishingPage/usePublishingModule → PublishingWebBridge → ServerGenerationClient → PublishingController → PublishingService/Dispatcher → Production/Publisher`. DTO nằm trong Contracts; schema `social` do server sở hữu, desktop bị DENY. Occurrence có unique schedule/time, revision/input/consent snapshot và lease; dùng quote/first-frame/provider request/reservation hiện hành, không thêm đường gọi AI từ desktop. Google/Meta OAuth và token mã hóa ở server; TikTok dùng service sẵn có và duyệt video theo hash. Media lưu `.part`, kiểm SHA/probe trước promote; retention giữ lịch sử. Project nội bộ `publishing/<run-id>` không đưa vào danh sách workspace desktop. [Mô hình, trạng thái và rollout](TRIEN_KHAI_LEN_LICH_XUAT_BAN.md).
+
 ## Bổ sung 2026-09-11: toàn bộ video ngắn dùng Veo
 
 `ShortVideoVeoPolicy` yêu cầu Fal/Veo 3.1 Standard/Fast, 720p, Native Audio, 4/6/8 giây và 9:16/16:9. `DirectShortVideo` dùng policy `LongForm` hiện có nhưng vẫn giữ workflow một cảnh, không áp content/speech rewrite của video dài. `GenerationService` luôn kiểm `SceneFirstFrame` Approved/current; ảnh mặc thử được ánh xạ thành `MediaAsset`/`SceneFirstFrame` qua `ShortVideoVeoFirstFrame`, giữ provider request/hash/revision nguồn. TextOnly đi qua `SceneFirstFrameService`, rồi quote video bền vững trong `vf.ShortVideoOperations`; desktop chỉ gửi quote đã xác nhận với idempotency key tương ứng. Bridge cũ `short-video.generate` không còn tạo clip trực tiếp.

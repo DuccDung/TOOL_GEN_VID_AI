@@ -1,5 +1,9 @@
 # Bối cảnh hệ thống hiện hành
 
+### Lên lịch tạo video và xuất bản — 2026-09-11
+
+Đã triển khai menu/trang lịch, draft/kích hoạt có xác nhận, ảnh nhân vật/sản phẩm, lịch ngày/thứ/múi giờ, worker server có snapshot/lease/checkpoint, tạo Veo 4/6/8 giây qua gateway, OAuth Google/Meta và xuất bản đa tài khoản. TikTok cần xem/duyệt video cụ thể; Facebook Page/YouTube có đường đăng tự động. Đã thêm migration `4.1.10-publishing-schedules` nhưng chưa áp database thật; Publishing và worker mặc định tắt. Release solution build đạt khi tách output server để tránh DLL đang bị tiến trình người dùng khóa. Frontend **212 Passed / 0 Failed / 0 Skipped**. .NET toàn suite cuối **1.348 Passed / 1 Failed / 5 Skipped**; lỗi căn chữ UI Vietsub không tái hiện khi chạy lại cùng nhóm lịch: **59 Passed / 0 Failed / 0 Skipped**, không đổi assertion/source test đó. Chưa nghiệm thu OAuth/provider/bài đăng thật. [Task, quy tắc và các bước bật](TRIEN_KHAI_LEN_LICH_XUAT_BAN.md).
+
 ### Tải video Bilibili — 2026-09-11
 
 Thêm item menu trái và module desktop quét video/kênh, chọn nhiều, tải MP4, hủy/thử lại, chọn chất lượng/thư mục. Không cần migration hay request AI. Release solution build đạt; .NET **1.294 Passed / 0 Failed / 5 Skipped**, frontend **204 Passed / 0 Failed / 0 Skipped**. Smoke video public đã tải/ghép/probe/hash thành công; danh sách kênh lấy được hai mục trong smoke giới hạn, nhưng quét toàn kênh bị Bilibili hạn chế truy cập nên chưa nghiệm thu full-channel trên mạng hiện tại. UI WebView2 đã kiểm 1440/1024 px và zoom 125%. [Chi tiết sử dụng, nguồn gốc runtime và giới hạn](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).

@@ -23,6 +23,13 @@ internal sealed record BilibiliDownloadRequest(string ScanId, string[] EntryIds,
 internal sealed record BilibiliJobRequest(string? JobId = null);
 
 [System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+internal sealed record PublishingWebPayload(Guid OrganizationId, Guid? ScheduleId = null, int? ExpectedRevision = null,
+    TOOL_SHARED.Contracts.Publishing.PublishingScheduleInput? Input = null, string? Role = null, string? Action = null,
+    bool ConfirmAutomaticGeneration = false, string? Platform = null, Guid? ConnectionId = null, Guid? RunId = null,
+    string? MediaSha256 = null, bool Approve = false, IReadOnlyList<TOOL_SHARED.Contracts.Publishing.PublishingTarget>? Targets = null,
+    Guid? DeliveryId = null);
+
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
 internal sealed record VietsubStartCloudTranslationRequest(Guid ExpectedTrackId, int ExpectedTrackRevision);
 
 internal sealed record WebMessageError(

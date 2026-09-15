@@ -1,5 +1,9 @@
 # Vận hành và phát hành VideoMaker
 
+### Lên lịch xuất bản — 2026-09-11
+
+Migration mới `VideoFactory.4.1.10.PublishingSchedules.sql` chưa được chạy trên database đích. Triển khai contracts/server/desktop/frontend đồng thời, cấu hình kho media/FFprobe đã pin hash, AI readiness và Google/Meta OAuth ở secret store server. `Publishing:Enabled` và `WorkerEnabled` mặc định false; không tự bật public posting khi app chưa được duyệt. Lịch vẫn kiểm session/device/license lease. Cleanup chạy khi Enabled=true ngay cả khi WorkerEnabled=false/EmergencyDisabled=true; giữ dữ liệu đối soát. [Task, config, rehearsal, rollout/rollback và giới hạn](TRIEN_KHAI_LEN_LICH_XUAT_BAN.md).
+
 ### Tải Bilibili — 2026-09-11
 
 Không cần migration/server flag. Desktop tải yt-dlp 2026.08.19 bằng thao tác **Chuẩn bị công cụ tải**, kiểm pinned size/SHA-256, giữ license/provenance bên runtime; không tự nâng bản. Chỉ triển khai frontend cùng native bridge mới. Chức năng dùng video public và có thể bị Bilibili hạn chế theo mạng; giữ partial, không báo quét đủ khi chưa hoàn tất. Hàng đợi trong phiên, MP4 lưu ở máy; rollback desktop không xóa video đã tải. [Hướng dẫn, nguồn gốc và giới hạn smoke](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).

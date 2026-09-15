@@ -11,7 +11,7 @@ internal interface ILocalVoiceAccessClient
         throw new NotSupportedException("Local voice authorization is unavailable.");
 }
 
-internal interface IGenerationClient : ILocalVoiceAccessClient, IShortVideoOutfitClient
+internal interface IGenerationClient : ILocalVoiceAccessClient, IShortVideoOutfitClient, TOOL_LOCAL.Publishing.IPublishingClient
 {
     Guid? SelectedOrganizationId { get; }
     Task<IReadOnlyList<OrganizationSummaryResponse>> GetOrganizationsAsync(CancellationToken cancellationToken);

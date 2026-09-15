@@ -85,6 +85,8 @@ import { TikTokPage } from './features/tiktok/TikTokPage';
 import { useTikTokModule } from './features/tiktok/useTikTokModule';
 import { BilibiliPage } from './features/bilibili/BilibiliPage';
 import { useBilibiliModule } from './features/bilibili/useBilibiliModule';
+import { PublishingPage } from './features/publishing/PublishingPage';
+import { usePublishingModule } from './features/publishing/usePublishingModule';
 import { getSceneFirstFrameAssetBlocker } from './sceneAssetValidation';
 import { buildSpeechTranscriptDiff, type SpeechDiffSegment } from './speechTranscriptDiff';
 import { assessSpeechPacing } from './speechPacing';
@@ -139,7 +141,7 @@ import type {
   UpdateProjectAssetPayload,
 } from './types';
 
-type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'tiktok' | 'bilibili' | 'apiKeys' | 'settings';
+type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'tiktok' | 'bilibili' | 'publishing' | 'apiKeys' | 'settings';
 type LongVideoStepId = 'setup' | 'content' | 'assets' | 'storyboard' | 'export';
 type LongVideoStep = {
   id: LongVideoStepId;
@@ -220,6 +222,10 @@ const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
   tiktok: {
     title: 'Đăng TikTok',
     subtitle: 'Chọn video trên máy và tải trực tiếp lên tài khoản TikTok của bạn.'
+  },
+  publishing: {
+    title: 'Lên lịch xuất bản',
+    subtitle: 'Lên lịch tạo video từ nhân vật, sản phẩm và đăng lên các tài khoản đã chọn.'
   },
   bilibili: {
     title: 'Tải video Bilibili',
@@ -305,7 +311,7 @@ const primaryMenu: Array<{
   { label: 'Nhân vật AI', icon: Users },
   { label: 'Thư viện video', icon: Library },
   { label: 'Lịch sử render', icon: Clock3 },
-  { label: 'Lên lịch xuất bản', icon: CalendarDays }
+  { label: 'Lên lịch xuất bản', icon: CalendarDays, page: 'publishing' }
 ];
 
 const secondaryMenu: Array<{ label: string; icon: LucideIcon; page?: Page }> = [
@@ -462,6 +468,7 @@ function App() {
   );
   const tiktok = useTikTokModule(dashboard.features.tikTokEnabled);
   const bilibili = useBilibiliModule(page === 'bilibili', dashboard.profile.userId);
+  const publishing = usePublishingModule(page === 'publishing', dashboard.selectedOrganizationId, dashboard.profile.userId);
   const selectedProjectRequestRef = useRef<string | null>(null);
   const licenseRequestsRef = useRef(new Map<string, LicenseRequestKind>());
   const licenseBootstrapRequestedRef = useRef(false);
@@ -1759,7 +1766,7 @@ function App() {
     ? vietsub.state.loading || vietsub.state.busy
     : page === 'tiktok'
       ? tiktok.state.loading || tiktok.state.busy
-      : page === 'bilibili' ? bilibili.busy || bilibili.loading : generationBusy;
+      : page === 'bilibili' ? bilibili.busy || bilibili.loading : page === 'publishing' ? publishing.busy || publishing.loading : generationBusy;
   const licenseLocked = isLicenseLocked(dashboard.license);
   const tiktokCredentialVerification = Boolean(
     tiktok.state.feature.isCredentialVerification &&
@@ -1803,7 +1810,7 @@ function App() {
         <Header
           dashboard={dashboard}
           page={page}
-          busy={pageBusy}
+          busy={pageBusy || publishing.busy}
           onMenu={() => setSidebarOpen(true)}
           onCreate={openNewProject}
           onRefresh={() => {
@@ -1813,6 +1820,8 @@ function App() {
               tiktok.refresh();
             } else if (page === 'bilibili') {
               bilibili.refresh();
+            } else if (page === 'publishing') {
+              publishing.refresh();
             } else {
               setBusy(true);
               postToHost('dashboard.refresh');
@@ -1833,7 +1842,9 @@ function App() {
           onUnavailable={notify}
         />
 
-        {page === 'bilibili' ? (
+        {page === 'publishing' ? (
+          <PublishingPage module={publishing} onTikTok={() => setPage('tiktok')} />
+        ) : page === 'bilibili' ? (
           <BilibiliPage module={bilibili} />
         ) : page === 'tiktok' ? (
           <TikTokPage module={tiktok} />

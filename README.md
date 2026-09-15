@@ -34,6 +34,8 @@ Solution: `TOOL_GEN_POST_VIDEO.slnx`.
 
 ## Luồng sản phẩm
 
+**Lên lịch xuất bản**: nhập chủ đề, ảnh nhân vật/sản phẩm và thời gian để server tạo video ngắn 4/6/8 giây, đăng Facebook Page/YouTube hoặc chờ xem và xác nhận TikTok. Source đã triển khai; cần migration/cấu hình server và nghiệm thu tài khoản thật trước khi bật. Xem [task triển khai và hướng dẫn vận hành](TRIEN_KHAI_LEN_LICH_XUAT_BAN.md).
+
 Nút **Tạo video mới** mở popup chọn **Video ngắn** hoặc **Video dài**, nhập nội dung rồi lưu và mở project mới trong tổ chức đang chọn. Tạo project chưa gọi AI; video ngắn lưu sẵn một cảnh và chỉ tạo clip khi người dùng bấm tạo video, xác nhận chi phí.
 
 ### Video dài

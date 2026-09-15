@@ -1,5 +1,9 @@
 # Nghiệp vụ và kiến trúc VideoMaker
 
+## Bổ sung 2026-09-11: lịch tạo video và xuất bản
+
+Lịch nhận tiêu đề/mô tả, ảnh nhân vật và sản phẩm, ngày/giờ/múi giờ, các thứ trong tuần và tài khoản đích. Lưu draft chưa tốn phí; kích hoạt cần đồng ý tự tạo/duyệt ảnh đầu cảnh và tạo clip theo tổng báo giá USD/lượt. Mỗi ngày được chọn tạo một clip Veo 4/6/8 giây từ snapshot đầu vào; không tự sinh chuỗi chủ đề hoặc lời thoại mới. Facebook Page Reels/YouTube có thể đăng theo lịch; TikTok chờ người dùng xem đúng video, chọn privacy và xác nhận. Chế độ trong ngày dừng đăng mới sau nửa đêm local; chế độ bỏ qua có thời gian chờ 5 phút. Không tạo bù lượt lỡ hạn hoặc bypass session/device/license/role/budget. [Quy tắc chi tiết và giới hạn](TRIEN_KHAI_LEN_LICH_XUAT_BAN.md).
+
 ## Bổ sung 2026-09-10: video ngắn phối trang phục
 
 `DirectShortVideo` có mode `TextOnly` mặc định và `CharacterOutfit` khi cờ được mở. Mode mới dùng một ảnh nhân vật và một ảnh trang phục; lưu bối cảnh/chuyển động, báo giá riêng từng bước AI, duyệt ảnh trước clip và duyệt hình/âm thanh trước xuất MP4. Từ 2026-09-11, cả hai mode tạo clip bằng Veo 3.1, một cảnh 4/6/8 giây, tỷ lệ 9:16 hoặc 16:9; tỷ lệ/audio chọn lúc tạo project. Đổi ảnh, bối cảnh hoặc chuyển động làm tăng revision và vô hiệu hóa kết quả đã duyệt. Chỉ hỗ trợ âm thanh môi trường hoặc tắt tiếng, không TTS/thoại. Feature mặc định tắt, máy Development đã bật bằng override; chưa nghiệm thu provider thật. Xem [triển khai Veo](TRIEN_KHAI_VIDEO_NGAN_VEO.md).

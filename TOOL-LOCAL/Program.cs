@@ -370,7 +370,8 @@ internal static class Program
                     vietsubCloudTranslationService: vietsubCloudTranslationService,
                     localVoiceService: localVoiceService,
                     shortVideoOutfit: shortVideoOutfit,
-                    bilibiliService: bilibiliService);
+                    bilibiliService: bilibiliService,
+                    publishingMediaService: new TikTokMediaService(mediaProbe, mediaToolPreflight));
                 try
                 {
                     Application.Run(mainForm);

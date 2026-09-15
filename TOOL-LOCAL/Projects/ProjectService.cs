@@ -31,6 +31,7 @@ public sealed class ProjectService(
             .Where(x =>
                 x.RemoteUserId == remoteUserId &&
                 x.DeletedAtUtc == null &&
+                !x.WorkspaceRelativePath.StartsWith("publishing/") &&
                 !x.WorkspaceRelativePath.StartsWith(VoiceCatalogPreviewContexts.WorkspacePrefix))
             .OrderByDescending(x => x.UpdatedAtUtc)
             .Select(x => new ProjectSummary(

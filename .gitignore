@@ -23,6 +23,15 @@ TOOL-LOCAL/Web/vite.config.d.ts
 artifacts/
 TOOL-SERVER/App_Releases/
 
+# Local smoke-test output and generated video files
+/.tmp/
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.avi
+*.m4v
+
 # Server runtime-generated provider output cache
 /data/video-outputs/
 /TOOL-SERVER/[Dd]ata/video-outputs/

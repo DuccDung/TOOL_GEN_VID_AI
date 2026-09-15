@@ -1,5 +1,15 @@
 # Kiểm thử và nghiệm thu VideoMaker
 
+### Lên lịch tạo video và xuất bản — 2026-09-11
+
+Frontend **212 Passed / 0 Failed / 0 Skipped**, 36 file, chạy `npm test -- --maxWorkers=1 --no-file-parallelism`. WebView2 dùng App production với bridge/data giả, chặn network ngoài virtual host: menu mở đúng trang, 4 thẻ thống kê và không tràn ngang ở 1440/1024 px, zoom 125%; form tạo lịch ở 1024 px có đầy đủ trường và cuộn nội dung. Đã xem ảnh `.tmp/publishing-validation/ui/publishing-1440-100.png` và `publishing-editor-1024.png`.
+
+Restore solution, npm ci và Release solution build đạt; MSBuild 0 warning/error, Vite còn cảnh báo bundle >500 kB. Toàn bộ .NET cuối chạy collection tuần tự, TEMP/TMP ở thư mục thử riêng trên D: **1.348 Passed / 1 Failed / 5 Skipped**, 1.354 tổng, 3 phút 13 giây. TRX: `.tmp/publishing-validation/publishing-full-final.trx`. Lỗi duy nhất là căn giữa chữ của `VietsubTimelineLayoutIntegrationTests` ở lần đo đầu; hai lượt toàn bộ trước đã qua. Chạy lại bài UI đó cùng nhóm `Publishing|ScheduledProduct` trên cùng binary đạt **59 Passed / 0 Failed / 0 Skipped** (`publishing-recheck.trx`), không đổi assertion hay source Vietsub. Giữ riêng số liệu lần lỗi và lần chạy lại, không coi full suite cuối là 0 Failed.
+
+Server output được chuyển riêng bằng CustomBeforeMicrosoftCommonTargets để tránh khóa DLL của tiến trình server đang chạy; không dừng tiến trình người dùng. Contracts giữa build server/tests khớp SHA-256; bundle desktop Release khớp Web/dist. `git diff --check` và kiểm whitespace của 28 file mới đạt.
+
+Regression gồm lịch ngày/zone/DST, xác nhận tự động, ảnh mã hóa/cross-user/org/role, Viewer, idempotency/revision, mất session/quyền, pause/restart/lease, unique occurrence trên SQLite, migration model/SQL/least privilege, prompt sản phẩm đi qua service ảnh và settlement hiện hành, OAuth single-use/PKCE/scope/account binding, Page permission, YouTube lost response/resume offset, upload Unknown không gửi trùng, video sai hash/codec/ratio/fps và retention giữ lịch sử/live lease. Fake HTTP và database/media fixture; không tạo request AI, kết nối tài khoản hoặc bài đăng thật. Bốn test model và một SQL rehearsal TikTok opt-in vẫn Skipped; chưa có rehearsal SQL Server cho migration mới. [Phạm vi và checklist nghiệm thu](TRIEN_KHAI_LEN_LICH_XUAT_BAN.md).
+
 ### Tải video Bilibili — 2026-09-11
 
 Restore/build Release đạt; MSBuild 0 warning/error, Vite còn cảnh báo bundle trên 500 kB. Frontend **204 Passed / 0 Failed / 0 Skipped**; .NET **1.294 Passed / 0 Failed / 5 Skipped** trên toàn suite chạy collection tuần tự và TEMP/TMP riêng ở D. Lượt đầu 21 failure do ổ C thiếu dung lượng không được tính Passed. Thêm 40 native và 8 frontend test cho input/allowlist, partial scan, collection/dedup, access/stale selection, busy/cancel/retry, checksum/signature, atomic promote/không ghi đè, cleanup và menu/UI. WebView2 với fixture giả không tràn ngang ở 1440/1024 px và zoom 125%; smoke public tải MP4 thật qua checksum/probe đạt. Full-channel bị nền tảng hạn chế nên chưa nghiệm thu quét hoàn tất toàn kênh. [Lệnh, artifact và giới hạn](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).

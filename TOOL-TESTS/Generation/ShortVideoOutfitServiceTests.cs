@@ -17,6 +17,20 @@ namespace TOOL_TESTS.Generation;
 public sealed class ShortVideoOutfitServiceTests
 {
     [Fact]
+    public async Task ScheduledProduct_UsesProductReferenceInsteadOfTreatingEveryProductAsClothing()
+    {
+        await using var f = new Fixture();
+        f.Scene.RequiredCapabilitiesJson = """{"shortVideoMode":"CharacterOutfit","scheduledProduct":true}""";
+        await f.Db.SaveChangesAsync();
+        var image = await f.Compose(await f.ImageQuote()); await f.Approve(image);
+        Assert.Contains("product demonstration", f.Images.LastPrompt);
+        Assert.DoesNotContain("dress the person", f.Images.LastPrompt);
+        Assert.Equal(2, f.Images.Inputs!.Count);
+        Assert.Equal("Approved", (await f.Db.SceneFirstFrames.SingleAsync()).Status);
+        Assert.Equal(1, f.Budget.Reserves); Assert.Equal(1, f.Budget.Settles);
+        Assert.Contains("scheduled-product-v1", (await f.Db.ProviderRequests.SingleAsync()).RequestJson);
+    }
+    [Fact]
     public async Task Gateway_SubmitsOutfitToVeoWithApprovedFirstFrame_AndReplaysWithoutAnotherCharge()
     {
         await using var f = new Fixture(); var image = await f.Compose(await f.ImageQuote()); await f.Approve(image);
@@ -339,10 +353,10 @@ public sealed class ShortVideoOutfitServiceTests
     }
     private sealed class Images : IOpenAiImageClient
     {
-        public int Calls; public bool Fail, Reject; public IReadOnlyList<OpenAiImageEditInput>? Inputs; public byte[] Output = Png(720, 1280);
+        public int Calls; public bool Fail, Reject; public string LastPrompt = ""; public IReadOnlyList<OpenAiImageEditInput>? Inputs; public byte[] Output = Png(720, 1280);
         public Task<OpenAiImageResult> GenerateAsync(ProviderRuntimeConfiguration provider, string prompt, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<OpenAiImageResult> GenerateOutfitAsync(ProviderRuntimeConfiguration provider, string prompt, string aspectRatio, IReadOnlyList<OpenAiImageEditInput> sources, CancellationToken cancellationToken)
-        { Calls++; Inputs = sources; if (Fail) throw new TimeoutException(); if (Reject) throw new ProviderHttpException("openai", "openai_image_moderation_blocked", "rejected", statusCode: System.Net.HttpStatusCode.BadRequest); return Task.FromResult(new OpenAiImageResult(new(Output, "image/png", Convert.ToHexString(SHA256.HashData(Output)).ToLowerInvariant(), 720, 1280), 100, 200, "fake-request")); }
+        { Calls++; LastPrompt = prompt; Inputs = sources; if (Fail) throw new TimeoutException(); if (Reject) throw new ProviderHttpException("openai", "openai_image_moderation_blocked", "rejected", statusCode: System.Net.HttpStatusCode.BadRequest); return Task.FromResult(new OpenAiImageResult(new(Output, "image/png", Convert.ToHexString(SHA256.HashData(Output)).ToLowerInvariant(), 720, 1280), 100, 200, "fake-request")); }
     }
     private sealed class Cost : IAiCostEstimator
     {

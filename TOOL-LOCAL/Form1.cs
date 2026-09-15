@@ -75,6 +75,8 @@ public partial class Form1 : Form
     private TikTokWebBridge? _tiktokBridge;
     private readonly Bilibili.BilibiliService? _bilibiliService;
     private Bilibili.BilibiliWebBridge? _bilibiliBridge;
+    private readonly TikTokMediaService? _publishingMediaService;
+    private Publishing.PublishingWebBridge? _publishingBridge;
     private bool _refreshing;
     private bool _closing;
     private bool _checkingUpdate;
@@ -124,7 +126,8 @@ public partial class Form1 : Form
         VietsubCloudTranslationService? vietsubCloudTranslationService = null,
         TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoiceService = null,
         TOOL_LOCAL.Generation.ShortVideoWorkflowService? shortVideoOutfit = null,
-        Bilibili.BilibiliService? bilibiliService = null) : this()
+        Bilibili.BilibiliService? bilibiliService = null,
+        TikTokMediaService? publishingMediaService = null) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -133,6 +136,7 @@ public partial class Form1 : Form
         _localVoiceService = localVoiceService;
         _shortVideoOutfit = shortVideoOutfit;
         _bilibiliService = bilibiliService;
+        _publishingMediaService = publishingMediaService;
         _generationService = generationService;
         _generationClient = generationClient;
         _workspaceService = workspaceService;
@@ -300,6 +304,10 @@ public partial class Form1 : Form
                     PostJsonToWebView);
             }
 
+            if (_publishingMediaService is not null && _tiktokGatewayClient is not null)
+                _publishingBridge = new Publishing.PublishingWebBridge(_generationClient, _sessionManager, _licenseManager,
+                    _publishingMediaService, _tiktokGatewayClient, SelectShortVideoImage, PostJsonToWebView);
+
             if (_bilibiliService is not null)
                 _bilibiliBridge = new Bilibili.BilibiliWebBridge(_bilibiliService,
                     async token => { await _licenseManager.EnsureAccessAsync(token); }, SelectBilibiliFolder,
@@ -407,6 +415,7 @@ public partial class Form1 : Form
         }
 
         if (_bilibiliBridge is not null && await _bilibiliBridge.TryHandleAsync(message, _shutdown.Token)) return;
+        if (_publishingBridge is not null && await _publishingBridge.TryHandleAsync(message, _shutdown.Token)) return;
         await _bridge.HandleAsync(message, _shutdown.Token);
     }
 
@@ -440,7 +449,8 @@ public partial class Form1 : Form
         {
         }
 
-        var response = _tiktokPreviewService.Open(requestUri, eventArgs.Request.Method, rangeHeader);
+        var response = _publishingBridge?.Open(requestUri, eventArgs.Request.Method, rangeHeader)
+            ?? _tiktokPreviewService.Open(requestUri, eventArgs.Request.Method, rangeHeader);
         try
         {
             var webResponse = coreWebView.Environment.CreateWebResourceResponse(
@@ -1174,6 +1184,7 @@ public partial class Form1 : Form
         _vietsubBridge?.Dispose();
         _tiktokBridge?.Dispose();
         _bilibiliBridge?.Dispose();
+        _publishingBridge?.Dispose();
         if (_licenseManager is not null)
         {
             _licenseManager.LicenseInvalidated -= LicenseManagerOnInvalidated;

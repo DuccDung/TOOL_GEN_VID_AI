@@ -714,3 +714,4 @@ export type DesktopUpdateProgress = {
   percent: number;
   message: string;
 };
+export type { PublishingInput, PublishingTarget, PublishingState, PublishingSchedule, PublishingRun } from './features/publishing/types';
