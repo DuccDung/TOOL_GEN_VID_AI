@@ -13,7 +13,7 @@ using TOOL_SHARED.Contracts.Projects;
 
 namespace TOOL_LOCAL.WebView;
 
-internal sealed class DashboardBridge : IDisposable
+internal sealed partial class DashboardBridge : IDisposable
 {
     private const int MaxMessageLength = 64 * 1024;
     private readonly AccountSessionManager _sessionManager;
@@ -25,6 +25,7 @@ internal sealed class DashboardBridge : IDisposable
     private readonly IMediaToolPreflightService _mediaToolPreflight;
     private readonly LicensePaymentApiClient _licensePaymentClient;
     private readonly bool _vietsubEnabled;
+    private readonly bool _tiktokEnabled;
     private readonly bool _speechSynchronizationEnabled;
     private readonly string _applicationDirectory;
     private readonly Action<string> _postJson;
@@ -50,11 +51,13 @@ internal sealed class DashboardBridge : IDisposable
         IMediaToolPreflightService mediaToolPreflight,
         LicensePaymentApiClient licensePaymentClient,
         bool vietsubEnabled,
+        bool tiktokEnabled,
         Action<string> postJson,
         Action closeApplication,
         bool speechSynchronizationEnabled = false,
         string? applicationDirectory = null,
-        Func<string?>? finalVideoExportSelector = null)
+        Func<string?>? finalVideoExportSelector = null,
+        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoice = null)
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -65,11 +68,13 @@ internal sealed class DashboardBridge : IDisposable
         _mediaToolPreflight = mediaToolPreflight;
         _licensePaymentClient = licensePaymentClient;
         _vietsubEnabled = vietsubEnabled;
+        _tiktokEnabled = tiktokEnabled;
         _speechSynchronizationEnabled = speechSynchronizationEnabled;
         _applicationDirectory = applicationDirectory ?? AppContext.BaseDirectory;
         _postJson = postJson;
         _closeApplication = closeApplication;
         _finalVideoExportSelector = finalVideoExportSelector;
+        _localVoice = localVoice;
     }
 
     public async Task HandleAsync(string json, CancellationToken cancellationToken = default)
@@ -113,6 +118,15 @@ internal sealed class DashboardBridge : IDisposable
 
         try
         {
+            if (request.Type.StartsWith("local-voice.", StringComparison.Ordinal))
+            {
+                await HandleLocalVoiceAsync(request, cancellationToken);
+                return;
+            }
+            if (request.Type is "project.select" or "organization.select" or "auth.logout")
+                if (_selectedProjectId is { } previousProject) _localVoice?.Cancel(previousProject);
+            if (_localVoice?.IsRunning == true && request.Type is "generation.video" or "generation.content" or "render.final" or "project.create" or "short-video.create")
+                throw new ArgumentException("Hãy chờ hoặc hủy tác vụ giọng local trước khi tạo hoặc dựng video.");
             switch (request.Type)
             {
                 case "app.ready":
@@ -149,7 +163,10 @@ internal sealed class DashboardBridge : IDisposable
                     await SelectOrganizationAsync(request, cancellationToken);
                     break;
                 case "project.create":
-                    await CreateProjectAsync(request, cancellationToken);
+                    await RunProjectCreationAsync(request, CreateProjectAsync, cancellationToken);
+                    break;
+                case "short-video.create":
+                    await RunProjectCreationAsync(request, CreateShortVideoProjectAsync, cancellationToken);
                     break;
                 case "short-video.generate":
                     await GenerateShortVideoAsync(request, cancellationToken);
@@ -447,6 +464,7 @@ internal sealed class DashboardBridge : IDisposable
     {
         var payload = request.Payload.Deserialize<CreateProjectWebRequest>(_jsonOptions)
             ?? throw new ArgumentException("Thông tin tạo dự án không hợp lệ.");
+        var organizationId = await RequireProjectCreationOrganizationAsync(payload.OrganizationId, cancellationToken);
         var topic = NormalizeTopic(payload.Topic);
         var aspectRatio = payload.AspectRatio is "16:9" or "9:16" or "1:1"
             ? payload.AspectRatio
@@ -497,8 +515,7 @@ internal sealed class DashboardBridge : IDisposable
                 75,
                 null,
                 languageCode,
-                _generationClient.SelectedOrganizationId
-                    ?? throw new ArgumentException("Hãy chọn tổ chức trước khi tạo dự án."),
+                organizationId,
                 voiceCode,
                 voiceSpeakingRate,
                 speechProductionPolicy),
@@ -510,7 +527,51 @@ internal sealed class DashboardBridge : IDisposable
             "operation.notice",
             request.RequestId,
             new { message = "Đã tạo dự án mới." }));
+    }
+
+    private async Task RunProjectCreationAsync(
+        WebMessageRequest request,
+        Func<WebMessageRequest, CancellationToken, Task> create,
+        CancellationToken cancellationToken)
+    {
+        if (!_generationLock.Wait(0)) throw new ArgumentException("Hãy chờ tác vụ hiện tại hoàn tất trước khi tạo dự án.");
+        try
+        {
+            _generationRunning = true;
+            await create(request, cancellationToken);
+        }
+        finally
+        {
+            _generationRunning = false;
+            _generationLock.Release();
+        }
         await RefreshAsync(request.RequestId, cancellationToken);
+    }
+
+    private async Task<Guid> RequireProjectCreationOrganizationAsync(Guid? expectedOrganizationId, CancellationToken token)
+    {
+        var selected = _generationClient.SelectedOrganizationId
+            ?? throw new ArgumentException("Hãy chọn tổ chức trước khi tạo dự án.");
+        if (expectedOrganizationId is { } expected && expected != selected)
+            throw new ArgumentException("Tổ chức đã thay đổi. Hãy mở lại cửa sổ tạo dự án.");
+        var organizations = await _generationClient.GetOrganizationsAsync(token);
+        if (organizations.All(organization => organization.OrganizationId != selected))
+            throw new ArgumentException("Bạn không còn quyền tạo dự án trong tổ chức đã chọn.");
+        return selected;
+    }
+
+    private async Task CreateShortVideoProjectAsync(WebMessageRequest request, CancellationToken cancellationToken)
+    {
+        var payload = request.Payload.Deserialize<CreateShortVideoWebRequest>(_jsonOptions)
+            ?? throw new ArgumentException("Thông tin tạo video ngắn không hợp lệ.");
+        var organizationId = await RequireProjectCreationOrganizationAsync(payload.OrganizationId, cancellationToken);
+        var current = _sessionManager.Current
+            ?? throw new InvalidOperationException("Phiên đăng nhập không còn hiệu lực.");
+        var result = await _projectService.CreateShortVideoAsync(
+            new CreateShortVideoCommand(payload.Content, payload.AspectRatio, payload.DurationSeconds, payload.AudioEnabled, organizationId),
+            current.User, current.DeviceId, cancellationToken);
+        _selectedProjectId = result.Project.ProjectId;
+        Post(new WebMessageResponse("operation.notice", request.RequestId, new { message = "Đã tạo dự án video ngắn." }));
     }
 
     private Task GenerateShortVideoAsync(WebMessageRequest request, CancellationToken cancellationToken)
@@ -541,20 +602,14 @@ internal sealed class DashboardBridge : IDisposable
 
                 await _mediaToolPreflight.RequireReadyAsync(token);
                 var providerStatus = await _generationService.GetProviderStatusAsync(token);
-                if (!providerStatus.VideoReady)
+                if (!providerStatus.KlingReady)
                 {
                     throw new AccountClientException(
-                        providerStatus.VideoUnavailableCode ?? "video_provider_not_ready",
-                        providerStatus.VideoUnavailableMessage ??
+                        providerStatus.KlingUnavailableCode ?? "video_provider_not_ready",
+                        providerStatus.KlingUnavailableMessage ??
                         "Kling chưa sẵn sàng cho tổ chức hiện tại. Hãy kiểm tra provider, model và rate Active.",
                         409);
                 }
-                if (!string.Equals(providerStatus.VideoProviderCode, "kling", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new ArgumentException(
-                        "Màn hình này chỉ tạo clip bằng Kling. Hãy chọn Kling làm video policy của tổ chức.");
-                }
-
                 var result = await _projectService.CreateShortVideoAsync(
                     new CreateShortVideoCommand(
                         content,
@@ -996,9 +1051,6 @@ internal sealed class DashboardBridge : IDisposable
                 scene.Preview is null &&
                 scene.SpeechStatus is "SpeechVerificationRequired" or "SpeechReviewRequired")
             : 0;
-        var waitingForLipSync = canonicalWorkflow
-            ? scenes.Count(scene => scene.SpeechStatus == "SpeechReadyForLipSync")
-            : 0;
         var waitingForVideoReview = scenes.Count(scene =>
             scene.Preview is not null &&
             scene.RequiresAudioReview &&
@@ -1012,11 +1064,6 @@ internal sealed class DashboardBridge : IDisposable
             return $"{completedPrefix}đã chuẩn bị WAV cho {waitingForCanonicalReview} cảnh. " +
                    "Video chưa được gửi tạo cho các cảnh này. Tiếp theo: phát WAV và duyệt. " +
                    "Sau khi duyệt, chọn lại cảnh và bấm “Tạo video nền”.";
-        }
-
-        if (waitingForLipSync > 0)
-        {
-            return $"Đã duyệt Canonical WAV cho {waitingForLipSync} cảnh. Các cảnh này đang chờ bước lip-sync; chưa có request tạo video ở giai đoạn hiện tại.";
         }
 
         if (waitingForVideoReview > 0)
@@ -1793,7 +1840,7 @@ internal sealed class DashboardBridge : IDisposable
                             DateTime.UtcNow),
                         _licenseManager.Current,
                         false,
-                        new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled),
+                        new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled),
                         [])));
                 return;
             }
@@ -1883,7 +1930,7 @@ internal sealed class DashboardBridge : IDisposable
                     mediaToolStatus,
                     _licenseManager.Current,
                     _generationRunning,
-                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled),
+                    new DashboardFeatureFlagsResponse(_vietsubEnabled, _speechSynchronizationEnabled, _tiktokEnabled),
                     sceneFirstFrames,
                     contentLanguageFailure)));
         }

@@ -17,14 +17,20 @@ using TOOL_LOCAL.Vietsub.Translation;
 using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.Payments;
 using TOOL_LOCAL.SystemSetup;
+using TOOL_LOCAL.TikTok;
 
 namespace TOOL_LOCAL;
 
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (TOOL_LOCAL.LocalVoice.LocalVoiceMaintenance.IsMaintenanceCommand(args))
+        {
+            Environment.ExitCode = TOOL_LOCAL.LocalVoice.LocalVoiceMaintenance.RunAsync(args[0]).GetAwaiter().GetResult();
+            return;
+        }
         ApplicationConfiguration.Initialize();
 
         try
@@ -46,6 +52,24 @@ internal static class Program
             using var generationHttpClient = new HttpClient
             {
                 BaseAddress = new Uri(options.Server.BaseUrl),
+                Timeout = TimeSpan.FromMinutes(30)
+            };
+            using var tiktokGatewayHttpClient = new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false
+            })
+            {
+                BaseAddress = new Uri(options.Server.BaseUrl),
+                Timeout = TimeSpan.FromSeconds(30)
+            };
+            using var tiktokUploadHttpClient = new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                UseProxy = false
+            })
+            {
                 Timeout = TimeSpan.FromMinutes(30)
             };
             using var sessionManager = new AccountSessionManager(
@@ -134,6 +158,14 @@ internal static class Program
                 var finalOutputInspector = new FinalOutputInspector(
                     mediaProbe,
                     audioQualityValidator);
+                var generationClient = new ServerGenerationClient(
+                    generationHttpClient, sessionManager, licenseManager);
+                using var localVoiceService = new TOOL_LOCAL.LocalVoice.LocalVoiceService(
+                    dbContextFactory, new TOOL_LOCAL.LocalVoice.LocalVoiceStore(workspaceService),
+                    new TOOL_LOCAL.LocalVoice.LocalVoiceRuntime(workspaceService.WorkspaceRoot, options.Features.VeoLocalVoiceConsistencyEnabled,
+                        componentRootOverride: options.LocalVoice.ComponentRoot, temporaryRootOverride: options.LocalVoice.TemporaryRoot),
+                    new TOOL_LOCAL.LocalVoice.LocalVoiceMedia(mediaToolPaths.FfmpegPath, mediaProcessRunner, mediaProbe, audioQualityValidator),
+                    generationClient);
                 var projectRenderService = new ProjectRenderService(
                     dbContextFactory,
                     workspaceService,
@@ -141,11 +173,8 @@ internal static class Program
                     finalMediaRenderer,
                     finalOutputInspector,
                     options.Features.SpeechSynchronizationEnabled,
-                    options.SpeechSynchronization.TargetLoudnessLufs);
-                var generationClient = new ServerGenerationClient(
-                    generationHttpClient,
-                    sessionManager,
-                    licenseManager);
+                    options.SpeechSynchronization.TargetLoudnessLufs,
+                    localVoiceService);
                 var generationService = new ProjectGenerationService(
                     dbContextFactory,
                     workspaceService,
@@ -156,6 +185,14 @@ internal static class Program
                     sceneAudioMixer,
                     sceneVideoTrimmer,
                     speechAudioExtractor);
+                var tiktokGatewayClient = new TikTokGatewayClient(
+                    tiktokGatewayHttpClient,
+                    sessionManager,
+                    licenseManager);
+                var tiktokOAuthCoordinator = new TikTokOAuthCoordinator(tiktokGatewayClient);
+                var tiktokMediaService = new TikTokMediaService(mediaProbe, mediaToolPreflight);
+                var tiktokPreviewService = new TikTokMediaPreviewService(tiktokMediaService);
+                var tiktokUploadService = new TikTokUploadService(tiktokUploadHttpClient);
                 var updateApiClient = new DesktopUpdateApiClient(updateHttpClient, sessionManager, options.Update);
                 var packageUpdateService = new DesktopPackageUpdateService(updateHttpClient);
                 VietsubProjectStore? vietsubProjectStore = null;
@@ -355,10 +392,16 @@ internal static class Program
                         vietsubTranslationService,
                         vietsubVoiceService,
                         vietsubVideoExportService,
+                        tiktokGatewayClient,
+                        tiktokOAuthCoordinator,
+                        tiktokMediaService,
+                        tiktokPreviewService,
+                        tiktokUploadService,
                         licensePaymentClient,
                         vietsubCloudTranslationService,
                         setupCoordinator: setupCoordinator,
-                        startupSystemSetupRequired: startupSystemSetupRequired);
+                        startupSystemSetupRequired: startupSystemSetupRequired,
+                        localVoiceService: localVoiceService);
                     Application.Run(mainForm);
                     returnToLogin = mainForm.ReturnToLoginRequested;
                 }

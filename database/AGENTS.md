@@ -14,10 +14,12 @@
 ## Migration
 
 - `VideoFactory.Initial.sql` khởi tạo database.
-- Migration versioned từ `4.0.0` đến `4.1.6` chạy theo thứ tự số trong runbook.
+- Migration versioned từ `4.0.0` đến `4.1.8` chạy theo thứ tự số trong runbook.
 - `4.1.6` thêm job Cloud và FK `VietsubProjectId` cho budget/ledger; giữ FK video và CHECK đúng một loại project. Không rollback binary server cũ khi đã có reservation Vietsub.
 - `4.1.0` tạo Vietsub registry; `4.1.1` tạo Scene First Frame; `4.1.2` lưu failure details; `4.1.3` thêm speech synchronization; `4.1.4` thêm bằng chứng duyệt voice profile; `4.1.5` thêm audited speech verification review.
+- `4.1.6.TikTokPublishing` và `4.1.7.TikTokAdminCredentials` thêm publishing, credential và rollout TikTok. `4.1.8.LocalVoiceConsistency` thêm policy và trạng thái đồng nhất giọng Veo local. Các migration cùng tiền tố số thuộc module khác nhau có mã SchemaVersions riêng; không đổi tên hay ghi đè migration lịch sử.
 - `Verify.VideoFactory.4.0.11.OrganizationSeatProvisioning.sql` là script kiểm tra, không phải migration version mới.
+- `4.1.8` thêm nhiều tài khoản TikTok, account-bound OAuth, durable publish attempts và history snapshot; không đổi ConnectionId/token/job cũ. Không hạ về server một tài khoản sau khi phát sinh nhiều connection.
 - `VideoFactory.DesktopLeastPrivilege.sql` chạy sau cùng để áp quyền desktop.
 - Không sửa migration đã có khả năng được triển khai; tạo file version mới và ghi version idempotent.
 

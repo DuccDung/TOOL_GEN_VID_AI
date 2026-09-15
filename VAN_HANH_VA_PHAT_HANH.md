@@ -1,5 +1,13 @@
 # Vận hành và phát hành VideoMaker
 
+### Veo local voice — bổ sung 2026-09-09
+
+Rehearsal trên database clone được phê duyệt trước: áp dụng migration VideoFactory.4.1.8.LocalVoiceConsistency.sql idempotently sau baseline hiện hành, rồi triển khai server/desktop cùng contract. Mapping mới cần cột LocalVoicePolicyVersion kể cả khi feature tắt; không chạy binary mới lên schema cũ. Migration không phụ thuộc cloud LipSync thử nghiệm 4.1.6/4.1.7. Không xóa cột/policy/lineage khi rollback; desktop cũ không có render guard không được dùng để render project đã bật local policy.
+
+Chỉ bật Features.VeoLocalVoiceConsistencyEnabled ở desktop nghiệm thu, khởi động lại, bật rõ trong project rồi cài runtime từ UI. Installer tải dependency có lock/hash và model ghim; cần mạng/dung lượng trống khi cài, không upload media. Inference chạy CPU và vẫn cần server authorization cho thao tác. Không phát hành profile GPU hoặc chứng nhận model chỉ dựa vào probe. Lưu license/provenance component, nghe thử tiếng Việt/âm nền/khẩu hình và rà soát quyền phân phối trước rollout; xem nhật ký triển khai.
+
+Bổ sung 2026-09-10: cấu hình desktop trong repository đã bật flag theo yêu cầu triển khai. Máy này đặt `LocalVoice:ComponentRoot=D:\VideoMakerLocalVoice\v1`, `LocalVoice:TemporaryRoot=D:\VideoMakerLocalVoice\tmp` trong `appsettings.user.json` được Git bỏ qua; không đưa đường dẫn máy vào cấu hình phát hành. Có thể chuẩn bị component trước đăng nhập bằng `powershell -NoProfile -File scripts/Prepare-VeoLocalVoice.ps1 -Mode Prepare`; `-Mode Verify` kiểm byte và nạp lại model, `-Mode Status` chỉ đọc trạng thái. Ba lệnh đều chạy binary đã build và đọc cấu hình bên cạnh binary. Không ghi tay READY. Hướng dẫn máy đích và phần nghiệm thu còn lại: [HUONG_DAN_CHAY_DONG_NHAT_GIONG_VEO_LOCAL.md](HUONG_DAN_CHAY_DONG_NHAT_GIONG_VEO_LOCAL.md).
+
 > Runbook chuẩn cho database, secret, provider, speech, SePay, desktop bundle và rollback. Rà soát ngày 2026-09-07.
 
 Không chạy nội dung tài liệu này trên production nếu chưa xác định rõ instance/database, người phê duyệt, backup đã kiểm tra và phương án restore. Các giá trị trong dấu `<...>` là placeholder, không được commit secret thật.
@@ -42,6 +50,10 @@ database/VideoFactory.4.1.3.SpeechSynchronization.sql
 database/VideoFactory.4.1.4.VoiceProfileApproval.sql
 database/VideoFactory.4.1.5.SpeechVerificationReview.sql
 database/VideoFactory.4.1.6.VietsubCloudTranslation.sql
+database/VideoFactory.4.1.6.TikTokPublishing.sql
+database/VideoFactory.4.1.7.TikTokAdminCredentials.sql
+database/VideoFactory.4.1.8.TikTokMultiAccount.sql
+database/VideoFactory.4.1.8.LocalVoiceConsistency.sql
 ```
 
 Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
@@ -81,6 +93,8 @@ dotnet user-secrets set --project TOOL-SERVER "Jwt:SigningKey" "<random-secret-a
 ```
 
 SMTP password/App Password, admin bootstrap identity, SePay secret, signing key, production connection string và provider credential không được commit. Production dùng secret manager của môi trường và HTTPS certificate hợp lệ.
+
+TikTok Client Key/Client Secret mới được nhập qua mục **Tích hợp TikTok** bởi Global Admin sau migration 4.1.7. Cấu hình `TikTok:ClientKey`/`TikTok:ClientSecret` chỉ còn là fallback legacy và không dùng cho rollout mới.
 
 Data Protection key ring nằm trong database. Backup/restore phải giữ được key ring cùng encrypted credential; thử giải mã credential bằng health/admin flow sau restore mà không in secret.
 
@@ -132,6 +146,8 @@ Mỗi provider có rollback flag/policy riêng. Tắt provider chặn request m�
 
 ## 7. Rollout Canonical Voice và speech verification
 
+Từ thay đổi loại bỏ lip-sync Cloud ngày 2026-09-10, triển khai server và desktop cùng phiên bản: server cũ vẫn chặn Canonical thoại nhân vật. Không cần migration dữ liệu để tiếp tục project chờ cũ; dashboard đối chiếu WAV/voice version hiện hành, sau đó thao tác tạo/duyệt ghi trạng thái theo workflow thông thường. Giữ nguyên migration 4.1.6/4.1.7 lip-sync và dữ liệu lịch sử; chúng không còn là bước cài bắt buộc của hai luồng hiện hành. Không DROP bảng hoặc xóa ledger/request cũ. Bản server/desktop đang chạy không tự được thay bằng kết quả build kiểm thử.
+
 Điều kiện Canonical Voice:
 
 - Migration 4.1.3–4.1.4 đã chạy lặp trên clone và áp đúng môi trường.
@@ -147,10 +163,26 @@ Smoke bắt buộc:
 3. Quote/xác nhận xảy ra trước TTS outbound; phát lại WAV đã tải không tạo request mới.
 4. Content plan đạt mục tiêu nhịp 85–95%; output ngoài biên 80–105% chỉ mở repair có quote, không tự gọi lần hai.
 5. WAV qua MIME/SHA-256/sample rate/duration/audibility và đúng speech/voice snapshot.
-6. `NativeVoiceOver` ghép toàn bộ WAV vào video nền; `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`.
+6. `NativeVoiceOver` và `OnCameraDialogue` ghép toàn bộ WAV vào video nền; thoại nhân vật cần duyệt WAV trước. Nghe/duyệt clip đã ghép trước render. Không có module lip-sync Cloud.
 7. Video dài `ProviderNativeVerified` không hiển thị/quote/gọi ASR và duyệt bằng audio hợp lệ cùng checklist nghe.
 
 Speech verification là rollout độc lập cho workflow không phải `OpenAiStructuredPlan`: cần migration 4.1.5, transcription credential/model/rate và `SpeechVerificationEnabled`. `NeedsReview` phải có lý do/reviewer/timestamp; stale row version và `Failed` bị chặn.
+
+## 7A. Rollout TikTok Direct Post
+
+Với nhiều tài khoản, thực hiện [quy trình migration, bật cờ và rollback](TRIEN_KHAI_TIKTOK_NHIEU_TAI_KHOAN.md). Cấu hình workspace đã bật `TikTok:MultiAccountEnabled=true` theo yêu cầu người dùng sau khi áp migration vào `DUNGDEV / VideoFactory`. Khi triển khai sang môi trường khác, giữ cờ tắt cho đến khi migration, server và desktop cùng tương thích. Migration 4.1.8 vẫn bắt buộc cho server mới khi cờ tắt. Không hạ về server một tài khoản sau khi có nhiều connection. Tắt cờ chỉ ngăn mở rộng tài khoản, giữ vận hành các kết nối hiện có.
+
+Item TikTok mặc định hiển thị trên desktop nhưng thao tác phía server vẫn tắt. Trước khi bật integration:
+
+- apply/rehearsal tuần tự migration TikTok 4.1.6, 4.1.7 rồi 4.1.8, kiểm tra Data Protection key ring nằm trong backup/restore plan;
+- đăng ký đúng loopback redirect URI cho Login Kit Desktop, có scope `video.publish`, hoàn tất app review/audit theo yêu cầu TikTok;
+- Global Admin mở **Tích hợp TikTok**, nhập credential đã regenerate, bấm yêu cầu xác minh, rồi trong 15 phút đăng nhập đúng tài khoản Admin đó trên Desktop và hoàn tất **Kết nối TikTok**;
+- dùng tài khoản test để smoke connect/reconnect/disconnect, creator-info, privacy/interaction/disclosure, chunk upload, retry, restart desktop và terminal status;
+- xác nhận log/API/React không lộ token, app secret, signed upload URL hoặc absolute local path;
+- sau OAuth thành công, credential chuyển `Pending -> Active` và integration được bật nhưng public posting vẫn ở `SELF_ONLY`;
+- chỉ bật xác nhận public posting trong Admin sau khi có bằng chứng TikTok audit còn hiệu lực; dùng `TikTok:EmergencyDisabled=true` nếu cần dừng khẩn cấp.
+
+Không chạy smoke đăng bài vào tài khoản thật hoặc bật public posting nếu chưa có phê duyệt môi trường và TikTok audit tương ứng.
 
 ## 8. Rollout SePay
 
@@ -217,6 +249,7 @@ Nếu dùng appsettings đóng gói riêng, truyền `-AppSettingsPath` đến f
 - Poll khi desktop reconnect, proxy download, MIME/size/hash và approve/render.
 - Admin credential hint/rotation không lộ secret.
 - SePay chỉ nếu nằm trong scope rollout.
+- TikTok chỉ nếu nằm trong scope rollout: OAuth, local direct upload, reconnect/poll và không lộ token/path/signed URL.
 - Vietsub create/open/sync registry, OCR và translation chỉ nếu runtime đã được phê duyệt.
 - Updater install/update/rollback trên máy sạch hoặc VM.
 - Health/log/metrics không chứa token, prompt nhạy cảm hoặc signed URL.

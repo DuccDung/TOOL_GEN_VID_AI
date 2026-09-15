@@ -21,6 +21,7 @@ using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.Vietsub.Translation;
 using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.Payments;
+using TOOL_LOCAL.TikTok;
 using System.Runtime.InteropServices;
 using TOOL_LOCAL.SystemSetup;
 
@@ -34,6 +35,7 @@ public partial class Form1 : Form
     private readonly LicenseSessionManager? _licenseManager;
     private readonly IProjectService? _projectService;
     private readonly IProjectRenderService? _projectRenderService;
+    private readonly TOOL_LOCAL.LocalVoice.LocalVoiceService? _localVoiceService;
     private readonly IProjectGenerationService? _generationService;
     private readonly IGenerationClient? _generationClient;
     private readonly ProjectWorkspaceService? _workspaceService;
@@ -59,6 +61,11 @@ public partial class Form1 : Form
     private readonly VietsubVoiceService? _vietsubVoiceService;
     private readonly VietsubVideoExportService? _vietsubVideoExportService;
     private readonly LicensePaymentApiClient? _licensePaymentClient;
+    private readonly ITikTokGatewayClient? _tiktokGatewayClient;
+    private readonly TikTokOAuthCoordinator? _tiktokOAuthCoordinator;
+    private readonly TikTokMediaService? _tiktokMediaService;
+    private readonly TikTokMediaPreviewService? _tiktokPreviewService;
+    private readonly TikTokUploadService? _tiktokUploadService;
     private readonly VietsubMediaRuntimeLog _vietsubMediaLog = VietsubMediaRuntimeLog.CreateDefault();
     private WebView2? _webView;
     private Panel? _loadingPanel;
@@ -68,6 +75,7 @@ public partial class Form1 : Form
     private SystemSetupBridge? _setupBridge;
     private readonly SystemSetupCoordinator? _setupCoordinator;
     private readonly StartupSystemSetupGate? _startupSystemSetupGate;
+    private TikTokWebBridge? _tiktokBridge;
     private bool _refreshing;
     private bool _closing;
     private bool _checkingUpdate;
@@ -108,15 +116,22 @@ public partial class Form1 : Form
         VietsubTranslationService? vietsubTranslationService,
         VietsubVoiceService? vietsubVoiceService,
         VietsubVideoExportService? vietsubVideoExportService,
+        ITikTokGatewayClient tiktokGatewayClient,
+        TikTokOAuthCoordinator tiktokOAuthCoordinator,
+        TikTokMediaService tiktokMediaService,
+        TikTokMediaPreviewService tiktokPreviewService,
+        TikTokUploadService tiktokUploadService,
         LicensePaymentApiClient licensePaymentClient,
         VietsubCloudTranslationService? vietsubCloudTranslationService = null,
         SystemSetupCoordinator? setupCoordinator = null,
-        bool startupSystemSetupRequired = false) : this()
+        bool startupSystemSetupRequired = false,
+        TOOL_LOCAL.LocalVoice.LocalVoiceService? localVoiceService = null) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
         _projectService = projectService;
         _projectRenderService = projectRenderService;
+        _localVoiceService = localVoiceService;
         _generationService = generationService;
         _generationClient = generationClient;
         _workspaceService = workspaceService;
@@ -147,6 +162,11 @@ public partial class Form1 : Form
         _vietsubCloudTranslationService = vietsubCloudTranslationService;
         _vietsubVoiceService = vietsubVoiceService;
         _vietsubVideoExportService = vietsubVideoExportService;
+        _tiktokGatewayClient = tiktokGatewayClient;
+        _tiktokOAuthCoordinator = tiktokOAuthCoordinator;
+        _tiktokMediaService = tiktokMediaService;
+        _tiktokPreviewService = tiktokPreviewService;
+        _tiktokUploadService = tiktokUploadService;
         _licensePaymentClient = licensePaymentClient;
         _updateTimer.Interval = Math.Max(30, updateOptions.CheckIntervalSeconds) * 1000;
         ConfigureWindow();
@@ -231,10 +251,12 @@ public partial class Form1 : Form
                 _mediaToolPreflight,
                 _licensePaymentClient,
                 _featureOptions.VietsubEnabled,
+                _featureOptions.TikTokEnabled,
                 PostJsonToWebView,
                 CloseAfterLogout,
                 _featureOptions.SpeechSynchronizationEnabled,
-                finalVideoExportSelector: SelectFinalVideoDestination);
+                finalVideoExportSelector: SelectFinalVideoDestination,
+                localVoice: _localVoiceService);
             _vietsubBridge = new VietsubWebBridge(
                 _featureOptions.VietsubEnabled,
                 PostJsonToWebView,
@@ -269,6 +291,21 @@ public partial class Form1 : Form
                 SelectVietsubVideoDestination,
                 _vietsubVideoExportService,
                 _vietsubCloudTranslationService);
+            if (_tiktokGatewayClient is not null &&
+                _tiktokOAuthCoordinator is not null &&
+                _tiktokMediaService is not null &&
+                _tiktokUploadService is not null)
+            {
+                _tiktokBridge = new TikTokWebBridge(
+                    _featureOptions.TikTokEnabled,
+                    _licenseManager,
+                    _tiktokGatewayClient,
+                    _tiktokOAuthCoordinator,
+                    _tiktokMediaService,
+                    _tiktokUploadService,
+                    SelectTikTokVideoFile,
+                    PostJsonToWebView);
+            }
 
             _webView.CoreWebView2.WebMessageReceived += WebViewOnWebMessageReceived;
             _webView.CoreWebView2.NavigationCompleted += WebViewOnNavigationCompleted;
@@ -299,7 +336,12 @@ public partial class Form1 : Form
             $"https://{VietsubMediaPlaybackService.HostName}/*",
             CoreWebView2WebResourceContext.All,
             CoreWebView2WebResourceRequestSourceKinds.All);
+        coreWebView.AddWebResourceRequestedFilter(
+            $"https://{TikTokMediaPreviewService.HostName}/*",
+            CoreWebView2WebResourceContext.All,
+            CoreWebView2WebResourceRequestSourceKinds.All);
         coreWebView.WebResourceRequested += WebViewOnVietsubMediaRequested;
+        coreWebView.WebResourceRequested += WebViewOnTikTokMediaRequested;
         coreWebView.WebResourceResponseReceived += WebViewOnVietsubMediaResponseReceived;
 
         var settings = coreWebView.Settings;
@@ -370,6 +412,12 @@ public partial class Form1 : Form
             return;
         }
 
+        if (_tiktokBridge is not null &&
+            await _tiktokBridge.TryHandleAsync(message, _shutdown.Token))
+        {
+            return;
+        }
+
         await _bridge.HandleAsync(message, _shutdown.Token);
     }
 
@@ -389,6 +437,62 @@ public partial class Form1 : Form
         catch (JsonException)
         {
             return false;
+        }
+    }
+
+    private void WebViewOnTikTokMediaRequested(
+        object? sender,
+        CoreWebView2WebResourceRequestedEventArgs eventArgs)
+    {
+        if (_webView?.CoreWebView2 is not { } coreWebView ||
+            _tiktokPreviewService is null ||
+            !Uri.TryCreate(eventArgs.Request.Uri, UriKind.Absolute, out var requestUri) ||
+            !requestUri.Host.Equals(TikTokMediaPreviewService.HostName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string? rangeHeader = null;
+        try
+        {
+            if (eventArgs.Request.Headers.Contains("Range"))
+            {
+                rangeHeader = eventArgs.Request.Headers.GetHeader("Range");
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException or COMException)
+        {
+        }
+
+        var response = _tiktokPreviewService.Open(requestUri, eventArgs.Request.Method, rangeHeader);
+        try
+        {
+            var webResponse = coreWebView.Environment.CreateWebResourceResponse(
+                response.Content,
+                response.StatusCode,
+                response.ReasonPhrase,
+                string.Empty);
+            foreach (var header in response.Headers.Split(
+                ["\r\n", "\n"],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var separator = header.IndexOf(':');
+                if (separator <= 0 || separator == header.Length - 1)
+                {
+                    throw new InvalidDataException("Header preview TikTok không hợp lệ.");
+                }
+                webResponse.Headers.AppendHeader(header[..separator].Trim(), header[(separator + 1)..].Trim());
+            }
+            eventArgs.Response = webResponse;
+        }
+        catch
+        {
+            response.Content.Dispose();
+            eventArgs.Response = coreWebView.Environment.CreateWebResourceResponse(
+                Stream.Null,
+                500,
+                "Internal Server Error",
+                "Content-Length: 0\r\nCache-Control: no-store\r\nX-TikTok-Error-Code: tiktok_preview_response_failed\r\n");
         }
     }
 
@@ -945,6 +1049,22 @@ public partial class Form1 : Form
             : null;
     }
 
+    private string? SelectTikTokVideoFile()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Chọn video đăng lên TikTok",
+            Filter = "Video TikTok|*.mp4;*.mov;*.webm|Tất cả tệp|*.*",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            Multiselect = false,
+            RestoreDirectory = true
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? dialog.FileName
+            : null;
+    }
+
     private string? SelectVietsubSrtFile()
     {
         using var dialog = new OpenFileDialog
@@ -1115,6 +1235,7 @@ public partial class Form1 : Form
         _shutdown.Cancel();
         _bridge?.Dispose();
         _vietsubBridge?.Dispose();
+        _tiktokBridge?.Dispose();
         if (_licenseManager is not null)
         {
             _licenseManager.LicenseInvalidated -= LicenseManagerOnInvalidated;

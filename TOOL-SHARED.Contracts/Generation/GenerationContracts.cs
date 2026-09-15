@@ -34,7 +34,9 @@ public static class SceneSpeechStatuses
     public const string SpeechVerificationRequired = "SpeechVerificationRequired";
     public const string SpeechReviewRequired = "SpeechReviewRequired";
     public const string SpeechApproved = "SpeechApproved";
-    public const string SpeechReadyForLipSync = "SpeechReadyForLipSync";
+    // Read-only compatibility with projects saved before cloud lip-sync was removed.
+    // Approval is always revalidated from the current VoiceGeneration, never from this status.
+    public const string LegacySpeechReadyForLipSync = "SpeechReadyForLipSync";
     public const string SpeechInvalid = "SpeechInvalid";
 }
 
@@ -72,7 +74,6 @@ public static class SpeechSynchronizationErrorCodes
     public const string SpeechVerificationReviewRequired = "speech_verification_review_required";
     public const string SpeechVerificationReviewInvalid = "speech_verification_review_invalid";
     public const string SpeechAudioInvalid = "speech_audio_invalid";
-    public const string SpeechReadyForLipSync = "speech_ready_for_lipsync";
     public const string PricingNotConfigured = "pricing_not_configured";
 }
 

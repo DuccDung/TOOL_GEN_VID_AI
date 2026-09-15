@@ -21,6 +21,7 @@ const pageMeta = {
   overview: ['LICENSE CONTROL', 'Tổng quan hệ thống', 'Theo dõi tài khoản, license và phiên sử dụng từ dữ liệu hiện tại trên server.'],
   users: ['ACCOUNTS & ACCESS', 'Người dùng', 'Cấp, gia hạn hoặc thu hồi quyền sử dụng theo từng tài khoản.'],
   organizations: ['ORGANIZATION & AI', 'Tổ chức & AI', 'Quản lý thành viên, ngân sách, credential, usage và bảng giá AI.'],
+  tiktok: ['SYSTEM INTEGRATION', 'Tích hợp TikTok', 'Quản lý TikTok Developer App, kiểm tra OAuth và giới hạn đăng công khai.'],
   plans: ['LICENSE POLICY', 'Gói sử dụng', 'Thiết lập thời hạn, số thiết bị và số phiên chạy đồng thời.'],
   releases: ['DESKTOP DISTRIBUTION', 'Desktop Releases', 'Quản lý package, bộ cài và chính sách cập nhật VideoMaker.']
 };
@@ -220,6 +221,7 @@ function paginationMarkup(pagination, key, label) {
 }
 
 function showLogin(message = '') {
+  window.videoMakerTikTokAdmin?.reset();
   clearSession();
   setTopbarVisible(true);
   loginScreen.classList.remove('hidden');
@@ -419,6 +421,7 @@ function setOrganizationMenuExpanded(expanded) {
 
 function navigate(view, options = {}) {
   if (!pageMeta[view]) return;
+  if (state.currentView === 'tiktok' && view !== 'tiktok') window.videoMakerTikTokAdmin?.deactivate();
   state.currentView = view;
   setTopbarVisible(true);
   if (!options.keepSetupReturn) setSetupReturn(false);
@@ -431,6 +434,7 @@ function navigate(view, options = {}) {
     window.videoMakerOrganizationAdmin?.activate(options.organizationScope);
   } else {
     setOrganizationMenuExpanded(false);
+    if (view === 'tiktok') window.videoMakerTikTokAdmin?.activate();
   }
 }
 
@@ -570,9 +574,11 @@ document.querySelectorAll('.nav-item').forEach(button => button.addEventListener
 }));
 document.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => navigate(button.dataset.go)));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
-document.getElementById('refreshButton').addEventListener('click', () => state.currentView === 'organizations'
-  ? window.videoMakerOrganizationAdmin?.refresh()
-  : loadAll());
+document.getElementById('refreshButton').addEventListener('click', () => {
+  if (state.currentView === 'organizations') return window.videoMakerOrganizationAdmin?.refresh();
+  if (state.currentView === 'tiktok') return window.videoMakerTikTokAdmin?.refresh();
+  return loadAll();
+});
 document.getElementById('addPlanButton').addEventListener('click', () => openPlanDialog());
 document.getElementById('addReleaseButton').addEventListener('click', () => openReleaseDialog());
 document.getElementById('grantPlan').addEventListener('change', syncGrantDuration);

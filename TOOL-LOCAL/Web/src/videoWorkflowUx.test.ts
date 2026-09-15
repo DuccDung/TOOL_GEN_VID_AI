@@ -33,6 +33,27 @@ function scene(overrides: Partial<SceneSummary> = {}): SceneSummary {
 }
 
 describe('Canonical Voice workflow UX', () => {
+  it('continues approved character WAV to background video and mix', () => {
+    const input = scene({ speechMode: 'OnCameraDialogue', speechStatus: 'SpeechApproved',
+      canonicalVoicePreview: { url: 'https://media.app.local/voice.wav', durationMs: 6100 } });
+    expect(needsCanonicalVoicePreparation(input, 'CanonicalVoice')).toBe(false);
+    expect(getStoryboardActionSummary([input], 'CanonicalVoice').videoCount).toBe(1);
+    const journey = getCanonicalVoiceJourney(input, false);
+    expect(journey.steps.find(step => step.id === 'video')).toMatchObject({ state: 'current', label: 'Tạo video nền và ghép WAV' });
+    expect(journey.nextAction).toContain('không gọi TTS mới');
+  });
+
+  it('does not treat a legacy waiting label or a missing WAV as approval', () => {
+    for (const input of [
+      scene({ speechMode: 'OnCameraDialogue', speechStatus: 'SpeechReadyForLipSync',
+        canonicalVoicePreview: { url: 'https://media.app.local/voice.wav', durationMs: 6100 } }),
+      scene({ speechMode: 'OnCameraDialogue', speechStatus: 'SpeechApproved' })
+    ]) {
+      expect(needsCanonicalVoicePreparation(input, 'CanonicalVoice')).toBe(true);
+      expect(getCanonicalVoiceJourney(input, false).steps.find(step => step.id === 'video')?.state).toBe('pending');
+    }
+  });
+
   it('labels the first operation as WAV preparation instead of video generation', () => {
     const input = scene();
 

@@ -1,5 +1,8 @@
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { LocalVoicePanel } from './features/localVoice/LocalVoicePanel';
+import { NewProjectDialog } from './features/projects/NewProjectDialog';
+import { createdProjectPage, shortVideoProviderStatus, type PendingProjectCreation } from './features/projects/projectCreation';
 import {
   ArrowLeft,
   ArrowRight,
@@ -80,6 +83,8 @@ import { useSystemSetup, type SystemSetupController } from './features/systemSet
 import { SystemSetupPanel } from './features/systemSetup/SystemSetupPanel';
 import { StartupSystemSetupModal } from './features/systemSetup/StartupSystemSetupModal';
 import { isSystemSetupReady } from './features/systemSetup/types';
+import { TikTokPage } from './features/tiktok/TikTokPage';
+import { useTikTokModule } from './features/tiktok/useTikTokModule';
 import { getSceneFirstFrameAssetBlocker } from './sceneAssetValidation';
 import { buildSpeechTranscriptDiff, type SpeechDiffSegment } from './speechTranscriptDiff';
 import { assessSpeechPacing } from './speechPacing';
@@ -133,7 +138,7 @@ import type {
   UpdateProjectAssetPayload,
 } from './types';
 
-type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'apiKeys' | 'settings';
+type Page = 'create' | 'longVideo' | 'shortVideo' | 'projects' | 'vietsub' | 'tiktok' | 'apiKeys' | 'settings';
 type LongVideoStepId = 'setup' | 'content' | 'assets' | 'storyboard' | 'export';
 type LongVideoStep = {
   id: LongVideoStepId;
@@ -211,6 +216,10 @@ const pageHeaders: Record<Page, { title: string; subtitle: string }> = {
     title: 'Dịch phụ đề',
     subtitle: 'Tạo phụ đề tiếng Việt, giọng đọc và video hoàn chỉnh trong một workspace riêng.'
   },
+  tiktok: {
+    title: 'Đăng TikTok',
+    subtitle: 'Chọn video trên máy và tải trực tiếp lên tài khoản TikTok của bạn.'
+  },
   apiKeys: {
     title: 'API AI tổ chức',
     subtitle: 'Trạng thái OpenAI, provider video và ngân sách do tổ chức quản lý tập trung.'
@@ -255,7 +264,8 @@ const emptyState: DashboardState = {
   generationRunning: false,
   features: {
     vietsubEnabled: false,
-    speechSynchronizationEnabled: false
+    speechSynchronizationEnabled: false,
+    tikTokEnabled: false
   },
   sceneFirstFrames: [],
   contentLanguageFailure: null
@@ -283,6 +293,7 @@ const primaryMenu: Array<{
   { label: 'Tạo Video Dài', icon: Film, page: 'longVideo' },
   { label: 'Tạo Video Ngắn', icon: Play, page: 'shortVideo' },
   { label: 'Dịch phụ đề', icon: Languages, page: 'vietsub', feature: 'vietsubEnabled' },
+  { label: 'Đăng TikTok', icon: Upload, page: 'tiktok', feature: 'tikTokEnabled' },
   { label: 'Nhân vật AI', icon: Users },
   { label: 'Thư viện video', icon: Library },
   { label: 'Lịch sử render', icon: Clock3 },
@@ -378,6 +389,10 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
   const latestDashboardRef = useRef(dashboard);
   const [page, setPage] = useState<Page>('create');
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [projectCreationBusy, setProjectCreationBusy] = useState(false);
+  const [projectCreationError, setProjectCreationError] = useState<string | null>(null);
+  const pendingProjectCreationRef = useRef<PendingProjectCreation | null>(null);
   const [busy, setBusy] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -435,6 +450,7 @@ function App() {
     dashboard.features.vietsubEnabled && vietsubStartupReady,
     dashboard.selectedOrganizationId
   );
+  const tiktok = useTikTokModule(dashboard.features.tikTokEnabled);
   const selectedProjectRequestRef = useRef<string | null>(null);
   const licenseRequestsRef = useRef(new Map<string, LicenseRequestKind>());
   const licenseBootstrapRequestedRef = useRef(false);
@@ -491,10 +507,12 @@ function App() {
         setDashboard((current) => isLicenseLocked(nextDashboard.license) ? {
           ...current,
           profile: nextDashboard.profile,
+          // Admin credential verification remains available without discarding the current project.
+          features: { ...current.features, tikTokEnabled: nextDashboard.features?.tikTokEnabled ?? false },
           license: nextDashboard.license
         } : {
           ...nextDashboard,
-          features: nextDashboard.features ?? { vietsubEnabled: false, speechSynchronizationEnabled: false },
+          features: nextDashboard.features ?? { vietsubEnabled: false, speechSynchronizationEnabled: false, tikTokEnabled: false },
           sceneFirstFrames: nextDashboard.sceneFirstFrames ?? [],
           contentLanguageFailure: nextDashboard.contentLanguageFailure ?? null
         });
@@ -508,6 +526,14 @@ function App() {
         if (!nextDashboard.generationRunning) setCharacterImageBusyId(null);
         setAssetConfirmBusyId(null);
         setBusy(false);
+        const creationPage = createdProjectPage(pendingProjectCreationRef.current, message.requestId, nextDashboard);
+        if (creationPage) {
+          pendingProjectCreationRef.current = null;
+          setProjectCreationBusy(false);
+          setNewProjectOpen(false);
+          setProjectCreationError(null);
+          setPage(creationPage);
+        }
         if (isSelectedProjectResponse(selectedProjectRequestRef.current, message.requestId)) {
           selectedProjectRequestRef.current = null;
           setPage(resolveSelectedProjectPage(nextDashboard.selectedProject?.workflowStructureType));
@@ -741,6 +767,11 @@ function App() {
           return;
         }
         const operationErrorMessage = formatContentLanguageError(message.error);
+        if (pendingProjectCreationRef.current?.requestId === message.requestId) {
+          pendingProjectCreationRef.current = null;
+          setProjectCreationBusy(false);
+          setProjectCreationError(operationErrorMessage);
+        }
         const recoverableContentFailure = parseContentLanguageFailure(message.error);
         if (recoverableContentFailure) {
           setContentGenerationError(operationErrorMessage);
@@ -944,7 +975,10 @@ function App() {
     if (page === 'vietsub' && !dashboard.features.vietsubEnabled) {
       setPage('create');
     }
-  }, [dashboard.features.vietsubEnabled, page]);
+    if (page === 'tiktok' && !dashboard.features.tikTokEnabled) {
+      setPage('create');
+    }
+  }, [dashboard.features.vietsubEnabled, dashboard.features.tikTokEnabled, page]);
 
   useEffect(() => {
     try {
@@ -1031,12 +1065,28 @@ function App() {
     selectedProjectRequestRef.current = postToHost('project.select', { projectId });
   };
 
-  const createProject = (payload: CreateProjectPayload) => {
-    setBusy(true);
-    postToHost('project.create', payload);
+  const openNewProject = async () => {
+    if (pageBusy || dashboard.generationRunning || pendingProjectCreationRef.current) return;
+    if (!dashboard.selectedOrganizationId) { notify('Hãy chọn tổ chức trước khi tạo dự án.', true); return; }
+    if (page === 'vietsub' && vietsub.state.selectedProject && !await vietsub.prepareToLeaveEditor()) return;
+    setProjectCreationError(null);
+    setNewProjectOpen(true);
   };
 
-  const requestShortVideo = (payload: CreateShortVideoPayload) => {
+  const submitNewProject = (type: 'project.create' | 'short-video.create', payload: CreateProjectPayload | CreateShortVideoPayload) => {
+    if (busy || dashboard.generationRunning || pendingProjectCreationRef.current) return;
+    const organizationId = dashboard.selectedOrganizationId;
+    if (!organizationId) { notify('Hãy chọn tổ chức trước khi tạo dự án.', true); return; }
+    setBusy(true);
+    setProjectCreationBusy(true);
+    setProjectCreationError(null);
+    const requestId = postToHost(type, { ...payload, organizationId });
+    pendingProjectCreationRef.current = { requestId, organizationId, previousProjectId: dashboard.selectedProject?.project.projectId };
+  };
+
+  const createProject = (payload: CreateProjectPayload) => submitNewProject('project.create', payload);
+
+  const requestShortVideo = (payload: CreateShortVideoPayload, savedProjectId?: string) => {
     if (busy || dashboard.generationRunning) return;
     const content = payload.content.trim();
     if (!content || content.length > 2000) {
@@ -1055,7 +1105,7 @@ function App() {
       notify(dashboard.mediaTools.message || 'FFmpeg và FFprobe chưa sẵn sàng.', true);
       return;
     }
-    const status = dashboard.providerStatus;
+    const status = shortVideoProviderStatus(dashboard.providerStatus);
     if (!status.videoReady) {
       notify(status.videoUnavailableMessage ?? 'Kling chưa sẵn sàng cho tổ chức hiện tại.', true);
       return;
@@ -1079,7 +1129,19 @@ function App() {
         : `Server sẽ quote rate Active, giữ budget của tổ chức và kiểm tra quyền trước khi gọi Kling.${payload.audioEnabled ? '' : ' Kling vẫn dùng variant Native Audio và tính phí như cũ; VideoMaker sẽ loại bỏ hoàn toàn audio khỏi file đầu ra.'} Luồng này không gọi OpenAI.`,
       confirmLabel: `Tạo clip ${payload.durationSeconds} giây`,
       onConfirm: () => {
+        const latest = latestDashboardRef.current;
+        if (latest.selectedOrganizationId !== dashboard.selectedOrganizationId ||
+            (savedProjectId && latest.selectedProject?.project.projectId !== savedProjectId)) {
+          notify('Dự án hoặc tổ chức đã thay đổi. Hãy kiểm tra lại trước khi tạo video.', true);
+          return;
+        }
         setBusy(true);
+        if (savedProjectId) {
+          const scene = latest.selectedProject?.scenes[0];
+          if (!scene) { setBusy(false); return; }
+          postToHost('generation.video', { sceneIds: [scene.sceneId] });
+          return;
+        }
         postToHost('short-video.generate', {
           content,
           aspectRatio: payload.aspectRatio,
@@ -1733,12 +1795,18 @@ function App() {
   const generationBusy = busy || dashboard.generationRunning;
   const pageBusy = page === 'vietsub'
     ? vietsub.state.loading || vietsub.state.busy
-    : generationBusy;
+    : page === 'tiktok'
+      ? tiktok.state.loading || tiktok.state.busy
+      : generationBusy;
   const licenseLocked = isLicenseLocked(dashboard.license);
   const startupSystemSetupVisible = Boolean(
     systemSetup.snapshot?.startupRequired
     && !isSystemSetupReady(systemSetup.snapshot)
     && !licenseLocked
+  );
+  const tiktokCredentialVerification = Boolean(
+    tiktok.state.feature.isCredentialVerification &&
+    dashboard.profile.roles.some((role) => role.toLowerCase() === 'admin')
   );
   const checkMediaTools = () => {
     if (generationBusy) return;
@@ -1768,6 +1836,8 @@ function App() {
         onClose={() => setSidebarOpen(false)}
         onToggle={() => setSidebarCollapsed((current) => !current)}
         onNavigate={handleNavigation}
+        onCreate={openNewProject}
+        busy={pageBusy}
         onLogout={requestLogout}
         onUnavailable={notify}
         interactionLocked={startupSystemSetupVisible}
@@ -1780,10 +1850,12 @@ function App() {
           page={page}
           busy={pageBusy}
           onMenu={() => setSidebarOpen(true)}
-          onCreate={() => setPage('longVideo')}
+          onCreate={openNewProject}
           onRefresh={() => {
             if (page === 'vietsub') {
               vietsub.refresh();
+            } else if (page === 'tiktok') {
+              tiktok.refresh();
             } else {
               setBusy(true);
               postToHost('dashboard.refresh');
@@ -1804,7 +1876,9 @@ function App() {
           onUnavailable={notify}
         />
 
-        {page === 'vietsub' ? (
+        {page === 'tiktok' ? (
+          <TikTokPage module={tiktok} />
+        ) : page === 'vietsub' ? (
           <VietsubPage
             state={vietsub.state}
             onRefresh={vietsub.refresh}
@@ -1849,13 +1923,14 @@ function App() {
             onRegisterBeforeLeave={vietsub.registerBeforeLeave}
           />
         ) : page === 'projects' ? (
-          <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={() => setPage('longVideo')} />
+          <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={openNewProject} />
         ) : page === 'shortVideo' ? (
           <ShortVideoPage
+            key={dashboard.selectedProject?.workflowStructureType === 'DirectShortVideo' ? dashboard.selectedProject.project.projectId : 'new-short-video'}
             project={dashboard.selectedProject?.workflowStructureType === 'DirectShortVideo'
               ? dashboard.selectedProject
               : null}
-            providerStatus={dashboard.providerStatus}
+            providerStatus={shortVideoProviderStatus(dashboard.providerStatus)}
             mediaTools={dashboard.mediaTools}
             hasOrganization={Boolean(dashboard.selectedOrganizationId)}
             busy={generationBusy}
@@ -1983,6 +2058,17 @@ function App() {
         )}
       </main>
 
+      {newProjectOpen && <NewProjectDialog
+        organizationName={dashboard.organizations.find(organization => organization.organizationId === dashboard.selectedOrganizationId)?.name ?? ''}
+        busy={projectCreationBusy}
+        error={projectCreationError}
+        speechSynchronizationEnabled={dashboard.features.speechSynchronizationEnabled}
+        voiceOptions={getAvailableVoiceOptions(dashboard.providerStatus.openAiVoiceOptions)}
+        onClose={() => { if (!pendingProjectCreationRef.current) setNewProjectOpen(false); }}
+        onCreateLong={createProject}
+        onCreateShort={payload => submitNewProject('short-video.create', payload)}
+      />}
+
       {confirmation && (
         <ConfirmationModal
           eyebrow={confirmation.eyebrow}
@@ -2046,7 +2132,7 @@ function App() {
         <StartupSystemSetupModal setup={systemSetup} />
       )}
 
-      {licenseLocked && dashboard.license && (
+      {licenseLocked && dashboard.license && !(page === 'tiktok' && tiktokCredentialVerification) && (
         <LicenseGateOverlay
           license={dashboard.license}
           offers={licenseOffers}
@@ -2066,6 +2152,7 @@ function App() {
             postLicenseRequest('refresh', 'license.refresh');
           }}
           onLogout={requestLogout}
+          onVerifyTikTok={tiktokCredentialVerification ? () => setPage('tiktok') : undefined}
         />
       )}
 
@@ -2097,6 +2184,7 @@ function LicenseGateOverlay({
   onResetExpired,
   onRetry,
   onCheckAgain,
+  onVerifyTikTok,
   onLogout
 }: {
   license: NonNullable<DashboardState['license']>;
@@ -2111,6 +2199,7 @@ function LicenseGateOverlay({
   onResetExpired: () => void;
   onRetry: () => void;
   onCheckAgain: () => void;
+  onVerifyTikTok?: () => void;
   onLogout: () => void;
 }) {
   const cardRef = useRef<HTMLElement>(null);
@@ -2266,6 +2355,14 @@ function LicenseGateOverlay({
                 </p>
               </div>
             </div>
+
+            {onVerifyTikTok && (
+              <div className="license-tiktok-verification">
+                <ShieldCheck size={19} />
+                <span>Credential TikTok đang chờ chính tài khoản Admin này xác minh OAuth trên Desktop.</span>
+                <button type="button" className="license-primary-action" onClick={onVerifyTikTok}>Mở xác minh TikTok</button>
+              </div>
+            )}
 
             {canPurchase ? (
               <>
@@ -2664,6 +2761,8 @@ function Sidebar({
   onClose,
   onToggle,
   onNavigate,
+  onCreate,
+  busy,
   onLogout,
   onUnavailable,
   interactionLocked = false
@@ -2675,6 +2774,8 @@ function Sidebar({
   onClose: () => void;
   onToggle: () => void;
   onNavigate: (label: string, page?: Page) => void;
+  onCreate: () => void;
+  busy: boolean;
   onLogout: () => void;
   onUnavailable: (message: string) => void;
   interactionLocked?: boolean;
@@ -2711,7 +2812,9 @@ function Sidebar({
         <button
           className="new-video-button"
           type="button"
-          onClick={() => onNavigate('Tạo Video Dài', 'longVideo')}
+          onClick={() => { onCreate(); onClose(); }}
+          disabled={busy}
+          aria-haspopup="dialog"
           aria-label="Tạo video mới"
           title={collapsed ? 'Tạo video mới' : undefined}
         >
@@ -2795,7 +2898,7 @@ function Header({
         <p>{pageHeader.subtitle}</p>
       </div>
       <div className="topbar-spacer" />
-      {dashboard.organizations.length > 0 && (
+      {page !== 'tiktok' && dashboard.organizations.length > 0 && (
         <label className="project-picker">
           <span>Tổ chức</span>
           <select
@@ -2810,12 +2913,12 @@ function Header({
           <ChevronDown size={15} />
         </label>
       )}
-      {page === 'projects' && (
-        <button className="start-button topbar-create-button" onClick={onCreate}>
+      {(['create', 'projects', 'longVideo', 'shortVideo'] as Page[]).includes(page) && (
+        <button className="start-button topbar-create-button" disabled={busy} aria-haspopup="dialog" onClick={onCreate}>
           <Plus size={17} /> <span>Tạo video mới</span>
         </button>
       )}
-      {page !== 'apiKeys' && page !== 'settings' && page !== 'shortVideo' && page !== 'vietsub' && dashboard.projects.length > 0 && (
+      {page !== 'apiKeys' && page !== 'settings' && page !== 'shortVideo' && page !== 'vietsub' && page !== 'tiktok' && dashboard.projects.length > 0 && (
         <label className="project-picker">
           <span>Dự án</span>
           <select
@@ -2856,14 +2959,16 @@ function ShortVideoPage({
   mediaTools: MediaToolStatus;
   hasOrganization: boolean;
   busy: boolean;
-  onGenerate: (payload: CreateShortVideoPayload) => void;
+  onGenerate: (payload: CreateShortVideoPayload, savedProjectId?: string) => void;
   onOpenSetup: () => void;
   onCheckMediaTools: () => void;
 }) {
-  const [content, setContent] = useState('');
-  const [aspectRatio, setAspectRatio] = useState<CreateShortVideoPayload['aspectRatio']>('9:16');
-  const [durationSeconds, setDurationSeconds] = useState(15);
-  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [content, setContent] = useState(project?.project.topic ?? '');
+  const [aspectRatio, setAspectRatio] = useState<CreateShortVideoPayload['aspectRatio']>(
+    (project?.project.aspectRatio as CreateShortVideoPayload['aspectRatio']) ?? '9:16');
+  const [durationSeconds, setDurationSeconds] = useState(project?.project.targetDurationSeconds ?? 15);
+  const [audioEnabled, setAudioEnabled] = useState(project?.audioStrategy !== 'SilentOutput');
+  const settingsLocked = busy || Boolean(project);
   const scene = project?.scenes[0] ?? null;
   const preview = scene?.preview ?? project?.preview ?? null;
   const projectAspectRatio = project?.project.aspectRatio;
@@ -2879,6 +2984,7 @@ function ShortVideoPage({
     hasOrganization &&
     klingReady &&
     mediaTools.ready &&
+    (!project || scene?.canGenerate) &&
     !busy
   );
   const providerDurationSeconds = Math.max(3, durationSeconds);
@@ -2891,7 +2997,7 @@ function ShortVideoPage({
 
   const submit = () => {
     if (!canGenerate) return;
-    onGenerate({ content: content.trim(), aspectRatio, durationSeconds, audioEnabled });
+    onGenerate({ content: content.trim(), aspectRatio, durationSeconds, audioEnabled }, project?.project.projectId);
   };
 
   return (
@@ -2900,7 +3006,7 @@ function ShortVideoPage({
         <section className="card short-video-form-card">
           <div className="short-video-section-heading">
             <span>1</span>
-            <div><h3>Nhập nội dung cảnh</h3><p>Mô tả rõ chủ thể, bối cảnh, hành động, góc máy, ánh sáng và phong cách mong muốn.</p></div>
+            <div><h3>{project ? 'Nội dung dự án' : 'Nhập nội dung cảnh'}</h3><p>{project ? project.project.name : 'Mô tả rõ chủ thể, bối cảnh, hành động, góc máy, ánh sáng và phong cách mong muốn.'}</p></div>
           </div>
 
           <label className="short-video-prompt-field">
@@ -2909,7 +3015,7 @@ function ShortVideoPage({
               autoFocus
               maxLength={2000}
               value={content}
-              disabled={busy}
+              disabled={settingsLocked}
               onChange={(event) => setContent(event.target.value)}
               placeholder="Ví dụ: Một cô gái mặc áo dài xanh bước chậm giữa phố cổ Hội An lúc bình minh, máy quay dolly lùi mượt, đèn lồng lay nhẹ trong gió, phong cách điện ảnh chân thực..."
             />
@@ -2923,7 +3029,7 @@ function ShortVideoPage({
                 <button
                   type="button"
                   className={aspectRatio === ratio ? 'selected' : ''}
-                  disabled={busy}
+                  disabled={settingsLocked}
                   key={ratio}
                   onClick={() => setAspectRatio(ratio)}
                 >
@@ -2943,7 +3049,7 @@ function ShortVideoPage({
             <div className="short-video-duration-control">
               <button
                 type="button"
-                disabled={busy || durationSeconds <= 5}
+                disabled={settingsLocked || durationSeconds <= 5}
                 aria-label="Giảm một giây"
                 onClick={() => setDurationSeconds((current) => Math.max(5, current - 1))}
               >−</button>
@@ -2953,13 +3059,13 @@ function ShortVideoPage({
                 max="15"
                 step="1"
                 value={durationSeconds}
-                disabled={busy}
+                disabled={settingsLocked}
                 aria-label="Thời lượng video từ 5 đến 15 giây"
                 onChange={(event) => setDurationSeconds(Number(event.target.value))}
               />
               <button
                 type="button"
-                disabled={busy || durationSeconds >= 15}
+                disabled={settingsLocked || durationSeconds >= 15}
                 aria-label="Tăng một giây"
                 onClick={() => setDurationSeconds((current) => Math.min(15, current + 1))}
               >+</button>
@@ -2974,7 +3080,7 @@ function ShortVideoPage({
               className={`short-video-audio-option ${audioEnabled ? 'enabled' : 'muted'}`}
               role="switch"
               aria-checked={audioEnabled}
-              disabled={busy}
+              disabled={settingsLocked}
               onClick={() => setAudioEnabled((current) => !current)}
             >
               {audioEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
@@ -3451,7 +3557,7 @@ function LongVideoPage({
     }
 
     if (activeStep === 'storyboard') {
-      return <StoryboardSection
+      return <><LocalVoicePanel project={project} busy={busy} /><StoryboardSection
         project={project}
         assetLibrary={assetLibrary}
         sceneFirstFrames={sceneFirstFrames}
@@ -3476,11 +3582,12 @@ function LongVideoPage({
         onUpdateSceneAssets={onUpdateSceneAssets}
         onConfirmSceneAssets={onConfirmSceneAssets}
         assetConfirmBusyId={assetConfirmBusyId}
-      />;
+      /></>;
     }
 
     return <>
       <LongVideoExportOverview project={project} mediaTools={mediaTools} />
+      <LocalVoicePanel project={project} busy={busy} />
       <RenderProgressCard
         project={project}
         busy={busy}
@@ -5043,16 +5150,14 @@ function StoryboardSection({
     isCanonicalSpeechScene(scene, project.speechProductionPolicy));
   const canonicalNeedWavCount = canonicalSpeechScenes.filter((scene) =>
     !scene.hasCanonicalVoicePreview &&
-    scene.speechStatus !== 'SpeechApproved' &&
-    scene.speechStatus !== 'SpeechReadyForLipSync').length;
+    scene.speechStatus !== 'SpeechApproved').length;
   const canonicalNeedVoiceReviewCount = canonicalSpeechScenes.filter((scene) =>
     scene.speechMode === 'OnCameraDialogue' &&
     scene.hasCanonicalVoicePreview &&
     !scene.preview?.url &&
-    scene.speechStatus !== 'SpeechApproved' &&
-    scene.speechStatus !== 'SpeechReadyForLipSync').length;
+    scene.speechStatus !== 'SpeechApproved').length;
   const canonicalReadyForVideoCount = canonicalSpeechScenes.filter((scene) =>
-    scene.speechMode === 'NativeVoiceOver' &&
+    (scene.speechMode === 'NativeVoiceOver' || scene.speechStatus === 'SpeechApproved') &&
     scene.hasCanonicalVoicePreview &&
     !scene.preview?.url).length;
   const canonicalVideoReviewCount = canonicalSpeechScenes.filter((scene) =>
@@ -5295,7 +5400,7 @@ function SceneCard({
   const [speechReviewReason, setSpeechReviewReason] = useState('');
   const [speechContentConfirmed, setSpeechContentConfirmed] = useState(false);
   const [speakerConfirmed, setSpeakerConfirmed] = useState(false);
-  const [lipSyncConfirmed, setLipSyncConfirmed] = useState(false);
+  const [mediaAlignmentConfirmed, setMediaAlignmentConfirmed] = useState(false);
   const [assigningAssets, setAssigningAssets] = useState(false);
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   const assignedAssetIds = sceneAssignedAssetIds(scene.sceneId, assetLibrary);
@@ -5325,7 +5430,7 @@ function SceneCard({
     : videoPlaybackConfirmed;
   const canonicalVoiceWorkflow = isCanonicalSpeechScene(scene, speechProductionPolicy);
   const canonicalNarrationReadyForVideo = canonicalVoiceWorkflow &&
-    scene.speechMode === 'NativeVoiceOver' &&
+    (scene.speechMode === 'NativeVoiceOver' || scene.speechStatus === 'SpeechApproved') &&
     Boolean(scene.canonicalVoicePreview?.url) &&
     !scene.preview?.url;
   const canonicalVoiceJourney = canonicalVoiceWorkflow
@@ -5336,7 +5441,6 @@ function SceneCard({
     ? scene.canonicalVoicePreview?.durationMs
     : scene.preview?.durationMs;
   const audioCanBeUnapproved = isSceneCompleted(scene) ||
-    scene.speechStatus === 'SpeechReadyForLipSync' ||
     (scene.speechStatus === 'SpeechApproved' && Boolean(scene.hasCanonicalVoicePreview));
   const validSpeech = speechMode === 'None'
     ? narration.trim().length === 0
@@ -5362,7 +5466,7 @@ function SceneCard({
               ? 'Lời dẫn ngoài khung hình chỉ dùng cho cảnh B-roll không có nhân vật.'
               : null;
   const reviewChecklistComplete = scene.speechMode === 'None' ||
-    (speechContentConfirmed && speakerConfirmed && lipSyncConfirmed);
+    (speechContentConfirmed && speakerConfirmed && mediaAlignmentConfirmed);
   const audioReviewBlocker = !scene.requiresAudioReview
     ? null
     : speechVerificationRequired &&
@@ -5390,7 +5494,7 @@ function SceneCard({
     setCanonicalVoicePlaybackConfirmed(false);
     setSpeechContentConfirmed(false);
     setSpeakerConfirmed(false);
-    setLipSyncConfirmed(false);
+    setMediaAlignmentConfirmed(false);
     setSpeechReviewReason('');
   }, [scene.sceneId, scene.preview?.url, scene.canonicalVoicePreview?.url, scene.speechVerification?.speechVerificationReportId]);
   useEffect(() => setDraftAssetIds(new Set(assignedAssetIds)), [scene.sceneId, assignedAssetIds.join('|')]);
@@ -5852,7 +5956,7 @@ function SceneCard({
                 </div>
               </div>
             )}
-            {scene.requiresAudioReview && !canonicalNarrationReadyForVideo && scene.speechStatus !== 'SpeechReadyForLipSync' && (
+            {scene.requiresAudioReview && !canonicalNarrationReadyForVideo && (
               <div className="scene-audio-review">
                 <div>
                   <strong><Volume2 size={15} /> Cần nghe và duyệt lời nói</strong>
@@ -5860,9 +5964,7 @@ function SceneCard({
                     {scene.speechMode === 'None'
                       ? 'Hãy kiểm tra âm thanh môi trường và hiệu ứng có phù hợp với hình ảnh.'
                       : scene.hasCanonicalVoicePreview
-                        ? scene.speechMode === 'OnCameraDialogue'
-                          ? 'Hãy nghe Canonical Voice. Sau khi duyệt, cảnh sẽ dừng ở trạng thái sẵn sàng cho lip-sync.'
-                          : canonicalVoiceOnlyReview
+                        ? canonicalVoiceOnlyReview
                             ? 'Hãy nghe và duyệt Canonical WAV. Chỉ sau bước này hệ thống mới cho phép sinh video nền.'
                             : 'Hãy nghe Canonical Voice và clip đã thay hoàn toàn native speech trước khi duyệt.'
                         : `Hãy kiểm tra lời nói đúng nguyên văn, đúng người nói và khớp khẩu hình. Hệ thống đã phát hiện track âm thanh${scene.nativeAudioAudible ? ' có tín hiệu nghe được' : ''}.`}
@@ -5873,8 +5975,8 @@ function SceneCard({
                   {scene.speechMode !== 'None' && (
                     <div className="scene-audio-review-checklist">
                       <label><input type="checkbox" checked={speechContentConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setSpeechContentConfirmed(event.target.checked)} /> Tôi đã nghe rõ đủ câu và đúng nguyên văn.</label>
-                      <label><input type="checkbox" checked={speakerConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setSpeakerConfirmed(event.target.checked)} /> {scene.speechMode === 'OnCameraDialogue' ? 'Đúng nhân vật trên màn hình đang nói.' : 'Đúng là lời dẫn ngoài khung hình; không có nhân vật nói trực tiếp.'}</label>
-                      <label><input type="checkbox" checked={lipSyncConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setLipSyncConfirmed(event.target.checked)} /> {canonicalVoiceOnlyReview ? 'Chất giọng và thời lượng WAV phù hợp với cảnh.' : scene.speechMode === 'OnCameraDialogue' ? 'Khẩu hình và biểu cảm chấp nhận được.' : 'Giọng dẫn và hình ảnh đồng bộ, chấp nhận được.'}</label>
+                      <label><input type="checkbox" checked={speakerConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setSpeakerConfirmed(event.target.checked)} /> {scene.speechMode === 'OnCameraDialogue' ? canonicalVoiceWorkflow ? 'Đúng giọng của nhân vật được chọn.' : 'Đúng nhân vật trên màn hình đang nói.' : 'Đúng là lời dẫn ngoài khung hình; không có nhân vật nói trực tiếp.'}</label>
+                      <label><input type="checkbox" checked={mediaAlignmentConfirmed} disabled={busy || !reviewControlsReady} onChange={(event) => setMediaAlignmentConfirmed(event.target.checked)} /> {canonicalVoiceOnlyReview ? 'Chất giọng và thời lượng WAV phù hợp với cảnh.' : canonicalVoiceWorkflow ? 'Hình ảnh và audio ghép phù hợp; tôi chấp nhận chuyển động miệng của clip.' : scene.speechMode === 'OnCameraDialogue' ? 'Khẩu hình và biểu cảm chấp nhận được.' : 'Giọng dẫn và hình ảnh đồng bộ, chấp nhận được.'}</label>
                     </div>
                   )}
                 </div>
@@ -5933,7 +6035,6 @@ function SceneCard({
                           : 'Tạo clip cảnh này'}
                 </button>
               )}
-              {scene.speechStatus === 'SpeechReadyForLipSync' && <span className="scene-complete-note"><CircleCheck size={15} /> Canonical Voice đã duyệt · chờ lip-sync</span>}
               {isSceneCompleted(scene) && <span className="scene-complete-note"><CircleCheck size={15} /> Hình và lời nói đã được duyệt</span>}
             </div>
           </>
@@ -6258,7 +6359,7 @@ function CreateVideoCard({
           <span>Âm thanh</span>
           <strong><Volume2 size={15} /> {speechProductionPolicy === 'CanonicalVoice' ? 'Canonical Voice' : 'Provider Native Audio'}</strong>
           <small>{speechProductionPolicy === 'CanonicalVoice'
-            ? 'Lời dẫn được tạo thành WAV có version và ghép sau khi clip nền hoàn tất. Cảnh thấy miệng sẽ chờ bước lip-sync.'
+            ? 'Lời nói được tạo thành WAV có phiên bản và ghép sau khi clip nền hoàn tất. Hình ảnh và chuyển động miệng giữ theo video được tạo.'
             : 'Giọng nói, âm thanh môi trường và hiệu ứng được provider tạo cùng clip.'}</small>
         </div>
         <button

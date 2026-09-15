@@ -1,5 +1,19 @@
 # Kiểm thử và nghiệm thu VideoMaker
 
+### Hợp nhất local-2 và main — xác minh 2026-09-10
+
+Release build/restore toàn solution, `npm ci` và production build đạt. Source hợp nhất được kiểm tra ở checkout riêng: .NET **1185 Passed / 0 Failed / 5 Skipped**, frontend **174 Passed / 0 Failed / 0 Skipped**, TikTok Admin state/browser **25 Passed / 0 Failed / 0 Skipped**, smoke popup ngắn/dài đạt. Các bài model thật và SQL opt-in bị skip không được tính là đã nghiệm thu. Phạm vi sửa, lệnh chạy, lỗi phát hiện trong quá trình hợp nhất và artifact: [biên bản hợp nhất 2026-09-10](HOP_NHAT_LOCAL_2_MAIN_20260910.md).
+
+### Veo local voice — kiểm thử bổ sung 2026-09-09
+
+TOOL-TESTS/LocalVoice, các test local policy trong ProjectRenderServiceTests, và Web/src/features/localVoice/*.test.ts bao phủ policy, access, stale/hash, checkpoint, cancel/retry/idempotency, duyệt riêng, native exception, cleanup và FFmpeg remux. Fake model/media chỉ chứng minh điều phối, không chứng minh chất lượng tiếng Việt.
+
+LocalVoiceModelTests mặc định **Skipped**, chỉ chạy khi có VM_LOCAL_VOICE_COMPONENT_ROOT, VM_LOCAL_VOICE_SMOKE_SOURCE và VM_LOCAL_VOICE_SMOKE_ANCHOR. Hai sample phải có quyền sử dụng. Technical smoke kiểm nạp model, VAD/separation/conversion, audible/duration, video packet hash và cache retry; không chấm khẩu hình hoặc nhận diện giọng bằng tai.
+
+Bổ sung triển khai 2026-09-10: `LocalVoiceDeploymentTests` kiểm cấu hình component/temp độc lập media workspace, không tự cài khi đọc trạng thái, từ chối đường dẫn không hợp lệ và lọc môi trường tiến trình con. Test model ghi thời gian và peak working set từng worker; số đo là tiến trình Python, không phải tổng RAM cả ứng dụng. Chạy test .NET với TEMP/TMP ngắn (ví dụ `D:\vmt-voice-0910`) để tránh SQLite lỗi đường dẫn dài trên Windows. Có thể dùng Python của component để chạy `TOOL-TESTS/LocalVoice/test_voice_consistency_worker.py`; không cần Python hệ thống. Helper có regression dùng tensor nhỏ, chặn `_native_multi_head_attention` và xác minh CPU profile vẫn xử lý attention được; tái hiện nhánh gây access violation khi tách âm trước bản sửa. Case này cần PyTorch, không tải model khi test. Bằng chứng sau thay đổi: [task triển khai trên máy đích](TASK_TRIEN_KHAI_VEO_LOCAL_SU_DUNG_THUC_TE.md).
+
+Trước production cần rehearsal migration trên clone, UI WebView2 thật, 2–3 clip Veo tiếng Việt cùng nhân vật, giọng nam/nữ, âm nền, lỗi/no-speech/multiple-speaker, restart/retry, nghe A/B và đo CPU/RAM/thời gian. Thiếu clip thật hoặc model test bị skip phải ghi chưa nghiệm thu. Module và test chuyên biệt cloud LipSync đã xóa; migration lịch sử được giữ nguyên. Không tính test đã loại bỏ vào Passed hoặc Skipped.
+
 > Ma trận kiểm thử và Definition of Done. Rà soát ngày 2026-09-07.
 
 Kết quả phải ghi rõ thời điểm, commit/worktree, môi trường và số Passed/Failed/Skipped. Không dùng mốc lịch sử như kết quả của lần thay đổi mới.
@@ -42,6 +56,7 @@ Không dùng `npm install` để âm thầm đổi lockfile trong một thay đ�
 | Vietsub/OCR | Manifest/SQLite/revision/lock, path safety, cue/source/language, cancel/retry và atomic SRT |
 | Translation runtime | Worker safety/protocol/readiness tests; model integration và benchmark opt-in; desktop smoke |
 | Local voice | Phrase/cache/revision, worker protocol, WAV/hash/path, fit 1.20x, FFmpeg timeline, playback authorization; runtime/model thật và nghe smoke là opt-in |
+| TikTok | OAuth state/PKCE/user-device binding, app credential Pending/Active và mã hóa theo ID, Global Admin authorization/audit, token encryption, creator policy, idempotency, chunk/Range, exact host, path/URL redaction, recovery và polling |
 | SePay/seat | Options validation, duplicate/concurrent webhook, matching, expiry, capacity, idempotency và relational tests |
 | Updater/setup | Manifest/hash, managed files, install/update/rollback trên VM hoặc máy sạch |
 
@@ -73,6 +88,7 @@ Không dùng `npm install` để âm thầm đổi lockfile trong một thay đ�
 - chặn HTTP, host/port ngoài allowlist, private/reserved IP, DNS rebinding và redirect sai;
 - output sai MIME, quá size, hash/signature/media invalid;
 - desktop/translation worker không có provider client hoặc đường gọi Cloud ngoài thiết kế.
+- TikTok token/app secret chỉ ở server; signed upload URL không vào React/log/database plaintext và upload request không kèm JWT/Bearer của app.
 
 ### Local filesystem
 
@@ -94,6 +110,10 @@ Test đọc nội dung migration không thay thế apply thật. Với mỗi mig
 7. Thử restore backup và ghi thời gian/điểm mất dữ liệu chấp nhận được.
 
 Với migration 4.1.2–4.1.5, kiểm tra thêm failure details không lộ nội dung nhạy cảm, backfill speech policy, voice profile approval proof, index/FK mới và constraint `NeedsReview` chỉ cho phép accept khi có lý do/reviewer/timestamp.
+
+Với migration 4.1.6, kiểm tra unique connection/idempotency theo user, FK user/device, ciphertext token/upload URL, row version và desktop principal không có quyền trực tiếp schema `social`.
+
+Với migration 4.1.7, kiểm tra duy nhất một credential `Pending`/`Active`, payload mã hóa, FK OAuth session tới credential, singleton integration settings, audit evidence constraint và không cấp thêm quyền SQL cho desktop.
 
 Không apply migration vào database thật chỉ để hoàn thành checklist test.
 
@@ -134,7 +154,7 @@ Unit/integration mặc định không gửi request có phí. Smoke thật chỉ
 - TTS fail closed khi thiếu model/credential/rate/budget; WAV sai MIME/hash/sample/duration/audibility bị chặn.
 - Canonical Voice không gọi transcription; video dài Provider Native cũng không quote/gọi ASR và không cần `SpeechVerificationReport`.
 - `NativeVoiceOver` dùng đúng WAV/speech/voice snapshot và asset sync v3; compatibility v2 chỉ cho exact approved lineage.
-- `OnCameraDialogue` dừng ở `SpeechReadyForLipSync`; render không giả định đã lip-sync.
+- `OnCameraDialogue` Canonical Voice phải qua duyệt WAV, tạo video nền, ghép và duyệt clip trước render. Kiểm thử project cũ mang trạng thái chờ với WAV đã duyệt, chưa duyệt và lời thoại thay đổi; đọc dashboard không được ghi dữ liệu. Retry dùng lại WAV/provider request còn hợp lệ, không submit mới chỉ vì lỗi ghép local.
 - Nếu bật speech verification ngoài video dài: `Passed`, audited `NeedsReview`, stale version và `Failed` phải đúng policy trước outbound/render.
 
 Kết quả một provider không đại diện cho provider khác.
@@ -246,6 +266,41 @@ Script kiểm tra size/SHA-256 model và config trước khi bật riêng catego
 Trên đúng bundle x64 định phát hành, xác nhận `VietsubLocalVoiceEnabled` đang bật, cài runtime qua UI rồi xác minh model/config đúng checksum. Tạo giọng từ track mà toàn bộ cue đã có nội dung dịch tiếng Việt, gồm cả fixture có trạng thái cảnh báo/chất lượng chưa duyệt để xác minh các trạng thái này không chặn nghiệp vụ; xác minh output xuất hiện ở track **Giọng Việt** dưới phụ đề và đồng bộ play/pause/seek/tốc độ với video mà không còn audio player độc lập trong panel thiết lập. Nghe câu ngắn/dài/dấu câu/tên riêng, thử cancel/retry và khởi động lại để kiểm tra cache/checkpoint. Nới mép phải một cue để xác minh voice được chuyển tiếp sang revision mới; đổi `start`/rút ngắn hoặc tạo chênh nhiều revision để xác minh timeline được dựng lại từ phrase cache mà không chạy Piper. Đổi nội dung/speaker/cấu trúc cue phải làm cache không tương thích mất hiệu lực. Cuối cùng kiểm tra CPU/RAM/disk/thời gian và worker không có provider/database/network ngoài giai đoạn component store tải các URL đã pin.
 
 `VietsubLocalVoiceEnabled` được bật mặc định để người dùng luôn thấy trạng thái giọng local. Việc bật flag không đồng nghĩa runtime/model đã sẵn sàng: máy thiếu component phải trả `NOT_INSTALLED`, yêu cầu người dùng chủ động xác nhận cài và chỉ được trả `READY` sau khi model/config/worker đúng checksum và probe đạt. Trước khi tuyên bố production-ready vẫn phải kiểm kê đầy đủ license và dependency Python, verify model thật, benchmark, nghe nghiệm thu và smoke desktop; test unit dùng fake worker hoặc model test bị `Skipped` không thay thế các cổng này.
+
+## 7A. TikTok Direct Post
+
+Nhiều tài khoản: kiểm tra ownership mọi route, OAuth thêm/reconnect/sai danh tính, giữ token/job A khi thêm hoặc ngắt B, ClientRequestId độc lập media và conflict khi đổi payload/account, attempt được commit trước outbound và không replay khi timeout/restart. Native phải chặn sai ConnectionId từ server, MediaId cũ và file bị thay trong lúc init trước khi gửi byte. UI kiểm tra A → B → A với creator/error đến muộn, reset privacy/consent, nhiều job và dialog đúng tài khoản. Khi integration tắt, vẫn phải quản lý ngắt tài khoản và xem lịch sử.
+
+SQL integration dùng opt-in `VIDEOMAKER_RUN_TIKTOK_SQL_TESTS=1`: tạo instance LocalDB 2019 riêng với dữ liệu giả, backup CHECKSUM/VERIFYONLY, chạy migration 4.1.8 hai lần, giữ ID/token/job cũ, kiểm unique identity, application lock và worker claim trên SQL Server thật. Không nhận connection string hoặc dùng database của người vận hành; hướng dẫn và kết quả tại [TRIEN_KHAI_TIKTOK_NHIEU_TAI_KHOAN.md](TRIEN_KHAI_TIKTOK_NHIEU_TAI_KHOAN.md). Rehearsal này không thay thế bản sao database đầy đủ của môi trường đích.
+
+Form đăng TikTok dùng thanh tài khoản gọn và hai cột preview/thiết lập trên desktop; preview dọc co theo chiều cao cửa sổ. Browser fixture dùng khung sidebar/topbar hiện hành để kiểm tra nút đăng không cần cuộn ở 1280×720, 1366×768 và 1440×900; nội dung thương mại mở rộng được kiểm tra ở 1366×768. Màn hình nhỏ vẫn cuộn tới được nút đăng, không tràn ngang. Tiến trình dùng dialog giữa viewport với backdrop nhẹ, giữ focus bàn phím, thu nhỏ/mở lại mà không gửi bài mới. Test đi qua bridge event giả lập cho chuẩn bị, upload 100% chưa phải thành công, TikTok xử lý, thành công, lỗi khởi tạo/polling/provider, hủy, thay đổi creator policy trong lúc init và khôi phục job đang chạy. Không gọi TikTok thật.
+
+Server và Desktop phải chấp nhận đúng các host upload `open-upload.tiktokapis.com`, `open-upload-sg.tiktokapis.com`, `upload.us.tiktokapis.com` qua HTTPS/443 và giữ nguyên query của URL trả về. Test dùng URL giả lập cho cả ba host; URL sai giao thức/cổng, host giả mạo hoặc subdomain ngoài danh sách, userinfo, fragment và URL quá dài phải bị chặn. Server không lưu job với URL bị từ chối; Desktop từ chối trước khi mở file hoặc gửi dữ liệu. Không dùng URL/token thật trong fixture.
+
+Preview TikTok phải được cho phép bởi `media-src` cho đúng host nội bộ `https://tiktok-media.app.local`. Browser test dùng CSP từ `Web/index.html`, video H.264 tổng hợp bằng FFmpeg và HTTP range giả lập để kiểm tra tải metadata/hình, phát, tua, đổi file, báo lỗi và tải lại. Kiểm tra tỷ lệ khung hình trên desktop/mobile và xác nhận CSP vẫn chặn media từ host ngoài allowlist. Test này không thay thế smoke WebView2 trên file thực tế của người dùng.
+
+Làm mới creator info trả thông tin trực tiếp từ TikTok, không ghi lại tên hoặc `UpdatedAtUtc` của connection sau mỗi lần đọc. Test dùng hai DbContext thay đổi `RowVersion` trong lúc chờ provider, kiểm tra không xung đột hoặc ghi đè token mới; nhánh access token hết hạn vẫn phải lưu token refresh. Desktop chỉ gửi một yêu cầu creator đang chờ tại một thời điểm; browser test kiểm tra mở trang, gọi refresh liên tiếp và thử lại sau success/error đúng request ID.
+
+Ứng dụng chưa audit yêu cầu cả tài khoản TikTok riêng tư và quyền xem bài đăng `SELF_ONLY`. Tài khoản công khai nhận creator info kèm `PublishingIssue`, không ném exception cho điều kiện này. UI hiển thị hướng dẫn và nút kiểm tra lại, khóa đăng khi còn issue. Server kiểm tra lại trước init; nếu bị chặn thì trả `BlockedCreator`, không tạo job hoặc gọi API đăng. Desktop nhận kết quả này phải cập nhật creator và kết thúc thao tác trước upload. Test phủ trường hợp bị chặn và kiểm tra lại sau khi tài khoản chuyển riêng tư.
+
+Kiểm tra luồng xác minh khi Desktop mở trước Admin: mở lại mục TikTok phải nạp trạng thái mới; lỗi lấy trạng thái phải hiển thị cả khi integration chưa sẵn sàng. Server trả lý do an toàn để phân biệt phiên thuộc tài khoản khác, phiên hết hạn, chưa thiết lập hoặc bị tắt. OAuth trên Desktop chuyển quyết định license cho server để Admin đang xác minh không bị chặn bởi license local; user thường vẫn phải qua kiểm tra license tại server và thao tác đăng video vẫn giữ kiểm tra license. Các trường hợp này được kiểm tra bằng fake HTTP/runtime và test render React, không gọi TikTok thật.
+
+Giao diện Admin TikTok có bộ kiểm tra trạng thái thuần JavaScript và bộ kiểm tra trình duyệt dùng chính Razor markup, CSS, script hiện hành với API giả lập. Chạy từ thư mục gốc repository:
+
+```powershell
+node --test TOOL-TESTS/TikTok/admin-tiktok-state.test.cjs
+# Cần Playwright và Chromium tương ứng đã cài trong môi trường kiểm thử.
+# Nếu package ở ngoài repository, đặt VIDEOMAKER_PLAYWRIGHT_MODULE trỏ tới thư mục package playwright.
+node --test TOOL-TESTS/TikTok/admin-tiktok.browser.test.cjs
+# Cần npm ci tại TOOL-LOCAL/Web; render React hiện hành bằng Rolldown, dữ liệu giả lập.
+node --test TOOL-TESTS/TikTok/desktop-tiktok.browser.test.cjs
+```
+
+Bộ trình duyệt chặn network, không khởi động server và không chạm database/TikTok. Phạm vi gồm xác nhận trước khi mở phiên xác minh, xóa secret khỏi form, chặn gửi lặp, giữ bản nháp khi làm mới, phát hiện cài đặt server thay đổi, xử lý lỗi, polling/hết hạn/rời trang, đăng xuất, xác nhận công khai và bố cục 375–1440 px. Có thể đặt `VIDEOMAKER_SCREENSHOT_DIR` để lưu ảnh kiểm tra desktop/mobile. Đây là kiểm tra UI với API giả lập; không thay thế nghiệm thu OAuth thật.
+
+Test tự động không gọi TikTok thật phải phủ chunk boundary, `Content-Range`, 206/201, retry/416 reconciliation, exact HTTPS host/443, file đổi sau init, OAuth state/PKCE/user-device binding, app credential mã hóa/ràng buộc ID, chỉ Admin được quản lý, Pending không dùng chung, activation/audit gate, token encryption theo user, ownership/idempotency và không lộ secret/token/path/signed URL sang React.
+
+Smoke thật chỉ chạy khi được phép trên app/tài khoản test đã review: connect/reconnect/disconnect, query creator info, privacy không có mặc định, interaction bị TikTok disable, disclosure/consent, video nhỏ và nhiều chunk, đóng/mở desktop giữa job, terminal success/failure và refresh token. Không coi build/unit test là bằng chứng TikTok app đã được audit hoặc public posting đã sẵn sàng.
 
 ## 8. FFmpeg, distribution và updater
 
@@ -487,3 +542,14 @@ Modal có hai nút bật/tắt độc lập **Lật trái–phải** và **Lật
 - Test C# kiểm migration 6 → 7, bridge lưu/trả event, bốn thứ tự bộ lọc và từ chối output khi lật hình đổi giữa lúc render: **Passed**. Bốn fixture qua FFmpeg/FFprobe bundle thật kiểm vị trí pixel hình ảnh, phụ đề vẫn phía dưới, kích thước và trạng thái audio không đổi: **4 Passed / 0 Failed / 0 Skipped**.
 - Full .NET Release ở chế độ song song mặc định: **1.089 Passed / 1 Failed / 4 Skipped**, lỗi tại bài cài runtime translation không thuộc tính năng lật hình (`InstallCallCount` 0 thay vì 1). Bài này chạy riêng: **1 Passed / 0 Failed / 0 Skipped**. Full suite theo quy ước `--no-build -- xUnit.ParallelizeTestCollections=false`: **1.090 Passed / 0 Failed / 4 Skipped / 1.094 Total**, 3 phút 29 giây; không sửa assertion hay tắt test để đạt kết quả.
 - `git diff --check`: **Passed**. Không dùng project/video người dùng, không chạy migration SQL, model/provider có phí hay publish. Bốn bài Skipped vẫn là model/runtime opt-in, không tính là đạt. Chưa nghiệm thu thủ công modal WebView2 trên video 16:9 và 9:16 cùng ma trận DPI/zoom hoặc đối chiếu hình/phụ đề/audio trên MP4 người dùng; đây là bước trước khi kết luận sẵn sàng phát hành.
+
+## 26. Hợp nhất `local-2` với GitHub — 2026-09-15
+
+Checkout hợp nhất từ commit local `1333ab2` và remote `dc6cdc3` trên nhánh tạm. Hai phía trùng 11 file; Git báo conflict ở 5 file. Giữ đồng thời gate Setup trong `Program`/`Form1`/React và composition TikTok/giọng local từ GitHub, thêm các asset cần thiết vào project file; fixture Setup được bổ sung `tikTokEnabled` theo contract frontend hiện hành. Không chọn toàn bộ một phía cho file conflict, không xóa migration/license/provenance và không chạy SQL.
+
+- `dotnet restore TOOL_GEN_POST_VIDEO.slnx`: **Passed**. Build solution Release `--no-restore`: **Passed**, 0 warning / 0 error.
+- `npm ci --no-audit --no-fund`, `npm run build`: **Passed**, còn cảnh báo chunk >500 kB. `npm test`: **187 Passed / 0 Failed / 0 Skipped** trong 34 file.
+- .NET Release `--no-build -- xUnit.ParallelizeTestCollections=false`: **1.242 Passed / 0 Failed / 6 Skipped / 1.248 Total**, 3 phút 52 giây. Các bài Skipped gồm model/runtime Qwen/Piper/LocalVoice thật và SQL TikTok opt-in; không coi là nghiệm thu model, database hay TikTok production.
+- `git diff origin/local-2 --check`: **Passed** cho phần nội dung được bổ sung/hợp nhất. `git diff --cached --check` trên toàn merge vẫn báo whitespace đã có trong các file `.codex/skills/ui-ux-pro-max` từ remote; không sửa các asset đó chỉ để làm sạch kết quả. Kiểm tra phần ngoài `.codex` không báo lỗi whitespace.
+
+Chưa chạy UI automation/WebView2 trực tiếp, đăng TikTok, provider có phí, migration trên database thật hoặc publish release. Build và test trên checkout hợp nhất không tự chứng minh cấu hình/runtime/schema của máy đích đã sẵn sàng.

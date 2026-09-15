@@ -25,6 +25,10 @@ internal sealed class ServerGenerationClient(
     private readonly object _organizationStateLock = new();
     private Guid? _organizationId;
 
+    public async Task<LocalVoiceAccessResponse> AuthorizeLocalVoiceAsync(Guid projectId, CancellationToken cancellationToken) =>
+        await SendAsync<LocalVoiceAccessResponse>(HttpMethod.Post, "api/generation/local-voice/access",
+            new LocalVoiceAccessRequest(await GetOrganizationIdAsync(cancellationToken), projectId), cancellationToken);
+
     public Guid? SelectedOrganizationId
     {
         get

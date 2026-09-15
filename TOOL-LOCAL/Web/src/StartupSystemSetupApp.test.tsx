@@ -42,7 +42,7 @@ const dashboard: DashboardState = {
   providerStatus: { openAiReady: false, klingReady: false, videoReady: false },
   mediaTools: { ready: false, message: 'Chưa kiểm tra công cụ media.', checkedAtUtc: '' },
   generationRunning: false,
-  features: { vietsubEnabled: false, speechSynchronizationEnabled: false },
+  features: { vietsubEnabled: false, speechSynchronizationEnabled: false, tikTokEnabled: false },
   sceneFirstFrames: [],
   license: { hasActiveLicense: true, currentDeviceActivated: true, maxActivatedDevices: 1, activeDeviceCount: 1,
     offlineGraceHours: 0, serverTimeUtc: '2026-09-15T00:00:00Z', heartbeatIntervalSeconds: 300,

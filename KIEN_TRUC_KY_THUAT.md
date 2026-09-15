@@ -1,5 +1,21 @@
 # Kiến trúc kỹ thuật VideoMaker
 
+## Bổ sung 2026-09-09: local Veo voice consistency
+
+React LocalVoicePanel → bridge local-voice.* → LocalVoiceService. Server POST /api/generation/local-voice/access chỉ kiểm session/device/license/membership/role/project qua access service hiện hành; không reserve budget, gọi provider hoặc nhận media.
+
+Policy snapshot là vf.Projects.LocalVoicePolicyVersion; JSON checkpoint, voice samples và model nằm trong workspace local. Desktop chỉ ghi workflow vf, không thêm quyền ai/auth/vs. LocalVoiceRuntime chạy Python riêng với môi trường lọc, không provider key/Cloud client; installer và dependency/model lock là đường tải component duy nhất. Worker dùng profile CPU OpenVoice V2 converter + Silero + Demucs, không gọi module TTS.
+
+Từ 2026-09-10, cấu hình native `LocalVoice:ComponentRoot` và `LocalVoice:TemporaryRoot` cho phép đặt model/cache/temp trên ổ riêng, không chuyển media workspace. Đường dẫn phải là thư mục local đầy đủ, không qua reparse point; temp nằm ngoài component manifest. Installer và worker nhận TEMP/TMP trong môi trường tiến trình đã lọc. Desktop có các lệnh bảo trì `--prepare-local-voice`, `--verify-local-voice`, `--check-local-voice` dùng cùng runtime/checksum/probe, không đăng nhập, truy cập database, bật project hay chuyển media; thao tác project vẫn qua server access như cũ.
+
+Profile CPU Windows chạy một luồng, tắt oneDNN/MHA fastpath và dùng math SDPA: model thật trên máy đích đã tái hiện access violation tại `torch._native_multi_head_attention` trong Demucs; chỉ tắt MHA fastpath vẫn chưa ổn định ở bước tách âm. Worker dùng triển khai attention chuẩn với cùng trọng số đã ghim; fingerprint worker thay đổi sẽ yêu cầu probe lại và làm checkpoint cũ hết hiệu lực. Chỉ số RAM/CPU do chính tiến trình model báo, tránh đo nhầm launcher của Python venv.
+
+Giới hạn đoạn Demucs 4 giây được đặt cả trên `model.segment` và lời gọi `apply_model`: HTDemucs tự đệm theo `model.segment` trong forward, nên chỉ chia input thành đoạn 4 giây ở bên ngoài vẫn có thể cấp phát attention theo đoạn training dài hơn. Đây là giới hạn tài nguyên của profile CPU; chất lượng âm nền và giọng vẫn cần nghe nghiệm thu.
+
+LocalVoiceStore kiểm path/reparse/hash, atomic checkpoint, khóa project liên tiến trình. Runtime có khóa component, xác minh byte trước khi chạy Python; worker nhận request riêng của host, kiểm lại model ghim và chặn socket API trong inference (không phải sandbox cấp hệ điều hành). LocalVoiceMedia kiểm duration/audio/stream và promote MP4 từ .part. Asset được duyệt là SceneVideoVoiceConverted, lưu lineage metadata; ProjectRenderService kiểm lại clip, mẫu và source trước và sau render.
+
+Module Cloud Fal LipSync đã bị loại bỏ, gồm provider client, worker, input store, API/cấu hình và cờ build thử nghiệm. Migration cũ được giữ làm lịch sử; trạng thái `SpeechReadyForLipSync` chỉ được đọc tương thích, không phát sinh mới và không thay thế bằng chứng duyệt WAV.
+
 > Mô tả ranh giới module và đường gọi theo source ngày 2026-09-07.
 
 ## 1. Tổng thể
@@ -45,6 +61,7 @@ Desktop không gọi AI provider trực tiếp. Server là trust boundary cho au
 - AI request, provider request, idempotency, reservation và usage ledger;
 - project registry/server workflow trong SQL;
 - Vietsub project registry metadata;
+- TikTok Developer App credential dùng chung được Data Protection bảo vệ, kết nối OAuth/token theo user, integration policy và metadata publish job trong schema `social`;
 - output cache và release metadata.
 
 ### Desktop sở hữu
@@ -52,6 +69,7 @@ Desktop không gọi AI provider trực tiếp. Server là trust boundary cho au
 - UI state và selection hiện hành;
 - workspace media, file `.part`, thumbnail/waveform và render output;
 - manifest/SQLite/SRT/OCR artifact của Vietsub;
+- lựa chọn file, absolute path, preview và byte video dùng để upload trực tiếp TikTok;
 - cấu hình máy phát triển không chứa provider secret.
 
 Desktop còn kết nối SQL trực tiếp cho workflow schema `vf` trong giai đoạn chuyển tiếp. Nó không được có quyền đọc/ghi bảng sự thật `auth`, `ai`, credential/usage hoặc schema `vs`.
@@ -74,8 +92,9 @@ Server tách phạm vi dữ liệu bằng các context chính:
 - `ProviderAdminDbContext`: thao tác quản trị provider/catalog.
 - `VideoFactoryDbContext`: project, scene, asset và generation workflow.
 - `VietsubDbContext`: registry `vs.Projects`, job/batch/attempt Cloud và payload/result tạm được mã hóa; không thay database biên tập local.
+- `TikTokDbContext`: app credential/version, integration settings, nhiều connection theo user/app/OpenId, OAuth session có target connection, publish attempt và publish job trong schema `social`; audit quản trị ghi vào `auth.AccountAuditLogs`.
 
-Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp.
+Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs`, `social` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp.
 
 ### 4.3 Nhóm API
 
@@ -88,6 +107,7 @@ Các nhóm endpoint chính gồm:
 - video submit/status/retry/approve và output proxy;
 - SePay payment order/webhook/status;
 - Vietsub registry metadata.
+- TikTok state/OAuth/creator info/direct-post init/status theo user và device hiện hành; API Global Admin quản lý credential dạng write-only, mở cửa sổ xác minh và policy public posting.
 
 Contract public nằm ở `TOOL-SHARED.Contracts`; thay contract phải cập nhật server, desktop và test cùng lúc.
 
@@ -96,6 +116,14 @@ Contract public nằm ở `TOOL-SHARED.Contracts`; thay contract phải cập nh
 Server có các background worker cho request/provider polling, settlement/release, output caching/cleanup và các quy trình nền liên quan. Worker dùng claim lease để nhiều instance không xử lý cùng bản ghi, có giới hạn attempt/age và chỉ chuyển trạng thái tiến tới terminal.
 
 Task provider tiếp tục chạy sau khi desktop đóng. Desktop reconnect bằng status API/idempotency thay vì gửi lại request mới tùy tiện.
+
+`TikTokPublishingWorker` polling các publish job chưa terminal theo batch, luôn dùng `job.TikTokConnectionId`. Worker claim bằng `NextPollAtUtc` trước outbound để phối hợp nhiều instance; claim hết hạn sau 5 phút nếu tiến trình chết, lượt tiếp theo sau 30 giây. API trạng thái chỉ đọc SQL, không gọi provider theo tần suất refresh của desktop. Signed upload URL chỉ dùng trong desktop native để chuyển byte file local; worker/server không đọc file người dùng và không trả URL này cho React.
+
+`TikTokOperationLock` dùng SQL Server session application lock trên connection riêng cho OAuth theo user, refresh/reconnect/disconnect theo connection và publish theo user/request ID. Không giữ transaction SQL qua HTTP. `TikTokPublishAttempts` được commit trước Direct Post init; payload hash gắn account và metadata. Attempt chưa xác định kết quả không được submit lại sau restart.
+
+Bridge TikTok gắn request ID, connection ID, media ID và ID lần đăng; snapshot file trước init, kiểm tra lại trước upload. React bỏ phản hồi creator/history đến muộn, giữ job theo ID và tài khoản. Avatar đi qua proxy có ownership, exact HTTPS host/443, DNS public pinning, không redirect, giới hạn MIME/signature/1 MiB; native đưa ảnh qua virtual host nội bộ. URL CDN có chữ ký được mã hóa, không sang React và HTTP client tải avatar tắt log URL.
+
+`TikTokCredentialRuntime` ưu tiên credential database `Active`; cấu hình Client Key/Secret tĩnh chỉ là đường tương thích legacy. OAuth session snapshot `TikTokAppCredentialId`. Credential `Pending` chỉ khả dụng cho đúng Global Admin trong cửa sổ xác minh và chỉ được kích hoạt sau code exchange có scope `video.publish`.
 
 ## 5. AI Gateway
 
@@ -164,7 +192,7 @@ Download đi qua `.part`, sau đó kiểm tra HTTP metadata, file signature, siz
 - **Provider Native:** video dài kiểm tra audio kỹ thuật rồi nghe/duyệt trực tiếp, không gọi ASR; speech verification là workflow độc lập ngoài video dài khi được bật.
 - **Render:** desktop tái xác minh approved generation và media trước ghép.
 
-Narrated asset mới dùng policy `scene-audio-sync-v3`. Tương thích `v2` chỉ áp dụng cho exact approved pointer còn khớp generation, VoiceGeneration, speech/voice snapshot và hash; `OnCameraDialogue` Canonical Voice dừng ở `SpeechReadyForLipSync` khi chưa có engine lip-sync.
+Asset đã ghép audio mới dùng policy `scene-audio-sync-v3`, áp dụng cho cả lời dẫn và thoại nhân vật Canonical Voice. Thoại nhân vật dùng WAV đã duyệt để tạo video nền rồi ghép bằng FFmpeg; hình và chuyển động miệng giữ theo clip provider. Tương thích `v2` chỉ áp dụng cho exact approved pointer còn khớp generation, VoiceGeneration, speech/voice snapshot và hash. Project cũ có trạng thái chờ được đối chiếu WAV/voice version hiện hành; dashboard chỉ chiếu trạng thái tiếp tục, không tự ghi approval vào database.
 
 ## 7. Vietsub
 
@@ -207,8 +235,9 @@ Sau trộn stem, timestamp cũng được dựng lại; `apad=whole_len` và `at
 - SePay: tắt mặc định.
 - Desktop server URL: `https://localhost:7202/`.
 - Desktop updater: bật, channel `Stable`, platform `win-x64`.
-- Canonical Voice/speech verification: tắt ở server; Speech Synchronization: tắt ở desktop.
+- Canonical Voice/speech verification: source server bật hai flag; Speech Synchronization: source desktop tắt, có thể được ghi đè theo máy. Readiness vẫn kiểm credential/rate/budget và voice version.
 - Vietsub/OCR: bật; translation local: tắt; local voice UI/cài đặt: bật nhưng runtime thiếu component trả `NOT_INSTALLED`.
+- TikTok: item desktop hiển thị mặc định với `Features:TikTokEnabled=true`; server bật khả năng quản trị bằng `TikTok:AdminManagedCredentialsEnabled=true`, giữ legacy `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và không chứa Client Key/Secret trong cấu hình mặc định.
 
 Giá, credential, bank account và production connection string không nằm trong tài liệu hoặc source commit; chúng phải được cấu hình theo môi trường.
 
