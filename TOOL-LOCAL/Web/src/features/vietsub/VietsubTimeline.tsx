@@ -66,6 +66,7 @@ type VietsubTimelineProps = {
   selectedCueId?: string | null;
   onSeek: (milliseconds: number) => void;
   onSelectCue: (cueId: string, milliseconds: number, cueIndex: number) => void;
+  onOpenCueEditor?: (cue: VietsubTimelineCue, anchor: HTMLElement) => void;
   onLoadWindow: (query: VietsubTimelineWindowQuery) => void;
   onRequestThumbnails: (sourceSha256: string, indices: number[]) => void;
   onRequestWaveform: (sourceSha256: string) => void;
@@ -105,6 +106,7 @@ export function VietsubTimeline({
   selectedCueId,
   onSeek,
   onSelectCue,
+  onOpenCueEditor,
   onLoadWindow,
   onRequestThumbnails,
   onRequestWaveform,
@@ -400,7 +402,7 @@ export function VietsubTimeline({
         ...current,
         startMilliseconds: Math.round(start),
         endMilliseconds: Math.round(end),
-        moved: current.moved || Math.abs(event.clientX - current.originClientX) >= 2
+        moved: current.moved || Math.abs(event.clientX - current.originClientX) >= 4
       } : null);
     };
     const onPointerUp = (event: PointerEvent) => {
@@ -411,7 +413,11 @@ export function VietsubTimeline({
       }
       if (event.type === 'pointercancel') return;
       if (!completed.moved) {
-        onSelectCue(completed.cue.cueId, completed.cue.startMilliseconds, completed.cue.cueIndex);
+        if (completed.mode === 'move' && onOpenCueEditor) {
+          onOpenCueEditor(completed.cue, completed.captureTarget);
+        } else {
+          onSelectCue(completed.cue.cueId, completed.cue.startMilliseconds, completed.cue.cueIndex);
+        }
         return;
       }
       if (!timelineWindow || busy) return;
@@ -431,7 +437,7 @@ export function VietsubTimeline({
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
     };
-  }, [busy, drag, durationMilliseconds, effectivePixelsPerSecond, onSelectCue, onUpdateCue, playheadMilliseconds, timelineWindow]);
+  }, [busy, drag, durationMilliseconds, effectivePixelsPerSecond, onOpenCueEditor, onSelectCue, onUpdateCue, playheadMilliseconds, timelineWindow]);
 
   const rulerTicks = useMemo(() => {
     const first = Math.floor(visibleRange.startMilliseconds / rulerStep) * rulerStep;
@@ -886,7 +892,12 @@ export function VietsubTimeline({
                     aria-label={`Cue ${cue.cueIndex + 1}, ${formatTimeline(start)} đến ${formatTimeline(end)}, ${cue.previewText}`}
                     aria-pressed={selectedCueId === cue.cueId}
                     disabled={busy}
-                    onClick={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (event.detail !== 0) return;
+                      if (onOpenCueEditor) onOpenCueEditor(cue, event.currentTarget);
+                      else onSelectCue(cue.cueId, cue.startMilliseconds, cue.cueIndex);
+                    }}
                     onContextMenu={(event) => {
                       if (!onUpdateCueVoice) return;
                       event.preventDefault(); event.stopPropagation();

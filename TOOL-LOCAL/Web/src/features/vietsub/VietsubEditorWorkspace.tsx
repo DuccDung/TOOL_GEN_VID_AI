@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
-import { ArrowLeft, LoaderCircle, TriangleAlert } from 'lucide-react';
-import type { VietsubAudioMixSettings, VietsubProjectSummary, VietsubSaveState } from './types';
+import { ArrowLeft, LoaderCircle, TriangleAlert, X } from 'lucide-react';
+import type { VietsubAudioMixSettings, VietsubProjectSummary, VietsubSaveState, VietsubTimelineCue } from './types';
 import type { VietsubPageProps } from './VietsubPage';
 import { VietsubPreviewPanel } from './VietsubPreviewPanel';
 import { VietsubSubtitleDesignerModal } from './VietsubSubtitleDesignerModal';
@@ -11,6 +11,11 @@ import {
   type VietsubSubtitleEditorHandle
 } from './VietsubSubtitleEditor';
 import { VietsubTimeline } from './VietsubTimeline';
+import {
+  VietsubTimelineCueEditPopover,
+  type VietsubTimelineCueEditSnapshot,
+  type VietsubTimelineCueEditTarget
+} from './VietsubTimelineCueEditPopover';
 import { effectiveOriginalVolume, effectiveVoiceVolume } from './vietsubAudioMix';
 import { useSynchronizedVoice } from './useSynchronizedVoice';
 import { VietsubNotice } from './VietsubNotice';
@@ -73,6 +78,7 @@ function readVietsubEditorLayout(projectId: string): VietsubEditorLayout {
 export function VietsubEditorWorkspace({
   state,
   project,
+  onRefresh,
   onCloseProject,
   onImportMedia,
   onUpdateOcrSettings,
@@ -130,8 +136,13 @@ export function VietsubEditorWorkspace({
   const [subtitleDesignerOpen, setSubtitleDesignerOpen] = useState(false);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [selectedCueIndex, setSelectedCueIndex] = useState<number | null>(null);
+  const [cueEditTarget, setCueEditTarget] = useState<VietsubTimelineCueEditTarget | null>(null);
+  const [cueEditNotice, setCueEditNotice] = useState<string | null>(null);
   const [navigationVersion, setNavigationVersion] = useState(0);
   const navigationRequest = useRef(0);
+  const cueEditDirtyRef = useRef(false);
+  const activeTrackIdRef = useRef(state.subtitleWorkspace?.activeTrackId ?? null);
+  activeTrackIdRef.current = state.subtitleWorkspace?.activeTrackId ?? null;
   const [, setSaveState] = useState<VietsubSaveState>('saved');
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
@@ -173,11 +184,19 @@ export function VietsubEditorWorkspace({
     setSubtitleDesignerOpen(false);
     setSelectedCueId(null);
     setSelectedCueIndex(null);
+    setCueEditTarget(null);
+    setCueEditNotice(null);
     setSaveState('saved');
     setClosing(false);
     setSettingsDrawerOpen(false);
     setCompactPanel('preview');
   }, [project.projectId, project.sourceVideo?.mediaId]);
+
+  useEffect(() => {
+    navigationRequest.current++;
+    setCueEditTarget(null);
+    setCueEditNotice(null);
+  }, [state.subtitleWorkspace?.activeTrackId]);
 
   useEffect(() => {
     setAudioPreviewSettings({ ...state.audioMixSettings });
@@ -329,13 +348,18 @@ export function VietsubEditorWorkspace({
     void subtitleEditorRef.current?.exportVideo();
   }, []);
 
+  const flushBeforeLeave = useCallback(async () => {
+    if (cueEditDirtyRef.current) return false;
+    return flushPendingEdits();
+  }, [flushPendingEdits]);
+
   useEffect(
-    () => onRegisterBeforeLeave(flushPendingEdits),
-    [flushPendingEdits, onRegisterBeforeLeave]
+    () => onRegisterBeforeLeave(flushBeforeLeave),
+    [flushBeforeLeave, onRegisterBeforeLeave]
   );
 
   const closeEditor = useCallback(async () => {
-    if (busy || videoExporting || closingRef.current) return;
+    if (busy || videoExporting || closingRef.current || cueEditDirtyRef.current) return;
     closingRef.current = true;
     setClosing(true);
     setCloseFailed(false);
@@ -436,21 +460,91 @@ export function VietsubEditorWorkspace({
     if (!next) voiceAudioRef.current?.pause();
   }, []);
 
-  const selectCue = useCallback((cueId: string, positionMilliseconds: number, cueIndex: number) => {
+  const selectCueSafely = useCallback(async (cueId: string, positionMilliseconds: number, cueIndex: number) => {
     const request = ++navigationRequest.current;
-    void flushPendingEdits().then(saved => {
-      if (!saved || request !== navigationRequest.current) return;
-      setSelectedCueId(cueId);
-      setSelectedCueIndex(cueIndex);
-      setNavigationVersion(value => value + 1);
-      seek(positionMilliseconds);
-    });
+    const saved = await flushPendingEdits();
+    if (!saved || request !== navigationRequest.current) return false;
+    setSelectedCueId(cueId);
+    setSelectedCueIndex(cueIndex);
+    setNavigationVersion(value => value + 1);
+    seek(positionMilliseconds);
+    return true;
   }, [flushPendingEdits, seek]);
+
+  const selectCue = useCallback((cueId: string, positionMilliseconds: number, cueIndex: number) => {
+    void selectCueSafely(cueId, positionMilliseconds, cueIndex);
+  }, [selectCueSafely]);
+
+  const requestCuePage = useCallback((trackId: string, cueIndex: number) => {
+    onLoadSubtitlePage({
+      trackId,
+      offset: Math.max(0, cueIndex),
+      pageSize: 50,
+      search: '',
+      status: 'ALL',
+      speaker: ''
+    });
+  }, [onLoadSubtitlePage]);
+
+  const openCueEditor = useCallback((cue: VietsubTimelineCue, anchor: HTMLElement) => {
+    const trackId = activeTrackIdRef.current;
+    if (busy || subtitleDesignerOpen || !trackId || state.timelineWindow?.trackId !== trackId) return;
+    void selectCueSafely(cue.cueId, cue.startMilliseconds, cue.cueIndex).then((selected) => {
+      if (!selected || activeTrackIdRef.current !== trackId || !anchor.isConnected) return;
+      videoRef.current?.pause();
+      voiceAudioRef.current?.pause();
+      setPlaying(false);
+      setCueEditNotice(null);
+      setCueEditTarget({
+        trackId,
+        cueId: cue.cueId,
+        cueIndex: cue.cueIndex,
+        startMilliseconds: cue.startMilliseconds,
+        endMilliseconds: cue.endMilliseconds,
+        anchor
+      });
+      const page = state.subtitlePage;
+      const currentRevision = state.subtitleWorkspace?.tracks.find(track => track.trackId === trackId)?.revision;
+      if (page?.trackId !== trackId || page.trackRevision !== currentRevision
+        || !page.cues.some(item => item.cueId === cue.cueId)) requestCuePage(trackId, cue.cueIndex);
+    });
+  }, [busy, subtitleDesignerOpen, state.timelineWindow?.trackId, state.subtitlePage, state.subtitleWorkspace?.tracks, selectCueSafely, requestCuePage]);
+
+  const saveCueFromPopover = useCallback(async (
+    target: VietsubTimelineCueEditTarget,
+    snapshot: VietsubTimelineCueEditSnapshot,
+    translatedText: string
+  ) => {
+    const page = state.subtitlePage;
+    const track = state.subtitleWorkspace?.tracks.find(item => item.trackId === target.trackId);
+    const pageCue = page?.cues.find(item => item.cueId === target.cueId);
+    if (busy || activeTrackIdRef.current !== target.trackId
+      || page?.trackId !== target.trackId || page.trackRevision !== snapshot.revision
+      || track?.revision !== snapshot.revision || !pageCue
+      || pageCue.originalText !== snapshot.originalText || pageCue.speaker !== snapshot.speaker) return false;
+    const saved = await onUpdateSubtitleCue({
+      cueId: target.cueId,
+      originalText: snapshot.originalText,
+      translatedText,
+      speaker: snapshot.speaker,
+      expectedTrackId: target.trackId,
+      expectedTrackRevision: snapshot.revision
+    });
+    if (saved && activeTrackIdRef.current === target.trackId) {
+      onRefresh();
+      setCueEditNotice(state.voiceWorkspace?.timeline && pageCue.voiceEnabled !== false
+        ? 'Đã lưu phụ đề. Giọng Việt của đoạn này cần tạo lại.'
+        : 'Đã lưu phụ đề.');
+    }
+    return saved;
+  }, [busy, state.subtitlePage, state.subtitleWorkspace?.tracks, state.voiceWorkspace?.timeline, onUpdateSubtitleCue, onRefresh]);
 
   const activateSubtitleTrack = useCallback((trackId: string) => {
     navigationRequest.current++;
     setSelectedCueId(null);
     setSelectedCueIndex(null);
+    setCueEditTarget(null);
+    setCueEditNotice(null);
     onActivateSubtitleTrack(trackId);
   }, [onActivateSubtitleTrack]);
 
@@ -691,6 +785,7 @@ export function VietsubEditorWorkspace({
             getPlayheadMilliseconds={getPlayheadMilliseconds}
             selectedCueId={selectedCueId}
             selectedCueIndex={selectedCueIndex}
+            timelineEditingCueId={cueEditTarget?.cueId ?? null}
             onImportSrt={onImportSrt}
             onActivateTrack={activateSubtitleTrack}
             onLoadPage={onLoadSubtitlePage}
@@ -739,6 +834,7 @@ export function VietsubEditorWorkspace({
         selectedCueId={selectedCueId}
         onSeek={seek}
         onSelectCue={selectCue}
+        onOpenCueEditor={openCueEditor}
         onLoadWindow={onLoadTimelineWindow}
         onRequestThumbnails={onRequestTimelineThumbnails}
         onRequestWaveform={onRequestTimelineWaveform}
@@ -747,6 +843,25 @@ export function VietsubEditorWorkspace({
         onPreviewAudioMix={previewTimelineAudioMix}
         onUpdateAudioMix={updateTimelineAudioMix}
       />
+      {cueEditTarget && <VietsubTimelineCueEditPopover
+        key={`${cueEditTarget.trackId}:${cueEditTarget.cueId}`}
+        target={cueEditTarget}
+        cue={state.subtitlePage?.trackId === cueEditTarget.trackId
+          ? state.subtitlePage.cues.find(item => item.cueId === cueEditTarget.cueId) ?? null
+          : null}
+        pageRevision={state.subtitlePage?.trackId === cueEditTarget.trackId
+          ? state.subtitlePage.trackRevision : null}
+        activeTrackRevision={state.subtitleWorkspace?.tracks.find(item => item.trackId === cueEditTarget.trackId)?.revision ?? null}
+        busy={busy}
+        onSave={saveCueFromPopover}
+        onRetry={() => requestCuePage(cueEditTarget.trackId, cueEditTarget.cueIndex)}
+        onClose={() => setCueEditTarget(null)}
+        onDirtyChange={(dirty) => { cueEditDirtyRef.current = dirty; }}
+      />}
+      {cueEditNotice && <div className="vietsub-timeline-cue-edit-notice" role="status">
+        <span>{cueEditNotice}</span>
+        <button type="button" aria-label="Đóng thông báo chỉnh sửa phụ đề" onClick={() => setCueEditNotice(null)}><X size={15} /></button>
+      </div>}
       </div>
       {subtitleDesignerOpen && project.sourceVideo?.playbackUrl && (
         <VietsubSubtitleDesignerModal

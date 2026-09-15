@@ -21,6 +21,8 @@ import {
   ListFilter,
   LockKeyhole,
   LoaderCircle,
+  Mic,
+  MicOff,
   Palette,
   Scissors,
   Search,
@@ -56,6 +58,7 @@ type VietsubSubtitleEditorProps = {
   getPlayheadMilliseconds: () => number;
   selectedCueId?: string | null;
   selectedCueIndex?: number | null;
+  timelineEditingCueId?: string | null;
   onImportSrt: (languageCode: string) => void;
   onActivateTrack: (trackId: string) => void;
   onLoadPage: (query: VietsubSubtitlePageQuery) => void;
@@ -97,6 +100,7 @@ const VietsubSubtitleEditorComponent = forwardRef<VietsubSubtitleEditorHandle, V
   getPlayheadMilliseconds,
   selectedCueId,
   selectedCueIndex,
+  timelineEditingCueId,
   onImportSrt,
   onActivateTrack,
   onLoadPage,
@@ -288,6 +292,10 @@ const VietsubSubtitleEditorComponent = forwardRef<VietsubSubtitleEditorHandle, V
       navigationRequestRef.current = null;
       return;
     }
+    if (timelineEditingCueId === selectedCueId) {
+      navigationRequestRef.current = null;
+      return;
+    }
     if (page?.trackId === activeTrackId && page.cues.some((cue) => cue.cueId === selectedCueId)) {
       navigationRequestRef.current = null;
       return;
@@ -311,7 +319,7 @@ const VietsubSubtitleEditorComponent = forwardRef<VietsubSubtitleEditorHandle, V
         speaker: ''
       });
     });
-  }, [activeTrackId, flushPendingEdits, onLoadPage, page, selectedCueId, selectedCueIndex]);
+  }, [activeTrackId, flushPendingEdits, onLoadPage, page, selectedCueId, selectedCueIndex, timelineEditingCueId]);
 
   const activeTrack = workspace?.tracks.find((track) => track.trackId === activeTrackId) ?? null;
   const pendingCount = Math.max(0, (activeTrack?.cueCount ?? 0) - (activeTrack?.translatedCueCount ?? 0));
@@ -797,7 +805,8 @@ const VietsubCueRow = memo(function VietsubCueRow({
               <div>
                 {onSetVoiceEnabled && <button type="button" disabled={voiceSelectionDisabled}
                   onClick={() => { closeActionsMenu(); onSetVoiceEnabled(cue.cueId, cue.voiceEnabled === false); }}>
-                  {cue.voiceEnabled === false ? 'Bật tạo giọng' : 'Bỏ qua tạo giọng'}
+                  {cue.voiceEnabled === false ? <Mic size={14} /> : <MicOff size={14} />}
+                  <span><strong>{cue.voiceEnabled === false ? 'Bật tạo giọng' : 'Bỏ qua tạo giọng'}</strong></span>
                 </button>}
                 <button type="button" disabled={busy} onClick={splitAtPlayhead}><Scissors size={14} /><span><strong>Tách tại vị trí phát</strong><small>Chia câu thành hai đoạn</small></span></button>
                 <button type="button" disabled={busy} onClick={alignToPlayhead}><AlignStartHorizontal size={14} /><span><strong>Căn điểm bắt đầu</strong><small>Dùng vị trí phát hiện tại</small></span></button>

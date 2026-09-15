@@ -167,6 +167,66 @@ describe('Vietsub video flip designer', () => {
   });
 });
 
+describe('Vietsub timeline text editing', () => {
+  it('opens the exact cue page and saves its full text with the selected track revision', async () => {
+    const props = await openWorkspace('cue-edit-video');
+    const fullCue = {
+      cueId: 'cue-2', cueIndex: 1, startMilliseconds: 2_000, endMilliseconds: 3_500,
+      originalText: 'The complete original sentence.', translatedText: 'Phụ đề Việt đầy đủ.',
+      speaker: 'speaker_1', originalLocked: false, translationLocked: false,
+      warnings: [], updatedAtUtc: ''
+    };
+    const workspace = { activeTrackId: 'track', tracks: [{
+      trackId: 'track', displayName: 'English', source: 'IMPORTED_SRT', languageCode: 'en',
+      revision: 4, cueCount: 2, translatedCueCount: 2, warningCueCount: 0, updatedAtUtc: ''
+    }] };
+    const timelineWindow = { trackId: 'track', trackRevision: 4, windowStartMilliseconds: 0,
+      windowEndMilliseconds: 9_000, truncated: false, cues: [{ cueId: 'cue-2', cueIndex: 1,
+        startMilliseconds: 2_000, endMilliseconds: 3_500, locked: false, hasWarnings: false,
+        hasTranslation: true, previewText: 'Phụ đề bị rút gọn…' }] };
+    const otherPage = { trackId: 'track', trackRevision: 4, offset: 0, pageSize: 50,
+      totalCount: 2, search: '', status: 'ALL' as const, speaker: '', speakers: ['speaker_1'],
+      cues: [{ ...fullCue, cueId: 'cue-1', cueIndex: 0, startMilliseconds: 0, endMilliseconds: 1_000 }] };
+    const loadPage = vi.fn();
+    const updateCue = vi.fn(async () => true);
+    const refresh = vi.fn();
+    let beforeLeave!: () => Promise<boolean>;
+    const state: VietsubModuleState = { ...props.state, subtitleWorkspace: workspace,
+      subtitlePage: otherPage, timelineWindow };
+    const render = async (nextState: VietsubModuleState) => {
+      await act(async () => root.render(createElement(VietsubEditorWorkspace, {
+        ...props, state: nextState, onLoadSubtitlePage: loadPage,
+        onUpdateSubtitleCue: updateCue, onRefresh: refresh,
+        onRegisterBeforeLeave: (handler) => { beforeLeave = handler; return () => { }; }
+      })));
+    };
+    await render(state);
+    const bar = container.querySelector<HTMLButtonElement>('[aria-label^="Cue 2,"]')!;
+    await act(async () => bar.click());
+    expect(loadPage).toHaveBeenCalledWith(expect.objectContaining({ trackId: 'track', offset: 1, status: 'ALL' }));
+    expect(document.body.textContent).toContain('Đang tải nội dung phụ đề');
+    await render({ ...state, subtitlePage: { ...otherPage, offset: 1, cues: [fullCue] } });
+    const field = document.body.querySelector<HTMLTextAreaElement>('.vietsub-timeline-cue-edit-field textarea')!;
+    expect(field.value).toBe(fullCue.translatedText);
+    expect(document.body.textContent).toContain(fullCue.originalText);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, 'Đã sửa từ timeline.');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(await beforeLeave()).toBe(false);
+    const saveButton = document.body.querySelector<HTMLButtonElement>('.vietsub-timeline-cue-edit-footer .is-primary')!;
+    await act(async () => saveButton.click());
+    expect(updateCue).toHaveBeenCalledWith({
+      cueId: 'cue-2', originalText: fullCue.originalText, translatedText: 'Đã sửa từ timeline.',
+      speaker: fullCue.speaker, expectedTrackId: 'track', expectedTrackRevision: 4
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(document.body.querySelector('.vietsub-timeline-cue-edit-popover')).toBeNull();
+    expect(await beforeLeave()).toBe(true);
+    expect(container.textContent).toContain('Giọng Việt của đoạn này cần tạo lại');
+  });
+});
+
 describe('Vietsub editor export controls', () => {
   it('shares draft saving, progress and duplicate protection between the timeline and subtitle buttons', async () => {
     const props = await openWorkspace('export-video');

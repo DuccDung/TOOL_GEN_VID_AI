@@ -41,7 +41,9 @@ internal sealed record UpdateVietsubSubtitleCueRequest(
     Guid CueId,
     string OriginalText,
     string TranslatedText,
-    string Speaker);
+    string Speaker,
+    Guid? ExpectedTrackId = null,
+    int? ExpectedTrackRevision = null);
 
 internal sealed record VietsubSubtitleCueTimelineRequest(Guid CueId, long PositionMilliseconds);
 
@@ -997,13 +999,20 @@ internal sealed class VietsubWebBridge : IDisposable
         var session = RequireProjectSession();
         var payload = request.Payload.Deserialize<UpdateVietsubSubtitleCueRequest>(_jsonOptions)
             ?? throw new JsonException();
+        if (payload.ExpectedTrackId.HasValue != payload.ExpectedTrackRevision.HasValue
+            || (payload.ExpectedTrackId.HasValue &&
+                (session.Manifest.ActiveSubtitleTrackId != payload.ExpectedTrackId
+                 || payload.ExpectedTrackRevision < 1)))
+            throw new VietsubSubtitleException("vietsub_timeline_edit_conflict",
+                "Track phụ đề đã thay đổi. Hãy tải lại trước khi chỉnh tiếp.");
         await RequireSubtitleService().UpdateCueAsync(
             session.Manifest,
             payload.CueId,
             payload.OriginalText,
             payload.TranslatedText,
             payload.Speaker,
-            cancellationToken);
+            cancellationToken,
+            payload.ExpectedTrackRevision);
         PostSubtitleChanged(requestId, resetPage: false);
     }
 

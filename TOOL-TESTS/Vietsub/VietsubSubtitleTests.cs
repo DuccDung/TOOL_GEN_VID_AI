@@ -290,6 +290,63 @@ public sealed class VietsubSubtitleTests : IDisposable
         Assert.Contains(responses, response => response.Contains("vietsub.subtitle.changed", StringComparison.Ordinal));
         Assert.Contains(responses, response => response.Contains("vietsub.operation.completed", StringComparison.Ordinal));
         Assert.DoesNotContain(responses, response => response.Contains("vietsub.error", StringComparison.Ordinal));
+
+        var currentTrack = Assert.Single(await subtitleStore.LoadTracksAsync(project.ProjectId));
+        responses.Clear();
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.subtitle.cue.update",
+            requestId = "stale-popup-text",
+            payload = new
+            {
+                cueId = cue.CueId,
+                originalText = cue.OriginalText,
+                translatedText = "Bản nháp cũ",
+                speaker = cue.Speaker,
+                expectedTrackId = track.TrackId,
+                expectedTrackRevision = track.Revision
+            }
+        }));
+        Assert.Contains(responses, response => response.Contains("vietsub_timeline_edit_conflict", StringComparison.Ordinal));
+        Assert.DoesNotContain(responses, response => response.Contains("vietsub.subtitle.changed", StringComparison.Ordinal));
+        Assert.Equal("Xin chào", Assert.Single(Assert.Single(await subtitleStore.LoadTracksAsync(project.ProjectId)).Cues).TranslatedText);
+
+        responses.Clear();
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.subtitle.cue.update",
+            requestId = "wrong-track-popup-text",
+            payload = new
+            {
+                cueId = cue.CueId,
+                originalText = cue.OriginalText,
+                translatedText = "Sai track",
+                speaker = cue.Speaker,
+                expectedTrackId = Guid.NewGuid(),
+                expectedTrackRevision = currentTrack.Revision
+            }
+        }));
+        Assert.Contains(responses, response => response.Contains("vietsub_timeline_edit_conflict", StringComparison.Ordinal));
+        Assert.DoesNotContain(responses, response => response.Contains("vietsub.subtitle.changed", StringComparison.Ordinal));
+
+        responses.Clear();
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.subtitle.cue.update",
+            requestId = "current-popup-text",
+            payload = new
+            {
+                cueId = cue.CueId,
+                originalText = cue.OriginalText,
+                translatedText = "Phụ đề đã sửa",
+                speaker = cue.Speaker,
+                expectedTrackId = track.TrackId,
+                expectedTrackRevision = currentTrack.Revision
+            }
+        }));
+        Assert.Contains(responses, response => response.Contains("vietsub.subtitle.changed", StringComparison.Ordinal));
+        Assert.Contains(responses, response => response.Contains("vietsub.operation.completed", StringComparison.Ordinal));
+        Assert.Equal("Phụ đề đã sửa", Assert.Single(Assert.Single(await subtitleStore.LoadTracksAsync(project.ProjectId)).Cues).TranslatedText);
     }
 
     [Fact]

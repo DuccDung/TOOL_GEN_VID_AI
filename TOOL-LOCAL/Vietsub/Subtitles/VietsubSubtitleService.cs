@@ -388,10 +388,13 @@ internal sealed partial class VietsubSubtitleService(
         string originalText,
         string translatedText,
         string speaker,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? expectedTrackRevision = null)
     {
         var trackId = project.ActiveSubtitleTrackId ?? throw TrackNotFound();
         var snapshot = await store.LoadCueEditAsync(project.ProjectId, trackId, cueId, cancellationToken) ?? throw TrackNotFound();
+        if (expectedTrackRevision.HasValue && snapshot.Revision != expectedTrackRevision.Value)
+            throw TimelineEditConflict();
         var cue = snapshot.Cue;
         var original = NormalizeText(originalText);
         var translated = NormalizeText(translatedText, allowEmpty: true);

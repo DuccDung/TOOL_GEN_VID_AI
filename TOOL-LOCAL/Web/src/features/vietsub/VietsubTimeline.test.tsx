@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, type ComponentProps } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
@@ -121,7 +121,8 @@ const timelineElement = (
   voiceWorkspace: VietsubVoiceWorkspace | null = null,
   voiceEnabled = false,
   timelineWindow: VietsubTimelineWindow | null = null,
-  onUpdateCueVoice?: (ids: string[], enabled: boolean, trackId: string, revision: number) => Promise<boolean>
+  onUpdateCueVoice?: (ids: string[], enabled: boolean, trackId: string, revision: number) => Promise<boolean>,
+  overrides: Partial<ComponentProps<typeof VietsubTimeline>> = {}
 ) => createElement(
   VietsubTimeline,
   {
@@ -147,12 +148,69 @@ const timelineElement = (
     onUpdateCueVoice,
     onToggleVoice: () => { },
     onPreviewAudioMix: () => { },
-    onUpdateAudioMix: async () => true
+    onUpdateAudioMix: async () => true,
+    ...overrides
   }
 );
 const renderTimeline = (...args: Parameters<typeof timelineElement>) => renderToStaticMarkup(timelineElement(...args));
 
 describe('VietsubTimeline media artifacts', () => {
+  it('opens a text editor on a left click, while drag, resize and right click keep their own actions', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    vi.stubGlobal('ResizeObserver', class { observe() { } disconnect() { } });
+    vi.stubGlobal('PointerEvent', class extends MouseEvent {
+      readonly pointerId: number;
+      constructor(type: string, init: MouseEventInit & { pointerId?: number } = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+      }
+    });
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
+    const container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    const open = vi.fn();
+    const select = vi.fn();
+    const update = vi.fn(async () => true);
+    const dispatch = async (target: EventTarget, type: string, clientX: number) => {
+      await act(async () => target.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, button: 0, clientX, pointerId: 1
+      })));
+    };
+    try {
+      await act(async () => root.render(timelineElement(createMedia(), null, false, createTimelineWindow(), undefined,
+        { onOpenCueEditor: open, onSelectCue: select, onUpdateCue: update })));
+      const cue = container.querySelector<HTMLButtonElement>('[aria-label^="Cue 1,"]')!;
+      await dispatch(cue, 'pointerdown', 40);
+      await dispatch(window, 'pointerup', 40);
+      expect(open).toHaveBeenCalledWith(expect.objectContaining({ cueId: 'cue-1' }), cue);
+      expect(select).not.toHaveBeenCalled();
+
+      await dispatch(cue, 'pointerdown', 40);
+      await dispatch(window, 'pointermove', 60);
+      await dispatch(window, 'pointerup', 60);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledTimes(1);
+
+      await dispatch(cue.querySelector('.resize-start')!, 'pointerdown', 40);
+      await dispatch(window, 'pointerup', 40);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(select).toHaveBeenCalledWith('cue-1', 500, 0);
+
+      await act(async () => cue.click());
+      expect(open).toHaveBeenCalledTimes(2);
+      await act(async () => cue.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2 })));
+      expect(open).toHaveBeenCalledTimes(2);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      delete (HTMLElement.prototype as Partial<HTMLElement>).setPointerCapture;
+      delete (HTMLElement.prototype as Partial<HTMLElement>).hasPointerCapture;
+      delete (HTMLElement.prototype as Partial<HTMLElement>).releasePointerCapture;
+      vi.unstubAllGlobals();
+    }
+  });
   it('mở menu chuột phải và gửi lựa chọn giọng cho đúng câu', async () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     vi.stubGlobal('ResizeObserver', class { observe() { } disconnect() { } });

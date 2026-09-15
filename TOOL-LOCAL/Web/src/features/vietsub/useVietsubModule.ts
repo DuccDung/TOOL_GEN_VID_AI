@@ -9,7 +9,7 @@ import type {
   VietsubOcrSettings,
   VietsubAudioMixSettings,
   VietsubVideoTransformSettings,
-  VietsubSubtitleCue,
+  VietsubSubtitleCueUpdate,
   VietsubSubtitleStyle,
   VietsubSubtitlePageQuery,
   VietsubTimelineCueUpdate,
@@ -1297,10 +1297,8 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     runProjectOperation('vietsub.subtitle.track.activate', { trackId });
   }, [runProjectOperation]);
 
-  const updateSubtitleCue = useCallback((cue: Pick<
-    VietsubSubtitleCue,
-    'cueId' | 'originalText' | 'translatedText' | 'speaker'
-  >) => runAwaitableOperation('vietsub.subtitle.cue.update', cue), [runAwaitableOperation]);
+  const updateSubtitleCue = useCallback((cue: VietsubSubtitleCueUpdate) =>
+    runAwaitableOperation('vietsub.subtitle.cue.update', cue), [runAwaitableOperation]);
 
   const updateSubtitleStyle = useCallback(async (
     style: VietsubSubtitleStyle,

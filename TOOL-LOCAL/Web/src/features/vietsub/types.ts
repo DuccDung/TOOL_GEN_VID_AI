@@ -462,4 +462,12 @@ export type VietsubTimelineCueUpdate = {
   endMilliseconds: number;
 };
 
+export type VietsubSubtitleCueUpdate = Pick<
+  VietsubSubtitleCue,
+  'cueId' | 'originalText' | 'translatedText' | 'speaker'
+> & {
+  expectedTrackId?: string;
+  expectedTrackRevision?: number;
+};
+
 export type VietsubSaveState = 'saved' | 'dirty' | 'saving' | 'error';
