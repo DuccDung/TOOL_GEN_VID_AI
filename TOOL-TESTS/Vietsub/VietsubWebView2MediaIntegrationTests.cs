@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -13,8 +14,10 @@ namespace TOOL_TESTS.Vietsub;
 
 public sealed class VietsubWebView2MediaIntegrationTests
 {
-    [Fact]
-    public async Task WebView2_decodes_real_artifacts_through_project_bridge_and_playback_service()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WebView2_uses_desktop_media_handler_without_unhandled_exceptions(bool missingThumbnail)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -116,10 +119,16 @@ public sealed class VietsubWebView2MediaIntegrationTests
                 requestId = "request-full-webview-waveform",
                 payload = new { sourceSha256 = manifest.SourceVideo.Sha256 }
             }), timeout.Token);
-            await WaitUntilAsync(
-                () => ContainsMessage(bridgeMessages, "vietsub.timeline.thumbnail.ready")
-                    && ContainsMessage(bridgeMessages, "vietsub.timeline.waveform.ready"),
-                timeout.Token);
+            try { await WaitUntilAsync(
+                () => (ContainsMessage(bridgeMessages, "vietsub.timeline.thumbnail.ready")
+                    && ContainsMessage(bridgeMessages, "vietsub.timeline.waveform.ready"))
+                    || ContainsMessage(bridgeMessages, "vietsub.timeline.waveform.failed")
+                    || ContainsMessage(bridgeMessages, "vietsub.timeline.thumbnail.failed"),
+                timeout.Token); }
+            catch (OperationCanceledException) { throw new Xunit.Sdk.XunitException(string.Join('\n', bridgeMessages)); }
+            if (!ContainsMessage(bridgeMessages, "vietsub.timeline.waveform.ready"))
+                await waveforms.EnsureAsync(manifest, timeout.Token); // Surface the underlying fixture failure promptly.
+            Assert.True(ContainsMessage(bridgeMessages, "vietsub.timeline.waveform.ready"), string.Join('\n', bridgeMessages));
             await bridge.TryHandleAsync(
                 """{"type":"vietsub.state.get","requestId":"state-full-webview-path","payload":{}}""",
                 timeout.Token);
@@ -127,9 +136,17 @@ public sealed class VietsubWebView2MediaIntegrationTests
             Assert.NotNull(mediaState.ThumbnailUrl);
             Assert.NotNull(mediaState.WaveformUrl);
 
+            var thumbnailPath = thumbnails.ResolveArtifactPath(
+                manifest.ProjectId, manifest.SourceVideo.Sha256, mediaState.ThumbnailIndex);
+            Assert.NotNull(thumbnailPath);
+            if (missingThumbnail)
+            {
+                File.Delete(thumbnailPath);
+            }
+
             await File.WriteAllTextAsync(
                 Path.Combine(webRoot, "index.html"),
-                BuildTestPage(mediaState.ThumbnailUrl!, mediaState.WaveformUrl!),
+                BuildTestPage(mediaState.ThumbnailUrl!, mediaState.WaveformUrl!, missingThumbnail),
                 timeout.Token);
             var browserResult = await RunWebView2CheckOnStaAsync(
                 webRoot,
@@ -138,15 +155,25 @@ public sealed class VietsubWebView2MediaIntegrationTests
                 bridge,
                 timeout.Token);
 
-            Assert.Equal(200, browserResult.ThumbnailStatus);
             Assert.Equal(200, browserResult.WaveformStatus);
-            Assert.Equal("none", browserResult.ThumbnailErrorCode);
+            if (missingThumbnail)
+            {
+                // Failed image loads need not raise WebResourceResponseReceived.
+                // The desktop's safe failure message must still reach the page.
+                Assert.Equal("vietsub_thumbnail_artifact_missing", browserResult.ThumbnailFailureCode);
+            }
+            else
+            {
+                Assert.Equal(200, browserResult.ThumbnailStatus);
+                Assert.Equal("none", browserResult.ThumbnailErrorCode);
+                Assert.Null(browserResult.ThumbnailFailureCode);
+                Assert.Equal(1, browserResult.ThumbnailResponseReceivedCalls);
+            }
             Assert.Equal("none", browserResult.WaveformErrorCode);
-            Assert.True(browserResult.ThumbnailWidth > 0 && browserResult.ThumbnailHeight > 0);
+            Assert.Equal(!missingThumbnail, browserResult.ThumbnailWidth > 0 && browserResult.ThumbnailHeight > 0);
             Assert.True(browserResult.WaveformWidth > 0 && browserResult.WaveformHeight > 0);
             Assert.Equal(1, browserResult.ThumbnailHandlerCalls);
             Assert.Equal(1, browserResult.WaveformHandlerCalls);
-            Assert.Equal(1, browserResult.ThumbnailResponseReceivedCalls);
             Assert.Equal(1, browserResult.WaveformResponseReceivedCalls);
 
             context = new VietsubUserContext(userId, Guid.NewGuid());
@@ -159,11 +186,6 @@ public sealed class VietsubWebView2MediaIntegrationTests
             Assert.Equal(0, wrongOrganization.Content.Length);
 
             context = new VietsubUserContext(userId, organizationId);
-            var thumbnailPath = thumbnails.ResolveArtifactPath(
-                manifest.ProjectId,
-                manifest.SourceVideo.Sha256,
-                mediaState.ThumbnailIndex);
-            Assert.NotNull(thumbnailPath);
             File.Delete(thumbnailPath);
             var missing = bridge.TryOpenPlaybackRequest(
                 new Uri(mediaState.ThumbnailUrl!),
@@ -193,7 +215,10 @@ public sealed class VietsubWebView2MediaIntegrationTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
-            using var form = new Form
+            // Catch failures from the real async-void callback instead of letting a
+            // regression terminate the test host or open a WinForms error dialog.
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException, threadScope: true);
+            using var form = new TOOL_LOCAL.Form1
             {
                 ClientSize = new Size(320, 200),
                 ShowInTaskbar = false,
@@ -203,10 +228,72 @@ public sealed class VietsubWebView2MediaIntegrationTests
             };
             using var webView = new WebView2 { Dock = DockStyle.Fill };
             form.Controls.Add(webView);
+            const BindingFlags privateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(TOOL_LOCAL.Form1).GetField("_webView", privateInstance)!.SetValue(form, webView);
+            typeof(TOOL_LOCAL.Form1).GetField("_vietsubBridge", privateInstance)!.SetValue(form, bridge);
+            var runtimeLogPath = Path.Combine(webRoot, "media-runtime.log");
+            typeof(TOOL_LOCAL.Form1).GetField("_vietsubMediaLog", privateInstance)!.SetValue(
+                form, new VietsubMediaRuntimeLog(runtimeLogPath));
+            var productionHandler = typeof(TOOL_LOCAL.Form1)
+                .GetMethod("WebViewOnVietsubMediaRequested", privateInstance)!
+                .CreateDelegate<EventHandler<CoreWebView2WebResourceRequestedEventArgs>>(form);
             var statuses = new ConcurrentDictionary<string, (int Status, string ErrorCode)>();
             var handlerCalls = new ConcurrentDictionary<string, int>();
             var responseReceivedCalls = new ConcurrentDictionary<string, int>();
-            var headerFailures = new ConcurrentQueue<string>();
+            string? browserPayload = null;
+            void TryCompleteBrowserCheck()
+            {
+                if (browserPayload is null || completion.Task.IsCompleted) return;
+                try
+                {
+                    using var document = JsonDocument.Parse(browserPayload);
+                    var root = document.RootElement;
+                    if (!string.Equals(root.GetProperty("result").GetString(), "PASS", StringComparison.Ordinal))
+                    {
+                        completion.TrySetException(new InvalidOperationException(browserPayload));
+                    }
+                    else
+                    {
+                        // Web messages and response notifications have no guaranteed
+                        // relative order. Wait for both, without a timing delay.
+                        if (!statuses.TryGetValue(VietsubPlaybackResourceTypes.Waveform, out var waveformStatus)
+                            || (root.GetProperty("thumbnailWidth").GetInt32() > 0
+                                && !statuses.ContainsKey(VietsubPlaybackResourceTypes.Thumbnail))) return;
+                        var runtimeLog = File.ReadAllText(runtimeLogPath);
+                        if (runtimeLog.Split('\n').Any(line =>
+                                line.Contains("ExceptionType=", StringComparison.Ordinal)
+                                && !line.Contains("ExceptionType=none", StringComparison.Ordinal)))
+                            throw new InvalidOperationException($"Desktop media callback failed: {runtimeLog}");
+                        var thumbnailStatus = statuses.GetValueOrDefault(
+                            VietsubPlaybackResourceTypes.Thumbnail, (Status: 0, ErrorCode: "none"));
+                        completion.TrySetResult(new BrowserResult(
+                            thumbnailStatus.Status,
+                            thumbnailStatus.ErrorCode,
+                            root.GetProperty("thumbnailWidth").GetInt32(),
+                            root.GetProperty("thumbnailHeight").GetInt32(),
+                            waveformStatus.Status,
+                            waveformStatus.ErrorCode,
+                            root.GetProperty("waveformWidth").GetInt32(),
+                            root.GetProperty("waveformHeight").GetInt32(),
+                            handlerCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Thumbnail),
+                            handlerCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Waveform),
+                            responseReceivedCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Thumbnail),
+                            responseReceivedCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Waveform),
+                            root.GetProperty("thumbnailFailureCode").GetString()));
+                    }
+                }
+                catch (Exception exception)
+                {
+                    completion.TrySetException(exception);
+                }
+                form.BeginInvoke(form.Close);
+            }
+            ThreadExceptionEventHandler onThreadException = (_, args) =>
+            {
+                completion.TrySetException(args.Exception);
+                form.BeginInvoke(form.Close);
+            };
+            Application.ThreadException += onThreadException;
             using var cancellationRegistration = cancellationToken.Register(() =>
             {
                 try
@@ -247,26 +334,8 @@ public sealed class VietsubWebView2MediaIntegrationTests
                         var uri = new Uri(eventArgs.Request.Uri);
                         var resourceType = VietsubMediaPlaybackService.ClassifyResource(uri);
                         handlerCalls.AddOrUpdate(resourceType, 1, (_, current) => current + 1);
-                        var rangeHeader = TOOL_LOCAL.Form1.ReadVietsubRangeHeader(
-                            eventArgs.Request.Headers,
-                            resourceType,
-                            out var rangeHeaderExceptionType);
-                        if (rangeHeaderExceptionType is not null)
-                        {
-                            headerFailures.Enqueue(rangeHeaderExceptionType);
-                        }
-                        var response = bridge.TryOpenPlaybackRequest(
-                            uri,
-                            eventArgs.Request.Method,
-                            rangeHeader);
-                        statuses[resourceType] = (
-                            response.StatusCode,
-                            response.ErrorCode ?? "none");
-                        eventArgs.Response = TOOL_LOCAL.Form1.CreateVietsubWebResourceResponse(
-                            coreWebView.Environment,
-                            response,
-                            Guid.NewGuid().ToString("N"));
                     };
+                    coreWebView.WebResourceRequested += productionHandler;
                     coreWebView.WebResourceResponseReceived += (_, eventArgs) =>
                     {
                         var uri = new Uri(eventArgs.Request.Uri);
@@ -281,42 +350,12 @@ public sealed class VietsubWebView2MediaIntegrationTests
                         errorCode = string.IsNullOrWhiteSpace(errorCode) ? "none" : errorCode;
                         statuses[resourceType] = (eventArgs.Response.StatusCode, errorCode);
                         responseReceivedCalls.AddOrUpdate(resourceType, 1, (_, current) => current + 1);
+                        TryCompleteBrowserCheck();
                     };
                     coreWebView.WebMessageReceived += (_, eventArgs) =>
                     {
-                        var payload = eventArgs.WebMessageAsJson;
-                        using var document = JsonDocument.Parse(payload);
-                        var root = document.RootElement;
-                        if (!string.Equals(root.GetProperty("result").GetString(), "PASS", StringComparison.Ordinal))
-                        {
-                            completion.TrySetException(new InvalidOperationException(payload));
-                        }
-                        else
-                        {
-                            if (headerFailures.TryPeek(out var headerFailure))
-                            {
-                                completion.TrySetException(new InvalidOperationException(
-                                    $"Đọc request header ảnh phát sinh {headerFailure}."));
-                                form.BeginInvoke(form.Close);
-                                return;
-                            }
-                            var thumbnailStatus = statuses[VietsubPlaybackResourceTypes.Thumbnail];
-                            var waveformStatus = statuses[VietsubPlaybackResourceTypes.Waveform];
-                            completion.TrySetResult(new BrowserResult(
-                                thumbnailStatus.Status,
-                                thumbnailStatus.ErrorCode,
-                                root.GetProperty("thumbnailWidth").GetInt32(),
-                                root.GetProperty("thumbnailHeight").GetInt32(),
-                                waveformStatus.Status,
-                                waveformStatus.ErrorCode,
-                                root.GetProperty("waveformWidth").GetInt32(),
-                                root.GetProperty("waveformHeight").GetInt32(),
-                                handlerCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Thumbnail),
-                                handlerCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Waveform),
-                                responseReceivedCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Thumbnail),
-                                responseReceivedCalls.GetValueOrDefault(VietsubPlaybackResourceTypes.Waveform)));
-                        }
-                        form.BeginInvoke(form.Close);
+                        browserPayload = eventArgs.WebMessageAsJson;
+                        TryCompleteBrowserCheck();
                     };
                     coreWebView.Navigate("https://app.local/index.html");
                 }
@@ -335,7 +374,14 @@ public sealed class VietsubWebView2MediaIntegrationTests
                 }
             };
 
-            Application.Run(form);
+            try
+            {
+                Application.Run(form);
+            }
+            finally
+            {
+                Application.ThreadException -= onThreadException;
+            }
         })
         {
             IsBackground = true,
@@ -388,7 +434,7 @@ public sealed class VietsubWebView2MediaIntegrationTests
         }
     }
 
-    private static string BuildTestPage(string thumbnailUrl, string waveformUrl) => $$"""
+    private static string BuildTestPage(string thumbnailUrl, string waveformUrl, bool missingThumbnail) => $$"""
         <!doctype html>
         <html>
         <head>
@@ -399,23 +445,39 @@ public sealed class VietsubWebView2MediaIntegrationTests
           <img id="thumbnail" crossorigin="anonymous" referrerpolicy="no-referrer">
           <img id="waveform" crossorigin="anonymous" referrerpolicy="no-referrer">
           <script>
+            window.addEventListener('error', event => chrome.webview.postMessage({ result: 'FAIL', error: event.message }));
             const thumbnail = document.getElementById('thumbnail');
             const waveform = document.getElementById('waveform');
             const loaded = new Set();
+            let thumbnailFailureCode = null;
+            let reported = false;
             const complete = (name) => {
               loaded.add(name);
-              if (loaded.size !== 2) return;
+              if (reported || !loaded.has('thumbnail') || !loaded.has('waveform')) return;
+              if ({{JsonSerializer.Serialize(missingThumbnail)}} && !thumbnailFailureCode) return;
+              reported = true;
               chrome.webview.postMessage({
                 result: 'PASS',
                 thumbnailWidth: thumbnail.naturalWidth,
                 thumbnailHeight: thumbnail.naturalHeight,
                 waveformWidth: waveform.naturalWidth,
-                waveformHeight: waveform.naturalHeight
+                waveformHeight: waveform.naturalHeight,
+                thumbnailFailureCode
               });
             };
+            chrome.webview.addEventListener('message', event => {
+              const message = event.data;
+              if (message.type === 'vietsub.media.load.failed' && message.payload?.resourceType === 'thumbnail') {
+                thumbnailFailureCode = message.payload.errorCode;
+                complete('failure');
+              }
+            });
             thumbnail.addEventListener('load', () => complete('thumbnail'));
             waveform.addEventListener('load', () => complete('waveform'));
-            thumbnail.addEventListener('error', () => chrome.webview.postMessage({ result: 'FAIL', resource: 'thumbnail' }));
+            thumbnail.addEventListener('error', () => {
+              if ({{JsonSerializer.Serialize(missingThumbnail)}}) complete('thumbnail');
+              else chrome.webview.postMessage({ result: 'FAIL', resource: 'thumbnail' });
+            });
             waveform.addEventListener('error', () => chrome.webview.postMessage({ result: 'FAIL', resource: 'waveform' }));
             thumbnail.src = {{JsonSerializer.Serialize(thumbnailUrl)}};
             waveform.src = {{JsonSerializer.Serialize(waveformUrl)}};
@@ -491,5 +553,6 @@ public sealed class VietsubWebView2MediaIntegrationTests
         int ThumbnailHandlerCalls,
         int WaveformHandlerCalls,
         int ThumbnailResponseReceivedCalls,
-        int WaveformResponseReceivedCalls);
+        int WaveformResponseReceivedCalls,
+        string? ThumbnailFailureCode);
 }

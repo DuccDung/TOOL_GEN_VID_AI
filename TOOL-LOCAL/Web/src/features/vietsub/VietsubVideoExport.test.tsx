@@ -93,7 +93,13 @@ describe('video export completion through the desktop bridge', () => {
     const requestId = await startExport();
     await emit({ type: 'vietsub.video.export.started', requestId });
     expect(container.textContent).toContain('Đang kết xuất MP4');
+    await emit({ type: 'vietsub.video.export.progress', requestId, payload: { stage: 'RENDER', percent: 53.8 } });
+    expect(container.textContent).toContain('53%');
+    await emit({ type: 'vietsub.video.export.progress', requestId: 'stale-export', payload: { stage: 'RENDER', percent: 99 } });
+    expect(container.textContent).toContain('53%');
+    expect(container.textContent).not.toContain('99%');
     await emit({ type: 'vietsub.video.export.completed', requestId, payload: { fileName: 'finished.mp4' } });
+    await emit({ type: 'vietsub.video.export.progress', requestId, payload: { stage: 'RENDER', percent: 80 } });
     await emit(stateMessage(requestId));
     await emit({ type: 'vietsub.operation.completed', requestId: 'unrelated-request', payload: { completed: true } });
     expect(button().disabled).toBe(true);

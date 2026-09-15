@@ -76,6 +76,10 @@ import {
 } from './contentLanguageError';
 import { VietsubPage } from './features/vietsub/VietsubPage';
 import { useVietsubModule } from './features/vietsub/useVietsubModule';
+import { useSystemSetup, type SystemSetupController } from './features/systemSetup/useSystemSetup';
+import { SystemSetupPanel } from './features/systemSetup/SystemSetupPanel';
+import { StartupSystemSetupModal } from './features/systemSetup/StartupSystemSetupModal';
+import { isSystemSetupReady } from './features/systemSetup/types';
 import { getSceneFirstFrameAssetBlocker } from './sceneAssetValidation';
 import { buildSpeechTranscriptDiff, type SpeechDiffSegment } from './speechTranscriptDiff';
 import { assessSpeechPacing } from './speechPacing';
@@ -422,8 +426,13 @@ function App() {
   const pendingVoiceCatalogPreviewQuoteRef = useRef(new Map<string, PendingVoiceCatalogPreview>());
   const pendingVoiceCatalogPreviewOperationRef = useRef(new Map<string, PendingVoiceCatalogPreview>());
   const pendingVideoVoiceQuoteRef = useRef(new Map<string, string[]>());
+  const systemSetup = useSystemSetup(dashboard.selectedOrganizationId);
+  const vietsubStartupReady = !isHosted || Boolean(
+    systemSetup.snapshot
+    && (!systemSetup.snapshot.startupRequired || isSystemSetupReady(systemSetup.snapshot))
+  );
   const vietsub = useVietsubModule(
-    dashboard.features.vietsubEnabled,
+    dashboard.features.vietsubEnabled && vietsubStartupReady,
     dashboard.selectedOrganizationId
   );
   const selectedProjectRequestRef = useRef<string | null>(null);
@@ -1726,6 +1735,11 @@ function App() {
     ? vietsub.state.loading || vietsub.state.busy
     : generationBusy;
   const licenseLocked = isLicenseLocked(dashboard.license);
+  const startupSystemSetupVisible = Boolean(
+    systemSetup.snapshot?.startupRequired
+    && !isSystemSetupReady(systemSetup.snapshot)
+    && !licenseLocked
+  );
   const checkMediaTools = () => {
     if (generationBusy) return;
     setBusy(true);
@@ -1756,9 +1770,11 @@ function App() {
         onNavigate={handleNavigation}
         onLogout={requestLogout}
         onUnavailable={notify}
+        interactionLocked={startupSystemSetupVisible}
       />
 
-      <main className="app-main">
+      <main className="app-main" inert={startupSystemSetupVisible ? true : undefined}
+        aria-hidden={startupSystemSetupVisible ? true : undefined}>
         <Header
           dashboard={dashboard}
           page={page}
@@ -1866,6 +1882,7 @@ function App() {
           />
         ) : page === 'settings' ? (
           <DesktopSettingsPage
+            setup={systemSetup}
             settings={desktopSettings}
             busy={busy}
             onSpeechSynchronizationChange={updateSpeechSynchronizationSetting}
@@ -2023,6 +2040,10 @@ function App() {
 
       {mediaInstallProgress && (
         <MediaToolInstallModal progress={mediaInstallProgress} />
+      )}
+
+      {startupSystemSetupVisible && (
+        <StartupSystemSetupModal setup={systemSetup} />
       )}
 
       {licenseLocked && dashboard.license && (
@@ -2644,7 +2665,8 @@ function Sidebar({
   onToggle,
   onNavigate,
   onLogout,
-  onUnavailable
+  onUnavailable,
+  interactionLocked = false
 }: {
   dashboard: DashboardState;
   page: Page;
@@ -2655,6 +2677,7 @@ function Sidebar({
   onNavigate: (label: string, page?: Page) => void;
   onLogout: () => void;
   onUnavailable: (message: string) => void;
+  interactionLocked?: boolean;
 }) {
   const profile = dashboard.profile;
   const displayName = profile.displayName || profile.email || 'Tài khoản';
@@ -2666,8 +2689,10 @@ function Sidebar({
 
   return (
     <>
-      <button className={`sidebar-scrim ${open ? 'visible' : ''}`} onClick={onClose} aria-label="Đóng menu" />
-      <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}>
+      <button className={`sidebar-scrim ${open ? 'visible' : ''}`} onClick={onClose} aria-label="Đóng menu"
+        inert={interactionLocked ? true : undefined} aria-hidden={interactionLocked ? true : undefined} />
+      <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}
+        inert={interactionLocked ? true : undefined} aria-hidden={interactionLocked ? true : undefined}>
         <div className="brand">
           <div className="brand-mark"><Clapperboard size={25} /></div>
           <div className="brand-copy"><strong>VideoMaker</strong><span>Tự động tạo video</span></div>
@@ -6481,10 +6506,12 @@ function ProjectsPage({ projects, onSelect, onCreate }: { projects: ProjectSumma
 }
 
 function DesktopSettingsPage({
+  setup,
   settings,
   busy,
   onSpeechSynchronizationChange
 }: {
+  setup: SystemSetupController;
   settings: DesktopFeatureSettings;
   busy: boolean;
   onSpeechSynchronizationChange: (enabled: boolean) => void;
@@ -6506,6 +6533,7 @@ function DesktopSettingsPage({
         </div>
       </section>
 
+      <SystemSetupPanel setup={setup} />
       <section className="card desktop-setting-card" id="speech-synchronization-setting">
         <div className="desktop-setting-heading">
           <span className="desktop-setting-icon"><Volume2 size={22} /></span>

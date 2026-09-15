@@ -19,6 +19,7 @@ export type VietsubModuleState = {
   timelineWindow?: VietsubTimelineWindow | null;
   subtitleStyle: VietsubSubtitleStyle;
   audioMixSettings: VietsubAudioMixSettings;
+  videoTransformSettings: VietsubVideoTransformSettings;
   subtitleNotice?: string | null;
   translationNotice?: string | null;
   translationResourceAlert?: VietsubTranslationResourceAlert | null;
@@ -380,6 +381,11 @@ export type VietsubAudioMixSettings = {
   originalMuted: boolean;
   translatedVoiceMuted: boolean;
   autoDuckOriginal: boolean;
+};
+
+export type VietsubVideoTransformSettings = {
+  flipHorizontal: boolean;
+  flipVertical: boolean;
 };
 
 export type VietsubSubtitlePageQuery = {

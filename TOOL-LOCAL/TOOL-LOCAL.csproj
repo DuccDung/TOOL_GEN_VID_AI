@@ -57,6 +57,8 @@
 
   <ItemGroup>
     <Content Include="Vietsub\Voice\Workers\piper_worker.py" Link="workers\piper_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="SystemSetup\piper-requirements.lock" Link="workers\piper-requirements.lock" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="SystemSetup\Fixtures\*.png" Link="setup-fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -164,7 +166,9 @@
     </ItemGroup>
   </Target>
 
-  <Target Name="CleanDashboardPublishAssets" BeforeTargets="CopyFilesToPublishDirectory" Condition="'$(PublishDir)' != ''">
+  <!-- CopyFilesToPublishDirectory dependencies already copy assets before its BeforeTargets run.
+       Clean before computing/copying files, so repeated publish cannot delete the freshly copied UI. -->
+  <Target Name="CleanDashboardPublishAssets" BeforeTargets="ComputeFilesToPublish" Condition="'$(PublishDir)' != ''">
     <RemoveDir Directories="$(PublishDir)wwwroot\assets" />
   </Target>
 

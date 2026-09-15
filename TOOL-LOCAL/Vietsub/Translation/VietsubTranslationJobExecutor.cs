@@ -651,15 +651,8 @@ internal sealed class VietsubTranslationJobExecutor(
         string configurationFingerprint,
         CancellationToken cancellationToken)
     {
-        var currentTrack = (await subtitleStore.LoadTracksAsync(projectId, cancellationToken))
-            .SingleOrDefault(candidate => candidate.TrackId == trackId)
-            ?? throw new VietsubTranslationException(
-                VietsubTranslationErrorCodes.JobNotResumable,
-                "Input track đã bị xóa trong lúc translation job đang chạy.");
-        var orderedCues = currentTrack.Cues
-            .OrderBy(cue => cue.StartMilliseconds)
-            .ThenBy(cue => cue.EndMilliseconds)
-            .ToArray();
+        var orderedCues = (await subtitleStore.LoadCueContextAsync(projectId, trackId, cueId,
+            contextCueCount, cancellationToken)).ToArray();
         var cueIndex = Array.FindIndex(orderedCues, candidate => candidate.CueId == cueId);
         if (cueIndex < 0)
         {

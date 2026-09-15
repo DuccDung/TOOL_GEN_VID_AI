@@ -16,7 +16,7 @@ internal static class VietsubProjectStatuses
 
 internal sealed class VietsubProjectManifest
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -57,6 +57,8 @@ internal sealed class VietsubProjectManifest
     public VietsubVoiceSettings VoiceSettings { get; set; } = new();
 
     public VietsubAudioMixSettings AudioMixSettings { get; set; } = VietsubAudioMixSettings.CreateDefault();
+
+    public VietsubVideoTransformSettings VideoTransformSettings { get; set; } = VietsubVideoTransformSettings.CreateDefault();
 
     public VietsubSubtitleStyle SubtitleStyle { get; set; } = VietsubSubtitleStyle.CreateDefault();
 

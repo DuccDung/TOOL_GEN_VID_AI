@@ -272,7 +272,7 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
                 return;
             }
 
-            Directory.CreateDirectory(ComponentDirectory);
+            TOOL_LOCAL.SystemSetup.SystemSetupPaths.EnsureSafeDirectory(ComponentDirectory);
             var partialPath = ModelPath + ".partial";
             TryDelete(partialPath);
             TryDelete(ProbeMarkerPath);
@@ -516,7 +516,7 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
         }
 
         var marker = new ProbeMarker(
-            3,
+            4,
             _component.EngineId,
             _component.EngineVersion,
             _component.ModelSha256,
@@ -529,7 +529,8 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
             evidence.AvxLevel,
             evidence.NativeLibraryHash,
             evidence.ConfigFingerprint,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            TOOL_LOCAL.SystemSetup.SystemSetupPaths.MachineFingerprint);
         var temporaryPath = ProbeMarkerPath + ".partial";
         File.WriteAllText(temporaryPath, JsonSerializer.Serialize(marker, JsonOptions));
         File.Move(temporaryPath, ProbeMarkerPath, overwrite: true);
@@ -813,22 +814,6 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
             }
         }
 
-        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            try
-            {
-                var root = Path.GetPathRoot(Path.GetFullPath(candidate));
-                if (!string.IsNullOrWhiteSpace(root)
-                    && new DriveInfo(root).AvailableFreeSpace >= component.MinimumFreeDiskBytes)
-                {
-                    return candidate;
-                }
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-            }
-        }
-
         return localAppDataRoot;
     }
 
@@ -845,7 +830,8 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
                 Environment.ProcessorCount);
             var marker = JsonSerializer.Deserialize<ProbeMarker>(File.ReadAllText(ProbeMarkerPath), JsonOptions);
             return marker is not null
-                && marker.SchemaVersion == 3
+                && marker.SchemaVersion == 4
+                && marker.MachineFingerprint == TOOL_LOCAL.SystemSetup.SystemSetupPaths.MachineFingerprint
                 && string.Equals(marker.EngineId, _component.EngineId, StringComparison.Ordinal)
                 && string.Equals(marker.EngineVersion, _component.EngineVersion, StringComparison.Ordinal)
                 && string.Equals(marker.ModelSha256, _component.ModelSha256, StringComparison.Ordinal)
@@ -970,5 +956,6 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
         string AvxLevel,
         string NativeLibraryHash,
         string ConfigFingerprint,
-        DateTime ProbedAtUtc);
+        DateTime ProbedAtUtc,
+        string? MachineFingerprint = null);
 }

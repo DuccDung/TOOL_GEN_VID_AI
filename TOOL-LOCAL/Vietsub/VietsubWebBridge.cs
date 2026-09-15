@@ -64,7 +64,8 @@ internal sealed record ExportVietsubSrtRequest(string Mode);
 
 internal sealed record UpdateVietsubSubtitleStyleRequest(
     VietsubSubtitleStyle Style,
-    VietsubAudioMixSettings? AudioMixSettings = null);
+    VietsubAudioMixSettings? AudioMixSettings = null,
+    VietsubVideoTransformSettings? VideoTransformSettings = null);
 
 internal sealed record VietsubJobRequest(Guid JobId);
 
@@ -762,12 +763,7 @@ internal sealed class VietsubWebBridge : IDisposable
         catch (OperationCanceledException)
         {
         }
-        catch (Exception exception) when (
-            exception is VietsubMediaException
-                or TOOL_LOCAL.Media.MediaToolUnavailableException
-                or IOException
-                or UnauthorizedAccessException
-                or TimeoutException)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             if (!IsCurrentTimelineSource(project))
             {
@@ -1018,10 +1014,13 @@ internal sealed class VietsubWebBridge : IDisposable
         var audioMixSettings = payload.AudioMixSettings?.Copy()
             ?? session.Manifest.AudioMixSettings.Copy();
         audioMixSettings.Normalize();
+        var videoTransformSettings = payload.VideoTransformSettings?.Copy()
+            ?? session.Manifest.VideoTransformSettings.Copy();
         await session.UpdateAsync(manifest =>
         {
             manifest.SubtitleStyle = style;
             manifest.AudioMixSettings = audioMixSettings;
+            manifest.VideoTransformSettings = videoTransformSettings;
         }, cancellationToken);
         await session.FlushAsync(cancellationToken);
         Post(new WebMessageResponse(
@@ -1032,6 +1031,10 @@ internal sealed class VietsubWebBridge : IDisposable
             "vietsub.audio.mix.updated",
             requestId,
             audioMixSettings.Copy()));
+        Post(new WebMessageResponse(
+            "vietsub.video.transform.updated",
+            requestId,
+            videoTransformSettings.Copy()));
     }
 
     private async Task PostTimelineWindowAsync(
@@ -1250,7 +1253,16 @@ internal sealed class VietsubWebBridge : IDisposable
             context.UserId,
             context.OrganizationId,
             destinationPath,
-            cancellationToken);
+            cancellationToken,
+            new Progress<VietsubVideoExportProgress>(update =>
+            {
+                var current = _contextProvider?.Invoke();
+                if (!_disposed && ReferenceEquals(session, _projectSession)
+                    && current?.OrganizationId == context.OrganizationId
+                    && string.Equals(current?.UserId, context.UserId, StringComparison.Ordinal)
+                    && string.Equals(_activeOperationRequestId, requestId, StringComparison.Ordinal))
+                    Post(new WebMessageResponse("vietsub.video.export.progress", requestId, update));
+            }));
         Post(new WebMessageResponse(
             "vietsub.video.export.completed",
             requestId,
@@ -2004,6 +2016,7 @@ internal sealed class VietsubWebBridge : IDisposable
         VietsubSubtitleWorkspaceSummary? subtitleWorkspace = null;
         VietsubVoiceWorkspaceSummary? voiceWorkspace = null;
         IReadOnlyList<VietsubJobSummary> jobs = [];
+        var stateSession = _projectSession;
         if (_projectStore is not null && _contextProvider is not null)
         {
             var context = RequireContext();
@@ -2016,32 +2029,38 @@ internal sealed class VietsubWebBridge : IDisposable
             {
                 await CloseCurrentSessionAsync(cancellationToken);
             }
-
+            stateSession = _projectSession;
+            var manifest = stateSession?.Manifest;
             projects = await _projectStore.ListAsync(
                 context.OrganizationId,
                 context.UserId,
                 cancellationToken);
-            selectedProject = _projectSession is null
+            selectedProject = manifest is null
                 ? null
-                : ToSelectedProjectSummary(_projectSession.Manifest);
-            if (_projectSession is not null && _subtitleService is not null)
+                : ToSelectedProjectSummary(manifest);
+            if (manifest is not null && _subtitleService is not null)
             {
                 subtitleWorkspace = await _subtitleService.GetWorkspaceAsync(
-                    _projectSession.Manifest,
+                    manifest,
                     cancellationToken);
             }
-            if (_projectSession is not null && _voiceService is not null)
+            if (manifest is not null && _voiceService is not null)
             {
                 voiceWorkspace = await _voiceService.GetWorkspaceAsync(
-                    _projectSession.Manifest,
+                    manifest,
                     cancellationToken);
             }
-            if (_projectSession is not null && _jobManager is not null)
+            if (manifest is not null && _jobManager is not null)
             {
                 jobs = await _jobManager.ListAsync(
-                    _projectSession.Manifest.ProjectId,
+                    manifest.ProjectId,
                     cancellationToken: cancellationToken);
             }
+            // Background SQLite/hash work must never publish data into a newly selected context.
+            var currentContext = _contextProvider.Invoke();
+            if (_disposed || !ReferenceEquals(stateSession, _projectSession)
+                || currentContext?.OrganizationId != context.OrganizationId
+                || !string.Equals(currentContext?.UserId, context.UserId, StringComparison.Ordinal)) return;
         }
 
         Post(new WebMessageResponse(
@@ -2058,6 +2077,7 @@ internal sealed class VietsubWebBridge : IDisposable
                 subtitleWorkspace,
                 subtitleStyle = _projectSession?.Manifest.SubtitleStyle,
                 audioMixSettings = _projectSession?.Manifest.AudioMixSettings,
+                videoTransformSettings = _projectSession?.Manifest.VideoTransformSettings,
                 voiceWorkspace,
                 ocrSettings = _projectSession?.Manifest.OcrSettings,
                 voiceRuntime = _voiceService?.GetRuntimeStatus(),
@@ -2180,6 +2200,46 @@ internal sealed class VietsubWebBridge : IDisposable
         }
 
         return _mediaPlaybackService.Open(requestUri, method, rangeHeader, manifest);
+    }
+
+    public async Task<VietsubPlaybackResponse> OpenPlaybackRequestAsync(
+        Uri requestUri, string method, string? rangeHeader, CancellationToken cancellationToken)
+    {
+        // Capture UI-owned context before dispatching disk/hash work. Never invoke the
+        // context provider or access WebView COM objects from the background thread.
+        var session = _projectSession;
+        var manifest = session?.Manifest;
+        var service = _mediaPlaybackService;
+        var context = _contextProvider?.Invoke();
+        if (!_enabled || _disposed || service is null || manifest is null || context is null
+            || context.OrganizationId != manifest.OrganizationId
+            || !string.Equals(context.UserId, manifest.OwnerUserId, StringComparison.Ordinal))
+        {
+            var unavailable = _disposed || service is null;
+            var code = !_enabled ? "vietsub_feature_disabled" : unavailable ? "vietsub_media_bridge_unavailable"
+                : manifest is null ? "vietsub_media_project_session_required" : "vietsub_media_session_context_mismatch";
+            return VietsubMediaPlaybackService.Error(unavailable && _enabled ? 503 : 403,
+                unavailable && _enabled ? "Service Unavailable" : "Forbidden", code,
+                VietsubMediaPlaybackService.ClassifyResource(requestUri));
+        }
+
+        var snapshot = JsonSerializer.Deserialize<VietsubProjectManifest>(JsonSerializer.SerializeToUtf8Bytes(manifest))!;
+        var response = await Task.Run(() => service.Open(requestUri, method, rangeHeader, snapshot, cancellationToken), cancellationToken);
+        var currentContext = _contextProvider?.Invoke();
+        if (cancellationToken.IsCancellationRequested || _disposed || !ReferenceEquals(session, _projectSession)
+            || !ReferenceEquals(manifest, _projectSession?.Manifest)
+            || manifest.ActiveSubtitleTrackId != snapshot.ActiveSubtitleTrackId
+            || manifest.UpdatedAtUtc != snapshot.UpdatedAtUtc
+            || manifest.SourceVideo?.MediaId != snapshot.SourceVideo?.MediaId
+            || manifest.SourceVideo?.Sha256 != snapshot.SourceVideo?.Sha256
+            || currentContext?.OrganizationId != snapshot.OrganizationId
+            || !string.Equals(currentContext?.UserId, snapshot.OwnerUserId, StringComparison.Ordinal))
+        {
+            response.Content.Dispose();
+            return VietsubMediaPlaybackService.Error(403, "Forbidden", "vietsub_media_session_context_mismatch",
+                VietsubMediaPlaybackService.ClassifyResource(requestUri));
+        }
+        return response;
     }
 
     private VietsubProjectStore RequireProjectStore() =>

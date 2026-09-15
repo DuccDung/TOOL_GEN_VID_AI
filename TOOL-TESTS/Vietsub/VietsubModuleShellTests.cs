@@ -270,14 +270,14 @@ public sealed class VietsubModuleShellTests
     }
 
     [Fact]
-    public void Host_registers_media_filter_before_navigation_and_assigns_typed_response_synchronously()
+    public void Host_registers_media_filter_before_navigation_and_defers_background_media_verification()
     {
         var form = ReadRepositoryFile("TOOL-LOCAL", "Form1.cs");
         var configureCall = form.IndexOf("ConfigureWebViewSecurity(", StringComparison.Ordinal);
         var firstNavigation = form.IndexOf(".Navigate(", configureCall, StringComparison.Ordinal);
         var configureMethodStart = form.IndexOf("private void ConfigureWebViewSecurity", StringComparison.Ordinal);
         var configureMethodEnd = form.IndexOf("private async void WebViewOnWebMessageReceived", configureMethodStart, StringComparison.Ordinal);
-        var handlerStart = form.IndexOf("private void WebViewOnVietsubMediaRequested", StringComparison.Ordinal);
+        var handlerStart = form.IndexOf("private async void WebViewOnVietsubMediaRequested", StringComparison.Ordinal);
         var handlerEnd = form.IndexOf("private void WebViewOnNavigationCompleted", handlerStart, StringComparison.Ordinal);
 
         Assert.True(configureCall >= 0);
@@ -293,6 +293,9 @@ public sealed class VietsubModuleShellTests
         Assert.Contains("WebResourceRequested += WebViewOnVietsubMediaRequested", configureMethod);
         Assert.Contains("WebResourceResponseReceived += WebViewOnVietsubMediaResponseReceived", configureMethod);
         Assert.Contains("eventArgs.Response =", handler);
+        Assert.Contains("using var deferral = eventArgs.GetDeferral()", handler);
+        Assert.Contains("await bridge.OpenPlaybackRequestAsync", handler);
+        Assert.DoesNotContain("deferral.Complete()", handler);
         Assert.Contains("CreateVietsubWebResourceResponse", handler);
         Assert.Contains("response.StatusCode", handler);
         Assert.Contains("response.ReasonPhrase", handler);

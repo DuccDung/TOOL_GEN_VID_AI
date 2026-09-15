@@ -34,6 +34,7 @@ internal sealed class VietsubVideoExportException(
 }
 
 internal sealed record VietsubVideoExportResult(string FileName, long SizeBytes, decimal DurationSeconds);
+internal sealed record VietsubVideoExportProgress(string Stage, double Percent);
 
 internal sealed class VietsubVideoExportService(
     IVietsubLocalJobAuthorizer authorizer,
@@ -54,10 +55,12 @@ internal sealed class VietsubVideoExportService(
         string userId,
         Guid organizationId,
         string destinationPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<VietsubVideoExportProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         var project = session.Manifest;
+        progress?.Report(new("PREPARE", 0));
         try
         {
             await authorizer.AuthorizeAsync(userId, organizationId, project, cancellationToken);
@@ -67,6 +70,7 @@ internal sealed class VietsubVideoExportService(
             throw new VietsubVideoExportException(exception.Code, exception.Message, exception);
         }
 
+        using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: false);
         var media = project.SourceVideo
             ?? throw new VietsubVideoExportException(
                 VietsubVideoExportErrorCodes.VideoRequired,
@@ -123,6 +127,8 @@ internal sealed class VietsubVideoExportService(
         var audioMixSettings = project.AudioMixSettings.Copy();
         audioMixSettings.Normalize();
         var audioMixFingerprint = JsonSerializer.Serialize(audioMixSettings, JsonOptions);
+        var videoTransformSettings = project.VideoTransformSettings.Copy();
+        var videoTransformFingerprint = JsonSerializer.Serialize(videoTransformSettings, JsonOptions);
         var voiceWorkspace = await voiceStore.LoadWorkspaceAsync(
             project.ProjectId,
             activeTrackId,
@@ -174,6 +180,10 @@ internal sealed class VietsubVideoExportService(
 
         try
         {
+            var estimatedBytes = (long)Math.Ceiling((double)media.Metadata.DurationSeconds
+                * Math.Max(2_000_000, (double)displayWidth * displayHeight * (double)(media.Metadata.FramesPerSecond ?? 30) * 0.12) / 8 * 1.25);
+            if (new DriveInfo(Path.GetPathRoot(fullDestinationPath)!).AvailableFreeSpace < estimatedBytes + 512L * 1024 * 1024)
+                throw new VietsubVideoExportException("vietsub_export_disk_full", "Không đủ dung lượng dự kiến để xuất video. Hãy chọn ổ còn trống nhiều hơn.");
             await mediaToolPreflight.RequireReadyAsync(cancellationToken);
             await File.WriteAllTextAsync(assPath, ass, new UTF8Encoding(false), cancellationToken);
             var subtitleFilter = $"subtitles=filename='{EscapeSubtitleFilterPath(assPath)}'";
@@ -185,12 +195,31 @@ internal sealed class VietsubVideoExportService(
                 subtitleFilter,
                 media.Metadata.DurationSeconds,
                 media.Metadata.HasAudio,
-                audioMixSettings);
-            var result = await processRunner.RunAsync(
+                audioMixSettings,
+                videoTransformSettings);
+            var progressPath = Path.Combine(tempDirectory, "ffmpeg-progress.txt");
+            var monitoredArguments = new List<string> { "-progress", progressPath, "-stats_period", "0.5", "-nostats" };
+            monitoredArguments.AddRange(renderArguments);
+            progress?.Report(new("RENDER", 2));
+            var renderTask = processRunner.RunAsync(
                 ffmpegPath,
-                renderArguments,
+                monitoredArguments,
                 TimeSpan.FromMinutes(timeoutMinutes),
                 cancellationToken);
+            var lastPercent = 2d;
+            while (!renderTask.IsCompleted)
+            {
+                await Task.WhenAny(renderTask, Task.Delay(500, cancellationToken));
+                if (cancellationToken.IsCancellationRequested) break; // Await runner cleanup before deleting its files.
+                var seconds = ReadRenderedSeconds(progressPath);
+                var percent = Math.Clamp(2 + seconds / (double)media.Metadata.DurationSeconds * 93, 2, 95);
+                if (percent > lastPercent)
+                {
+                    lastPercent = percent;
+                    progress?.Report(new("RENDER", percent));
+                }
+            }
+            var result = await renderTask;
             if (result.ExitCode != 0 || !File.Exists(partialPath))
             {
                 throw new VietsubVideoExportException(
@@ -198,6 +227,7 @@ internal sealed class VietsubVideoExportService(
                     "Không thể kết xuất video có phụ đề. Hãy kiểm tra bộ FFmpeg và thử lại.");
             }
 
+            progress?.Report(new("VERIFY", 96));
             var output = await mediaProbe.ProbeAsync(partialPath, cancellationToken);
             var expectsAudio = ShouldIncludeOriginalAudio(media.Metadata.HasAudio, audioMixSettings)
                 || ShouldIncludeTranslatedVoice(voiceTimelinePath, audioMixSettings);
@@ -221,11 +251,13 @@ internal sealed class VietsubVideoExportService(
                 media.Sha256,
                 styleFingerprint,
                 audioMixFingerprint,
+                videoTransformFingerprint,
                 monitorVoiceTimeline,
                 voiceTimeline?.ArtifactId,
                 voiceTimeline?.Sha256,
                 cancellationToken);
             File.Move(partialPath, fullDestinationPath, overwrite: true);
+            progress?.Report(new("COMPLETED", 100));
             var info = new FileInfo(fullDestinationPath);
             return new(info.Name, info.Length, output.DurationSeconds);
         }
@@ -255,6 +287,26 @@ internal sealed class VietsubVideoExportService(
         }
     }
 
+    internal static double ReadRenderedSeconds(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            // Only the final progress block is needed even after hours of encoding.
+            var count = (int)Math.Min(stream.Length, 16384);
+            stream.Position = stream.Length - count;
+            var buffer = new byte[count];
+            stream.ReadExactly(buffer);
+            var lines = Encoding.UTF8.GetString(buffer).Split('\n');
+            foreach (var line in lines.Reverse())
+                if (line.StartsWith("out_time_us=", StringComparison.Ordinal)
+                    && long.TryParse(line.AsSpan(12).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var micros)
+                    && micros >= 0) return micros / 1_000_000d;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        return 0;
+    }
+
     private async Task EnsureSnapshotStillCurrentAsync(
         Guid projectId,
         Guid trackId,
@@ -263,6 +315,7 @@ internal sealed class VietsubVideoExportService(
         string mediaSha256,
         string styleFingerprint,
         string audioMixFingerprint,
+        string videoTransformFingerprint,
         bool monitorVoiceTimeline,
         Guid? voiceArtifactId,
         string? voiceSha256,
@@ -281,11 +334,15 @@ internal sealed class VietsubVideoExportService(
             || !string.Equals(
                 JsonSerializer.Serialize(currentProject.AudioMixSettings, JsonOptions),
                 audioMixFingerprint,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                JsonSerializer.Serialize(currentProject.VideoTransformSettings, JsonOptions),
+                videoTransformFingerprint,
                 StringComparison.Ordinal))
         {
             throw new VietsubVideoExportException(
                 VietsubVideoExportErrorCodes.TrackChanged,
-                "Video, track, phụ đề hoặc thiết lập âm thanh đã thay đổi trong lúc xuất. Hãy xuất lại để tránh dùng dữ liệu cũ.");
+                "Video, track, phụ đề, thiết lập hình ảnh hoặc âm thanh đã thay đổi trong lúc xuất. Hãy xuất lại để tránh dùng dữ liệu cũ.");
         }
         var currentTracks = await subtitleStore.LoadTracksAsync(projectId, cancellationToken);
         if (currentTracks.SingleOrDefault(item => item.TrackId == trackId)?.Revision != trackRevision)
@@ -330,7 +387,8 @@ internal sealed class VietsubVideoExportService(
         string subtitleFilter,
         decimal durationSeconds,
         bool sourceHasAudio,
-        VietsubAudioMixSettings settings)
+        VietsubAudioMixSettings settings,
+        VietsubVideoTransformSettings videoTransformSettings)
     {
         var includeOriginal = ShouldIncludeOriginalAudio(sourceHasAudio, settings);
         var includeVoice = ShouldIncludeTranslatedVoice(voiceTimelinePath, settings);
@@ -346,9 +404,14 @@ internal sealed class VietsubVideoExportService(
             arguments.AddRange(["-i", voiceTimelinePath!]);
         }
 
+        var videoFilters = new List<string>(3);
+        if (videoTransformSettings.FlipHorizontal) videoFilters.Add("hflip");
+        if (videoTransformSettings.FlipVertical) videoFilters.Add("vflip");
+        videoFilters.Add(subtitleFilter);
+
         arguments.AddRange([
             "-map", "0:v:0",
-            "-vf", subtitleFilter
+            "-vf", string.Join(',', videoFilters)
         ]);
 
         if (includeOriginal && includeVoice)

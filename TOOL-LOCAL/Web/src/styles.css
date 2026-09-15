@@ -1251,7 +1251,7 @@ button { color: inherit; }
 .vietsub-subtitle-designer-preview { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 10px; background: #fff; border: 1px solid #dfe7f0; border-radius: 12px; box-shadow: 0 4px 14px rgba(39,61,88,.05); }
 .vietsub-subtitle-preview-heading { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 2px 8px; }
 .vietsub-subtitle-preview-heading > span { color: #3b75be; font-size: 7px; font-weight: 900; letter-spacing: .12em; }
-.vietsub-subtitle-preview-heading > div { display: flex; align-items: center; gap: 5px; }
+.vietsub-subtitle-preview-heading > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
 .vietsub-subtitle-preview-heading strong,.vietsub-subtitle-preview-heading small { display: inline-flex; min-height: 20px; align-items: center; padding: 0 7px; font-size: 7px; border-radius: 99px; }
 .vietsub-subtitle-preview-heading strong { color: #2b69b5; background: #eaf3ff; border: 1px solid #c9ddf4; }
 .vietsub-subtitle-preview-heading small { color: #68798d; background: #f2f5f8; border: 1px solid #e0e6ed; }

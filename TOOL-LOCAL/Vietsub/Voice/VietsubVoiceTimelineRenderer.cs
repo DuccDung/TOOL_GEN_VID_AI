@@ -17,7 +17,7 @@ internal sealed record VietsubVoiceTimelineRenderResult(
     VietsubWavMetadata Metadata,
     IReadOnlyList<VietsubVoiceTimingDiagnostic> Diagnostics);
 
-internal sealed class VietsubVoiceTimelineRenderer(
+internal sealed partial class VietsubVoiceTimelineRenderer(
     VietsubAppPaths paths,
     IMediaToolPreflightService preflight,
     string ffmpegPath,
@@ -33,7 +33,8 @@ internal sealed class VietsubVoiceTimelineRenderer(
         IReadOnlyList<VietsubVoicePhraseAudio> phraseAudio,
         VietsubVoiceSettingsSnapshot settings,
         long requestedTimelineDurationMilliseconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<int, int, CancellationToken, Task>? segmentProgress = null)
     {
         if (phraseAudio.Count == 0)
         {
@@ -82,17 +83,23 @@ internal sealed class VietsubVoiceTimelineRenderer(
             diagnostics[index] = diagnostic;
         }
         phraseAudio = prepared;
+        var byId = diagnostics.ToDictionary(value => value.PhraseId, StringComparer.Ordinal);
 
         await preflight.RequireReadyAsync(cancellationToken);
         var renderedContentEnd = phraseAudio.Max(item =>
         {
-            var diagnostic = diagnostics.Single(value => value.PhraseId == item.Phrase.PhraseId);
+            var diagnostic = byId[item.Phrase.PhraseId];
             var renderedDuration = (long)Math.Ceiling(item.Metadata.AudibleDurationMilliseconds / Math.Max(1d, diagnostic.Tempo));
             return checked(item.Phrase.StartMilliseconds + renderedDuration);
         });
         var timelineDuration = Math.Max(
             requestedTimelineDurationMilliseconds,
             checked(renderedContentEnd + 250));
+        if (timelineDuration > VietsubWavInspector.MaximumTimelineMilliseconds)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.TimelineFailed, "Timeline giọng vượt giới hạn thời lượng được hỗ trợ.");
+        if (timelineDuration > SegmentMilliseconds || phraseAudio.Count > MaximumInputsPerPartition)
+            return await RenderSegmentsAsync(projectId, jobId, trackId, trackRevision, phraseAudio, diagnostics,
+                timelineDuration, cancellationToken, segmentProgress);
         var partitions = phraseAudio.Chunk(MaximumInputsPerPartition).Select(chunk => chunk.ToArray()).ToArray();
         EnsureDiskSpace(projectId, timelineDuration, partitions.Length + 2);
         var tempDirectory = paths.GetProjectPath(projectId, "temp", $"voice-{jobId:N}");
@@ -106,8 +113,8 @@ internal sealed class VietsubVoiceTimelineRenderer(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var stem = Path.Combine(tempDirectory, $"stem-{index:D4}.wav");
-                await RenderPartitionAsync(partitions[index], diagnostics, timelineDuration, stem, cancellationToken);
-                _ = VietsubWavInspector.Inspect(stem, analyzeSilence: false);
+                await RenderPartitionAsync(partitions[index], byId, timelineDuration, stem, cancellationToken);
+                _ = VietsubWavInspector.InspectTimeline(stem, timelineDuration, cancellationToken);
                 stems.Add(stem);
             }
 
@@ -120,7 +127,7 @@ internal sealed class VietsubVoiceTimelineRenderer(
             {
                 await MixStemsAsync(stems, timelineDuration, partial, cancellationToken);
             }
-            var metadata = VietsubWavInspector.Inspect(partial, analyzeSilence: false);
+            var metadata = VietsubWavInspector.InspectTimeline(partial, timelineDuration, cancellationToken);
             var final = Path.Combine(outputDirectory, $"voice-timeline-{Guid.NewGuid():N}.wav");
             File.Move(partial, final);
             return new(final, metadata, diagnostics);
@@ -133,10 +140,11 @@ internal sealed class VietsubVoiceTimelineRenderer(
 
     private async Task RenderPartitionAsync(
         IReadOnlyList<VietsubVoicePhraseAudio> items,
-        IReadOnlyList<VietsubVoiceTimingDiagnostic> allDiagnostics,
+        IReadOnlyDictionary<string, VietsubVoiceTimingDiagnostic> allDiagnostics,
         long timelineDurationMilliseconds,
         string outputPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long originMilliseconds = 0)
     {
         var arguments = new List<string> { "-hide_banner", "-loglevel", "error" };
         foreach (var item in items)
@@ -148,7 +156,7 @@ internal sealed class VietsubVoiceTimelineRenderer(
         for (var index = 0; index < items.Count; index++)
         {
             var item = items[index];
-            var diagnostic = allDiagnostics.Single(value => value.PhraseId == item.Phrase.PhraseId);
+            var diagnostic = allDiagnostics[item.Phrase.PhraseId];
             var trimStart = Seconds(item.Metadata.TrimStartMilliseconds);
             var trimEnd = Seconds(item.Metadata.TrimEndMilliseconds);
             var filter = $"[{index}:a:0]atrim=start={trimStart}:end={trimEnd},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo";
@@ -160,7 +168,10 @@ internal sealed class VietsubVoiceTimelineRenderer(
             }
             // adelay can emit leading frames without PTS after atempo. Rebuild the clock
             // from all samples, including silence, before atrim/amix can drop those frames.
-            filter += $",adelay={item.Phrase.StartMilliseconds}|{item.Phrase.StartMilliseconds},asetpts=N/SR/TB[a{index}]";
+            var offset = item.Phrase.StartMilliseconds - originMilliseconds;
+            if (offset < 0) filter += $",atrim=start_sample={checked(-offset * 48)},asetpts=N/SR/TB";
+            var delay = Math.Max(0, offset);
+            filter += $",adelay={delay}|{delay},asetpts=N/SR/TB[a{index}]";
             filters.Add(filter);
         }
         var inputLabels = string.Concat(Enumerable.Range(0, items.Count).Select(index => $"[a{index}]"));
@@ -208,7 +219,9 @@ internal sealed class VietsubVoiceTimelineRenderer(
         string outputPath,
         CancellationToken cancellationToken)
     {
-        var result = await processRunner.RunAsync(ffmpegPath, arguments, TimeSpan.FromMinutes(20), cancellationToken);
+        var limitedArguments = new List<string> { "-filter_complex_threads", "2" };
+        limitedArguments.AddRange(arguments);
+        var result = await processRunner.RunAsync(ffmpegPath, limitedArguments, TimeSpan.FromMinutes(20), cancellationToken);
         if (result.ExitCode != 0 || !File.Exists(outputPath) || new FileInfo(outputPath).Length <= 44)
         {
             throw new VietsubVoiceException(VietsubVoiceErrorCodes.TimelineFailed, "FFmpeg không thể dựng timeline giọng Việt.", true);

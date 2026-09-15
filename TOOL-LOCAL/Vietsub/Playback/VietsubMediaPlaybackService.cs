@@ -154,7 +154,8 @@ internal sealed class VietsubMediaPlaybackService
         Uri requestUri,
         string method,
         string? rangeHeader,
-        VietsubProjectManifest activeProject)
+        VietsubProjectManifest activeProject,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(requestUri);
         ArgumentNullException.ThrowIfNull(activeProject);
@@ -170,7 +171,7 @@ internal sealed class VietsubMediaPlaybackService
 
         if (TryParseVoiceUrl(requestUri, out var voiceProjectId, out var voiceArtifactId, out var voiceSha256))
         {
-            return OpenVoice(method, rangeHeader, activeProject, voiceProjectId, voiceArtifactId, voiceSha256);
+            return OpenVoice(method, rangeHeader, activeProject, voiceProjectId, voiceArtifactId, voiceSha256, cancellationToken);
         }
 
         if (TryParseWaveformUrl(
@@ -409,10 +410,11 @@ internal sealed class VietsubMediaPlaybackService
         VietsubProjectManifest activeProject,
         Guid projectId,
         Guid artifactId,
-        string sha256)
+        string sha256,
+        CancellationToken cancellationToken)
     {
         if (_voiceRegistry is null
-            || !_voiceRegistry.TryResolve(activeProject, projectId, artifactId, sha256, out var entry))
+            || !_voiceRegistry.TryResolve(activeProject, projectId, artifactId, sha256, out var entry, cancellationToken))
         {
             return Error(403, "Forbidden", "vietsub_voice_context_mismatch", VietsubPlaybackResourceTypes.Voice);
         }

@@ -7,6 +7,7 @@ import { VietsubEditorWorkspace } from './VietsubEditorWorkspace';
 import type { VietsubModuleState, VietsubProjectSummary } from './types';
 import { defaultVietsubAudioMixSettings } from './vietsubAudioMix';
 import { defaultVietsubSubtitleStyle } from './vietsubSubtitleStyle';
+import { defaultVietsubVideoTransformSettings } from './vietsubVideoTransform';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -55,7 +56,12 @@ async function click(text: string) {
   await act(async () => button!.click());
 }
 
-async function openDesigner(muted: boolean) {
+async function openDesigner(
+  muted: boolean,
+  onSave: ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave'] = async () => true,
+  onExportVideo: ComponentProps<typeof VietsubSubtitleDesignerModal>['onExportVideo'] = () => { },
+  videoTransformSettings = defaultVietsubVideoTransformSettings
+) {
   await act(async () => root.render(createElement(VietsubSubtitleDesignerModal, {
     media: {
       mediaId: 'media', fileName: 'video.mp4', importMode: 'COPY', sizeBytes: 1024,
@@ -67,10 +73,11 @@ async function openDesigner(muted: boolean) {
     },
     style: defaultVietsubSubtitleStyle,
     audioMixSettings: { ...defaultVietsubAudioMixSettings, translatedVoiceMuted: muted },
+    videoTransformSettings,
     voicePlaybackUrl: 'https://vietsub-media.app.local/voice.wav',
     previewText: 'Fixture', hasTranslatedSubtitles: true, initialTimeMilliseconds: 0,
-    busy: false, onPreviewTimeChange: () => { }, onSave: async () => true,
-    onExportVideo: () => { }, onCancelOperation: () => { }, onClose: () => { }
+    busy: false, onPreviewTimeChange: () => { }, onSave,
+    onExportVideo, onCancelOperation: () => { }, onClose: () => { }
   })));
 }
 
@@ -90,6 +97,7 @@ async function openWorkspace(mediaId: string) {
   const state: VietsubModuleState = {
     enabled: true, initialized: true, loading: false, busy: false, stage: 'shell_ready', projects: [project],
     selectedProject: project, subtitleStyle: defaultVietsubSubtitleStyle, audioMixSettings: defaultVietsubAudioMixSettings,
+    videoTransformSettings: defaultVietsubVideoTransformSettings,
     ocrSettings: { languageCode: 'en', profile: 'BALANCED', region: { x: 0, y: 0.6, width: 1, height: 0.4 } }, jobs: [],
     voiceWorkspace: {
       settings: { engineId: 'PIPER_LOCAL', modelId: 'model', voiceId: 'voice', maximumPhraseGapMilliseconds: 500,
@@ -117,6 +125,47 @@ async function openWorkspace(mediaId: string) {
   await act(async () => root.render(createElement(VietsubEditorWorkspace, props)));
   return props;
 }
+
+describe('Vietsub video flip designer', () => {
+  it('lật riêng hình video theo hai chiều và lưu lựa chọn cùng thiết kế', async () => {
+    const onSave = vi.fn(async (
+      ..._args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>
+    ) => true);
+    await openDesigner(false, onSave);
+    const video = container.querySelector('.vietsub-subtitle-designer-stage video') as HTMLVideoElement;
+    const stage = container.querySelector('.vietsub-subtitle-designer-stage') as HTMLDivElement;
+    expect(video.style.transform).toBe('scale(1, 1)');
+
+    await click('Lật trái–phải');
+    expect(video.style.transform).toBe('scale(-1, 1)');
+    await click('Lật trên–dưới');
+    expect(video.style.transform).toBe('scale(-1, -1)');
+    expect(stage.style.transform).toBe('scale(1)');
+    expect(container.querySelector('.vietsub-subtitle-preview-tools button[aria-pressed="true"]')?.textContent)
+      .toContain('Lật trái–phải');
+    await click('Lưu thay đổi');
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onSave.mock.calls[0][2]).toEqual({ flipHorizontal: true, flipVertical: true });
+  });
+
+  it('lưu trước khi xuất và đưa thiết lập lật về mặc định khi yêu cầu', async () => {
+    const onSave = vi.fn(async (
+      ..._args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>
+    ) => true);
+    const onExportVideo = vi.fn();
+    await openDesigner(false, onSave, onExportVideo, { flipHorizontal: true, flipVertical: false });
+    const video = container.querySelector('.vietsub-subtitle-designer-stage video') as HTMLVideoElement;
+    expect(video.style.transform).toBe('scale(-1, 1)');
+    await click('Lật trên–dưới');
+    await click('Xuất MP4');
+    expect(onSave.mock.calls[0][2]).toEqual({ flipHorizontal: true, flipVertical: true });
+    expect(onExportVideo).toHaveBeenCalledOnce();
+
+    await click('Mặc định');
+    expect(video.style.transform).toBe('scale(1, 1)');
+    expect(container.querySelectorAll('.vietsub-subtitle-preview-tools button[aria-pressed="true"]')).toHaveLength(0);
+  });
+});
 
 describe('Vietsub editor export controls', () => {
   it('shares draft saving, progress and duplicate protection between the timeline and subtitle buttons', async () => {

@@ -785,11 +785,13 @@ public sealed class VietsubMediaTests
         manifest.ServerSynchronized = true;
         await store.SaveAsync(manifest);
         var context = new VietsubUserContext(userId, organizationId);
+        var expireDuringRead = false;
+        var contextReads = 0;
         using var bridge = new VietsubWebBridge(
             true,
             _ => { },
             store,
-            () => context,
+            () => expireDuringRead && ++contextReads > 1 ? new VietsubUserContext(userId, Guid.NewGuid()) : context,
             mediaImportService: import,
             mediaPlaybackService: new VietsubMediaPlaybackService(import));
         await bridge.TryHandleAsync(JsonSerializer.Serialize(new
@@ -802,12 +804,17 @@ public sealed class VietsubMediaTests
         var url = new Uri(VietsubMediaPlaybackService.CreatePlaybackUrl(
             manifest.ProjectId,
             manifest.SourceVideo.MediaId));
-        var allowed = bridge.TryOpenPlaybackRequest(url, "GET", null);
+        var allowed = await bridge.OpenPlaybackRequestAsync(url, "GET", null, default);
         Assert.Equal(200, allowed.StatusCode);
         allowed.Content.Dispose();
 
+        expireDuringRead = true;
+        var expired = await bridge.OpenPlaybackRequestAsync(url, "GET", null, default);
+        AssertPlaybackError(expired, 403, "vietsub_media_session_context_mismatch", workspace.Root);
+        expireDuringRead = false;
+
         context = new VietsubUserContext(userId, Guid.NewGuid());
-        var wrongOrganization = bridge.TryOpenPlaybackRequest(url, "GET", null);
+        var wrongOrganization = await bridge.OpenPlaybackRequestAsync(url, "GET", null, default);
         AssertPlaybackError(
             wrongOrganization,
             403,
@@ -815,7 +822,7 @@ public sealed class VietsubMediaTests
             workspace.Root);
 
         context = new VietsubUserContext("different-user", organizationId);
-        var wrongUser = bridge.TryOpenPlaybackRequest(url, "GET", null);
+        var wrongUser = await bridge.OpenPlaybackRequestAsync(url, "GET", null, default);
         AssertPlaybackError(
             wrongUser,
             403,
@@ -1104,7 +1111,7 @@ public sealed class VietsubMediaTests
                     """, string.Empty);
             }
 
-            if (values.Any(value => value.Contains("showwavespic", StringComparison.Ordinal)))
+            if (values.Contains("s16le"))
             {
                 WaveformCalls++;
             }

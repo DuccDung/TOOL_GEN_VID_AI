@@ -7,6 +7,8 @@ import {
   Check,
   Eye,
   EyeOff,
+  FlipHorizontal2,
+  FlipVertical2,
   Italic,
   Move,
   Pause,
@@ -21,7 +23,12 @@ import {
   Type,
   X
 } from 'lucide-react';
-import type { VietsubAudioMixSettings, VietsubMediaSummary, VietsubSubtitleStyle } from './types';
+import type {
+  VietsubAudioMixSettings,
+  VietsubMediaSummary,
+  VietsubSubtitleStyle,
+  VietsubVideoTransformSettings
+} from './types';
 import {
   cloneAudioMixSettings,
   defaultVietsubAudioMixSettings,
@@ -34,6 +41,10 @@ import {
   hasSubtitleContrastWarning,
   vietsubSubtitlePresets
 } from './vietsubSubtitleStyle';
+import {
+  cloneVideoTransformSettings,
+  defaultVietsubVideoTransformSettings
+} from './vietsubVideoTransform';
 import { VietsubSubtitleOverlay, useVideoContentRect } from './VietsubSubtitleOverlay';
 import { useSynchronizedVoice } from './useSynchronizedVoice';
 import { VietsubNotice } from './VietsubNotice';
@@ -45,6 +56,7 @@ export function VietsubSubtitleDesignerModal({
   media,
   style,
   audioMixSettings,
+  videoTransformSettings,
   voicePlaybackUrl,
   previewText,
   hasTranslatedSubtitles,
@@ -60,6 +72,7 @@ export function VietsubSubtitleDesignerModal({
   media: VietsubMediaSummary;
   style: VietsubSubtitleStyle;
   audioMixSettings: VietsubAudioMixSettings;
+  videoTransformSettings: VietsubVideoTransformSettings;
   voicePlaybackUrl?: string | null;
   previewText?: string | null;
   hasTranslatedSubtitles: boolean;
@@ -67,7 +80,11 @@ export function VietsubSubtitleDesignerModal({
   busy: boolean;
   notice?: string | null;
   onPreviewTimeChange: (milliseconds: number) => void;
-  onSave: (style: VietsubSubtitleStyle, audioMixSettings: VietsubAudioMixSettings) => Promise<boolean>;
+  onSave: (
+    style: VietsubSubtitleStyle,
+    audioMixSettings: VietsubAudioMixSettings,
+    videoTransformSettings: VietsubVideoTransformSettings
+  ) => Promise<boolean>;
   onExportVideo: () => void;
   onCancelOperation: () => void;
   onClose: () => void;
@@ -76,6 +93,12 @@ export function VietsubSubtitleDesignerModal({
   const [baseline, setBaseline] = useState(() => cloneSubtitleStyle(style));
   const [audioDraft, setAudioDraft] = useState(() => cloneAudioMixSettings(audioMixSettings));
   const [audioBaseline, setAudioBaseline] = useState(() => cloneAudioMixSettings(audioMixSettings));
+  const [videoTransformDraft, setVideoTransformDraft] = useState(
+    () => cloneVideoTransformSettings(videoTransformSettings)
+  );
+  const [videoTransformBaseline, setVideoTransformBaseline] = useState(
+    () => cloneVideoTransformSettings(videoTransformSettings)
+  );
   const [activeTab, setActiveTab] = useState<DesignerTab>('TEXT');
   const [playing, setPlaying] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -96,8 +119,9 @@ export function VietsubSubtitleDesignerModal({
   const exportBusyObservedRef = useRef(false);
   const dirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(baseline)
-      || JSON.stringify(audioDraft) !== JSON.stringify(audioBaseline),
-    [audioBaseline, audioDraft, baseline, draft]
+      || JSON.stringify(audioDraft) !== JSON.stringify(audioBaseline)
+      || JSON.stringify(videoTransformDraft) !== JSON.stringify(videoTransformBaseline),
+    [audioBaseline, audioDraft, baseline, draft, videoTransformBaseline, videoTransformDraft]
   );
   dirtyRef.current = dirty;
   savingRef.current = saving;
@@ -253,11 +277,16 @@ export function VietsubSubtitleDesignerModal({
   const save = async () => {
     if (!dirty || saving || busy) return;
     setSaving(true);
-    const saved = await onSave(cloneSubtitleStyle(draft), cloneAudioMixSettings(audioDraft));
+    const saved = await onSave(
+      cloneSubtitleStyle(draft),
+      cloneAudioMixSettings(audioDraft),
+      cloneVideoTransformSettings(videoTransformDraft)
+    );
     setSaving(false);
     if (!saved) return;
     setBaseline(cloneSubtitleStyle(draft));
     setAudioBaseline(cloneAudioMixSettings(audioDraft));
+    setVideoTransformBaseline(cloneVideoTransformSettings(videoTransformDraft));
     onClose();
   };
 
@@ -265,11 +294,16 @@ export function VietsubSubtitleDesignerModal({
     if (saving || busy || !hasTranslatedSubtitles) return;
     if (dirty) {
       setSaving(true);
-      const saved = await onSave(cloneSubtitleStyle(draft), cloneAudioMixSettings(audioDraft));
+      const saved = await onSave(
+        cloneSubtitleStyle(draft),
+        cloneAudioMixSettings(audioDraft),
+        cloneVideoTransformSettings(videoTransformDraft)
+      );
       setSaving(false);
       if (!saved) return;
       setBaseline(cloneSubtitleStyle(draft));
       setAudioBaseline(cloneAudioMixSettings(audioDraft));
+      setVideoTransformBaseline(cloneVideoTransformSettings(videoTransformDraft));
     }
     setExportRequested(true);
     onExportVideo();
@@ -293,8 +327,8 @@ export function VietsubSubtitleDesignerModal({
           <div className="vietsub-subtitle-designer-icon"><Captions size={23} /></div>
           <div>
             <span>THIẾT KẾ THÀNH PHẨM</span>
-            <h2 id="vietsub-subtitle-designer-title">Phụ đề và âm thanh</h2>
-            <p>Xem trước trực tiếp cách hiển thị và cân bằng hai lớp âm thanh của dự án.</p>
+            <h2 id="vietsub-subtitle-designer-title">Phụ đề, hình ảnh và âm thanh</h2>
+            <p>Xem trước phụ đề, lật hình video và cân bằng hai lớp âm thanh của dự án.</p>
           </div>
           <button ref={closeButtonRef} type="button" disabled={busy && exportRequested} onClick={requestClose} aria-label="Đóng thiết kế thành phẩm">
             <X size={19} />
@@ -326,6 +360,28 @@ export function VietsubSubtitleDesignerModal({
                 </button>
                 <button type="button" className={previewMode === 'FIT' ? 'is-active' : ''} onClick={() => { setPreviewMode('FIT'); setPreviewZoom(100); }}>Vừa khung</button>
                 <button type="button" className={previewMode === 'FILL' ? 'is-active' : ''} onClick={() => { setPreviewMode('FILL'); setPreviewZoom(100); }}>Lấp đầy</button>
+                <button
+                  type="button"
+                  className={videoTransformDraft.flipHorizontal ? 'is-active' : ''}
+                  aria-pressed={videoTransformDraft.flipHorizontal}
+                  onClick={() => setVideoTransformDraft((current) => ({
+                    ...current,
+                    flipHorizontal: !current.flipHorizontal
+                  }))}
+                >
+                  <FlipHorizontal2 size={13} /> Lật trái–phải
+                </button>
+                <button
+                  type="button"
+                  className={videoTransformDraft.flipVertical ? 'is-active' : ''}
+                  aria-pressed={videoTransformDraft.flipVertical}
+                  onClick={() => setVideoTransformDraft((current) => ({
+                    ...current,
+                    flipVertical: !current.flipVertical
+                  }))}
+                >
+                  <FlipVertical2 size={13} /> Lật trên–dưới
+                </button>
                 <strong>{displayRatioLabel}</strong><small>{displayWidth} × {displayHeight}</small>
               </div>
             </div>
@@ -343,7 +399,10 @@ export function VietsubSubtitleDesignerModal({
                   src={media.playbackUrl}
                   preload="metadata"
                   playsInline
-                  style={{ objectFit: previewMode === 'FILL' ? 'cover' : 'contain' }}
+                  style={{
+                    objectFit: previewMode === 'FILL' ? 'cover' : 'contain',
+                    transform: `scale(${videoTransformDraft.flipHorizontal ? -1 : 1}, ${videoTransformDraft.flipVertical ? -1 : 1})`
+                  }}
                   onClick={togglePlaying}
                   onLoadedMetadata={(event) => {
                     const video = event.currentTarget;
@@ -566,11 +625,12 @@ export function VietsubSubtitleDesignerModal({
         </div>
 
         <footer className="vietsub-subtitle-designer-footer">
-          <span>{notice || (dirty ? 'Có thay đổi chưa lưu' : 'Phụ đề và âm thanh đã đồng bộ với dự án')}</span>
+          <span>{notice || (dirty ? 'Có thay đổi chưa lưu' : 'Hình ảnh, phụ đề và âm thanh đã đồng bộ với dự án')}</span>
           <div>
             <button type="button" className="is-secondary" disabled={saving || busy} onClick={() => {
               setDraft(cloneSubtitleStyle(defaultVietsubSubtitleStyle));
               setAudioDraft(cloneAudioMixSettings(defaultVietsubAudioMixSettings));
+              setVideoTransformDraft(cloneVideoTransformSettings(defaultVietsubVideoTransformSettings));
             }}>
               <RotateCcw size={15} /> Mặc định
             </button>

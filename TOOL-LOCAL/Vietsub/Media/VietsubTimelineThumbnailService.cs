@@ -456,11 +456,12 @@ internal sealed class VietsubTimelineThumbnailService : IAsyncDisposable
         {
             var timestamp = GetTimestamp(durationSeconds, index)
                 .ToString("0.###", CultureInfo.InvariantCulture);
+            using var decodeLease = await VietsubBackgroundMediaGate.EnterAsync(cancellationToken);
             var result = await _processRunner.RunAsync(
                 _ffmpegPath,
                 [
                     "-hide_banner", "-loglevel", "error",
-                    "-ss", timestamp,
+                    "-threads", "1", "-ss", timestamp,
                     "-i", sourcePath,
                     "-map", "0:v:0",
                     "-frames:v", "1",

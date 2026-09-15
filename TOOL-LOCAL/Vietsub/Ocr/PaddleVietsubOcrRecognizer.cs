@@ -16,6 +16,23 @@ internal sealed partial class PaddleVietsubOcrRecognizer : IVietsubOcrRecognizer
     private VietsubOcrRuntimeStatus? _runtimeStatus;
     private bool _disposed;
 
+    internal async Task<VietsubOcrRuntimeStatus> RecheckAsync(CancellationToken cancellationToken)
+    {
+        await _runtimeGate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            lock (_sync)
+            {
+                foreach (var slot in _recognizers.Values) slot.Dispose();
+                _recognizers.Clear();
+                _runtimeStatus = null;
+            }
+            return _runtimeStatus = await Task.Run(ProbeRuntime, cancellationToken);
+        }
+        finally { _runtimeGate.Release(); }
+    }
+
     public async Task<VietsubOcrRuntimeStatus> GetRuntimeStatusAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

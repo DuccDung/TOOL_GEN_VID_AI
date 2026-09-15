@@ -274,7 +274,7 @@ Sau publish:
 - Popup dịch phải phân biệt **chưa cài model** với **model đã có nhưng engine cần probe/kiểm tra lại**. Khi mở cảnh báo tài nguyên, popup chọn phương thức phải đóng trước để không chồng nhiều lớp overlay; cảnh báo RAM không được biến thành nhãn “Cần cài đặt”.
 - Card xem trước trong editor Vietsub phải ưu tiên diện tích video và control phát: không lặp tên file/badge kỹ thuật ở đầu card, không để metadata bị cắt ở đáy, và bộ chọn tốc độ phải có trạng thái focus rõ ràng nhưng không chiếm quá nhiều chiều ngang.
 - Card **Biên tập phụ đề** phải dùng thuật ngữ dễ hiểu, gom Nhập/Xuất SRT và thao tác thời gian vào menu phụ, chỉ mở rộng câu đang chọn/đang phát, hiển thị rõ `Chưa lưu`/`Đang lưu`/`Đã lưu`/`Lưu thất bại`, không làm mất bản nháp khi đổi lọc/trang/nguồn, tự đưa câu được chọn từ timeline vào vùng nhìn thấy và chỉ hiện phân trang khi thực sự có nhiều hơn một trang. Panel hẹp phải co theo chiều rộng card thay vì chiều rộng toàn cửa sổ.
-- Modal **Thiết kế thành phẩm** phải giữ đúng tỷ lệ video dọc/ngang, phát/tua không giật do reload nguồn, cho ẩn/hiện và vừa khung/lấp đầy/thu phóng. Kiểm tra kéo phụ đề, phím mũi tên `0,5%`, `Shift + mũi tên` `2%`, preset, font allowlist, cảnh báo tương phản và xác nhận bỏ bản nháp. Tab **Âm thanh** phải chỉnh riêng âm gốc/giọng Việt, mute từng kênh, nghe thử đồng bộ khi seek/play và chỉ auto-duck âm gốc trong đoạn có giọng Việt; mức giọng `>100%` phải nghe được trong preview. Sau khi lưu, đóng/mở lại phải giữ đúng style/mixer. Xuất MP4 vào đường dẫn mới, xác minh không còn `.partial`, FFprobe đọc đúng trạng thái audio, burn-in khớp preview và mức âm lượng/duck/limiter không clipping trên ít nhất một video `16:9` và một video `9:16`; sửa cue/style/mixer hoặc timeline giọng trong lúc xuất phải fail closed và không publish output stale.
+- Modal **Thiết kế thành phẩm** phải giữ đúng tỷ lệ video dọc/ngang, phát/tua không giật do reload nguồn, cho ẩn/hiện và vừa khung/lấp đầy/thu phóng. Kiểm tra lật hình trái–phải, trên–dưới, cả hai hoặc không lật trong FIT/FILL/zoom; chỉ hình video lật, chữ phụ đề và âm thanh không bị đảo. Kiểm tra kéo phụ đề, phím mũi tên `0,5%`, `Shift + mũi tên` `2%`, preset, font allowlist, cảnh báo tương phản và xác nhận bỏ bản nháp lật hình. Tab **Âm thanh** phải chỉnh riêng âm gốc/giọng Việt, mute từng kênh, nghe thử đồng bộ khi seek/play và chỉ auto-duck âm gốc trong đoạn có giọng Việt; mức giọng `>100%` phải nghe được trong preview. Sau khi lưu, đóng/mở lại phải giữ đúng style/mixer/lật hình; project schema 6 mở lại phải mặc định không lật và lưu thành schema 7. Xuất MP4 vào đường dẫn mới, xác minh không còn `.partial`, FFprobe đọc đúng trạng thái audio, burn-in khớp preview và mức âm lượng/duck/limiter không clipping trên ít nhất một video `16:9` và một video `9:16`; sửa cue/style/mixer/lật hình hoặc timeline giọng trong lúc xuất phải fail closed và không publish output stale.
 - Accordion, mục **Chi tiết kỹ thuật**, tùy chọn vùng OCR nâng cao và thanh hành động cố định phải dùng được bằng bàn phím, không tràn hoặc che nút ở panel hẹp.
 - Organization/project switch không giữ state/busy của context cũ.
 - Lỗi auth/budget/pricing/provider/media hiển thị có hành động khắc phục, không lộ chi tiết nhạy cảm.
@@ -444,3 +444,46 @@ Toolbar phân bổ khoảng trống vào cột nhãn Timeline bên trái, đưa 
 - Edge headless dùng bundle App production và bridge giả: viewport 1600×1000 và 1920×1080 có mixer rộng **520 CSS px**, cách nhóm nút **12 px**. 720×900/zoom 125% chuyển hàng, không chồng nhóm nút hoặc tràn toolbar. Đã xem ảnh `wide.png`, `narrow.png`; ảnh/JSON ở `.tmp/mixer-right-alignment-verification`.
 - .NET Release toàn bộ, `--no-build -- xUnit.ParallelizeTestCollections=false`, TEMP/TMP riêng có đường dẫn ngắn trên D: **1.033 Passed / 0 Failed / 3 Skipped / 1.036 Total**, 3 phút 3 giây. TRX tại `.tmp/mixer-right-alignment-verification/mixer-right-alignment-suite.trx`. Fixture WebView2 Timeline hiện có đạt ở zoom 100/125/150/200%, kiểm các chiều rộng 420/640/820/1160 px, nút xuất và mixer không chồng nhau; ảnh trong thư mục `timeline` cùng artifact.
 - `git diff --check`: **Passed**. Ba test model opt-in Qwen/Piper vẫn Skipped; không tính là model đã đạt. Không thay dữ liệu project hoặc cấu hình âm lượng người dùng. Chạy lại desktop để nạp bundle mới.
+
+## 23. Tích hợp Setup và tối ưu Vietsub/video dài vào local-2 — 2026-09-14
+
+Phạm vi lấy nghiệp vụ Setup hệ thống và xử lý video dài từ `sub-local`, đồng thời giữ ứng dụng đầy đủ của `local-2`. Source không có `VietsubLocalOnly`, bộ lọc local-only hoặc nhánh giao diện chỉ hiện Vietsub. Video AI, Dịch Cloud và các trang hiện hành vẫn giữ đường gọi cũ. Gate mới tự kiểm tra FFmpeg/OCR/Qwen/Piper sau đăng nhập, license và tổ chức hợp lệ; trạng thái thiếu mở hộp thoại **OK - Cài đặt/Sửa bộ ứng dụng** hoặc **Hủy và thoát** trước khi tạo màn hình chính.
+
+- `dotnet restore TOOL_GEN_POST_VIDEO.slnx`: **Passed**.
+- `dotnet build TOOL_GEN_POST_VIDEO.slnx -c Release --no-restore`: **Passed**, 0 warning / 0 error.
+- `dotnet test TOOL-TESTS\TOOL-TESTS.csproj -c Release --no-build -- xUnit.ParallelizeTestCollections=false`: **1.078 Passed / 0 Failed / 4 Skipped / 1.082 Total**.
+- `npm ci --no-audit --no-fund` và `npm run build`: **Passed**. Vite còn cảnh báo chunk lớn hơn 500 kB.
+- `npm test`: **148 Passed / 0 Failed / 0 Skipped**, 27 file. Test riêng Setup panel có 7 bài và đều Passed.
+- Test workflow Setup lúc khởi động: **4 Passed / 0 Failed / 0 Skipped**; bao phủ bỏ qua marker đã sẵn sàng, kiểm rồi cài model thiếu, chuyển OCR/FFmpeg hỏng sang updater và xác nhận tài nguyên Qwen gắn với đúng lượt retry.
+- `git diff --cached --check`: **Passed**.
+
+Full suite đầu phát hiện một lỗi ở đường cài Qwen cũ: bước lấy khóa runtime chạy trước kiểm tra xác nhận tài nguyên nên có thể che mã lỗi nghiệp vụ bằng lỗi chung. Đã kiểm tra xác nhận trước khóa, kiểm lại sau khi có khóa và ánh xạ lỗi Setup về lỗi Vietsub tương ứng cho cả Qwen/Piper. Test đích và full suite sau sửa đều Passed.
+
+Hai lượt full suite theo chế độ song song mặc định dùng để chẩn đoán gặp một sai lệch căn giữa WebView2 một pixel và một lần tranh khóa `RuntimeUseGate` giữa collection. Từng test đều Passed khi chạy cô lập. Lượt nghiệm thu cuối tắt song song collection theo quy ước kiểm thử hiện có của repository và Passed toàn bộ; không sửa assertion hoặc bỏ test để đạt kết quả này.
+
+Bốn bài Skipped là các bài opt-in dùng Qwen/Piper thật; không tính là model đã đạt trong lần tích hợp này. Chưa smoke bằng project/video người dùng, package sửa chữa thật, Windows sạch hoặc máy RAM thấp; chưa publish, chạy migration, gọi provider có phí hay sửa dữ liệu thật.
+
+## 24. Chuyển gate Setup lúc khởi động sang modal WebView — 2026-09-15
+
+Luồng khởi động tạo `Form1`, tải dashboard React và hiển thị nền dự án trước khi mở modal Setup. Cờ `startupRequired` do host xác định theo role và đi cùng snapshot Setup. Khi modal hiện, sidebar/nội dung chính dùng `inert` và `aria-hidden`; modal giữ focus, chặn `Esc`/backdrop, tự chạy kiểm tra, hỗ trợ cài/retry/xác nhận tài nguyên Qwen, hiển thị package repair và có **Hủy và thoát**. Host C# chặn command nghiệp vụ với `system_setup_required` cho tới khi toàn bộ thành phần không `DISABLED` đều `READY`.
+
+- `npm ci --no-audit --no-fund`, `npm run build`: **Passed**. Vite còn cảnh báo chunk lớn hơn 500 kB.
+- `npm test`: **152 Passed / 0 Failed / 0 Skipped**, 29 file. Ba file Setup có **11 Passed / 0 Failed / 0 Skipped**, gồm panel Settings hiện hành, modal startup và App thật với bridge giả.
+- Regression frontend kiểm nền dashboard tồn tại trước modal, khóa/mở `inert`, không đóng bằng `Esc`, tự check đúng context, retry Qwen gắn operation/profile, repair package và lệnh thoát.
+- `dotnet restore TOOL_GEN_POST_VIDEO.slnx`: **Passed**.
+- `dotnet build TOOL_GEN_POST_VIDEO.slnx -c Release --no-restore`: **Passed**, MSBuild **0 warning / 0 error**.
+- Test riêng namespace SystemSetup: **41 Passed / 0 Failed / 1 Skipped / 42 Total**. Test mới kiểm gate chỉ cho phép command bootstrap/Setup/repair, mở khóa sau `READY`, bỏ gate cho role không được yêu cầu Setup, snapshot có cờ startup và request thoát phải rỗng/hợp lệ.
+- Full .NET Release `--no-build -- xUnit.ParallelizeTestCollections=false`: **1.081 Passed / 0 Failed / 4 Skipped / 1.085 Total**, lượt cuối 3 phút 18 giây.
+- `git diff --check`: **Passed**.
+
+Bốn bài Skipped vẫn là các bài opt-in dùng model/runtime Qwen/Piper thật; không tính là model đã đạt. Không chạy migration, provider có phí, package repair thật hoặc dữ liệu project người dùng. Chưa smoke modal trực tiếp trong desktop với tài khoản/organization thật, chưa xác minh Windows sạch và chưa chụp giao diện WebView2 ở ma trận DPI/zoom; vì vậy thay đổi source/test đạt nhưng chưa phải bằng chứng phát hành production.
+
+## 25. Lật hình video trong Thiết kế thành phẩm — 2026-09-15
+
+Modal có hai nút bật/tắt độc lập **Lật trái–phải** và **Lật trên–dưới**. Bản nháp chỉ lật phần tử video, giữ phụ đề và âm thanh đúng chiều; nút **Mặc định** tắt cả hai. Lưu và lưu trước khi xuất ghi `videoTransformSettings` theo project cùng style/mixer; manifest JSON schema 6 nâng sang 7 với cả hai chiều mặc định tắt, không thay SQLite schema 6. FFmpeg đặt `hflip`/`vflip` trước `subtitles`, so lại snapshot lật hình trước khi publish `.partial.mp4`; thay đổi giữa lúc render không xuất bản output cũ.
+
+- `dotnet restore TOOL_GEN_POST_VIDEO.slnx`: **Passed**; build solution Release `--no-restore`: **Passed**, 0 warning / 0 error.
+- `npm ci --no-audit --no-fund`, `npm run build`: **Passed**; Vite vẫn cảnh báo chunk >500 kB. `npm test`: **154 Passed / 0 Failed / 0 Skipped** trong 29 file; test tương tác kiểm hai nút, preview chỉ lật video, lưu trước xuất và reset mặc định.
+- Test C# kiểm migration 6 → 7, bridge lưu/trả event, bốn thứ tự bộ lọc và từ chối output khi lật hình đổi giữa lúc render: **Passed**. Bốn fixture qua FFmpeg/FFprobe bundle thật kiểm vị trí pixel hình ảnh, phụ đề vẫn phía dưới, kích thước và trạng thái audio không đổi: **4 Passed / 0 Failed / 0 Skipped**.
+- Full .NET Release ở chế độ song song mặc định: **1.089 Passed / 1 Failed / 4 Skipped**, lỗi tại bài cài runtime translation không thuộc tính năng lật hình (`InstallCallCount` 0 thay vì 1). Bài này chạy riêng: **1 Passed / 0 Failed / 0 Skipped**. Full suite theo quy ước `--no-build -- xUnit.ParallelizeTestCollections=false`: **1.090 Passed / 0 Failed / 4 Skipped / 1.094 Total**, 3 phút 29 giây; không sửa assertion hay tắt test để đạt kết quả.
+- `git diff --check`: **Passed**. Không dùng project/video người dùng, không chạy migration SQL, model/provider có phí hay publish. Bốn bài Skipped vẫn là model/runtime opt-in, không tính là đạt. Chưa nghiệm thu thủ công modal WebView2 trên video 16:9 và 9:16 cùng ma trận DPI/zoom hoặc đối chiếu hình/phụ đề/audio trên MP4 người dùng; đây là bước trước khi kết luận sẵn sàng phát hành.

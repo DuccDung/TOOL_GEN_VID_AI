@@ -36,6 +36,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
     }
 
     public string RuntimeProfileId => _runtimeProfile.ProfileId;
+    internal string ComponentDirectory => _componentStore.ComponentDirectory;
 
     public bool LowMemoryMode => _runtimeProfile.IsLowMemory;
 
@@ -121,7 +122,16 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
         IProgress<VietsubTranslationRuntimeInstallProgress>? progress,
         CancellationToken cancellationToken,
         bool resourceWarningAccepted = false)
+        => await PrepareRuntimeAsync(progress, cancellationToken, resourceWarningAccepted, install: true);
+
+    internal Task VerifyAsync(IProgress<VietsubTranslationRuntimeInstallProgress>? progress,
+        CancellationToken cancellationToken, bool resourceWarningAccepted = false) =>
+        PrepareRuntimeAsync(progress, cancellationToken, resourceWarningAccepted, install: false);
+
+    private async Task PrepareRuntimeAsync(IProgress<VietsubTranslationRuntimeInstallProgress>? progress,
+        CancellationToken cancellationToken, bool resourceWarningAccepted, bool install)
     {
+        var confirmedProfileId = resourceWarningAccepted ? _runtimeProfile.ProfileId : null;
         ThrowIfDisposed();
         await _installGate.WaitAsync(cancellationToken);
         try
@@ -138,14 +148,23 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
             {
                 await _workerClient.ResetAsync();
                 _loadResult = null;
-                await _componentStore.InstallModelAsync(progress, cancellationToken);
+                if (install)
+                    await _componentStore.InstallModelAsync(progress, cancellationToken);
+                else
+                {
+                    var inspection = _componentStore.Inspect(requireProbe: false, checkResources: false);
+                    if (!inspection.ModelVerified)
+                        throw new VietsubTranslationException(inspection.ErrorCode ?? VietsubTranslationErrorCodes.ModelNotReady,
+                            inspection.Message);
+                }
                 SelectLowerMemoryProfileWhenRequired();
-                EnsureResourcesAvailable(resourceWarningAccepted);
+                var effectiveWarningAccepted = resourceWarningAccepted && _runtimeProfile.ProfileId == confirmedProfileId;
+                EnsureResourcesAvailable(effectiveWarningAccepted);
                 try
                 {
                     await LoadProbeAndMarkReadyAsync(
                         progress,
-                        resourceWarningAccepted,
+                        effectiveWarningAccepted,
                         cancellationToken);
                 }
                 catch (VietsubTranslationException exception)
@@ -156,7 +175,8 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
                     _loadResult = null;
                     _runtimeProfile = VietsubTranslationWorkerProfiles.CreateLowMemoryCpuRuntimeProfile(
                         Environment.ProcessorCount);
-                    EnsureResourcesAvailable(resourceWarningAccepted);
+                    effectiveWarningAccepted = resourceWarningAccepted && _runtimeProfile.ProfileId == confirmedProfileId;
+                    EnsureResourcesAvailable(effectiveWarningAccepted);
                     progress?.Report(new VietsubTranslationRuntimeInstallProgress(
                         "LOW_MEMORY_FALLBACK",
                         87,
@@ -165,7 +185,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
                         1));
                     await LoadProbeAndMarkReadyAsync(
                         progress,
-                        resourceWarningAccepted,
+                        effectiveWarningAccepted,
                         cancellationToken);
                 }
             }

@@ -97,6 +97,11 @@ internal sealed class DashboardBridge : IDisposable
             return;
         }
 
+        if (TOOL_LOCAL.SystemSetup.SystemSetupBridge.IsCommand(request.Type))
+        {
+            PostError(request.RequestId, "system_setup_unavailable", "Setup chưa được khởi tạo trong phiên desktop này.");
+            return;
+        }
         if (_licenseManager.IsLocked && !IsAllowedWhileLocked(request.Type))
         {
             PostError(

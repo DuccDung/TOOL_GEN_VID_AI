@@ -18,6 +18,7 @@ internal sealed class VietsubVoicePlaybackRegistry(
 {
     private readonly ConcurrentDictionary<Guid, VietsubVoicePlaybackEntry> _entries = new();
     private readonly ConcurrentDictionary<string, VerifiedFile> _verified = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _verificationGate = new(1, 1);
 
     public static string CreateUrl(Guid projectId, Guid artifactId, string sha256) =>
         $"https://{Playback.VietsubMediaPlaybackService.HostName}/projects/{projectId:N}/voice/{artifactId:N}/{sha256.ToLowerInvariant()}.wav";
@@ -30,7 +31,7 @@ internal sealed class VietsubVoicePlaybackRegistry(
 
     public void ClearProject(Guid projectId)
     {
-        _entries.TryRemove(projectId, out _);
+        if (_entries.TryRemove(projectId, out var previous)) _verified.TryRemove(previous.AbsolutePath, out _);
     }
 
     public bool TryResolve(
@@ -38,7 +39,8 @@ internal sealed class VietsubVoicePlaybackRegistry(
         Guid projectId,
         Guid artifactId,
         string sha256,
-        out VietsubVoicePlaybackEntry entry)
+        out VietsubVoicePlaybackEntry entry,
+        CancellationToken cancellationToken = default)
     {
         entry = null!;
         if (activeProject.ProjectId != projectId
@@ -49,7 +51,10 @@ internal sealed class VietsubVoicePlaybackRegistry(
             || (isTrackRevisionCurrent is not null
                 && !isTrackRevisionCurrent(candidate.ProjectId, candidate.TrackId, candidate.TrackRevision))
             || !FixedHashEquals(candidate.Sha256, sha256)
-            || !IsVerified(candidate))
+            || !IsVerified(candidate, cancellationToken)
+            || !_entries.TryGetValue(projectId, out var current) || current != candidate
+            || (isTrackRevisionCurrent is not null
+                && !isTrackRevisionCurrent(candidate.ProjectId, candidate.TrackId, candidate.TrackRevision)))
         {
             return false;
         }
@@ -57,8 +62,10 @@ internal sealed class VietsubVoicePlaybackRegistry(
         return true;
     }
 
-    private bool IsVerified(VietsubVoicePlaybackEntry entry)
+    private bool IsVerified(VietsubVoicePlaybackEntry entry, CancellationToken cancellationToken)
     {
+        // Deduplicate concurrent GET/HEAD/Range requests; the desktop caller runs this off the UI thread.
+        _verificationGate.Wait(cancellationToken);
         try
         {
             var file = new FileInfo(entry.AbsolutePath);
@@ -71,9 +78,18 @@ internal sealed class VietsubVoicePlaybackRegistry(
                 return cached.Valid;
             }
             using var stream = file.OpenRead();
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = stream.Read(buffer)) > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                hash.AppendData(buffer, 0, read);
+            }
             var valid = CryptographicOperations.FixedTimeEquals(
-                SHA256.HashData(stream),
+                hash.GetHashAndReset(),
                 Convert.FromHexString(entry.Sha256));
+            if (_verified.Count >= 64) _verified.Clear();
             _verified[entry.AbsolutePath] = new(file.Length, file.LastWriteTimeUtc, entry.Sha256, valid);
             return valid;
         }
@@ -81,6 +97,7 @@ internal sealed class VietsubVoicePlaybackRegistry(
         {
             return false;
         }
+        finally { _verificationGate.Release(); }
     }
 
     private static bool FixedHashEquals(string left, string right)

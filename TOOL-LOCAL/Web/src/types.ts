@@ -558,6 +558,11 @@ export type GenerationProviderStatus = {
   currencyCode?: string | null;
 };
 
+export type VietsubVideoExportProgress = {
+  stage: 'PREPARE' | 'RENDER' | 'VERIFY' | 'COMPLETED';
+  percent: number;
+};
+
 export type HostMessage<T = unknown> = {
   type: string;
   requestId?: string | null;
@@ -667,3 +672,4 @@ export type DesktopUpdateProgress = {
   percent: number;
   message: string;
 };
+export type { SetupComponent, SetupOperation, SetupSnapshot, SetupRequest } from './features/systemSetup/types';

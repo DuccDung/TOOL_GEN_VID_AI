@@ -16,6 +16,7 @@ using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.Vietsub.Translation;
 using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.Payments;
+using TOOL_LOCAL.SystemSetup;
 
 namespace TOOL_LOCAL;
 
@@ -28,6 +29,7 @@ internal static class Program
 
         try
         {
+            if (!DesktopPrerequisites.EnsureAvailable()) return;
             var options = DesktopOptions.Load();
             LegacyProviderCredentialCleaner.Remove();
             using var httpClient = new HttpClient
@@ -170,6 +172,7 @@ internal static class Program
                 VietsubVoiceService? vietsubVoiceService = null;
                 VietsubVideoExportService? vietsubVideoExportService = null;
                 VietsubVoiceComponentStore? vietsubVoiceComponents = null;
+                IVietsubOcrRecognizer? setupOcrRecognizer = null;
                 if (options.Features.VietsubEnabled)
                 {
                     var vietsubPaths = new VietsubAppPaths(options.Storage.WorkspaceRoot);
@@ -190,6 +193,7 @@ internal static class Program
                         : new UnavailableVietsubOcrRecognizer(
                             "OCR_FEATURE_DISABLED",
                             "OCR local đang bị khóa bởi feature flag cho tới khi runtime và package gate được duyệt.");
+                    setupOcrRecognizer = ocrRecognizer;
                     var ocrFrameReader = new VietsubFfmpegFrameReader(
                         mediaToolPaths.FfmpegPath,
                         mediaToolPreflight);
@@ -204,12 +208,9 @@ internal static class Program
                     var translationStore = new VietsubTranslationStore(
                         vietsubPaths,
                         vietsubSubtitleStore);
-                    if (options.Features.VietsubLocalTranslationEnabled)
-                    {
-                        vietsubTranslationProvider = new QwenGgufVietsubTranslationProvider(
-                            new VietsubTranslationComponentStore(
-                                VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km));
-                    }
+                    vietsubTranslationProvider = new QwenGgufVietsubTranslationProvider(
+                        new VietsubTranslationComponentStore(
+                            VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km));
                     var translationProviderRegistry = new VietsubTranslationProviderRegistry(
                         vietsubTranslationProvider is null ? [] : [vietsubTranslationProvider],
                         featureEnabled: options.Features.VietsubLocalTranslationEnabled);
@@ -224,7 +225,7 @@ internal static class Program
                     var voicePlaybackRegistry = new VietsubVoicePlaybackRegistry(voiceStore.IsTrackRevisionCurrent);
                     vietsubVoiceComponents = new VietsubVoiceComponentStore(
                         vietsubPaths,
-                        options.Features.VietsubLocalVoiceEnabled);
+                        options.Features.VietsubLocalVoiceEnabled, useUserComponentsRoot: true);
                     var voiceSynthesizer = new VietsubPiperVoiceSynthesizer(vietsubVoiceComponents);
                     var voiceTimelineRenderer = new VietsubVoiceTimelineRenderer(
                         vietsubPaths,
@@ -295,38 +296,75 @@ internal static class Program
                         mediaToolPaths.FfmpegPath,
                         mediaProcessRunner);
                 }
-                using var mainForm = new Form1(
-                    sessionManager,
-                    licenseManager,
-                    projectService,
-                    projectRenderService,
-                    generationService,
-                    generationClient,
-                    workspaceService,
-                    updateApiClient,
-                    packageUpdateService,
-                    options.Update,
-                    mediaToolPreflight,
-                    options.Features,
-                    vietsubProjectStore,
-                    vietsubProjectRegistryClient,
-                    vietsubMediaImportService,
-                    vietsubThumbnailService,
-                    vietsubWaveformService,
-                    vietsubSubtitleService,
-                    vietsubJobManager,
-                    vietsubOcrService,
-                    vietsubTranslationService,
-                    vietsubVoiceService,
-                    vietsubVideoExportService,
-                    licensePaymentClient,
-                    vietsubCloudTranslationService);
+                RuntimeUseGate.ConfigureShared(new[] { vietsubTranslationProvider?.ComponentDirectory,
+                    vietsubVoiceComponents?.ComponentDirectory }.OfType<string>());
+                var setupCoordinator = new SystemSetupCoordinator(
+                    new SystemSetupAuthorizer(new DesktopVietsubLocalAccessContext(sessionManager, licenseManager, generationClient)),
+                    [new MediaSetupAdapter(mediaToolPreflight, mediaToolPaths),
+                     new OcrSetupAdapter(setupOcrRecognizer, options.Features.VietsubEnabled && options.Features.VietsubOcrEnabled),
+                     new QwenSetupAdapter(vietsubTranslationProvider),
+                     new PiperSetupAdapter(vietsubVoiceComponents, options.Features.VietsubEnabled && options.Features.VietsubLocalVoiceEnabled)],
+                    RuntimeUseGate.Shared, new SystemSetupJournal(SystemSetupPaths.MetadataRoot),
+                    () => sessionManager.IsAuthenticated && licenseManager.HasValidLease);
+                if (vietsubTranslationService is not null) vietsubTranslationService.SetupCoordinator = setupCoordinator;
+                if (vietsubVoiceService is not null) vietsubVoiceService.SetupCoordinator = setupCoordinator;
+                var returnToLogin = false;
+                var startupSystemSetupRequired = false;
                 try
                 {
+                    if (licenseManager.HasValidLease)
+                    {
+                        var memberships = generationClient.GetOrganizationsAsync(CancellationToken.None)
+                            .GetAwaiter().GetResult();
+                        var assignedOrganizationId = licenseManager.Current?.AssignedOrganizationId;
+                        var selectedMembership = memberships.FirstOrDefault(membership =>
+                                membership.OrganizationId == assignedOrganizationId &&
+                                string.Equals(membership.Status, "Active", StringComparison.OrdinalIgnoreCase))
+                            ?? memberships.FirstOrDefault(membership =>
+                                string.Equals(membership.Status, "Active", StringComparison.OrdinalIgnoreCase));
+                        if (selectedMembership is not null)
+                        {
+                            generationClient.SelectOrganizationAsync(
+                                selectedMembership.OrganizationId,
+                                CancellationToken.None).GetAwaiter().GetResult();
+                            startupSystemSetupRequired = SystemSetupAuthorizer.CanManage(selectedMembership.Role);
+                        }
+                    }
+
+                    using var mainForm = new Form1(
+                        sessionManager,
+                        licenseManager,
+                        projectService,
+                        projectRenderService,
+                        generationService,
+                        generationClient,
+                        workspaceService,
+                        updateApiClient,
+                        packageUpdateService,
+                        options.Update,
+                        mediaToolPreflight,
+                        options.Features,
+                        vietsubProjectStore,
+                        vietsubProjectRegistryClient,
+                        vietsubMediaImportService,
+                        vietsubThumbnailService,
+                        vietsubWaveformService,
+                        vietsubSubtitleService,
+                        vietsubJobManager,
+                        vietsubOcrService,
+                        vietsubTranslationService,
+                        vietsubVoiceService,
+                        vietsubVideoExportService,
+                        licensePaymentClient,
+                        vietsubCloudTranslationService,
+                        setupCoordinator: setupCoordinator,
+                        startupSystemSetupRequired: startupSystemSetupRequired);
                     Application.Run(mainForm);
+                    returnToLogin = mainForm.ReturnToLoginRequested;
                 }
                 finally
                 {
+                    setupCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
                     vietsubThumbnailService?.DisposeAsync().AsTask().GetAwaiter().GetResult();
                     vietsubJobManager?.DisposeAsync().AsTask().GetAwaiter().GetResult();
                     vietsubTranslationProvider?.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -334,7 +372,7 @@ internal static class Program
                     licenseManager.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }
 
-                if (!mainForm.ReturnToLoginRequested)
+                if (!returnToLogin)
                 {
                     return;
                 }

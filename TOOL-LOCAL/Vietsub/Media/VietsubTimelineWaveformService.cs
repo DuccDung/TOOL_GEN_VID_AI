@@ -1,6 +1,9 @@
 using TOOL_LOCAL.Media;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Storage;
+using System.Buffers.Binary;
+using System.Drawing.Imaging;
+using System.Globalization;
 
 namespace TOOL_LOCAL.Vietsub.Media;
 
@@ -11,8 +14,12 @@ internal sealed record VietsubTimelineWaveformArtifact(
 
 internal sealed class VietsubTimelineWaveformService
 {
-    internal const int ProfileVersion = 1;
+    internal const int ProfileVersion = 2;
     private const int MinimumArtifactBytes = 128;
+    internal const int OverviewSampleRate = 2000;
+    internal const int WaveformWidth = 8192;
+    private const int MaximumDurationSeconds = 4 * 60 * 60;
+    private readonly SemaphoreSlim _generationGate = new(1, 1);
     private readonly VietsubAppPaths _paths;
     private readonly VietsubMediaImportService _mediaImportService;
     private readonly IMediaToolPreflightService _preflight;
@@ -58,8 +65,16 @@ internal sealed class VietsubTimelineWaveformService
         var outputPath = GetWaveformPath(project.ProjectId, media.Sha256);
         if (!IsUsable(outputPath))
         {
-            await _preflight.RequireReadyAsync(cancellationToken);
-            await GenerateAsync(status.EffectivePath, outputPath, cancellationToken);
+            await _generationGate.WaitAsync(cancellationToken);
+            try
+            {
+                if (!IsUsable(outputPath))
+                {
+                    await _preflight.RequireReadyAsync(cancellationToken);
+                    await GenerateAsync(status.EffectivePath, outputPath, media.Metadata.DurationSeconds, cancellationToken);
+                }
+            }
+            finally { _generationGate.Release(); }
         }
 
         return IsUsable(outputPath)
@@ -133,44 +148,92 @@ internal sealed class VietsubTimelineWaveformService
     private async Task GenerateAsync(
         string sourcePath,
         string outputPath,
+        decimal durationSeconds,
         CancellationToken cancellationToken)
     {
+        if (durationSeconds is <= 0 or > MaximumDurationSeconds)
+            throw new VietsubMediaException("vietsub_waveform_duration_unsupported", "Thời lượng video vượt giới hạn tạo waveform.");
         var outputDirectory = Path.GetDirectoryName(outputPath)!;
         Directory.CreateDirectory(outputDirectory);
         var partialPath = Path.Combine(
             outputDirectory,
             $"{Guid.NewGuid():N}.partial.png");
+        var pcmPath = partialPath + ".pcm";
+        var maximumBytes = (long)Math.Ceiling(durationSeconds + 1) * OverviewSampleRate * 2;
+        var drive = new DriveInfo(Path.GetPathRoot(outputPath)!);
+        if (drive.AvailableFreeSpace < maximumBytes + 32L * 1024 * 1024)
+            throw new VietsubMediaException("vietsub_waveform_disk_full", "Không đủ dung lượng tạm để tạo waveform.");
         try
         {
+            using var decodeLease = await VietsubBackgroundMediaGate.EnterAsync(cancellationToken);
             var result = await _processRunner.RunAsync(
                 _ffmpegPath,
                 [
                     "-hide_banner", "-loglevel", "error",
-                    "-i", sourcePath,
-                    "-filter_complex",
-                    "[0:a:0]aformat=channel_layouts=mono,showwavespic=s=2048x64:colors=0x4f86cc:scale=sqrt[waveform]",
-                    "-map", "[waveform]",
-                    "-frames:v", "1",
-                    "-an", "-sn", "-dn",
+                    "-threads", "1", "-i", sourcePath,
+                    "-map", "0:a:0", "-vn", "-sn", "-dn",
+                    "-ac", "1", "-ar", OverviewSampleRate.ToString(CultureInfo.InvariantCulture),
+                    "-c:a", "pcm_s16le", "-f", "s16le",
+                    "-t", durationSeconds.ToString(CultureInfo.InvariantCulture),
+                    "-fs", maximumBytes.ToString(CultureInfo.InvariantCulture),
                     "-threads", "1",
-                    "-y", partialPath
+                    "-y", pcmPath
                 ],
-                TimeSpan.FromMinutes(3),
+                TimeSpan.FromSeconds(Math.Clamp((double)durationSeconds / 10 + 120, 180, 1800)),
                 cancellationToken);
-            if (result.ExitCode != 0 || !IsUsable(partialPath))
+            if (result.ExitCode != 0 || !File.Exists(pcmPath) || new FileInfo(pcmPath).Length > maximumBytes)
             {
                 throw new VietsubMediaException(
                     "vietsub_waveform_generation_failed",
                     "FFmpeg không thể phân tích âm thanh gốc cho timeline.");
             }
-
+            // The PCM overview stays on disk. Only one read block and fixed peak bins are in RAM.
+            await Task.Run(() => RenderOverview(pcmPath, partialPath, cancellationToken), cancellationToken);
+            if (!IsUsable(partialPath)) throw new VietsubMediaException("vietsub_waveform_generation_failed", "Waveform không hợp lệ.");
             cancellationToken.ThrowIfCancellationRequested();
             File.Move(partialPath, outputPath, overwrite: true);
         }
         finally
         {
             TryDelete(partialPath);
+            TryDelete(pcmPath);
         }
+    }
+
+    internal static void RenderOverview(string pcmPath, string pngPath, CancellationToken token)
+    {
+        using var source = new FileStream(pcmPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            32768, FileOptions.SequentialScan);
+        if (source.Length < 2 || source.Length % 2 != 0 || source.Length > (MaximumDurationSeconds + 1L) * OverviewSampleRate * 2)
+            throw new VietsubMediaException("vietsub_waveform_generation_failed", "Dữ liệu waveform không hợp lệ.");
+        var totalSamples = source.Length / 2;
+        var peaks = new int[WaveformWidth];
+        var buffer = new byte[32768];
+        long sample = 0;
+        while (source.Position < source.Length)
+        {
+            token.ThrowIfCancellationRequested();
+            var count = (int)Math.Min(buffer.Length, source.Length - source.Position);
+            source.ReadExactly(buffer.AsSpan(0, count));
+            for (var offset = 0; offset < count; offset += 2, sample++)
+            {
+                var bin = (int)(sample * WaveformWidth / totalSamples);
+                peaks[bin] = Math.Max(peaks[bin], Math.Abs((int)BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(offset, 2))));
+            }
+        }
+        using var bitmap = new Bitmap(WaveformWidth, 64, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.Clear(Color.Transparent);
+        using var pen = new Pen(Color.FromArgb(0x4f, 0x86, 0xcc));
+        for (var x = 0; x < peaks.Length; x++)
+        {
+            var height = Math.Max(1, (int)Math.Round(Math.Sqrt(peaks[x] / 32768d) * 31));
+            graphics.DrawLine(pen, x, 32 - height, x, 32 + height);
+        }
+        token.ThrowIfCancellationRequested();
+        // Pass a managed stream so deeply nested workspace paths also work with GDI+.
+        using var destination = new FileStream(pngPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        bitmap.Save(destination, ImageFormat.Png);
     }
 
     private string GetWaveformPath(Guid projectId, string sha256)

@@ -135,7 +135,7 @@ internal static class VietsubVoiceFingerprintBuilder
     public static string BuildTimelineFingerprint(
         string configurationFingerprint,
         IEnumerable<VietsubVoiceArtifact> artifacts) =>
-        Hash(string.Join('\n', new[] { "voice-timeline-v1", configurationFingerprint }
+        Hash(string.Join('\n', new[] { "voice-timeline-v2", configurationFingerprint }
             .Concat(artifacts
                 .OrderBy(item => item.PhraseId, StringComparer.Ordinal)
                 .Select(item => item.ContentFingerprint))));

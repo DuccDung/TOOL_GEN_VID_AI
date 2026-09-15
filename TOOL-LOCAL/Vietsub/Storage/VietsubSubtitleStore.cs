@@ -368,12 +368,12 @@ internal sealed partial class VietsubSubtitleStore(VietsubAppPaths paths)
         Guid projectId,
         VietsubSubtitleTrack track,
         CancellationToken cancellationToken = default) =>
-        SaveTrackInternalAsync(
+        Task.Run(() => SaveTrackInternalAsync(
             projectId,
             track,
             checkpointJobId: null,
             checkpointJson: null,
-            cancellationToken);
+            cancellationToken), cancellationToken);
 
     public Task SaveTrackAndJobCheckpointAsync(
         Guid projectId,
@@ -560,7 +560,11 @@ internal sealed partial class VietsubSubtitleStore(VietsubAppPaths paths)
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyList<VietsubSubtitleTrack>> LoadTracksAsync(
+    public Task<IReadOnlyList<VietsubSubtitleTrack>> LoadTracksAsync(
+        Guid projectId, CancellationToken cancellationToken = default) =>
+        Task.Run(() => LoadTracksCoreAsync(projectId, cancellationToken), cancellationToken);
+
+    private async Task<IReadOnlyList<VietsubSubtitleTrack>> LoadTracksCoreAsync(
         Guid projectId,
         CancellationToken cancellationToken = default)
     {
@@ -671,7 +675,13 @@ internal sealed partial class VietsubSubtitleStore(VietsubAppPaths paths)
         return tracks;
     }
 
-    public async Task<VietsubTimelineWindowRecord?> LoadTimelineWindowAsync(
+    public Task<VietsubTimelineWindowRecord?> LoadTimelineWindowAsync(
+        Guid projectId, Guid trackId, long windowStartMilliseconds, long windowEndMilliseconds,
+        int maximumCues, CancellationToken cancellationToken = default) =>
+        Task.Run(() => LoadTimelineWindowCoreAsync(projectId, trackId, windowStartMilliseconds,
+            windowEndMilliseconds, maximumCues, cancellationToken), cancellationToken);
+
+    private async Task<VietsubTimelineWindowRecord?> LoadTimelineWindowCoreAsync(
         Guid projectId,
         Guid trackId,
         long windowStartMilliseconds,
@@ -681,9 +691,11 @@ internal sealed partial class VietsubSubtitleStore(VietsubAppPaths paths)
     {
         await InitializeAsync(projectId, cancellationToken);
         await using var connection = await OpenAsync(projectId, cancellationToken);
+        using var transaction = connection.BeginTransaction(deferred: true);
         int? trackRevision;
         await using (var revisionCommand = connection.CreateCommand())
         {
+            revisionCommand.Transaction = transaction;
             revisionCommand.CommandText = "SELECT revision FROM subtitle_tracks WHERE track_id = $trackId;";
             revisionCommand.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
             var value = await revisionCommand.ExecuteScalarAsync(cancellationToken);
@@ -697,6 +709,7 @@ internal sealed partial class VietsubSubtitleStore(VietsubAppPaths paths)
 
         var cues = new List<VietsubTimelineCueRecord>(maximumCues + 1);
         await using var cueCommand = connection.CreateCommand();
+        cueCommand.Transaction = transaction;
         cueCommand.CommandText = """
             SELECT cue_id, cue_index, start_ms, end_ms,
                    original_locked, translation_locked, quality_status,

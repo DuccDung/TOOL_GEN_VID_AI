@@ -122,6 +122,7 @@ internal sealed class VietsubTranslationService(
     VietsubJobManager jobManager)
 {
     private const string OcrSubtitleTrackSource = "PADDLE_OCR_LOCAL";
+    internal TOOL_LOCAL.SystemSetup.SystemSetupCoordinator? SetupCoordinator { get; set; }
     private const string OcrRequiredMessage = "Bạn cần quét OCR nhận dạng phụ đề trước khi dịch.";
 
     public IReadOnlyList<VietsubTranslationRuntimeStatus> GetRuntimeStatuses() =>
@@ -143,15 +144,38 @@ internal sealed class VietsubTranslationService(
     {
         ArgumentNullException.ThrowIfNull(input);
         await AuthorizeAsync(userId, organizationId, session.Manifest, cancellationToken);
+        if (SetupCoordinator is { } setup)
+        {
+            try
+            {
+                await setup.PrepareLegacyAsync("qwen", input.ConfirmResourceWarning,
+                    p => progress?.Report(new(p.Stage ?? "VERIFY", p.Percent ?? 0, "Đang chuẩn bị engine dịch local.",
+                        p.BytesProcessed ?? 0, p.TotalBytes ?? 0)), cancellationToken);
+                return GetRuntimeStatus();
+            }
+            catch (TOOL_LOCAL.SystemSetup.SetupException e) { throw new VietsubTranslationException(e.Code, e.Message); }
+        }
         var status = GetRuntimeStatus();
         var resourceWarningAccepted = ResolveResourceWarningAcceptance(
             status,
             input.ConfirmResourceWarning);
-        await providerRegistry.InstallDefaultAsync(
-            progress,
-            cancellationToken,
-            resourceWarningAccepted);
-        return GetRuntimeStatus();
+        try
+        {
+            using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+            status = GetRuntimeStatus();
+            resourceWarningAccepted = ResolveResourceWarningAcceptance(
+                status,
+                input.ConfirmResourceWarning);
+            await providerRegistry.InstallDefaultAsync(
+                progress,
+                cancellationToken,
+                resourceWarningAccepted);
+            return GetRuntimeStatus();
+        }
+        catch (TOOL_LOCAL.SystemSetup.SetupException exception)
+        {
+            throw new VietsubTranslationException(exception.Code, exception.Message);
+        }
     }
 
     public async Task<VietsubTranslationSettings> UpdateSettingsAsync(

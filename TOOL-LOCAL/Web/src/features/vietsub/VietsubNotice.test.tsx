@@ -7,6 +7,7 @@ import { useVietsubModule } from './useVietsubModule';
 import { VietsubPage, type VietsubPageProps } from './VietsubPage';
 import { defaultVietsubSubtitleStyle } from './vietsubSubtitleStyle';
 import { defaultVietsubAudioMixSettings } from './vietsubAudioMix';
+import { defaultVietsubVideoTransformSettings } from './vietsubVideoTransform';
 import type { HostMessage } from '../../types';
 import type { VietsubModuleState, VietsubProjectSummary } from './types';
 
@@ -87,6 +88,7 @@ describe('dismissible Vietsub notices', () => {
     const state: VietsubModuleState = { enabled: true, initialized: true, loading: false, busy: false, stage: 'shell_ready',
       projects: [project], selectedProject: project, jobs: [], subtitleStyle: defaultVietsubSubtitleStyle,
       audioMixSettings: defaultVietsubAudioMixSettings,
+      videoTransformSettings: defaultVietsubVideoTransformSettings,
       ocrSettings: { languageCode: 'en', profile: 'BALANCED', region: { x: 0, y: 0.6, width: 1, height: 0.4 } } };
     const noop = vi.fn(); const saved = async () => true;
     const props: VietsubPageProps = { state, onRefresh: noop, onCreateProject: noop, onOpenProject: noop, onRenameProject: noop,

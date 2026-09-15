@@ -3,6 +3,8 @@ import json
 import pathlib
 import sys
 import wave
+import importlib.metadata
+import re
 
 PROTOCOL_VERSION = 1
 sys.stdout.reconfigure(encoding="utf-8")
@@ -22,6 +24,15 @@ def emit(request_id: str, event_type: str, **values) -> None:
 
 
 def main() -> None:
+    if sys.version_info[:3] != (3, 11, 15) or sys.maxsize <= 2**32:
+        raise ValueError("Pinned CPython 3.11.15 x64 is required.")
+    lock_path = pathlib.Path(__file__).with_name("piper-requirements.lock")
+    requirements = re.findall(r"^([A-Za-z0-9_-]+)==([^\s]+)", lock_path.read_text(encoding="utf-8"), re.MULTILINE)
+    if not requirements:
+        raise ValueError("Runtime dependency lock is missing.")
+    for name, version in requirements:
+        if importlib.metadata.version(name) != version:
+            raise ValueError("Runtime dependency does not match the bundled lock.")
     if len(sys.argv) != 2:
         raise ValueError("A single request file is required.")
     with open(sys.argv[1], "r", encoding="utf-8") as request_file:

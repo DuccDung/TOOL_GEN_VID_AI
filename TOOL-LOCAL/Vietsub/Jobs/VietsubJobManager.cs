@@ -85,10 +85,15 @@ internal sealed class VietsubJobManager : IAsyncDisposable
                 "Job đã dùng hết số lần chạy cho phép.");
         }
 
+        IDisposable runtimeLease;
+        try { runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: false); }
+        catch (TOOL_LOCAL.SystemSetup.SetupException e) { throw new VietsubJobException(e.Code, e.Message); }
         var execution = new ActiveExecution(
-            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token));
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token), runtimeLease);
         if (!_active.TryAdd(jobId, execution))
         {
+            runtimeLease.Dispose();
+            execution.Cancellation.Dispose();
             throw new VietsubJobException(
                 "vietsub_job_already_running",
                 "Job đã được đưa vào hàng đợi thực thi.");
@@ -329,6 +334,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
                 _executionSlots.Release();
             }
             _active.TryRemove(jobId, out _);
+            execution.RuntimeLease.Dispose();
             execution.Cancellation.Dispose();
         }
     }
@@ -505,8 +511,9 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         Shutdown
     }
 
-    private sealed class ActiveExecution(CancellationTokenSource cancellation)
+    private sealed class ActiveExecution(CancellationTokenSource cancellation, IDisposable runtimeLease)
     {
+        public IDisposable RuntimeLease { get; } = runtimeLease;
         private int _stopReason;
 
         public CancellationTokenSource Cancellation { get; } = cancellation;

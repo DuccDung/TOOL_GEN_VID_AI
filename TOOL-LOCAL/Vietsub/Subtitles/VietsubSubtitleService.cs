@@ -185,14 +185,10 @@ internal sealed partial class VietsubSubtitleService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(project);
-        var tracks = await store.LoadTracksAsync(project.ProjectId, cancellationToken);
-        var activeTrackId = project.ActiveSubtitleTrackId is Guid selected
-            && tracks.Any(track => track.TrackId == selected)
-                ? selected
-                : tracks.FirstOrDefault()?.TrackId;
-        return new(
-            activeTrackId,
-            tracks.Select(ToTrackSummary).ToArray());
+        var tracks = await store.LoadSummariesAsync(project.ProjectId, cancellationToken);
+        var activeTrackId = project.ActiveSubtitleTrackId is Guid selected && tracks.Any(track => track.TrackId == selected)
+            ? selected : tracks.FirstOrDefault()?.TrackId;
+        return new(activeTrackId, tracks);
     }
 
     public async Task ActivateTrackAsync(
@@ -213,76 +209,11 @@ internal sealed partial class VietsubSubtitleService(
         VietsubSubtitlePageQuery query,
         CancellationToken cancellationToken = default)
     {
-        var tracks = await store.LoadTracksAsync(project.ProjectId, cancellationToken);
-        var track = ResolveTrack(project, tracks, query.TrackId);
-        var search = NormalizeSearch(query.Search);
-        var status = NormalizeStatus(query.Status);
-        var speaker = NormalizeSpeakerFilter(query.Speaker);
-        IEnumerable<VietsubSubtitleCue> filtered = track.Cues;
-        if (search.Length > 0)
-        {
-            filtered = filtered.Where(cue =>
-                cue.OriginalText.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-                || cue.TranslatedText.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-                || cue.Speaker.Contains(search, StringComparison.CurrentCultureIgnoreCase));
-        }
-        if (speaker.Length > 0)
-        {
-            filtered = filtered.Where(cue => string.Equals(
-                cue.Speaker,
-                speaker,
-                StringComparison.CurrentCultureIgnoreCase));
-        }
-        filtered = status switch
-        {
-            "PENDING" => filtered.Where(cue => string.IsNullOrWhiteSpace(cue.TranslatedText)),
-            "TRANSLATED" => filtered.Where(cue => !string.IsNullOrWhiteSpace(cue.TranslatedText)),
-            "LOCKED" => filtered.Where(cue => cue.OriginalLocked || cue.TranslationLocked),
-            "WARNING" => filtered.Where(cue => cue.Warnings.Count > 0
-                || string.Equals(cue.QualityStatus, "WARNING", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(cue.QualityStatus, "INVALID", StringComparison.OrdinalIgnoreCase)),
-            _ => filtered
-        };
-
-        var materialized = filtered.ToArray();
-        var requestedPageSize = Math.Clamp(query.PageSize <= 0 ? 50 : query.PageSize, 1, MaximumPageSize);
-        var offset = Math.Clamp(query.Offset, 0, Math.Max(0, materialized.Length - 1));
-        var cueIndexes = track.Cues
-            .Select((cue, index) => new { cue.CueId, Index = index })
-            .ToDictionary(item => item.CueId, item => item.Index);
-        var page = new List<VietsubSubtitleCueSummary>(requestedPageSize);
-        var textCharacters = 0;
-        foreach (var cue in materialized.Skip(offset).Take(requestedPageSize))
-        {
-            var cueCharacters = cue.OriginalText.Length
-                + cue.TranslatedText.Length
-                + cue.Speaker.Length
-                + cue.Warnings.Sum(warning => warning.Length);
-            if (page.Count > 0 && textCharacters + cueCharacters > MaximumPageTextCharacters)
-            {
-                break;
-            }
-            page.Add(ToCueSummary(cue, cueIndexes[cue.CueId]));
-            textCharacters += cueCharacters;
-        }
-        var effectivePageSize = page.Count > 0 ? page.Count : requestedPageSize;
-        var speakers = track.Cues
-            .Select(cue => cue.Speaker)
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.CurrentCultureIgnoreCase)
-            .OrderBy(value => value, StringComparer.CurrentCultureIgnoreCase)
-            .ToArray();
-        return new(
-            track.TrackId,
-            track.Revision,
-            offset,
-            effectivePageSize,
-            materialized.Length,
-            search,
-            status,
-            speaker,
-            speakers,
-            page);
+        var trackId = query.TrackId ?? project.ActiveSubtitleTrackId ?? throw TrackNotFound();
+        return await store.LoadPageAsync(project.ProjectId, trackId, query.Offset,
+            Math.Clamp(query.PageSize <= 0 ? 50 : query.PageSize, 1, MaximumPageSize),
+            NormalizeSearch(query.Search), NormalizeStatus(query.Status), NormalizeSpeakerFilter(query.Speaker),
+            MaximumPageTextCharacters, cancellationToken) ?? throw TrackNotFound();
     }
 
     public async Task<VietsubTrackActivationImpact> AssessActivationImpactAsync(
@@ -408,9 +339,8 @@ internal sealed partial class VietsubSubtitleService(
             throw TimelineEditConflict();
         }
 
-        var tracks = await store.LoadTracksAsync(project.ProjectId, cancellationToken);
-        var track = ResolveTrack(project, tracks, trackId);
-        if (track.Revision != expectedTrackRevision)
+        var snapshot = await store.LoadCueEditAsync(project.ProjectId, trackId, cueId, cancellationToken) ?? throw TrackNotFound();
+        if (snapshot.Revision != expectedTrackRevision)
         {
             throw TimelineEditConflict();
         }
@@ -426,13 +356,13 @@ internal sealed partial class VietsubSubtitleService(
         // Giữ policy SRT hiện hành: cue được phép chồng thời gian; editor chỉ khóa biên,
         // thời lượng tối thiểu, media duration và revision để không đổi dữ liệu ngoài ý muốn.
 
-        var cue = FindCue(track, cueId, out _);
+        var cue = snapshot.Cue;
         var previousStartMilliseconds = cue.StartMilliseconds;
         var previousEndMilliseconds = cue.EndMilliseconds;
         if (cue.StartMilliseconds == startMilliseconds && cue.EndMilliseconds == endMilliseconds)
         {
             return new(
-                track.Revision,
+                snapshot.Revision,
                 previousStartMilliseconds,
                 previousEndMilliseconds,
                 startMilliseconds,
@@ -442,9 +372,9 @@ internal sealed partial class VietsubSubtitleService(
         cue.StartMilliseconds = startMilliseconds;
         cue.EndMilliseconds = endMilliseconds;
         cue.UpdatedAtUtc = DateTime.UtcNow;
-        await SaveMutationAsync(project.ProjectId, track, cancellationToken);
+        if (!await store.SaveCueEditAsync(project.ProjectId, snapshot, cancellationToken)) throw TimelineEditConflict();
         return new(
-            track.Revision,
+            snapshot.Revision + 1,
             previousStartMilliseconds,
             previousEndMilliseconds,
             startMilliseconds,
@@ -460,8 +390,9 @@ internal sealed partial class VietsubSubtitleService(
         string speaker,
         CancellationToken cancellationToken = default)
     {
-        var track = await LoadActiveTrackAsync(project, cancellationToken);
-        var cue = FindCue(track, cueId, out _);
+        var trackId = project.ActiveSubtitleTrackId ?? throw TrackNotFound();
+        var snapshot = await store.LoadCueEditAsync(project.ProjectId, trackId, cueId, cancellationToken) ?? throw TrackNotFound();
+        var cue = snapshot.Cue;
         var original = NormalizeText(originalText);
         var translated = NormalizeText(translatedText, allowEmpty: true);
         var normalizedSpeaker = NormalizeSpeaker(speaker);
@@ -515,7 +446,7 @@ internal sealed partial class VietsubSubtitleService(
             }
         }
         cue.UpdatedAtUtc = DateTime.UtcNow;
-        await SaveMutationAsync(project.ProjectId, track, cancellationToken);
+        if (!await store.SaveCueEditAsync(project.ProjectId, snapshot, cancellationToken)) throw TimelineEditConflict();
     }
 
     public async Task SplitCueAsync(

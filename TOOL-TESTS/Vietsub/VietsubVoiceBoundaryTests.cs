@@ -244,7 +244,15 @@ public sealed class VietsubVoiceBoundaryTests : IDisposable
         {
             var output = Path.Combine(_root, $"export-{includeOriginal}.mp4");
             var mix = new VietsubAudioMixSettings { OriginalMuted = !includeOriginal, OriginalVolume = 0.25, TranslatedVoiceVolume = 1, AutoDuckOriginal = true };
-            await Run(VietsubVideoExportService.BuildRenderArguments(source, timelinePath, output, "null", 6.5m, true, mix));
+            await Run(VietsubVideoExportService.BuildRenderArguments(
+                source,
+                timelinePath,
+                output,
+                "null",
+                6.5m,
+                true,
+                mix,
+                VietsubVideoTransformSettings.CreateDefault()));
             var wave = Path.Combine(_root, $"export-{includeOriginal}.wav");
             await Run(["-v", "error", "-i", output, "-vn", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-y", wave]);
             var samples = ReadSamples(wave);

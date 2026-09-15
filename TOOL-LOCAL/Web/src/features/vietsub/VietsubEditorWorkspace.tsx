@@ -510,8 +510,12 @@ export function VietsubEditorWorkspace({
   }, [audioPreviewSettings.translatedVoiceMuted, audioPreviewSettings.translatedVoiceVolume, voiceAvailable]);
 
   const updateTimelineAudioMix = useCallback(
-    (next: VietsubAudioMixSettings) => onUpdateSubtitleStyle(state.subtitleStyle, next),
-    [onUpdateSubtitleStyle, state.subtitleStyle]
+    (next: VietsubAudioMixSettings) => onUpdateSubtitleStyle(
+      state.subtitleStyle,
+      next,
+      state.videoTransformSettings
+    ),
+    [onUpdateSubtitleStyle, state.subtitleStyle, state.videoTransformSettings]
   );
 
   return (
@@ -740,6 +744,7 @@ export function VietsubEditorWorkspace({
           media={project.sourceVideo}
           style={state.subtitleStyle}
           audioMixSettings={state.audioMixSettings}
+          videoTransformSettings={state.videoTransformSettings}
           voicePlaybackUrl={state.voiceWorkspace?.timelinePlaybackUrl}
           previewText={activeSubtitleText}
           hasTranslatedSubtitles={Boolean(state.subtitleWorkspace?.tracks.some((track) => track.translatedCueCount > 0))}

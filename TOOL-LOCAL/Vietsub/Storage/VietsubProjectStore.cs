@@ -410,6 +410,7 @@ internal sealed class VietsubProjectStore
         manifest.VoiceSettings.Normalize();
         manifest.AudioMixSettings ??= VietsubAudioMixSettings.CreateDefault();
         manifest.AudioMixSettings.Normalize();
+        manifest.VideoTransformSettings ??= VietsubVideoTransformSettings.CreateDefault();
         manifest.SubtitleStyle ??= VietsubSubtitleStyle.CreateDefault();
         manifest.SubtitleStyle.Normalize();
     }
@@ -475,6 +476,13 @@ internal sealed class VietsubProjectStore
         {
             manifest.AudioMixSettings = VietsubAudioMixSettings.CreateDefault();
             manifest.SchemaVersion = 6;
+            changed = true;
+        }
+
+        if (manifest.SchemaVersion == 6)
+        {
+            manifest.VideoTransformSettings = VietsubVideoTransformSettings.CreateDefault();
+            manifest.SchemaVersion = 7;
             changed = true;
         }
 

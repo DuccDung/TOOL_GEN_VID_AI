@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Jobs;
 using TOOL_LOCAL.Vietsub.Ocr;
@@ -17,6 +18,7 @@ internal sealed class VietsubVoiceService(
     VietsubVoiceTimelineRenderer timelineRenderer,
     VietsubJobManager jobManager)
 {
+    internal TOOL_LOCAL.SystemSetup.SystemSetupCoordinator? SetupCoordinator { get; set; }
     public async Task<int> SetCueVoiceEnabledAsync(VietsubProjectSession session, string userId,
         Guid organizationId, Guid trackId, int revision, IReadOnlyList<Guid> cueIds,
         bool enabled, CancellationToken token)
@@ -42,15 +44,41 @@ internal sealed class VietsubVoiceService(
         CancellationToken cancellationToken)
     {
         await AuthorizeAsync(session.Manifest, userId, organizationId, cancellationToken);
-        return await components.InstallAsync(progress, cancellationToken);
+        if (SetupCoordinator is { } setup)
+        {
+            try
+            {
+                await setup.PrepareLegacyAsync("piper", false,
+                    p => progress?.Report(new(p.Stage ?? "VERIFY", p.Percent ?? 0, "Đang chuẩn bị giọng Việt.",
+                        p.BytesProcessed ?? 0, p.TotalBytes ?? 0)), cancellationToken);
+                return components.GetStatus();
+            }
+            catch (TOOL_LOCAL.SystemSetup.SetupException e) { throw new VietsubVoiceException(e.Code, e.Message); }
+        }
+        try
+        {
+            using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+            return await components.InstallAsync(progress, cancellationToken);
+        }
+        catch (TOOL_LOCAL.SystemSetup.SetupException exception)
+        {
+            throw new VietsubVoiceException(exception.Code, exception.Message);
+        }
     }
 
-    public async Task<VietsubVoiceWorkspaceSummary> GetWorkspaceAsync(
+    public Task<VietsubVoiceWorkspaceSummary> GetWorkspaceAsync(
         VietsubProjectManifest project,
         CancellationToken cancellationToken)
     {
+        var snapshot = JsonSerializer.Deserialize<VietsubProjectManifest>(JsonSerializer.SerializeToUtf8Bytes(project))!;
+        return Task.Run(() => GetWorkspaceCoreAsync(snapshot, cancellationToken), cancellationToken);
+    }
+
+    private async Task<VietsubVoiceWorkspaceSummary> GetWorkspaceCoreAsync(
+        VietsubProjectManifest project, CancellationToken cancellationToken)
+    {
         var activeTrack = project.ActiveSubtitleTrackId is Guid trackId
-            ? (await subtitleStore.LoadTracksAsync(project.ProjectId, cancellationToken))
+            ? (await subtitleStore.LoadSummariesAsync(project.ProjectId, cancellationToken))
                 .SingleOrDefault(track => track.TrackId == trackId)
             : null;
         var trackRevision = activeTrack?.Revision;
@@ -60,11 +88,15 @@ internal sealed class VietsubVoiceService(
             trackRevision,
             project.VoiceSettings,
             cancellationToken);
-        if (workspace.Timeline is null && activeTrack is not null)
+        if (workspace.Timeline is null && activeTrack is not null
+            && await voiceStore.HasTimelineHistoryAsync(project.ProjectId, activeTrack.TrackId, cancellationToken))
         {
             try
             {
-                if (await TryRebuildTimelineFromCachedPhrasesAsync(project, activeTrack, cancellationToken))
+                var track = (await subtitleStore.LoadTracksAsync(project.ProjectId, cancellationToken))
+                    .SingleOrDefault(value => value.TrackId == activeTrack.TrackId);
+                if (track is not null && track.Revision == activeTrack.Revision
+                    && await TryRebuildTimelineFromCachedPhrasesAsync(project, track, cancellationToken))
                 {
                     workspace = await voiceStore.LoadWorkspaceAsync(
                         project.ProjectId,
@@ -84,7 +116,7 @@ internal sealed class VietsubVoiceService(
                 // người dùng có thể chủ động tạo lại voice nếu file cũ hoặc FFmpeg không còn hợp lệ.
             }
         }
-        var enabledCount = activeTrack?.Cues.Count(cue => cue.VoiceEnabled) ?? 0;
+        var enabledCount = activeTrack?.VoiceEnabledCueCount ?? 0;
         workspace = workspace with
         {
             EnabledCueCount = enabledCount,

@@ -5,6 +5,7 @@ import type {
   VietsubOcrSettings,
   VietsubSubtitleCue,
   VietsubSubtitleStyle,
+  VietsubVideoTransformSettings,
   VietsubSubtitlePageQuery,
   VietsubTimelineCueUpdate,
   VietsubTimelineWindowQuery
@@ -47,7 +48,11 @@ export type VietsubPageProps = {
   onRequestTimelineThumbnails: (sourceSha256: string, indices: number[]) => void;
   onRequestTimelineWaveform: (sourceSha256: string) => void;
   onUpdateSubtitleCue: (cue: Pick<VietsubSubtitleCue, 'cueId' | 'originalText' | 'translatedText' | 'speaker'>) => Promise<boolean>;
-  onUpdateSubtitleStyle: (style: VietsubSubtitleStyle, audioMixSettings: VietsubAudioMixSettings) => Promise<boolean>;
+  onUpdateSubtitleStyle: (
+    style: VietsubSubtitleStyle,
+    audioMixSettings: VietsubAudioMixSettings,
+    videoTransformSettings: VietsubVideoTransformSettings
+  ) => Promise<boolean>;
   onUpdateTimelineCue: (update: VietsubTimelineCueUpdate) => Promise<boolean>;
   onSplitSubtitleCue: (cueId: string, positionMilliseconds: number) => void;
   onAlignSubtitleCue: (cueId: string, positionMilliseconds: number) => void;

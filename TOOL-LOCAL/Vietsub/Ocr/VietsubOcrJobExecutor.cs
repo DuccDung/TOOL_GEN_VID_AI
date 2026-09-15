@@ -355,6 +355,7 @@ internal sealed class VietsubOcrJobExecutor(
         string message,
         CancellationToken cancellationToken)
     {
+        var expectedRevision = track.Revision;
         var completed = accumulator.DrainCompleted();
         var trackChanged = completed.Count > 0;
         if (completed.Count > 0)
@@ -373,11 +374,13 @@ internal sealed class VietsubOcrJobExecutor(
         var checkpointJson = JsonSerializer.Serialize(checkpoint, JsonOptions);
         if (trackChanged)
         {
-            await subtitleStore.SaveTrackAndJobCheckpointAsync(
+            await subtitleStore.SaveOcrDeltaCheckpointAsync(
                 context.Job.ProjectId,
                 track,
                 context.Job.Id,
                 checkpointJson,
+                expectedRevision,
+                completed.Select(cue => cue.CueId).ToHashSet(),
                 cancellationToken);
         }
         await context.ReportProgressAsync(

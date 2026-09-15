@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { VietsubSubtitleDesignerModal } from './VietsubSubtitleDesignerModal';
 import { defaultVietsubSubtitleStyle } from './vietsubSubtitleStyle';
 import { defaultVietsubAudioMixSettings } from './vietsubAudioMix';
+import { defaultVietsubVideoTransformSettings } from './vietsubVideoTransform';
 
 const media = {
   mediaId: 'media-1',
@@ -34,6 +35,7 @@ describe('Vietsub subtitle designer modal', () => {
       media,
       style: defaultVietsubSubtitleStyle,
       audioMixSettings: defaultVietsubAudioMixSettings,
+      videoTransformSettings: defaultVietsubVideoTransformSettings,
       voicePlaybackUrl: 'https://vietsub-media.app.local/voice.wav',
       previewText: 'Phụ đề đang xem trước',
       hasTranslatedSubtitles: true,
@@ -46,7 +48,7 @@ describe('Vietsub subtitle designer modal', () => {
       onClose: () => { }
     }));
 
-    expect(html).toContain('Phụ đề và âm thanh');
+    expect(html).toContain('Phụ đề, hình ảnh và âm thanh');
     expect(html).toContain('aria-label="Tua video xem trước phụ đề"');
     expect(html).toContain('class="vietsub-subtitle-designer-stage is-portrait"');
     expect(html).toContain('aspect-ratio:0.5625');
@@ -60,6 +62,8 @@ describe('Vietsub subtitle designer modal', () => {
     expect(html).toContain('Kéo trực tiếp phụ đề');
     expect(html).toContain('Xuất MP4');
     expect(html).toContain('Lưu thay đổi');
+    expect(html).toContain('Lật trái–phải');
+    expect(html).toContain('Lật trên–dưới');
     expect(html).not.toContain('app.local says');
   });
 });

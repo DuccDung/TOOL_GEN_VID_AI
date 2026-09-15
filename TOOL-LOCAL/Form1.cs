@@ -22,6 +22,7 @@ using TOOL_LOCAL.Vietsub.Translation;
 using TOOL_LOCAL.Vietsub.Voice;
 using TOOL_LOCAL.Payments;
 using System.Runtime.InteropServices;
+using TOOL_LOCAL.SystemSetup;
 
 namespace TOOL_LOCAL;
 
@@ -64,6 +65,9 @@ public partial class Form1 : Form
     private Label? _loadingLabel;
     private DashboardBridge? _bridge;
     private VietsubWebBridge? _vietsubBridge;
+    private SystemSetupBridge? _setupBridge;
+    private readonly SystemSetupCoordinator? _setupCoordinator;
+    private readonly StartupSystemSetupGate? _startupSystemSetupGate;
     private bool _refreshing;
     private bool _closing;
     private bool _checkingUpdate;
@@ -105,7 +109,9 @@ public partial class Form1 : Form
         VietsubVoiceService? vietsubVoiceService,
         VietsubVideoExportService? vietsubVideoExportService,
         LicensePaymentApiClient licensePaymentClient,
-        VietsubCloudTranslationService? vietsubCloudTranslationService = null) : this()
+        VietsubCloudTranslationService? vietsubCloudTranslationService = null,
+        SystemSetupCoordinator? setupCoordinator = null,
+        bool startupSystemSetupRequired = false) : this()
     {
         _sessionManager = sessionManager;
         _licenseManager = licenseManager;
@@ -119,6 +125,16 @@ public partial class Form1 : Form
         _updateOptions = updateOptions;
         _mediaToolPreflight = mediaToolPreflight;
         _featureOptions = featureOptions;
+        _setupCoordinator = setupCoordinator;
+        if (setupCoordinator is not null)
+        {
+            _startupSystemSetupGate = new StartupSystemSetupGate(setupCoordinator, startupSystemSetupRequired);
+            _setupBridge = new SystemSetupBridge(
+                setupCoordinator,
+                PostJsonToWebView,
+                CloseForStartupSetup,
+                startupSystemSetupRequired);
+        }
         _vietsubProjectStore = vietsubProjectStore;
         _vietsubProjectRegistryClient = vietsubProjectRegistryClient;
         _vietsubMediaImportService = vietsubMediaImportService;
@@ -328,6 +344,21 @@ public partial class Form1 : Form
             return;
         }
 
+        if (_setupBridge is not null && await _setupBridge.TryHandleAsync(message, _shutdown.Token)) return;
+
+        if (ShouldBlockForStartupSetup(message, out var requestId))
+        {
+            PostJsonToWebView(JsonSerializer.Serialize(
+                new WebMessageResponse(
+                    "operation.error",
+                    requestId,
+                    Error: new WebMessageError(
+                        "system_setup_required",
+                        "Hãy hoàn tất Setup hệ thống trước khi sử dụng chức năng này.")),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            return;
+        }
+
         if (await TryHandleUpdateMessageAsync(message))
         {
             return;
@@ -342,7 +373,26 @@ public partial class Form1 : Form
         await _bridge.HandleAsync(message, _shutdown.Token);
     }
 
-    private void WebViewOnVietsubMediaRequested(
+    private bool ShouldBlockForStartupSetup(string json, out string? requestId)
+    {
+        requestId = null;
+        if (_startupSystemSetupGate?.IsBlocking != true) return false;
+
+        try
+        {
+            var request = JsonSerializer.Deserialize<WebMessageRequest>(
+                json,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            requestId = request?.RequestId;
+            return request is not null && !StartupSystemSetupGate.IsAllowedCommand(request.Type);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private async void WebViewOnVietsubMediaRequested(
         object? sender,
         CoreWebView2WebResourceRequestedEventArgs eventArgs)
     {
@@ -380,91 +430,116 @@ public partial class Form1 : Form
                 rangeHeaderExceptionType);
         }
 
-        VietsubPlaybackResponse response;
         try
         {
-            _vietsubMediaLog.Write(
-                correlationId,
-                resourceType,
-                method,
-                null,
-                null,
-                "bridge");
-            response = _vietsubBridge?.TryOpenPlaybackRequest(
-                requestUri,
-                method,
-                rangeHeader)
-                ?? VietsubMediaPlaybackService.Error(
-                    503,
-                    "Service Unavailable",
-                    "vietsub_media_bridge_unavailable",
+            // Dispose completes the deferral, including cancellation/early returns.
+            // Calling Complete explicitly as well causes WebView2 E_ILLEGAL_METHOD_CALL.
+            using var deferral = eventArgs.GetDeferral();
+            VietsubPlaybackResponse response;
+            try
+            {
+                _vietsubMediaLog.Write(
+                    correlationId,
+                    resourceType,
+                    method,
+                    null,
+                    null,
+                    "bridge");
+                response = _vietsubBridge is { } bridge
+                    ? await bridge.OpenPlaybackRequestAsync(
+                    requestUri,
+                    method,
+                    rangeHeader, _shutdown.Token)
+                    : VietsubMediaPlaybackService.Error(
+                        503,
+                        "Service Unavailable",
+                        "vietsub_media_bridge_unavailable",
+                        resourceType);
+            }
+            catch (Exception exception)
+            {
+                _vietsubMediaLog.Write(
+                    correlationId,
+                    resourceType,
+                    method,
+                    500,
+                    "vietsub_media_request_failed",
+                    "bridge",
+                    exception.GetType().Name);
+                response = VietsubMediaPlaybackService.Error(
+                    500,
+                    "Internal Server Error",
+                    "vietsub_media_request_failed",
                     resourceType);
-        }
-        catch (Exception exception)
-        {
-            _vietsubMediaLog.Write(
-                correlationId,
-                resourceType,
-                method,
-                500,
-                "vietsub_media_request_failed",
-                "bridge",
-                exception.GetType().Name);
-            response = VietsubMediaPlaybackService.Error(
-                500,
-                "Internal Server Error",
-                "vietsub_media_request_failed",
-                resourceType);
-        }
-        _vietsubMediaLog.Write(
-            correlationId,
-            response.ResourceType,
-            method,
-            response.StatusCode,
-            response.ErrorCode,
-            "playback");
-        if (response.StatusCode >= 400)
-        {
-            PostVietsubMediaFailure(
-                response.ResourceType,
-                correlationId,
-                response.ErrorCode ?? "vietsub_media_unknown_error");
-        }
-        try
-        {
-            eventArgs.Response = CreateVietsubWebResourceResponse(
-                coreWebView.Environment,
-                response,
-                correlationId);
+            }
+            if (_shutdown.IsCancellationRequested || IsDisposed || _webView?.CoreWebView2 != coreWebView)
+            {
+                response.Content.Dispose();
+                return;
+            }
             _vietsubMediaLog.Write(
                 correlationId,
                 response.ResourceType,
                 method,
                 response.StatusCode,
                 response.ErrorCode,
-                "response_creation");
+                "playback");
+            if (response.StatusCode >= 400)
+            {
+                PostVietsubMediaFailure(
+                    response.ResourceType,
+                    correlationId,
+                    response.ErrorCode ?? "vietsub_media_unknown_error");
+            }
+            try
+            {
+                eventArgs.Response = CreateVietsubWebResourceResponse(
+                    coreWebView.Environment,
+                    response,
+                    correlationId);
+                _vietsubMediaLog.Write(
+                    correlationId,
+                    response.ResourceType,
+                    method,
+                    response.StatusCode,
+                    response.ErrorCode,
+                    "response_creation");
+            }
+            catch (Exception exception)
+            {
+                response.Content.Dispose();
+                const string responseErrorCode = "vietsub_media_response_creation_failed";
+                _vietsubMediaLog.Write(
+                    correlationId,
+                    response.ResourceType,
+                    method,
+                    500,
+                    responseErrorCode,
+                    "response_creation",
+                    exception.GetType().Name);
+                PostVietsubMediaFailure(response.ResourceType, correlationId, responseErrorCode);
+                eventArgs.Response = coreWebView.Environment.CreateWebResourceResponse(
+                    Stream.Null,
+                    500,
+                    "Internal Server Error",
+                    "Content-Length: 0\r\n" +
+                    "Cache-Control: no-store\r\n" +
+                    $"X-Vietsub-Error-Code: {responseErrorCode}\r\n" +
+                    $"X-Vietsub-Correlation-Id: {correlationId}\r\n");
+            }
         }
         catch (Exception exception)
         {
-            response.Content.Dispose();
-            const string responseErrorCode = "vietsub_media_response_creation_failed";
+            // An async-void event cannot propagate cleanup/COM failures to its caller.
+            // Keep shutdown/disposal races from terminating the desktop process.
             _vietsubMediaLog.Write(
                 correlationId,
-                response.ResourceType,
+                resourceType,
                 method,
                 500,
-                responseErrorCode,
+                "vietsub_media_callback_failed",
                 "response_creation",
                 exception.GetType().Name);
-            PostVietsubMediaFailure(response.ResourceType, correlationId, responseErrorCode);
-            eventArgs.Response = coreWebView.Environment.CreateWebResourceResponse(
-                Stream.Null,
-                500,
-                "Internal Server Error",
-                "Content-Length: 0\r\n" +
-                "Cache-Control: no-store\r\n" +
-                $"X-Vietsub-Error-Code: {responseErrorCode}\r\n" +
-                $"X-Vietsub-Correlation-Id: {correlationId}\r\n");
         }
     }
 
@@ -731,6 +806,7 @@ public partial class Form1 : Form
             var release = _mediaRepairRelease
                 ?? await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token);
             _mediaRepairRelease = null;
+            using var runtimeLease = RuntimeUseGate.Shared.Acquire(exclusive: true);
             var progress = new Progress<DesktopUpdateProgress>(update =>
                 PostHostMessage("media.tools.install.progress", update));
             await _packageUpdateService.StartAsync(release, progress, _shutdown.Token);
@@ -762,6 +838,7 @@ public partial class Form1 : Form
         try
         {
             var progress = new Progress<DesktopUpdateProgress>(update => PostHostMessage("update.progress", update));
+            using var runtimeLease = RuntimeUseGate.Shared.Acquire(exclusive: true);
             await _packageUpdateService.StartAsync(release, progress, _shutdown.Token);
             Close();
         }
@@ -949,6 +1026,22 @@ public partial class Form1 : Form
         Close();
     }
 
+    private void CloseForStartupSetup()
+    {
+        if (_closing || IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(CloseForStartupSetup);
+            return;
+        }
+
+        Close();
+    }
+
     private void SessionManagerOnInvalidated(string reason)
     {
         if (_closing || IsDisposed || !IsHandleCreated)
@@ -985,8 +1078,11 @@ public partial class Form1 : Form
         Close();
     }
 
-    private void LicenseManagerOnInvalidated(string reason) =>
+    private void LicenseManagerOnInvalidated(string reason)
+    {
+        _setupCoordinator?.Invalidate();
         PostHostMessage("license.invalidated", new LicenseInvalidatedMessage(reason, _licenseManager?.Current));
+    }
 
     private void ShowStartupError(string message)
     {
@@ -1013,6 +1109,8 @@ public partial class Form1 : Form
     private void FormOnClosed(object? sender, FormClosedEventArgs eventArgs)
     {
         _closing = true;
+        _setupCoordinator?.Invalidate();
+        _setupBridge?.Dispose();
         _refreshTimer.Stop();
         _shutdown.Cancel();
         _bridge?.Dispose();

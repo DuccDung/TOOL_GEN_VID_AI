@@ -194,7 +194,11 @@ internal sealed class VietsubVoiceJobExecutor(
                 audio,
                 parameters.Settings,
                 requestedDuration,
-                cancellationToken);
+                cancellationToken,
+                (done, total, token) => context.ReportProgressAsync(new("VOICE_TIMELINE", done * 100d / total,
+                    72 + done * 23d / total, $"Đang ghép giọng: {done}/{total} đoạn."), token).AsTask());
+            await context.ReportProgressAsync(new("VOICE_TIMELINE", 100, 96,
+                "Đang xác minh timeline giọng trước khi lưu.", timelineCheckpoint), cancellationToken);
             await voiceStore.SaveTimingDiagnosticsAsync(
                 project.ProjectId,
                 track.TrackId,

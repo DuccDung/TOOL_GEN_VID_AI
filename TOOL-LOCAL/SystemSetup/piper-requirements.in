@@ -1,0 +1,8 @@
+# Windows x64 / CPython 3.11.15. Resolve changes explicitly, then verify the locked wheels.
+piper-tts==1.6.0
+onnxruntime==1.28.0
+numpy==2.4.6
+flatbuffers==25.12.19
+packaging==26.3
+pathvalidate==3.3.1
+protobuf==7.35.1

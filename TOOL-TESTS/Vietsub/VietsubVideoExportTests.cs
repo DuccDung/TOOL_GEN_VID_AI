@@ -34,7 +34,8 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
             "subtitles=test.ass",
             9,
             sourceHasAudio: true,
-            settings);
+            settings,
+            VietsubVideoTransformSettings.CreateDefault());
 
         Assert.Contains("1:a:0", arguments);
         Assert.Contains(arguments, argument => argument.Contains("volume=1.25", StringComparison.Ordinal));
@@ -57,11 +58,110 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
             "subtitles=test.ass",
             9,
             sourceHasAudio: true,
-            settings);
+            settings,
+            VietsubVideoTransformSettings.CreateDefault());
 
         Assert.Contains("-an", arguments);
         Assert.DoesNotContain("-c:a", arguments);
         Assert.Equal(1, arguments.Count(argument => argument == "-i"));
+    }
+
+    [Theory]
+    [InlineData(false, false, "subtitles=test.ass")]
+    [InlineData(true, false, "hflip,subtitles=test.ass")]
+    [InlineData(false, true, "vflip,subtitles=test.ass")]
+    [InlineData(true, true, "hflip,vflip,subtitles=test.ass")]
+    public void BuildRenderArguments_AppliesVideoFlipBeforeSubtitles(
+        bool flipHorizontal,
+        bool flipVertical,
+        string expectedFilter)
+    {
+        var arguments = VietsubVideoExportService.BuildRenderArguments(
+            "source.mp4",
+            voiceTimelinePath: null,
+            "output.mp4",
+            "subtitles=test.ass",
+            9,
+            sourceHasAudio: false,
+            VietsubAudioMixSettings.CreateDefault(),
+            new VietsubVideoTransformSettings
+            {
+                FlipHorizontal = flipHorizontal,
+                FlipVertical = flipVertical
+            });
+
+        var filterIndex = Array.IndexOf(arguments.ToArray(), "-vf");
+        Assert.True(filterIndex >= 0);
+        Assert.Equal(expectedFilter, arguments[filterIndex + 1]);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task RealFfmpeg_FlipsImageButKeepsSubtitleAtBottom(
+        bool flipHorizontal,
+        bool flipVertical)
+    {
+        Directory.CreateDirectory(_root);
+        var ffmpeg = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg", "ffmpeg.exe");
+        var ffprobe = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg", "ffprobe.exe");
+        Assert.True(File.Exists(ffmpeg) && File.Exists(ffprobe), "The licensed FFmpeg test bundle is required.");
+        var runner = new ExternalProcessRunner();
+        async Task Run(IEnumerable<string> arguments)
+        {
+            var result = await runner.RunAsync(ffmpeg, arguments, TimeSpan.FromSeconds(30));
+            Assert.True(result.ExitCode == 0, result.StandardError);
+        }
+
+        const int width = 160;
+        const int height = 128;
+        var source = Path.Combine(_root, "flip-source.mp4");
+        await Run([
+            "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=160x128:r=10:d=1",
+            "-vf", "drawbox=x=0:y=0:w=30:h=30:color=red:t=fill,drawbox=x=130:y=98:w=30:h=30:color=blue:t=fill",
+            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", source
+        ]);
+        var style = VietsubSubtitleStyle.CreateDefault();
+        style.FontSizePercent = 10;
+        style.BackgroundEnabled = false;
+        var ass = VietsubAssSubtitleBuilder.BuildTranslated([
+            new VietsubSubtitleCue { StartMilliseconds = 0, EndMilliseconds = 1_000, TranslatedText = "TEST" }
+        ], style, width, height);
+        var assPath = Path.Combine(_root, "subtitles.ass");
+        await File.WriteAllTextAsync(assPath, ass);
+        var escapedAssPath = Path.GetFullPath(assPath)
+            .Replace("\\", "/", StringComparison.Ordinal)
+            .Replace(":", "\\:", StringComparison.Ordinal);
+        var destination = Path.Combine(_root, $"flip-{flipHorizontal}-{flipVertical}.mp4");
+        await Run(VietsubVideoExportService.BuildRenderArguments(
+            source, null, destination, $"subtitles=filename='{escapedAssPath}'", 1,
+            sourceHasAudio: false, VietsubAudioMixSettings.CreateDefault(),
+            new VietsubVideoTransformSettings { FlipHorizontal = flipHorizontal, FlipVertical = flipVertical }));
+
+        var metadata = await new FfprobeService(ffprobe, runner).ProbeAsync(destination);
+        Assert.Equal(width, metadata.Width);
+        Assert.Equal(height, metadata.Height);
+        Assert.False(metadata.HasAudio);
+        var framePath = Path.Combine(_root, $"frame-{flipHorizontal}-{flipVertical}.gray");
+        await Run(["-v", "error", "-i", destination, "-frames:v", "1", "-pix_fmt", "gray",
+            "-f", "rawvideo", "-y", framePath]);
+        var frame = await File.ReadAllBytesAsync(framePath);
+        Assert.Equal(width * height, frame.Length);
+        int Pixel(int x, int y) => frame[y * width + x];
+        var red = Pixel(flipHorizontal ? width - 15 : 15, flipVertical ? height - 15 : 15);
+        var blue = Pixel(flipHorizontal ? 15 : width - 15, flipVertical ? 15 : height - 15);
+        Assert.True(red > blue + 20, $"Red/blue image positions did not flip as expected: {red}/{blue}.");
+        Assert.True(blue > Pixel(15, height / 2) + 5);
+        var bottomSubtitlePixels = Enumerable.Range(100, 24)
+            .SelectMany(y => Enumerable.Range(48, 64).Select(x => Pixel(x, y)))
+            .Count(value => value > 150);
+        var topSubtitlePixels = Enumerable.Range(4, 28)
+            .SelectMany(y => Enumerable.Range(48, 64).Select(x => Pixel(x, y)))
+            .Count(value => value > 150);
+        Assert.True(bottomSubtitlePixels > 5, "The subtitle is missing from the bottom of the image.");
+        Assert.Equal(0, topSubtitlePixels);
     }
 
     [Fact]
@@ -117,6 +217,10 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
             OriginalVolume = 0.25,
             TranslatedVoiceVolume = 1.15,
             AutoDuckOriginal = true
+        };
+        project.VideoTransformSettings = new VietsubVideoTransformSettings
+        {
+            FlipHorizontal = true
         };
         var voicePath = paths.GetProjectPath(project.ProjectId, "voice", "timeline.wav");
         var voiceBytes = Enumerable.Range(0, 128).Select(index => (byte)index).ToArray();
@@ -182,7 +286,7 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
         Assert.Equal(2, runner.FfmpegArguments!.Count(argument => argument == "-i"));
         Assert.Contains("-filter_complex", runner.FfmpegArguments!);
         Assert.Contains("libx264", runner.FfmpegArguments!);
-        Assert.Contains(runner.FfmpegArguments!, argument => argument.Contains("subtitles=filename=", StringComparison.Ordinal));
+        Assert.Contains(runner.FfmpegArguments!, argument => argument.StartsWith("hflip,subtitles=filename=", StringComparison.Ordinal));
         Assert.Contains(runner.FfmpegArguments!, argument => argument.Contains("volume=0.25", StringComparison.Ordinal));
         Assert.Contains(runner.FfmpegArguments!, argument => argument.Contains("volume=1.15", StringComparison.Ordinal));
         Assert.Contains(runner.FfmpegArguments!, argument => argument.Contains("sidechaincompress", StringComparison.Ordinal));
@@ -190,6 +294,22 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
         Assert.DoesNotContain(
             Directory.EnumerateFiles(Path.GetDirectoryName(destination)!),
             path => path.Contains(".partial.mp4", StringComparison.OrdinalIgnoreCase));
+
+        runner.BeforeRenderAsync = async () =>
+        {
+            var changedProject = await projectStore.LoadForBackgroundJobAsync(project.ProjectId);
+            changedProject.VideoTransformSettings.FlipVertical = true;
+            await projectStore.SaveAsync(changedProject);
+        };
+        var changedDestination = Path.Combine(_root, "out", "changed-during-export.mp4");
+        var changedError = await Assert.ThrowsAsync<VietsubVideoExportException>(() => service.ExportAsync(
+            session, "owner", project.OrganizationId, changedDestination, CancellationToken.None));
+        Assert.Equal(VietsubVideoExportErrorCodes.TrackChanged, changedError.Code);
+        Assert.False(File.Exists(changedDestination));
+        Assert.DoesNotContain(Directory.EnumerateFiles(Path.GetDirectoryName(destination)!),
+            path => path.Contains(".partial.mp4", StringComparison.OrdinalIgnoreCase));
+        runner.BeforeRenderAsync = null;
+        await projectStore.SaveAsync(project);
 
         // Selecting no voice permits original audio; restoring a selection requires a current timeline.
         var revision = await subtitleStore.SetVoiceEnabledAsync(project.ProjectId, track.TrackId,
@@ -336,6 +456,7 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
     {
         public string[]? FfmpegArguments { get; private set; }
         public bool FailRender { get; set; }
+        public Func<Task>? BeforeRenderAsync { get; set; }
 
         public async Task<ProcessExecutionResult> RunAsync(
             string executable,
@@ -348,6 +469,7 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
             {
                 FfmpegArguments = values;
                 if (FailRender) return new(1, string.Empty, "Fixture render failed.");
+                if (BeforeRenderAsync is not null) await BeforeRenderAsync();
                 await File.WriteAllBytesAsync(values[^1], "rendered-mp4"u8.ToArray(), cancellationToken);
                 return new(0, string.Empty, string.Empty);
             }

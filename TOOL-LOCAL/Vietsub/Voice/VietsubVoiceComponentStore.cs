@@ -18,13 +18,13 @@ internal sealed record VietsubPiperComponentPaths(
 internal sealed class VietsubVoiceComponentStore : IDisposable
 {
     private const int ProtocolVersion = 1;
-    private const string RuntimeVersion = "piper-1.6.0-python-3.11-v1";
+    internal const string RuntimeVersion = "piper-1.6.0-python-3.11.15-locked-v2";
     private const string UvVersion = "0.12.3";
     private const long UvArchiveSize = 19_013_455;
     private const string UvArchiveSha256 = "b23350c79e8ad0192b8124af13a0f17e8d4e4549524785e1aef389ae5a06990e";
     private const long UvExecutableSize = 48_024_064;
     private const string UvExecutableSha256 = "68a22cbab1674647bcda32120b214e6480f875414e3333f49f87ae99b4b0e0fa";
-    private const long ModelSize = 63_201_294;
+    internal const long ModelSize = 63_201_294;
     private const string ModelSha256 = "ec7c89e2c85f4d1edc24b6120c18aaf1bda614f06b511567eb9c7c0de15e2dab";
     private const long ConfigSize = 4_860;
     private const string ConfigSha256 = "fafb9da1354ed4b77c31af228ed41fb41cd825c14cffa105454b25e6ae751ee0";
@@ -47,14 +47,19 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         StringComparer.OrdinalIgnoreCase);
     private readonly bool _featureEnabled;
     private readonly string _componentRoot;
+    private readonly bool _useVersionedRuntime;
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, VerifiedFile> _verifiedFiles = new(StringComparer.OrdinalIgnoreCase);
 
-    public VietsubVoiceComponentStore(VietsubAppPaths paths, bool featureEnabled, HttpMessageHandler? httpHandler = null)
+    public VietsubVoiceComponentStore(VietsubAppPaths paths, bool featureEnabled, HttpMessageHandler? httpHandler = null,
+        bool useUserComponentsRoot = false)
     {
         _featureEnabled = featureEnabled;
-        _componentRoot = Path.Combine(paths.RootDirectory, "components", "voice", "piper");
+        _useVersionedRuntime = useUserComponentsRoot;
+        var legacy = Path.Combine(paths.RootDirectory, "components", "voice", "piper");
+        _componentRoot = !useUserComponentsRoot || Directory.Exists(legacy) ? legacy
+            : Path.Combine(TOOL_LOCAL.SystemSetup.SystemSetupPaths.ComponentsRoot, "voice", "piper");
         httpHandler ??= new HttpClientHandler { AllowAutoRedirect = false };
         _httpClient = new HttpClient(httpHandler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
         _httpClient.DefaultRequestHeaders.UserAgent.TryParseAdd("VideoMaker-Vietsub/1.0");
@@ -100,6 +105,8 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         }
     }
 
+    internal string ComponentDirectory => _componentRoot;
+
     public async Task<VietsubVoiceRuntimeStatus> InstallAsync(
         IProgress<VietsubVoiceRuntimeInstallProgress>? progress,
         CancellationToken cancellationToken)
@@ -113,8 +120,10 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         try
         {
             if (GetStatus().Ready) return GetStatus();
+            // Never leave an old marker usable while Python/packages are being replaced.
+            TryDelete(MarkerPath);
             EnsureDiskSpace(768L * 1024 * 1024);
-            Directory.CreateDirectory(_componentRoot);
+            TOOL_LOCAL.SystemSetup.SystemSetupPaths.EnsureSafeDirectory(_componentRoot);
             Directory.CreateDirectory(ModelDirectory);
             Directory.CreateDirectory(RequestDirectory);
 
@@ -130,8 +139,8 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
                     "pip", "install",
                     "--python", PythonPath,
                     "--only-binary", ":all:",
-                    "--exclude-newer", "2026-08-14",
-                    "piper-tts==1.6.0"
+                    "--require-hashes", "--no-config", "--default-index", "https://pypi.org/simple",
+                    "--requirements", RequirementsPath
                 ],
                 cancellationToken);
 
@@ -179,7 +188,26 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         return new(PythonPath, WorkerPath, ModelPath, ConfigPath, RequestDirectory);
     }
 
-    private string RuntimeRoot => Path.Combine(_componentRoot, "runtime");
+    internal async Task<VietsubVoiceRuntimeStatus> VerifyAsync(CancellationToken token)
+    {
+        if (!_featureEnabled) return GetStatus();
+        await _gate.WaitAsync(token);
+        try
+        {
+            _verifiedFiles.Clear();
+            if (!IsVerifiedFile(ModelPath, ModelSize, ModelSha256)
+                || !IsVerifiedFile(ConfigPath, ConfigSize, ConfigSha256)
+                || !File.Exists(PythonPath) || !File.Exists(WorkerPath)) return GetStatus();
+            TryDelete(MarkerPath);
+            await ProbeAsync(token);
+            await WriteMarkerAsync(token);
+            return GetStatus();
+        }
+        finally { _gate.Release(); }
+    }
+
+    private string RuntimeRoot => _useVersionedRuntime ? Path.Combine(_componentRoot, "runtime", RuntimeVersion)
+        : Path.Combine(_componentRoot, "runtime");
     private string ModelDirectory => Path.Combine(_componentRoot, "model");
     private string PythonPath => Path.Combine(RuntimeRoot, ".venv", "Scripts", "python.exe");
     private string UvPath => Path.Combine(RuntimeRoot, "uv.exe");
@@ -189,6 +217,7 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
     private string MarkerPath => Path.Combine(_componentRoot, ".ready.json");
     private string RequestDirectory => Path.Combine(_componentRoot, "requests");
     private static string WorkerPath => Path.Combine(AppContext.BaseDirectory, "workers", "piper_worker.py");
+    private static string RequirementsPath => Path.Combine(AppContext.BaseDirectory, "workers", "piper-requirements.lock");
 
     private async Task DownloadVerifiedAsync(
         Uri uri,
@@ -328,7 +357,7 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
     }
 
     internal static IReadOnlyList<string> BuildVenvArguments(string environmentPath) =>
-        ["venv", "--clear", "--python", "3.11", "--managed-python", environmentPath];
+        ["venv", "--clear", "--python", "3.11.15", "--managed-python", "--no-config", environmentPath];
 
     private async Task RunUvAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
@@ -342,10 +371,18 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
             RedirectStandardError = true
         };
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        foreach (var key in startInfo.Environment.Keys.Where(key => key.StartsWith("UV_", StringComparison.OrdinalIgnoreCase)
+            || key.StartsWith("PIP_", StringComparison.OrdinalIgnoreCase) || key.StartsWith("PYTHON", StringComparison.OrdinalIgnoreCase)).ToArray())
+            startInfo.Environment.Remove(key);
         startInfo.Environment["UV_CACHE_DIR"] = Path.Combine(RuntimeRoot, "cache");
         startInfo.Environment["UV_PYTHON_INSTALL_DIR"] = Path.Combine(RuntimeRoot, "cpython");
         startInfo.Environment["UV_PYTHON_NO_REGISTRY"] = "1";
         startInfo.Environment["UV_NO_PROGRESS"] = "1";
+        startInfo.Environment["UV_NO_CONFIG"] = "1";
+        startInfo.Environment["UV_DEFAULT_INDEX"] = "https://pypi.org/simple";
+        using var installTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        installTimeout.CancelAfter(TimeSpan.FromMinutes(20));
+        cancellationToken = installTimeout.Token;
         using var process = Process.Start(startInfo)
             ?? throw new VietsubVoiceException(VietsubVoiceErrorCodes.RuntimeInstallFailed, "Không thể khởi động trình cài Piper.");
         var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -487,7 +524,9 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
             RuntimeVersion,
             Sha256File(WorkerPath),
             ModelSha256,
-            ConfigSha256);
+            ConfigSha256,
+            TOOL_LOCAL.SystemSetup.SystemSetupPaths.MachineFingerprint,
+            Sha256File(RequirementsPath), Sha256File(PythonPath));
         var partial = MarkerPath + ".partial";
         await File.WriteAllTextAsync(partial, JsonSerializer.Serialize(marker), cancellationToken);
         File.Move(partial, MarkerPath, overwrite: true);
@@ -500,6 +539,10 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         return marker is not null
             && marker.ProtocolVersion == ProtocolVersion
             && marker.RuntimeVersion == RuntimeVersion
+            && marker.MachineFingerprint == TOOL_LOCAL.SystemSetup.SystemSetupPaths.MachineFingerprint
+            && File.Exists(RequirementsPath) && File.Exists(PythonPath)
+            && marker.RequirementsSha256 == Sha256File(RequirementsPath)
+            && marker.PythonSha256 == Sha256File(PythonPath)
             && FixedHashEquals(marker.WorkerSha256, Sha256File(WorkerPath))
             && FixedHashEquals(marker.ModelSha256, ModelSha256)
             && FixedHashEquals(marker.ConfigSha256, ConfigSha256);
@@ -618,7 +661,10 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         string RuntimeVersion,
         string WorkerSha256,
         string ModelSha256,
-        string ConfigSha256);
+        string ConfigSha256,
+        string? MachineFingerprint = null,
+        string? RequirementsSha256 = null,
+        string? PythonSha256 = null);
 
     private sealed record ProbeWorkerEvent(int ProtocolVersion, string RequestId, string Type, int? Index);
 

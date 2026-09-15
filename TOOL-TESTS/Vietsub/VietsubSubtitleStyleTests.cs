@@ -120,6 +120,30 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
     }
 
     [Fact]
+    public async Task ManifestV6_MigratesAndPersistsDefaultVideoTransform()
+    {
+        var (paths, projects) = CreateStores();
+        var organizationId = Guid.NewGuid();
+        var created = await projects.CreateAsync(organizationId, "owner", "Video transform migration");
+        var manifestPath = paths.GetProjectPath(created.ProjectId, "project.json");
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
+        root["schemaVersion"] = 6;
+        root.Remove("videoTransformSettings");
+        await File.WriteAllTextAsync(manifestPath, root.ToJsonString());
+
+        var migrated = await projects.OpenAsync(created.ProjectId, organizationId, "owner");
+
+        Assert.Equal(VietsubProjectManifest.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.False(migrated.VideoTransformSettings.FlipHorizontal);
+        Assert.False(migrated.VideoTransformSettings.FlipVertical);
+        using var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
+        Assert.Equal(7, persisted.RootElement.GetProperty("schemaVersion").GetInt32());
+        var videoTransform = persisted.RootElement.GetProperty("videoTransformSettings");
+        Assert.False(videoTransform.GetProperty("flipHorizontal").GetBoolean());
+        Assert.False(videoTransform.GetProperty("flipVertical").GetBoolean());
+    }
+
+    [Fact]
     public void AssBuilder_MapsStyleAndNeutralizesOverrideTagInjection()
     {
         var style = VietsubSubtitleStyle.CreateDefault();
@@ -201,11 +225,16 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
             TranslatedVoiceMuted = false,
             AutoDuckOriginal = false
         };
+        var videoTransformSettings = new VietsubVideoTransformSettings
+        {
+            FlipHorizontal = true,
+            FlipVertical = true
+        };
         await bridge.TryHandleAsync(JsonSerializer.Serialize(new
         {
             type = "vietsub.subtitle.style.update",
             requestId = "update-style",
-            payload = new { style, audioMixSettings }
+            payload = new { style, audioMixSettings, videoTransformSettings }
         }));
 
         var updatedResponse = responses.Single(response =>
@@ -216,6 +245,11 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
             updated.RootElement.GetProperty("payload").GetProperty("fontFamily").GetString());
         Assert.Contains(responses, response => response.Contains("vietsub.operation.completed", StringComparison.Ordinal));
         Assert.Contains(responses, response => response.Contains("vietsub.audio.mix.updated", StringComparison.Ordinal));
+        var transformResponse = responses.Single(response =>
+            response.Contains("vietsub.video.transform.updated", StringComparison.Ordinal));
+        using var transform = JsonDocument.Parse(transformResponse);
+        Assert.True(transform.RootElement.GetProperty("payload").GetProperty("flipHorizontal").GetBoolean());
+        Assert.True(transform.RootElement.GetProperty("payload").GetProperty("flipVertical").GetBoolean());
         Assert.DoesNotContain(responses, response => response.Contains("vietsub.error", StringComparison.Ordinal));
 
         var persisted = await projects.OpenAsync(project.ProjectId, organizationId, owner);
@@ -225,6 +259,8 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
         Assert.Equal(0.4, persisted.AudioMixSettings.OriginalVolume);
         Assert.Equal(1.2, persisted.AudioMixSettings.TranslatedVoiceVolume);
         Assert.False(persisted.AudioMixSettings.AutoDuckOriginal);
+        Assert.True(persisted.VideoTransformSettings.FlipHorizontal);
+        Assert.True(persisted.VideoTransformSettings.FlipVertical);
 
         responses.Clear();
         currentOrganizationId = Guid.NewGuid();

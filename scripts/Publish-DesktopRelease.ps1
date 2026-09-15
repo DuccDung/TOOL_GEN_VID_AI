@@ -64,6 +64,8 @@ dotnet publish (Join-Path $solutionRoot 'TOOL-LOCAL\TOOL-LOCAL.csproj') `
     $desktopPublishDirectoryArgument
 if ($LASTEXITCODE -ne 0) { throw 'Desktop publish failed.' }
 
+& (Join-Path $scriptRoot 'Test-DesktopSetupPublish.ps1') -PublishRoot $publishRoot | Out-Null
+
 $publishedFfmpegProfile = & (Join-Path $scriptRoot 'Test-FfmpegBundle.ps1') `
     -BundlePath (Join-Path $publishRoot 'tools\ffmpeg') `
     -ExpectedVersion $ffmpegProfile.Version `

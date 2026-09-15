@@ -157,7 +157,7 @@ public sealed class VietsubVoiceCoreTests : IDisposable
         var arguments = VietsubVoiceComponentStore.BuildVenvArguments(environmentPath);
 
         Assert.Equal(
-            ["venv", "--clear", "--python", "3.11", "--managed-python", environmentPath],
+            ["venv", "--clear", "--python", "3.11.15", "--managed-python", "--no-config", environmentPath],
             arguments);
     }
 
@@ -775,11 +775,12 @@ public sealed class VietsubVoiceCoreTests : IDisposable
         int durationMilliseconds,
         int sampleRate = 16_000,
         int activeStartMilliseconds = 0,
-        int? activeEndMilliseconds = null)
+        int? activeEndMilliseconds = null,
+        int channels = 1)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var frameCount = sampleRate * durationMilliseconds / 1_000;
-        var dataBytes = frameCount * 2;
+        var dataBytes = frameCount * 2 * channels;
         using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: false);
         writer.Write(Encoding.ASCII.GetBytes("RIFF"));
@@ -787,10 +788,10 @@ public sealed class VietsubVoiceCoreTests : IDisposable
         writer.Write(Encoding.ASCII.GetBytes("WAVEfmt "));
         writer.Write(16);
         writer.Write((short)1);
-        writer.Write((short)1);
+        writer.Write((short)channels);
         writer.Write(sampleRate);
-        writer.Write(sampleRate * 2);
-        writer.Write((short)2);
+        writer.Write(sampleRate * 2 * channels);
+        writer.Write((short)(2 * channels));
         writer.Write((short)16);
         writer.Write(Encoding.ASCII.GetBytes("data"));
         writer.Write(dataBytes);
@@ -798,7 +799,8 @@ public sealed class VietsubVoiceCoreTests : IDisposable
         var activeEnd = sampleRate * (activeEndMilliseconds ?? durationMilliseconds) / 1_000;
         for (var frame = 0; frame < frameCount; frame++)
         {
-            writer.Write((short)(frame >= activeStart && frame < activeEnd ? 4_000 : 0));
+            for (var channel = 0; channel < channels; channel++)
+                writer.Write((short)(frame >= activeStart && frame < activeEnd ? 4_000 : 0));
         }
     }
 
@@ -841,8 +843,11 @@ public sealed class VietsubVoiceCoreTests : IDisposable
             TimeSpan timeout,
             CancellationToken cancellationToken = default)
         {
-            var output = arguments.Last();
-            WritePcmWav(output, 3_000, 48_000);
+            var args = arguments.ToArray();
+            var output = args.Last();
+            var filter = args[Array.IndexOf(args, "-filter_complex") + 1];
+            var samples = long.Parse(System.Text.RegularExpressions.Regex.Match(filter, @"atrim=end_sample=(\d+)").Groups[1].Value);
+            WritePcmWav(output, checked((int)(samples / 48)), 48_000, channels: 2);
             return Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty));
         }
     }
