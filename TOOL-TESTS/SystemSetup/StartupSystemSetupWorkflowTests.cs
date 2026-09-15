@@ -106,6 +106,9 @@ public sealed class StartupSystemSetupWorkflowTests
         Assert.True(StartupSystemSetupGate.IsAllowedCommand("app.ready"));
         Assert.True(StartupSystemSetupGate.IsAllowedCommand("system.setup.start"));
         Assert.True(StartupSystemSetupGate.IsAllowedCommand("media.tools.install"));
+        Assert.True(StartupSystemSetupGate.IsAllowedCommand("tiktok.state.get"));
+        Assert.False(StartupSystemSetupGate.IsAllowedCommand("tiktok.oauth.connect"));
+        Assert.False(StartupSystemSetupGate.IsAllowedCommand("tiktok.publish.start"));
         Assert.False(StartupSystemSetupGate.IsAllowedCommand("generation.content"));
 
         using var workflow = new StartupSystemSetupWorkflow(fixture.Coordinator);

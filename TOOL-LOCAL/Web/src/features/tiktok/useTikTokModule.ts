@@ -13,6 +13,7 @@ const initialState: TikTokModuleState = {
   uploadCompleted: false, error: null, publishFeedback: null
 };
 type Pending = { kind: string; connectionId?: string; page?: number };
+const STATE_RESPONSE_TIMEOUT_MS = 35_000;
 
 export function useTikTokModule(enabled: boolean) {
   const [state, setState] = useState<TikTokModuleState>({ ...initialState, feature: { ...initialState.feature, enabled } });
@@ -21,6 +22,7 @@ export function useTikTokModule(enabled: boolean) {
   const operationId = useRef<string | null>(null);
   const creatorRequest = useRef<{ id: string; connectionId: string } | null>(null);
   const stateRequestId = useRef<string | null>(null);
+  const stateRequestTimer = useRef<number | null>(null);
   const historyRequestId = useRef<string | null>(null);
   const publishRequestId = useRef<string | null>(null);
   const errorSource = useRef<string | null>(null);
@@ -34,10 +36,23 @@ export function useTikTokModule(enabled: boolean) {
     pending.current.set(id, context);
     return id;
   }, []);
+  const clearStateRequest = useCallback(() => {
+    if (stateRequestTimer.current !== null) window.clearTimeout(stateRequestTimer.current);
+    stateRequestTimer.current = null;
+    stateRequestId.current = null;
+  }, []);
   const refreshState = useCallback(() => {
     if (stateRequestId.current) return;
-    stateRequestId.current = send('tiktok.state.get', undefined, { kind: 'state' });
-  }, [send]);
+    const id = send('tiktok.state.get', undefined, { kind: 'state' });
+    stateRequestId.current = id;
+    stateRequestTimer.current = window.setTimeout(() => {
+      if (stateRequestId.current !== id) return;
+      pending.current.delete(id);
+      clearStateRequest();
+      errorSource.current = 'state';
+      update(s => ({ ...s, loading: false, error: 'Không nhận được phản hồi TikTok. Vui lòng thử lại.' }));
+    }, STATE_RESPONSE_TIMEOUT_MS);
+  }, [send, clearStateRequest, update]);
   const requestCreator = useCallback(() => {
     const account = current.current.feature.connection;
     if (!account || account.status === 'Disconnected' || account.status === 'ReconnectRequired') return;
@@ -52,7 +67,7 @@ export function useTikTokModule(enabled: boolean) {
   }, [send, update]);
 
   useEffect(() => subscribeToHost((message: HostMessage) => {
-    if (!message.type.startsWith('tiktok.')) return;
+    if (!message.type.startsWith('tiktok.') && message.type !== 'operation.error') return;
     const requestId = message.requestId ?? '';
     const context = pending.current.get(requestId);
     if (!context) return;
@@ -65,9 +80,9 @@ export function useTikTokModule(enabled: boolean) {
       if (context.kind === 'connect' || context.kind === 'disconnect') {
         // A read begun before the mutation must not restore the old account list.
         if (stateRequestId.current) pending.current.delete(stateRequestId.current);
-        stateRequestId.current = null;
+        clearStateRequest();
       }
-      if (stateRequestId.current === requestId) stateRequestId.current = null;
+      if (stateRequestId.current === requestId) clearStateRequest();
       const feature = message.payload as TikTokFeatureState;
       const accounts = feature.connections ?? (feature.connection ? [feature.connection] : []);
       update(s => {
@@ -125,7 +140,8 @@ export function useTikTokModule(enabled: boolean) {
       const data = message.payload as { publishJobId: string; connectionId: string };
       if (requestId !== publishRequestId.current || data.connectionId !== context.connectionId) return;
       const job: TikTokPublishStatus = { ...data, creatorUsername: current.current.creator?.creatorUsername,
-        creatorNickname: current.current.creator?.creatorNickname, status: 'PROCESSING_UPLOAD', uploadedBytes: 0, publicPostIds: [], updatedAtUtc: new Date().toISOString(), isTerminal: false };
+        creatorNickname: current.current.creator?.creatorNickname, status: 'PROCESSING_UPLOAD', uploadedBytes: 0, publicPostIds: [], updatedAtUtc: new Date().toISOString(), isTerminal: false,
+        provisional: true };
       update(s => ({ ...s, publish: job, jobs: mergeTikTokJobs(s.jobs, [job]), publishFeedback: { ...s.publishFeedback!, jobId: job.publishJobId, phase: 'uploading' } }));
       return;
     }
@@ -151,7 +167,7 @@ export function useTikTokModule(enabled: boolean) {
       finish(); return;
     }
     if (message.type === 'tiktok.operation.cancelled') { finish(); return; }
-    if (message.type === 'tiktok.error') {
+    if (message.type === 'tiktok.error' || message.type === 'operation.error') {
       if ((context.kind === 'creator' && creatorRequest.current?.id !== requestId) ||
           (context.kind === 'history' && historyRequestId.current !== requestId) ||
           (context.kind === 'state' && stateRequestId.current !== requestId)) { finish(); return; }
@@ -160,7 +176,7 @@ export function useTikTokModule(enabled: boolean) {
         !context.connectionId || context.connectionId === current.current.selectedConnectionId;
       if (relevant) errorSource.current = context.kind;
       if (creatorRequest.current?.id === requestId) creatorRequest.current = null;
-      if (stateRequestId.current === requestId) stateRequestId.current = null;
+      if (stateRequestId.current === requestId) clearStateRequest();
       if (historyRequestId.current === requestId) historyRequestId.current = null;
       update(s => ({ ...s, busy: active ? false : s.busy, loading: context.kind === 'state' ? false : s.loading,
         historyLoading: context.kind === 'history' && relevant ? false : s.historyLoading,
@@ -172,19 +188,19 @@ export function useTikTokModule(enabled: boolean) {
         } : s.publishFeedback }));
       finish();
     }
-  }), [update, refreshState]);
+  }), [update, refreshState, clearStateRequest]);
 
   useEffect(() => {
     if (!enabled) {
       pending.current.clear(); operationId.current = null; creatorRequest.current = null;
-      stateRequestId.current = null; historyRequestId.current = null; intents.current.clear();
+      clearStateRequest(); historyRequestId.current = null; intents.current.clear();
       update(() => ({ ...initialState })); return;
     }
     update(s => ({ ...s, loading: true, feature: { ...s.feature, enabled: true } }));
     refreshState();
     const timer = window.setInterval(refreshState, 10_000);
-    return () => { window.clearInterval(timer); pending.current.clear(); stateRequestId.current = null; };
-  }, [enabled, refreshState, update]);
+    return () => { window.clearInterval(timer); pending.current.clear(); clearStateRequest(); };
+  }, [enabled, refreshState, update, clearStateRequest]);
 
   useEffect(() => {
     creatorRequest.current = null;

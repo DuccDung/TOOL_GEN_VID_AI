@@ -73,6 +73,7 @@ export type TikTokPublishStatus = {
   publicPostIds: string[];
   updatedAtUtc: string;
   isTerminal: boolean;
+  provisional?: boolean;
 };
 
 export type TikTokPublishPayload = {

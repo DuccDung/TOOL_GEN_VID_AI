@@ -32,6 +32,7 @@ internal sealed class StartupSystemSetupGate
             "license.payment.current.get" or
             "license.payment.status" or
             "auth.logout" or
+            "tiktok.state.get" or
             "media.tools.install.prepare" or
             "media.tools.install";
 }

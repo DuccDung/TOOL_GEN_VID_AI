@@ -16,7 +16,9 @@ export function mergeTikTokJobs(previous: TikTokPublishStatus[], incoming: TikTo
   for (const job of incoming) {
     const old = jobs.get(job.publishJobId);
     if (old && ((old.connectionId && job.connectionId && old.connectionId !== job.connectionId) ||
-      (old.isTerminal && !job.isTerminal) || Date.parse(old.updatedAtUtc) > Date.parse(job.updatedAtUtc))) continue;
+      (old.isTerminal && !job.isTerminal) ||
+      (!old.provisional && !(job.isTerminal && !old.isTerminal) &&
+        Date.parse(old.updatedAtUtc) > Date.parse(job.updatedAtUtc)))) continue;
     jobs.set(job.publishJobId, job);
   }
   return [...jobs.values()].sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc));

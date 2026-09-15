@@ -23,4 +23,15 @@ describe('TikTok account context', () => {
       { ...original, status: 'PROCESSING_UPLOAD', isTerminal: false, updatedAtUtc: '2026-09-09T02:00:00Z' }]);
     expect(result).toEqual([original]);
   });
+  it('accepts a server update over a provisional job even when the desktop clock is ahead', () => {
+    const provisional: TikTokPublishStatus = { publishJobId: 'j', connectionId: 'a', status: 'PROCESSING_UPLOAD',
+      uploadedBytes: 0, publicPostIds: [], updatedAtUtc: '2026-09-15T12:00:00Z', isTerminal: false, provisional: true };
+    const processing = { ...provisional, status: 'PROCESSING_DOWNLOAD', uploadedBytes: 10,
+      updatedAtUtc: '2026-09-15T11:00:00Z', provisional: undefined };
+    const completed = { ...processing, status: 'PUBLISH_COMPLETE', isTerminal: true, publicPostIds: ['p'],
+      updatedAtUtc: '2026-09-15T11:30:00Z' };
+    expect(mergeTikTokJobs([provisional], [processing])).toEqual([processing]);
+    expect(mergeTikTokJobs([processing], [completed])).toEqual([completed]);
+    expect(mergeTikTokJobs([completed], [provisional])).toEqual([completed]);
+  });
 });
