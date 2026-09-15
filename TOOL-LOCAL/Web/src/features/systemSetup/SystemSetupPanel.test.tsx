@@ -34,6 +34,22 @@ const last = (type: string) => bridge.posts.filter(p => p.type === type).at(-1)!
 async function emit(type: string, payload: SetupSnapshot, requestId?: string) {
   await act(async () => bridge.listener!({ type, payload, requestId }));
 }
+async function showQwenResourceWarning() {
+  await act(async () => button('Cài thành phần cần thiết').click());
+  const start = last('system.setup.start');
+  const operationId = (start.payload as { operationId: string }).operationId;
+  const running: SetupSnapshot = { ...initial(), revision: 2,
+    operation: { operationId, mode: 'start', state: 'Running', componentIds: ['media', 'ocr', 'qwen', 'piper'],
+      sequence: 2, currentComponent: 'qwen', allSelectedReady: false, allRequiredReady: false } };
+  await emit('system.setup.accepted', running, start.requestId);
+  await emit('system.setup.completed', { ...running, revision: 3,
+    components: running.components.map(component => component.id === 'qwen'
+      ? { ...component, state: 'NEEDS_VERIFICATION', errorCode: 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED',
+          resourceProfileId: 'qwen3-cpu-low-memory-v1', message: 'Cần xác nhận RAM.' }
+      : { ...component, state: 'READY' }),
+    operation: { ...running.operation!, state: 'Failed', sequence: 3 } });
+  return operationId;
+}
 beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   bridge.posts = []; bridge.sequence = 0;
@@ -83,7 +99,7 @@ describe('Setup application workflow', () => {
       state: c.id === 'piper' ? 'REPAIR_REQUIRED' : 'READY' })), operation: { ...running.operation!, state: 'PartiallyCompleted', sequence: 2 } };
     await emit('system.setup.completed', done);
     expect(container.textContent).not.toContain('Các thành phần đã chọn đã sẵn sàng.');
-    await act(async () => button('Thử lại phần chưa đạt').click());
+    await act(async () => button('Kiểm tra lại phần chưa đạt').click());
     expect(last('system.setup.retry').payload).toMatchObject({ previousOperationId: operationId, componentIds: ['piper'] });
     expect((last('system.setup.retry').payload as { operationId: string }).operationId).not.toBe(operationId);
   });
@@ -93,6 +109,25 @@ describe('Setup application workflow', () => {
       error: { code: 'system_setup_busy', message: 'Runtime đang được sử dụng.' } }));
     expect(container.querySelector('[role=alert]')?.textContent).toContain('Runtime đang được sử dụng');
     expect(button('Cài thành phần cần thiết').disabled).toBe(false);
+  });
+  it('separates a normal retry from accepting the Qwen RAM warning', async () => {
+    const operationId = await showQwenResourceWarning();
+    expect(container.textContent).toContain('Model đã có');
+    expect(container.textContent).toContain('Cần xác nhận bộ nhớ');
+    expect(button('Vẫn thử dùng Qwen').disabled).toBe(true);
+    await act(async () => button('Kiểm tra lại phần chưa đạt').click());
+    expect(last('system.setup.retry').payload).toMatchObject({ previousOperationId: operationId,
+      componentIds: ['qwen'] });
+    expect(last('system.setup.retry').payload).not.toHaveProperty('resourceWarningAccepted');
+  });
+  it('sends explicit confirmation only when the user chooses to try Qwen with low RAM', async () => {
+    const operationId = await showQwenResourceWarning();
+    await act(async () => container.querySelector<HTMLInputElement>('.setup-warning input')!.click());
+    expect(button('Vẫn thử dùng Qwen').disabled).toBe(false);
+    await act(async () => button('Vẫn thử dùng Qwen').click());
+    expect(last('system.setup.retry').payload).toMatchObject({ previousOperationId: operationId,
+      componentIds: ['qwen'], resourceWarningAccepted: true,
+      confirmedResourceProfileId: 'qwen3-cpu-low-memory-v1' });
   });
   it('drops callbacks after switching organization', async () => {
     await act(async () => root.render(<Harness organization="other-org" />));

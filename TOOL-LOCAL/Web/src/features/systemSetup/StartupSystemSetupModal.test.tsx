@@ -55,6 +55,28 @@ const button = (label: string) => [...container.querySelectorAll<HTMLButtonEleme
 async function emit(type: string, payload: SetupSnapshot, requestId?: string) {
   await act(async () => bridge.listener!({ type, payload, requestId }));
 }
+async function showQwenResourceWarning() {
+  await emit('system.setup.status', snapshot(), last('system.setup.get').requestId);
+  const check = last('system.setup.check');
+  const operationId = (check.payload as { operationId: string }).operationId;
+  const running: SetupSnapshot = {
+    ...snapshot(), revision: 2,
+    operation: { operationId, mode: 'check', state: 'Running', componentIds: ['media', 'ocr', 'qwen', 'piper'],
+      sequence: 2, currentComponent: 'qwen', allSelectedReady: false, allRequiredReady: false }
+  };
+  await emit('system.setup.accepted', running, check.requestId);
+  const warning: SetupSnapshot = {
+    ...running,
+    revision: 3,
+    components: running.components.map(component => component.id === 'qwen'
+      ? { ...component, state: 'NEEDS_VERIFICATION', errorCode: 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED',
+          resourceProfileId: 'standard', downloadBytes: 2_497_280_256, message: 'Cần xác nhận tài nguyên.' }
+      : { ...component, state: 'READY', message: 'Sẵn sàng' }),
+    operation: { ...running.operation!, state: 'Failed', sequence: 3 }
+  };
+  await emit('system.setup.completed', warning);
+  return operationId;
+}
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -94,36 +116,34 @@ describe('Startup System Setup modal', () => {
     expect(last('system.setup.exit')).toBeDefined();
   });
 
-  it('requires an explicit resource confirmation and retries the correlated Qwen check', async () => {
-    await emit('system.setup.status', snapshot(), last('system.setup.get').requestId);
-    const check = last('system.setup.check');
-    const operationId = (check.payload as { operationId: string }).operationId;
-    const running: SetupSnapshot = {
-      ...snapshot(), revision: 2,
-      operation: { operationId, mode: 'check', state: 'Running', componentIds: ['media', 'ocr', 'qwen', 'piper'],
-        sequence: 2, currentComponent: 'qwen', allSelectedReady: false, allRequiredReady: false }
-    };
-    await emit('system.setup.accepted', running, check.requestId);
-    const warning: SetupSnapshot = {
-      ...running,
-      revision: 3,
-      components: running.components.map(component => component.id === 'qwen'
-        ? { ...component, state: 'NEEDS_VERIFICATION', errorCode: 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED',
-            resourceProfileId: 'standard', message: 'Cần xác nhận tài nguyên.' }
-        : { ...component, state: 'READY', message: 'Sẵn sàng' }),
-      operation: { ...running.operation!, state: 'Failed', sequence: 3 }
-    };
-    await emit('system.setup.completed', warning);
-
-    expect(button('OK - Cài đặt').disabled).toBe(true);
+  it('makes the RAM warning clear and retries the correlated Qwen check after confirmation', async () => {
+    const operationId = await showQwenResourceWarning();
+    expect(container.textContent).toContain('Model Qwen đã có');
+    expect(container.textContent).toContain('Cần xác nhận bộ nhớ');
+    expect(container.textContent).not.toContain('Tải xuống:');
+    expect(container.textContent).not.toContain('Tôi đã đóng các ứng dụng nặng');
+    expect(container.querySelector('progress')).toBeNull();
+    expect(button('Kiểm tra lại').disabled).toBe(false);
+    expect(button('Vẫn thử dùng Qwen').disabled).toBe(true);
     await act(async () => container.querySelector<HTMLInputElement>('.startup-setup-resource-warning input')!.click());
-    await act(async () => button('OK - Cài đặt').click());
+    expect(button('Vẫn thử dùng Qwen').disabled).toBe(false);
+    await act(async () => button('Vẫn thử dùng Qwen').click());
     expect(last('system.setup.retry').payload).toMatchObject({
       previousOperationId: operationId,
       componentIds: ['qwen'],
       resourceWarningAccepted: true,
       confirmedResourceProfileId: 'standard'
     });
+  });
+
+  it('lets the user check Qwen again without accepting the low-memory risk', async () => {
+    const operationId = await showQwenResourceWarning();
+    await act(async () => button('Kiểm tra lại').click());
+    expect(last('system.setup.retry').payload).toMatchObject({
+      previousOperationId: operationId,
+      componentIds: ['qwen']
+    });
+    expect(last('system.setup.retry').payload).not.toHaveProperty('resourceWarningAccepted');
   });
 
   it('uses the verified application package when a bundled component needs repair', async () => {
@@ -142,7 +162,7 @@ describe('Startup System Setup modal', () => {
       operation: { ...repair.operation!, state: 'Running', sequence: 2 } }, check.requestId);
     await emit('system.setup.completed', repair);
 
-    await act(async () => button('OK - Sửa bộ ứng dụng').click());
+    await act(async () => button('Sửa bộ ứng dụng').click());
     expect(last('media.tools.install')).toBeDefined();
     expect(container.textContent).toContain('Đang chuẩn bị package sửa chữa');
   });

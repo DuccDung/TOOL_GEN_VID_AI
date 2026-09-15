@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleCheck, Download, LoaderCircle, LogOut, Package, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { CircleCheck, Download, LoaderCircle, LogOut, Package, RefreshCw, ShieldCheck, TriangleAlert } from 'lucide-react';
 import type { SystemSetupController } from './useSystemSetup';
 import {
   isSystemSetupReady,
@@ -36,9 +36,10 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
   const repairing = repairProgress !== null;
   const resourceWarning = missing.some(component =>
     component.id === 'qwen' && component.errorCode === 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED');
+  const onlyResourceWarning = resourceWarning && missing.length === 1;
   const canRetry = Boolean(operation && !['Accepted', 'Running'].includes(operation.state)
     && missing.every(component => operation.componentIds.includes(component.id)));
-  const requiresResourceConfirmation = resourceWarning && canRetry;
+  const requiresResourceConfirmation = resourceWarning && canRetry && !repairRequired;
 
   useEffect(() => {
     if (!snapshot || ready || busy || repairing || missing.length === 0) return;
@@ -112,29 +113,34 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
   if (ready) return null;
 
   const currentComponent = components.find(component => component.id === operation?.currentComponent);
-  const knownDownloadBytes = missing.reduce((total, component) => total + (component.downloadBytes ?? 0), 0);
+  const knownModelBytes = missing.filter(component => component.state === 'NOT_INSTALLED')
+    .reduce((total, component) => total + (component.downloadBytes ?? 0), 0);
   const progress = repairing ? repairProgress : operation;
   const progressPercent = progress?.percent;
   const active = busy || repairing;
   const primaryLabel = repairRequired
-    ? 'OK - Sửa bộ ứng dụng'
-    : operation?.mode !== 'check' && operation ? 'OK - Thử lại' : 'OK - Cài đặt';
+    ? 'Sửa bộ ứng dụng'
+    : onlyResourceWarning ? 'Kiểm tra lại'
+      : missing.some(component => ['UNKNOWN', 'NOT_INSTALLED', 'REPAIR_REQUIRED'].includes(component.state))
+        ? 'Cài và kiểm tra' : 'Kiểm tra lại';
   const progressMessage = repairing
     ? repairProgress?.message
     : currentComponent
       ? `Đang xử lý: ${currentComponent.name}`
       : busy
         ? 'Đang chuẩn bị kiểm tra thành phần hệ thống…'
-        : missing.some(component => component.errorCode)
-          ? 'Kiểm tra chi tiết lỗi trong danh sách rồi thử cài đặt.'
-          : 'Các thành phần còn thiếu sẽ được tải và kiểm tra tự động.';
+        : resourceWarning
+          ? 'Qwen cần được kiểm tra lại trước khi sử dụng.'
+          : missing.some(component => component.errorCode)
+            ? 'Xem lỗi từng thành phần rồi thử lại.'
+            : 'Thành phần còn thiếu sẽ được cài và kiểm tra; model hợp lệ sẽ được dùng lại.';
 
-  const install = () => {
+  const start = (confirmResources = false) => {
     if (repairRequired) {
       repairApplication();
       return;
     }
-    run(canRetry ? 'retry' : 'start', missing.map(component => component.id), requiresResourceConfirmation && resourceConfirmed);
+    run(canRetry ? 'retry' : 'start', missing.map(component => component.id), confirmResources);
     setResourceConfirmed(false);
   };
 
@@ -153,13 +159,17 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
           <span className="startup-setup-icon" aria-hidden="true"><Package size={25} /></span>
           <div>
             <span className="startup-setup-eyebrow">CHUẨN BỊ VIDEOMAKER</span>
-            <h1 id="startup-setup-title">VideoMaker cần bổ sung thành phần</h1>
+            <h1 id="startup-setup-title">{onlyResourceWarning
+              ? 'Qwen cần kiểm tra lại bộ nhớ'
+              : repairRequired ? 'VideoMaker cần sửa thành phần' : 'VideoMaker cần bổ sung thành phần'}</h1>
             <p id="startup-setup-summary">
               {!snapshot
                 ? 'Đang tải trạng thái các thành phần trên máy này…'
-                : `${missing.length} thành phần chưa sẵn sàng.${knownDownloadBytes > 0
-                  ? ` Dung lượng tải đã biết khoảng ${formatBytes(knownDownloadBytes)}.`
-                  : ''} Chọn cài đặt để tiếp tục hoặc hủy để thoát ứng dụng.`}
+                : onlyResourceWarning
+                  ? 'Model Qwen đã có, nhưng lượt kiểm tra dừng vì RAM hoặc bộ nhớ khả dụng thấp. Bạn có thể kiểm tra lại hoặc xác nhận để thử với tài nguyên hiện tại.'
+                  : `${missing.length} thành phần chưa sẵn sàng.${knownModelBytes > 0
+                    ? ` Dung lượng model cần chuẩn bị khoảng ${formatBytes(knownModelBytes)}.`
+                    : ''} Chọn ${primaryLabel.toLowerCase()} để tiếp tục, hoặc hủy để thoát ứng dụng.`}
             </p>
           </div>
         </header>
@@ -177,10 +187,15 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
                   <td><span className="startup-setup-state">
                     {component.state === 'READY' ? <CircleCheck size={15} /> : component.state === 'UNKNOWN'
                       ? <LoaderCircle className={active ? 'spin' : ''} size={15} /> : <TriangleAlert size={15} />}
-                    {labels[component.state]}
+                    {component.id === 'qwen' && component.errorCode === 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED'
+                      ? 'Cần xác nhận bộ nhớ' : labels[component.state]}
                   </span></td>
-                  <td><span>{component.message}</span>
-                    {(component.downloadBytes ?? 0) > 0 && <small>Tải xuống: {formatBytes(component.downloadBytes!)}</small>}
+                  <td><span>{component.id === 'qwen'
+                    && component.errorCode === 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED'
+                    ? 'Model đã có; RAM hoặc bộ nhớ khả dụng thấp khi kiểm tra Qwen. Có thể giải phóng bộ nhớ rồi thử lại, hoặc xác nhận để thử tiếp.'
+                    : component.message}</span>
+                    {component.state === 'NOT_INSTALLED' && (component.downloadBytes ?? 0) > 0
+                      && <small>Dung lượng model: {formatBytes(component.downloadBytes!)}</small>}
                   </td>
                 </tr>
               ))}
@@ -190,14 +205,14 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
 
         <div className="startup-setup-progress" role="status" aria-live="polite">
           <div><span>{progressMessage}</span>{progressPercent != null && <strong>{Math.round(progressPercent)}%</strong>}</div>
-          <progress aria-label="Tiến độ chuẩn bị VideoMaker" max={100} value={progressPercent ?? undefined} />
+          {active && <progress aria-label="Tiến độ chuẩn bị VideoMaker" max={100} value={progressPercent ?? undefined} />}
         </div>
 
         {requiresResourceConfirmation && !active && (
           <label className="startup-setup-resource-warning">
             <input type="checkbox" checked={resourceConfirmed} onChange={event => setResourceConfirmed(event.target.checked)} />
-            <span><strong>Tài nguyên máy thấp hơn mức khuyến nghị cho Qwen.</strong>
-              Tôi đã đóng các ứng dụng nặng và đồng ý thử kiểm tra với cấu hình hiện tại.</span>
+            <span><strong>Bạn vẫn có thể thử dùng Qwen với RAM hiện tại.</strong>
+              Tôi hiểu Qwen có thể chạy chậm, treo hoặc hết bộ nhớ. Ứng dụng vẫn phải kiểm tra model và worker trước khi cho sử dụng.</span>
           </label>
         )}
 
@@ -211,9 +226,15 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
             <button type="button" className="startup-setup-exit" onClick={exitApplication}>
               <LogOut size={16} /> Hủy và thoát
             </button>
-            <button type="button" className="startup-setup-primary" disabled={!snapshot || active || missing.length === 0
-              || (requiresResourceConfirmation && !resourceConfirmed)} onClick={install}>
-              {active ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{active ? 'Đang xử lý…' : primaryLabel}
+            {requiresResourceConfirmation && <button type="button" className="startup-setup-continue"
+              disabled={!resourceConfirmed || active} onClick={() => start(true)}>
+              Vẫn thử dùng Qwen
+            </button>}
+            <button type="button" className="startup-setup-primary" disabled={!snapshot || active || missing.length === 0}
+              onClick={() => start()}>
+              {active ? <LoaderCircle className="spin" size={17} />
+                : primaryLabel === 'Kiểm tra lại' ? <RefreshCw size={17} /> : <Download size={17} />}
+              {active ? 'Đang xử lý…' : primaryLabel}
             </button>
           </div>
         </footer>
