@@ -1,6 +1,6 @@
 # Hướng dẫn AI agent — VideoMaker
 
-> Áp dụng cho toàn bộ repository. Cập nhật ngữ cảnh: 2026-09-07.
+> Áp dụng cho toàn bộ repository. Rà soát context theo source ngày 2026-09-15.
 
 Khi làm việc trong thư mục có `AGENTS.md` riêng, phải tuân thủ đồng thời file này và file gần nhất trong cây thư mục.
 
@@ -13,6 +13,8 @@ Khi làm việc trong thư mục có `AGENTS.md` riêng, phải tuân thủ đ�
 5. Chạy `git status --short`; giữ nguyên thay đổi không liên quan của người dùng.
 6. Kiểm tra source, migration, cấu hình mặc định và đường gọi thực tế. Không phục hồi thiết kế BYOK hoặc hành vi cũ chỉ từ lịch sử Git.
 
+Khi chỉ cập nhật tài liệu, vẫn kiểm tra source và `git status --short`, nhưng không ghi kết quả build/test mới nếu chưa thực sự chạy. Ghi rõ nhánh/commit được rà soát; bằng chứng trên checkout hoặc môi trường khác chỉ là lịch sử.
+
 ## Nguồn sự thật
 
 Thứ tự ưu tiên khi có khác biệt:
@@ -24,6 +26,8 @@ Thứ tự ưu tiên khi có khác biệt:
 5. `VAN_HANH_VA_PHAT_HANH.md` và `KIEM_THU_VA_NGHIEM_THU.md` cho thao tác có kiểm soát.
 
 Không dùng `bin`, `obj`, `.vs`, `.tmp`, `node_modules`, `dist`, `artifacts`, ảnh giao diện, file bàn giao hoặc output build cũ làm nguồn sự thật thay source. Không dùng số test, trạng thái rollout hoặc cấu hình môi trường trong commit cũ làm bằng chứng hiện hành.
+
+Phân biệt bốn trạng thái trong tài liệu: có source; kiểm thử tự động trên commit xác định; smoke thủ công trên môi trường xác định; đã rollout production. Feature flag bật, migration có trong repository, hoặc test giả lập đạt không tự nâng trạng thái sang mức tiếp theo. Nếu chưa truy cập runtime/database đích, ghi là **chưa xác minh**, không suy ra đã áp migration hoặc có credential/rate.
 
 ## Kiến trúc không được phá vỡ
 
@@ -54,11 +58,13 @@ Không dùng `bin`, `obj`, `.vs`, `.tmp`, `node_modules`, `dist`, `artifacts`, �
 - File tải về dùng `.part`, kiểm tra signature/MIME/size/hash rồi mới promote atomically.
 - Project snapshot provider/model/policy/resolution/speech policy; thay policy tổ chức không đổi project cũ.
 - `OpenAiStructuredPlan` là cấu trúc project video dài; `LongForm` là scope policy provider. `DirectShortVideo` là video ngắn.
+- Video ngắn mới dùng Veo 3.1 qua Fal theo policy `LongForm`, một cảnh 4/6/8 giây, 9:16 hoặc 16:9. Cả `TextOnly` và `CharacterOutfit` cần `SceneFirstFrame` Approved/current, quote và xác nhận từng request có phí. Migration `4.1.9.ShortVideoCharacterOutfit` tạo cả bảng quote `vf.ShortVideoOperations` dùng cho `TextOnly`; không coi nó là migration chỉ dành cho mode phối trang phục.
 - Fal/Veo chỉ dùng `SceneFirstFrame` Approved/current đúng tỷ lệ và không fallback Text-to-Video.
 - Canonical Voice, TTS và speech verification chỉ chạy sau đủ feature flag, credential, rate, budget và readiness. Không fallback ngầm từ Provider Native Audio.
 - Render cuối chỉ dùng asset đã duyệt đúng generation/voice/speech snapshot và phải kiểm lại hash, stream, audio cùng thời lượng.
 - Dịch Vietsub chỉ nhận active `PADDLE_OCR_LOCAL` track `en`/`zh` có cue và revision khớp; cue manual/locked không bị ghi đè và SRT ghi atomically.
 - `VietsubLocalTranslationEnabled=false` là mặc định an toàn. `VietsubLocalVoiceEnabled=true` chỉ làm UI/cài đặt khả dụng; runtime thiếu component phải trả `NOT_INSTALLED`, không được coi là production-ready.
+- Setup khởi động là gate hai lớp: modal React khóa nền và host C# chặn command nghiệp vụ đến khi các component cần thiết `READY`. Chỉ ghi "sẵn sàng" khi runtime/bundle trên máy đích đã được probe, không dựa vào UI hay cờ mặc định.
 
 ## Quy tắc thay đổi
 

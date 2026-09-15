@@ -32,7 +32,7 @@ LocalVoiceStore kiểm path/reparse/hash, atomic checkpoint, khóa project liên
 
 Module Cloud Fal LipSync đã bị loại bỏ, gồm provider client, worker, input store, API/cấu hình và cờ build thử nghiệm. Migration cũ được giữ làm lịch sử; trạng thái `SpeechReadyForLipSync` chỉ được đọc tương thích, không phát sinh mới và không thay thế bằng chứng duyệt WAV.
 
-> Mô tả ranh giới module và đường gọi theo source ngày 2026-09-07.
+> Mô tả ranh giới module và đường gọi; rà soát source tại commit `8f10cc9` ngày 2026-09-15. Các báo cáo runtime/môi trường nằm trong `BOI_CANH_HE_THONG_HIEN_HANH.md`.
 
 ## 1. Tổng thể
 
@@ -54,17 +54,30 @@ Desktop không gọi AI provider trực tiếp. Server là trust boundary cho au
 | Project/thư mục | Trách nhiệm chính |
 |---|---|
 | `TOOL-SERVER` | ASP.NET Core API, Razor Admin, auth/license, tổ chức, AI governance, provider adapters, hosted workers, output cache/proxy, release API |
-| `TOOL-LOCAL` | WinForms host, React/WebView2 UI, gateway client, workflow project, workspace, download/verify/render và Vietsub |
+| `TOOL-LOCAL` | WinForms host, React/WebView2 UI, gateway client, workflow project, System Setup, TikTok native upload, Bilibili, workspace, download/verify/render và Vietsub |
 | `TOOL-SHARED.Contracts` | Request/response DTO và enum public giữa server/desktop |
 | `TOOL-VIETSUB-TRANSLATION-WORKER` | Tiến trình `net10.0-windows` x64 chạy LLamaSharp/Qwen qua IPC local |
 | `TOOL-DISTRIBUTION` | Manifest, provenance và kiểm tra SHA-256 bundle |
 | `TOOL-TESTS` | xUnit xuyên module |
 | `TOOL-UPDATER` | Download/update có backup và rollback |
 | `TOOL-SETUP` | Launcher/bộ cài desktop |
-| `database` | Initial schema, migration tuần tự, verify và desktop least-privilege role |
+| `database` | Initial schema, migration tuần tự đến 4.1.9, verify và desktop least-privilege role |
 | `scripts` | Kiểm tra runtime assets, model, bundle, publish và test opt-in |
 
 `TOOL-SERVER`, `TOOL-LOCAL`, `TOOL-SHARED.Contracts`, `TOOL-TESTS` và `database` có `AGENTS.md` cục bộ; quy tắc gần nhất áp dụng cùng file root.
+
+### Bản đồ đường gọi theo nghiệp vụ
+
+| Tác vụ | UI/native | API/server | Dữ liệu và worker |
+|---|---|---|---|
+| Tạo video dài | `Web/src/App.tsx` → `Form1`/`DashboardBridge` → `ProjectGenerationService`/`ServerGenerationClient` | `GenerationController` → `GenerationService` → `GenerationAccessService`, pricing/budget, adapter | Project/scene/request trong `vf` và ledger `ai`; `VideoPollingWorker` poll/cache/settle; desktop tải proxy rồi duyệt/render FFmpeg |
+| Tạo video ngắn | `TextShortVideo`/`OutfitShortVideo` → bridge video ngắn → `ShortVideoWorkflowService` | API `short-video`/`SceneFirstFrames` và `GenerationController`; `ShortVideoVeoPolicy` buộc Fal/Veo | `vf.ShortVideoOperations` giữ quote cả `TextOnly`; `vf.ShortVideoOutfits` giữ mode phối đồ; first frame và clip có lineage/approval riêng |
+| Vietsub local | `VietsubPage` → `VietsubWebBridge` | Registry metadata `VietsubProjectsController`; không gửi media/cue local lên server | Workspace/manifest/SQLite/SRT, PaddleOCR, Qwen worker x64, Piper Python và FFmpeg ở desktop |
+| Dịch Vietsub Cloud | `VietsubPage` → native snapshot/`VietsubCloudTranslationClient` | `VietsubCloudTranslationsController` → service/worker → OpenAI | Chỉ snapshot text giới hạn vào `vs` được mã hóa/retention; budget/ledger trong `ai`; desktop apply CAS và SRT atomic |
+| Đăng TikTok | `TikTokPage` → `TikTokWebBridge`/`TikTokUploadService` | `TikTokController`/service/OAuth, `TikTokPublishingWorker` | OAuth/token/job trong `social`; video/path và signed upload URL chỉ dùng ở desktop native |
+| Tải Bilibili | `BilibiliPage` → `BilibiliWebBridge`/`BilibiliService` | Không có provider AI/budget request | Runtime downloader local, hàng đợi theo phiên, `.part`/checksum/probe rồi promote MP4 |
+
+Các bảng trên là bản đồ source; chúng không khẳng định runtime, migration hay credential đã sẵn sàng ở môi trường đích.
 
 ## 3. Trust boundary và quyền sở hữu dữ liệu
 
@@ -110,7 +123,7 @@ Server tách phạm vi dữ liệu bằng các context chính:
 - `VietsubDbContext`: registry `vs.Projects`, job/batch/attempt Cloud và payload/result tạm được mã hóa; không thay database biên tập local.
 - `TikTokDbContext`: app credential/version, integration settings, nhiều connection theo user/app/OpenId, OAuth session có target connection, publish attempt và publish job trong schema `social`; audit quản trị ghi vào `auth.AccountAuditLogs`.
 
-Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs`, `social` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp.
+Database dùng các schema nghiệp vụ `auth`, `ai`, `vf`, `vs`, `social` cùng các bảng cần thiết trong `dbo`. Ranh giới DbContext là ranh giới ownership trong code, không thay thế quyền SQL và transaction thích hợp. Migration 4.1.9 thêm `vf.ShortVideoOperations` (quote ảnh/video, kể cả `TextOnly`) và `vf.ShortVideoOutfits`; script DENY trực tiếp quyền CRUD của desktop role lên cả hai bảng. Không chạy binary server mới trước khi xác minh migration, schema version và quyền trên database đích, vì startup bootstrap catalog có thể ghi dữ liệu.
 
 ### 4.3 Nhóm API
 
@@ -164,7 +177,7 @@ Mọi nhánh lỗi trước outbound phải không tạo chi phí. Lỗi sau res
 ### 5.2 Provider adapter
 
 - OpenAI dùng cho content có schema, image, Canonical Voice TTS và transcription ở workflow được phép.
-- Kling là video provider mặc định.
+- Kling là provider/model video mặc định của catalog và luồng video dài khi policy tổ chức chọn Kling; `DirectShortVideo` mới dùng Fal/Veo theo snapshot `LongForm`, không nhận default Kling làm fallback.
 - BytePlus Seedance có adapter riêng, catalog mặc định tắt.
 - Fal/Veo có adapter riêng, catalog mặc định tắt và nhận first frame hợp lệ cho `OpenAiStructuredPlan` lẫn `DirectShortVideo`; cả hai lấy policy scope `LongForm` nhưng giữ workflow riêng.
 
@@ -189,6 +202,8 @@ Server nhận URL output gốc, xác minh provider/host/scheme/DNS, giới hạn
 ### 6.1 Composition
 
 WinForms là process host. WebView2 tải React production bundle và trao đổi message với C# bridge. C# giữ gateway client, workflow service, workspace/media service, download/verification và command điều phối.
+
+Sau đăng nhập/license/chọn organization, `Program.cs` tạo `SystemSetupCoordinator` cho FFmpeg/OCR/Qwen/Piper; `SystemSetupAuthorizer.CanManage` yêu cầu gate cho Owner/OrganizationAdmin/BillingManager/Member, không yêu cầu Viewer. `Form1` tải dashboard trước, sau đó `StartupSystemSetupModal` phủ React; nền dùng `inert`/`aria-hidden`. `StartupSystemSetupGate` ở host từ chối command nghiệp vụ đến khi mọi component không `DISABLED` đều `READY`. Modal và host phải cùng context/operation ID; không dùng trạng thái UI làm quyền bypass runtime.
 
 Bridge là contract hai phía: TypeScript message, C# DTO/handler, validation và busy/error state phải thay đổi đồng bộ. Không tin path, organization id, project id hoặc trạng thái gửi từ JavaScript nếu chưa xác minh ở C#/server.
 
@@ -258,6 +273,9 @@ Sau trộn stem, timestamp cũng được dựng lại; `apad=whole_len` và `at
 - Canonical Voice/speech verification: source server bật hai flag; Speech Synchronization: source desktop tắt, có thể được ghi đè theo máy. Readiness vẫn kiểm credential/rate/budget và voice version.
 - Vietsub/OCR: bật; translation local: tắt; local voice UI/cài đặt: bật nhưng runtime thiếu component trả `NOT_INSTALLED`.
 - TikTok: item desktop hiển thị mặc định với `Features:TikTokEnabled=true`; server bật khả năng quản trị bằng `TikTok:AdminManagedCredentialsEnabled=true`, giữ legacy `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và không chứa Client Key/Secret trong cấu hình mặc định.
+- Server có `TikTok:MultiAccountEnabled=true` trong workspace; schema 4.1.8 và trạng thái runtime/môi trường vẫn phải xác minh riêng.
+- Video ngắn phối đồ: `Generation:ShortVideoCharacterOutfit:Enabled=false` và desktop `Features:ShortVideoCharacterOutfitEnabled=false`. Quote `TextOnly` vẫn phụ thuộc bảng `vf.ShortVideoOperations` của 4.1.9.
+- Dịch Cloud: `VietsubCloudTranslation:Enabled=true`, model `gpt-5.6-luna` theo `TOOL-SERVER/appsettings.json`; API readiness còn kiểm schema, quyền, rate/credential và budget.
 
 Giá, credential, bank account và production connection string không nằm trong tài liệu hoặc source commit; chúng phải được cấu hình theo môi trường.
 

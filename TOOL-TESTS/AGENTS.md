@@ -1,6 +1,6 @@
 # Hướng dẫn AI agent — TOOL-TESTS
 
-> Ngữ cảnh và trạng thái test: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-07.
+> Ngữ cảnh và trạng thái test: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Rà soát source: 2026-09-15.
 
 Áp dụng thêm `../AGENTS.md`.
 
@@ -19,6 +19,9 @@ Test phải bảo vệ hành vi nghiệp vụ và ranh giới bảo mật, khôn
 - migration idempotency/least-privilege;
 - Vietsub path/context/revision/job recovery/OCR/translation/voice;
 - updater/setup traversal, hash, backup và rollback.
+- video ngắn `TextOnly`/`CharacterOutfit`: migration 4.1.9 kể cả khi cờ phối đồ tắt, quote/first-frame/lineage Veo, chuyển Kling cũ có xác nhận và không submit lại khi `Unknown`;
+- System Setup startup: nền dashboard/modal và gate C# cùng chặn command, role/context, checksum/probe/install/repair/retry;
+- Bilibili: URL public/partial scan, selection, cancel/retry và `.part`/checksum/signature/MP4 probe.
 
 ## Quy tắc
 
@@ -30,5 +33,6 @@ Test phải bảo vệ hành vi nghiệp vụ và ranh giới bảo mật, khôn
 - Không chạy model thật song song với build hoặc OCR/FFmpeg nặng; không dừng IDE/app của người dùng để lấy tài nguyên.
 - Không làm test yếu đi chỉ để pass. Test security phải chứng minh bị từ chối trước outbound hoặc ledger ngoài ý muốn.
 - Không hard-code tổng số test trong source; chỉ cập nhật baseline tài liệu sau khi chạy thực tế.
+- Số Passed/Failed/Skipped trong Markdown là biên bản của commit/môi trường đã ghi; lượt cập nhật tài liệu không được chép chúng thành kết quả kiểm thử mới.
 
 Chạy theo `../AGENTS.md`; frontend chạy thêm `npm test` trong `TOOL-LOCAL/Web`.

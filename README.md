@@ -1,6 +1,6 @@
 # VideoMaker
 
-> Điểm vào repository. Cập nhật ngữ cảnh: 2026-09-07.
+> Điểm vào repository. Rà soát context theo source ngày 2026-09-15.
 
 VideoMaker là hệ thống desktop/server hỗ trợ tạo video bằng AI và xử lý media cục bộ. OpenAI tạo nội dung có cấu trúc và giọng Canonical; Kling, BytePlus hoặc Fal/Veo tạo clip theo policy của tổ chức; desktop tải output qua server, yêu cầu người dùng duyệt và dựng video bằng FFmpeg. Module Vietsub cung cấp editor/OCR, dịch ngữ cảnh Qwen và tạo giọng Việt Piper theo mô hình local-first.
 
@@ -15,6 +15,8 @@ VideoMaker là hệ thống desktop/server hỗ trợ tạo video bằng AI và 
 7. [DE_XUAT_NGHIEP_VU_DONG_NHAT_GIONG_VEO_LOCAL.md](DE_XUAT_NGHIEP_VU_DONG_NHAT_GIONG_VEO_LOCAL.md) — nghiệp vụ gốc; xem [trạng thái triển khai thử nghiệm](KE_HOACH_TRIEN_KHAI_VEO_LOCAL.md).
 
 Khi tài liệu khác source hoặc migration, source/migration là sự thật kỹ thuật. Khi mô tả nghiệp vụ khác nhau, ưu tiên `NGHIEP_VU_HE_THONG_VIDEOMAKER.md`.
+
+Các báo cáo build/test và triển khai ở đây gắn với checkout, thời điểm và môi trường đã ghi trong tài liệu; chúng không xác nhận trạng thái của binary/database đang chạy. Muốn đánh giá một môi trường, kiểm tra schema version, cờ, credential/rate/budget, runtime model và bundle trên chính môi trường đó. [Bối cảnh hiện hành](BOI_CANH_HE_THONG_HIEN_HANH.md) phân biệt source, test tự động, smoke thủ công và rollout production.
 
 ## Cấu trúc solution
 
@@ -69,6 +71,10 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 - Dịch local Qwen chạy trong worker x64 riêng và mặc định tắt tới khi model/benchmark/smoke đạt.
 - Tạo giọng local Piper hiển thị qua feature flag mặc định bật nhưng runtime/model phải được cài, kiểm checksum và probe; `NOT_INSTALLED` không phải `READY`.
 
+### Setup hệ thống khi mở desktop
+
+Sau đăng nhập, license và organization hợp lệ, desktop tạo dashboard rồi mở modal Setup cho role `Owner`, `OrganizationAdmin`, `BillingManager` hoặc `Member` nếu FFmpeg/OCR/Qwen/Piper đang thiếu hoặc hỏng; `Viewer` không thuộc gate này. Modal khóa nền; host C# đồng thời từ chối command nghiệp vụ cho tới khi mọi thành phần không `DISABLED` đều `READY`. Cờ hiển thị hoặc marker cũ không thay thế kiểm tra checksum/probe trên máy hiện hành. [Báo cáo tích hợp](BAO_CAO_SETUP_HE_THONG.md) ghi kiểm thử source; smoke trên Windows sạch và bundle phát hành là bước riêng.
+
 ### Tải video Bilibili
 
 - Mục **Tải video Bilibili** trong menu trái nhận link video/kênh/b23.tv, quét danh sách, chọn nhiều video và tải MP4 về máy với tiến độ, hủy/thử lại và chọn thư mục/chất lượng.
@@ -97,14 +103,14 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 
 ## Mặc định quan trọng
 
-- OpenAI Text/Image/Voice và Kling có catalog trong source; Kling 3.0 Native Audio 720p là video mặc định.
+- OpenAI Text/Image/Voice và Kling có catalog trong source; Kling 3.0 Native Audio 720p là **model video mặc định của catalog**, còn project video ngắn mới chọn Fal/Veo theo policy `LongForm` khi môi trường đã cấu hình/rollout.
 - BytePlus Seedance và Fal/Veo được seed `Disabled`.
 - Source server có `CanonicalVoiceEnabled=true` và `SpeechVerificationEnabled=true`; desktop giữ `SpeechSynchronizationEnabled=false`. Khả dụng thực tế còn phụ thuộc cấu hình máy, credential, rate, budget và readiness.
 - SePay mặc định `Enabled=false`.
 - Vietsub và OCR bật; dịch Qwen tắt; UI/cài đặt giọng Piper bật nhưng runtime/model không được coi là sẵn sàng khi chưa qua gate.
 - Cấu hình workspace kế thừa `local-2` đang bật Dịch Cloud (`VietsubCloudTranslation:Enabled=true`, model `gpt-5.6-luna`); khả dụng vẫn phụ thuộc schema, quyền, credential, rate và budget. Xem [hướng dẫn vận hành Cloud](HUONG_DAN_VAN_HANH_DICH_CLOUD_VIETSUB.md) trước khi triển khai môi trường khác.
 - Item TikTok hiển thị mặc định ở desktop; quản lý credential trong Admin được hỗ trợ nhưng integration runtime vẫn tắt cho tới khi credential được OAuth xác minh. `TikTok:EmergencyDisabled` là kill switch theo môi trường.
-- Migration đến 4.1.8 có trong source nhưng không được mặc định xem là đã chạy trên database thật.
+- Migration nghiệp vụ hiện có đến `4.1.9-short-video-outfit`. Bảng `vf.ShortVideoOperations` của 4.1.9 được dùng cả cho báo giá `TextOnly`; migration trong source không chứng minh đã áp trên database đích. Các migration lip-sync Cloud cũ còn trong repository để giữ lịch sử, module runtime đã loại bỏ.
 
 ## Yêu cầu phát triển
 
@@ -147,4 +153,4 @@ Desktop mặc định kết nối `https://localhost:7202/`. Có thể dùng `TO
 
 ## Phát hành
 
-Không publish chỉ từ một build xanh. Phải hoàn tất migration rehearsal đến 4.1.8, cấu hình rate/credential/budget, xác minh TikTok Developer App qua Global Admin nếu bật, smoke môi trường, kiểm tra FFmpeg `Approval scope: Release`, package integrity và rollback theo [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md).
+Không publish chỉ từ một build xanh. Với binary hiện hành, phải rehearsal chuỗi migration đến 4.1.9 trên clone và xác minh schema/quyền ở môi trường đích trước khi khởi động server; cấu hình rate/credential/budget, xác minh TikTok Developer App qua Global Admin nếu bật, smoke môi trường, kiểm tra FFmpeg `Approval scope: Release`, package integrity và rollback theo [VAN_HANH_VA_PHAT_HANH.md](VAN_HANH_VA_PHAT_HANH.md). Tách riêng Passed/Failed/Skipped; các bài model/SQL opt-in bị Skipped không phải bằng chứng nghiệm thu.

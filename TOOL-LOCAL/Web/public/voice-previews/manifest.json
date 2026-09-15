@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "sampleText": "Xin chào, đây là giọng đọc tiếng Việt để bạn nghe thử.",
+  "format": "mono PCM 16-bit WAV",
+  "samples": [
+    {
+      "voiceId": "kokoro-vi:diem_trinh",
+      "file": "diem_trinh.wav",
+      "sha256": "7b55a31bfa410594e1155170db6c732c8b0c3294a6de172ed76d128265722bbc",
+      "durationSeconds": 3.325,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:duc_an",
+      "file": "duc_an.wav",
+      "sha256": "4f45c69ef4f651fc1db152a1839789207056c4a1f3bef6f42547453fab5d6bee",
+      "durationSeconds": 3.325,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:duc_duy",
+      "file": "duc_duy.wav",
+      "sha256": "19bdc4dc95bd075e9614ea4abe0b578f1e5f28109ddedada99a860901d4a293c",
+      "durationSeconds": 3.4,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:hung_thinh",
+      "file": "hung_thinh.wav",
+      "sha256": "97666549ee8d87cb9e65998cc1468cdaf22e709500d9f4ffaa296b9e9ca43948",
+      "durationSeconds": 3.2,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:mai_linh",
+      "file": "mai_linh.wav",
+      "sha256": "b02d8f7de2d7505f8dc00fafa83a69cd67b4e6a7881addd4833de38e233be94e",
+      "durationSeconds": 3.225,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:mai_loan",
+      "file": "mai_loan.wav",
+      "sha256": "94d1d51de77c9b5194cddb2de558a01293413cc4cba863f78374402f6c96cfc8",
+      "durationSeconds": 4.1,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:manh_dung",
+      "file": "manh_dung.wav",
+      "sha256": "a302566f387d433a1537173ac50791e01fd390a3f57158d709369f2853ec2133",
+      "durationSeconds": 3.375,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:my_yen",
+      "file": "my_yen.wav",
+      "sha256": "9cd85e13669ca0b347875f171671f0553d1de8d8dc576de8d12d092f46948305",
+      "durationSeconds": 4.025,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:ngoc_huyen",
+      "file": "ngoc_huyen.wav",
+      "sha256": "c5a81337be780f7a1b8f32d645a9d72cbeb64d2139f56b71f7d55180287d4991",
+      "durationSeconds": 3.45,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:phat_tai",
+      "file": "phat_tai.wav",
+      "sha256": "683aef497499b919e0a4d2fb308f0689000630ecfd2d954f3c7e8eb97e7f0aa5",
+      "durationSeconds": 3.45,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "piper:vi-vn-vais1000",
+      "file": "piper-vais1000.wav",
+      "sha256": "8446edd5cf50832416bf3c33f951a73c02f73bd7193a42e0c969f36b87c424b6",
+      "durationSeconds": 2.496,
+      "sampleRate": 22050,
+      "modelRevision": "ea046e8458f6acd997706d6e6066a022b42f6fb1"
+    },
+    {
+      "voiceId": "kokoro-vi:storyvert",
+      "file": "storyvert.wav",
+      "sha256": "105810b92e661424ce7ca9d0a5598a9e9b7382189290ed249141f461719a2b3f",
+      "durationSeconds": 4.325,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:thanh_dat",
+      "file": "thanh_dat.wav",
+      "sha256": "81919aeeb66b8fd0441fa7917a5260e8c7607c425a1dc14dec91f0da4772b24b",
+      "durationSeconds": 3.625,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:thuc_trinh",
+      "file": "thuc_trinh.wav",
+      "sha256": "e035d737bcc01ba662d3937d320d65e2e39c3cb32c47362e0fe4af9dc5232e11",
+      "durationSeconds": 3.275,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    },
+    {
+      "voiceId": "kokoro-vi:tuan_ngoc",
+      "file": "tuan_ngoc.wav",
+      "sha256": "3e94bbd4436f2dcab6e7731d0615b00e6bf790cc11f2571cb57bfeead741cf10",
+      "durationSeconds": 3.425,
+      "sampleRate": 24000,
+      "modelRevision": "9f210d622209fcc216fe2ac6159fed2ff381cb8a"
+    }
+  ]
+}

@@ -2,7 +2,9 @@
 
 Ngày lập: 2026-09-10. Nhánh khảo sát: `vid-short`.
 
-Trạng thái cập nhật: đã triển khai source MVP và kiểm thử tự động theo yêu cầu tiếp theo của người dùng. Chưa áp migration, bật feature hoặc gọi provider có phí. Phần dưới giữ tiêu chí của kế hoạch ban đầu; tiến độ source, thay đổi thiết kế, bằng chứng kiểm thử và phần nghiệm thu chưa hoàn tất nằm tại [biên bản triển khai](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md).
+> Đây là **kế hoạch khảo sát gốc**, không phải đặc tả runtime hiện hành. Các giả định Kling, 5–15 giây, tỷ lệ 1:1, trạng thái UI/first-frame và checklist chưa hoàn tất bên dưới phản ánh source tại ngày lập. Từ 2026-09-11, video ngắn mới dùng Fal/Veo 3.1 cho cả `TextOnly`/`CharacterOutfit`, 4/6/8 giây, 9:16/16:9, first frame Approved/current và quote riêng; migration 4.1.9 đã có trong source và bảng quote còn dùng cho `TextOnly`. Tra [nghiệp vụ chuẩn](NGHIEP_VU_HE_THONG_VIDEOMAKER.md), [kiến trúc](KIEN_TRUC_KY_THUAT.md), [triển khai Veo](TRIEN_KHAI_VIDEO_NGAN_VEO.md) và [runbook](VAN_HANH_VA_PHAT_HANH.md) trước khi làm thay đổi mới.
+
+Trạng thái tại lượt lập kế hoạch: đã triển khai source MVP và kiểm thử tự động theo yêu cầu tiếp theo của người dùng; lúc đó chưa áp migration, bật feature hoặc gọi provider có phí. Báo cáo áp migration/bật riêng Development sau đó nằm tại [biên bản triển khai](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md). Phần dưới giữ tiêu chí của kế hoạch ban đầu, không suy ra trạng thái hiện hành của checkout/database đích.
 
 **Mục tiêu và giả định**
 

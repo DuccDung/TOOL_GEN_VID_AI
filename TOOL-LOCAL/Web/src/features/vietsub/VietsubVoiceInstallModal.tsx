@@ -1,31 +1,119 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Download, HardDrive, ShieldCheck, Volume2, X } from 'lucide-react';
+import { CircleCheck, Download, Pause, Play, RefreshCw, TriangleAlert, Volume2, X } from 'lucide-react';
+import type { VietsubVoiceModelInstallProgress, VietsubVoiceModelStatus } from './types';
+import { vietsubVoicePreviewSamples } from './vietsubVoicePreviewSamples';
 
 export function VietsubVoiceInstallModal({
-  requiredBytes,
-  modelVersion,
+  models,
+  installProgress,
+  errorMessage,
+  busy,
   onDismiss,
-  onConfirm
+  onRefresh,
+  onInstall,
+  onCancelInstall
 }: {
-  requiredBytes: number;
-  modelVersion?: string | null;
+  models?: VietsubVoiceModelStatus[] | null;
+  installProgress?: VietsubVoiceModelInstallProgress | null;
+  errorMessage?: string | null;
+  busy: boolean;
   onDismiss: () => void;
-  onConfirm: () => void;
+  onRefresh: () => void;
+  onInstall: (voiceId: string) => void;
+  onCancelInstall?: () => void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
-  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const currentPreviewVoiceIdRef = useRef<string | null>(null);
+  const previewRequestRef = useRef(0);
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const [loadingVoiceId, setLoadingVoiceId] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<{ voiceId: string; message: string } | null>(null);
+
+  const clearAudio = () => {
+    previewRequestRef.current += 1;
+    currentPreviewVoiceIdRef.current = null;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
+  };
+
+  const stopPreview = () => {
+    clearAudio();
+    setPlayingVoiceId(null);
+    setLoadingVoiceId(null);
+    setPreviewError(null);
+  };
+
+  const dismiss = () => {
+    stopPreview();
+    onDismiss();
+  };
+
+  const playPreview = (voiceId: string) => {
+    const source = vietsubVoicePreviewSamples[voiceId];
+    const audio = audioRef.current;
+    if (!source || !audio) return;
+
+    if (currentPreviewVoiceIdRef.current === voiceId
+      && (playingVoiceId === voiceId || loadingVoiceId === voiceId)) {
+      previewRequestRef.current += 1;
+      audio.pause();
+      setPlayingVoiceId(null);
+      setLoadingVoiceId(null);
+      return;
+    }
+
+    if (currentPreviewVoiceIdRef.current !== voiceId) {
+      previewRequestRef.current += 1;
+      audio.pause();
+      audio.src = source;
+      currentPreviewVoiceIdRef.current = voiceId;
+      setPlayingVoiceId(null);
+    }
+
+    const request = ++previewRequestRef.current;
+    setLoadingVoiceId(voiceId);
+    setPreviewError(null);
+    try {
+      void audio.play().then(() => {
+        if (request !== previewRequestRef.current || currentPreviewVoiceIdRef.current !== voiceId) return;
+        setPlayingVoiceId(voiceId);
+        setLoadingVoiceId(null);
+      }).catch(() => {
+        if (request !== previewRequestRef.current || currentPreviewVoiceIdRef.current !== voiceId) return;
+        currentPreviewVoiceIdRef.current = null;
+        audio.removeAttribute('src');
+        setLoadingVoiceId(null);
+        setPlayingVoiceId(null);
+        setPreviewError({ voiceId, message: 'Không thể phát âm thanh mẫu. Hãy thử lại.' });
+      });
+    } catch {
+      if (request !== previewRequestRef.current) return;
+      currentPreviewVoiceIdRef.current = null;
+      audio.removeAttribute('src');
+      setLoadingVoiceId(null);
+      setPreviewError({ voiceId, message: 'Không thể phát âm thanh mẫu. Hãy thử lại.' });
+    }
+  };
+
+  useEffect(() => () => clearAudio(), []);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    confirmButtonRef.current?.focus();
+    closeButtonRef.current?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onDismiss();
+        dismiss();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -55,83 +143,111 @@ export function VietsubVoiceInstallModal({
   };
 
   const modal = (
-    <div
-      className="confirmation-overlay vietsub-voice-install-overlay"
-      role="presentation"
+    <div className="confirmation-overlay vietsub-voice-install-overlay" role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onDismiss();
-      }}
-    >
-      <section
-        ref={dialogRef}
-        id="vietsub-voice-install-dialog"
+        if (event.target === event.currentTarget) dismiss();
+      }}>
+      <section ref={dialogRef} id="vietsub-voice-model-dialog"
         className="confirmation-card confirmation-download vietsub-voice-install-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="vietsub-voice-install-title"
-        aria-describedby="vietsub-voice-install-description vietsub-voice-install-privacy"
-        onKeyDown={keepFocusInside}
-      >
-        <button
-          className="confirmation-close"
-          type="button"
-          onClick={onDismiss}
-          aria-label="Đóng hộp thoại cài giọng đọc"
-        >
-          <X size={18} />
-        </button>
+        role="dialog" aria-modal="true" aria-labelledby="vietsub-voice-model-title"
+        aria-describedby="vietsub-voice-model-description" onKeyDown={keepFocusInside}>
+        <button ref={closeButtonRef} className="confirmation-close" type="button"
+          onClick={dismiss} aria-label="Đóng danh sách giọng local"><X size={18} /></button>
 
         <div className="confirmation-icon confirmation-icon-download" aria-hidden="true">
           <Volume2 size={25} />
         </div>
-        <span className="confirmation-eyebrow vietsub-voice-install-eyebrow">THIẾT LẬP GIỌNG ĐỌC LOCAL</span>
-        <h2 id="vietsub-voice-install-title">Cài Piper và giọng Việt?</h2>
-        <p id="vietsub-voice-install-description">
-          VideoMaker sẽ tải các thành phần đã được cố định phiên bản. Bạn chỉ có thể tạo giọng
-          sau khi quá trình cài đặt và kiểm tra hoàn tất.
+        <span className="confirmation-eyebrow vietsub-voice-install-eyebrow">TÀI NGUYÊN GIỌNG LOCAL</span>
+        <h2 id="vietsub-voice-model-title">Chọn giọng local để cài</h2>
+        <p id="vietsub-voice-model-description">
+          Nghe thử từng giọng trước khi cài model. Giọng đã cài và kiểm tra model sẽ hiện Sẵn sàng.
+          Nút Cài giọng chỉ tải tài nguyên; chưa bắt đầu tạo âm thanh cho phụ đề.
         </p>
 
-        <div className="vietsub-voice-install-summary" aria-label="Thông tin gói cài đặt">
-          <div className="vietsub-voice-install-item">
-            <span aria-hidden="true"><Volume2 size={18} /></span>
-            <div>
-              <strong>Giọng nữ tiếng Việt</strong>
-              <small>{formatVoiceModel(modelVersion)}</small>
-            </div>
-          </div>
-          <div className="vietsub-voice-install-item">
-            <span aria-hidden="true"><HardDrive size={18} /></span>
-            <div>
-              <strong>Dung lượng tải xuống</strong>
-              <small>{formatDownloadSize(requiredBytes)}</small>
-            </div>
-          </div>
-          <div className="vietsub-voice-install-item">
-            <span aria-hidden="true"><ShieldCheck size={18} /></span>
-            <div>
-              <strong>Được kiểm tra trước khi dùng</strong>
-              <small>Phiên bản và checksum phải khớp cấu hình đã khóa.</small>
-            </div>
-          </div>
+        <div className="vietsub-voice-model-toolbar">
+          <span>{models ? `${models.length} giọng local` : 'Đang kiểm tra các giọng trên máy...'}</span>
+          <button type="button" onClick={onRefresh} disabled={busy}>
+            <RefreshCw size={15} /> Kiểm tra lại
+          </button>
         </div>
 
-        <div id="vietsub-voice-install-privacy" className="confirmation-note confirmation-note-info">
-          <ShieldCheck size={17} />
-          <span>
-            Piper chạy trực tiếp trên máy. Nội dung phụ đề và âm thanh tạo ra không được gửi lên Cloud.
-          </span>
+        {errorMessage && <p className="vietsub-voice-model-error" role="alert">{errorMessage}</p>}
+
+        <audio ref={audioRef} preload="none" aria-hidden="true" style={{ display: 'none' }}
+          onPause={(event) => {
+            if (event.currentTarget.paused) setPlayingVoiceId(null);
+          }}
+          onEnded={(event) => {
+            if (!event.currentTarget.ended) return;
+            clearAudio();
+            setPlayingVoiceId(null);
+            setLoadingVoiceId(null);
+          }}
+          onError={(event) => {
+            if (!event.currentTarget.error) return;
+            const voiceId = currentPreviewVoiceIdRef.current;
+            if (!voiceId) return;
+            previewRequestRef.current += 1;
+            currentPreviewVoiceIdRef.current = null;
+            setLoadingVoiceId(null);
+            setPlayingVoiceId(null);
+            setPreviewError({ voiceId, message: 'Âm thanh mẫu không khả dụng. Hãy thử lại.' });
+          }} />
+
+        <div className="vietsub-voice-model-list" aria-label="Danh sách giọng local">
+          {models?.map((model) => {
+            const installing = installProgress?.voiceId === model.voiceId;
+            const canInstall = model.status === 'NOT_INSTALLED' || model.status === 'INVALID';
+            const previewPlaying = playingVoiceId === model.voiceId;
+            const previewLoading = loadingVoiceId === model.voiceId;
+            const previewActive = currentPreviewVoiceIdRef.current === model.voiceId;
+            const previewLabel = previewPlaying || previewLoading ? 'Tạm dừng'
+              : previewActive ? 'Tiếp tục' : 'Nghe thử';
+            return (
+              <div className="vietsub-voice-model-row" key={model.voiceId}>
+                <div className="vietsub-voice-model-info">
+                  <div className="vietsub-voice-model-heading">
+                    <strong>{model.displayName}</strong>
+                    {model.status === 'READY' ? (
+                      <span className="vietsub-voice-model-status is-ready"><CircleCheck size={16} /> Sẵn sàng</span>
+                    ) : model.status === 'DISABLED' ? (
+                      <span className="vietsub-voice-model-status">Chưa khả dụng</span>
+                    ) : model.status === 'INVALID' ? (
+                      <span className="vietsub-voice-model-status is-invalid"><TriangleAlert size={15} /> Cần cài lại</span>
+                    ) : null}
+                  </div>
+                  <small>{model.engineId === 'PIPER_LOCAL' ? 'Piper' : 'Kokoro Vietnamese'} · Bộ tài nguyên {formatDownloadSize(model.requiredBytes)}</small>
+                  <small>{installing ? installProgress.message : model.message}</small>
+                  {previewError?.voiceId === model.voiceId && (
+                    <small className="vietsub-voice-preview-error" role="alert">{previewError.message}</small>
+                  )}
+                </div>
+                <div className="vietsub-voice-model-action">
+                  <button type="button" className="vietsub-voice-model-button vietsub-voice-model-preview"
+                    disabled={!vietsubVoicePreviewSamples[model.voiceId]}
+                    aria-label={`${previewLabel} giọng ${model.displayName}`}
+                    aria-pressed={previewPlaying}
+                    onClick={() => playPreview(model.voiceId)}>
+                    {previewPlaying || previewLoading ? <Pause size={15} /> : <Play size={15} />}
+                    {previewLoading ? 'Đang tải...' : previewLabel}
+                  </button>
+                  {canInstall && (
+                    <button type="button" className="vietsub-voice-model-button vietsub-voice-model-install"
+                      disabled={busy} onClick={() => onInstall(model.voiceId)}>
+                      <Download size={16} /> {installing ? `${installProgress.percent.toFixed(0)}%` : model.status === 'INVALID' ? 'Cài lại' : 'Cài giọng'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         <div className="confirmation-actions">
-          <button className="confirmation-cancel" type="button" onClick={onDismiss}>Để sau</button>
-          <button
-            ref={confirmButtonRef}
-            className="confirmation-submit vietsub-voice-install-submit"
-            type="button"
-            onClick={onConfirm}
-          >
-            <Download size={17} /> Tải và cài đặt
-          </button>
+          {busy && installProgress && onCancelInstall && (
+            <button className="confirmation-cancel" type="button" onClick={onCancelInstall}>Hủy tải</button>
+          )}
+          <button className="confirmation-cancel" type="button" onClick={dismiss}>Đóng</button>
         </div>
       </section>
     </div>
@@ -141,13 +257,7 @@ export function VietsubVoiceInstallModal({
 }
 
 function formatDownloadSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return 'Sẽ hiển thị khi bắt đầu tải';
+  if (!Number.isFinite(bytes) || bytes <= 0) return 'chưa xác định';
   const megabytes = bytes / (1024 * 1024);
-  return `Khoảng ${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(megabytes)} MB`;
-}
-
-function formatVoiceModel(modelVersion?: string | null): string {
-  if (!modelVersion) return 'Piper · VAIS1000 Medium';
-  const displayVersion = modelVersion.replace(/^vi_VN-/i, '').replace(/@.+$/, '').replace(/-/g, ' ');
-  return `Piper · ${displayVersion}`;
+  return `khoảng ${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(megabytes)} MB`;
 }

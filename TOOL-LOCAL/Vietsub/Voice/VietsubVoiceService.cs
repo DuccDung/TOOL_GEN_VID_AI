@@ -36,6 +36,33 @@ internal sealed class VietsubVoiceService(
 
     public VietsubVoiceRuntimeStatus GetRuntimeStatus() => components.GetStatus();
 
+    public async Task<IReadOnlyList<VietsubVoiceModelStatus>> GetModelStatusesAsync(
+        VietsubProjectSession session, string userId, Guid organizationId, CancellationToken token)
+    {
+        await AuthorizeAsync(session.Manifest, userId, organizationId, token);
+        return await Task.Run(components.GetModelStatuses, token);
+    }
+
+    public async Task<VietsubVoiceModelStatus> InstallModelAsync(
+        VietsubProjectSession session,
+        string userId,
+        Guid organizationId,
+        string voiceId,
+        IProgress<VietsubVoiceModelInstallProgress>? progress,
+        CancellationToken token)
+    {
+        await AuthorizeAsync(session.Manifest, userId, organizationId, token);
+        try
+        {
+            using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+            return await components.InstallModelAsync(voiceId, progress, token);
+        }
+        catch (TOOL_LOCAL.SystemSetup.SetupException exception)
+        {
+            throw new VietsubVoiceException(exception.Code, exception.Message);
+        }
+    }
+
     public async Task<VietsubVoiceRuntimeStatus> InstallRuntimeAsync(
         VietsubProjectSession session,
         string userId,

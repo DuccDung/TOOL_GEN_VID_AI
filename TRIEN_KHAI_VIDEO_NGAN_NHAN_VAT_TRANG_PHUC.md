@@ -2,6 +2,8 @@
 
 Ngày cập nhật: 2026-09-10. Nhánh: `vid-short`.
 
+> Lưu ý context 2026-09-15: đây là **biên bản MVP Kling ngày 2026-09-10** và bằng chứng bật riêng trên Development, không phải hướng dẫn chạy video ngắn hiện hành. Từ 2026-09-11, cả `TextOnly` và `CharacterOutfit` dùng Fal/Veo 3.1 theo policy `LongForm`, thời lượng 4/6/8 giây, tỷ lệ 9:16/16:9, first frame Approved/current và quote/duyệt từng bước; xem [triển khai Veo hiện hành](TRIEN_KHAI_VIDEO_NGAN_VEO.md), [nghiệp vụ chuẩn](NGHIEP_VU_HE_THONG_VIDEOMAKER.md) và [runbook](VAN_HANH_VA_PHAT_HANH.md). Schema 4.1.9 còn cần cho quote `TextOnly` khi cờ phối trang phục tắt. Các thông số Kling/5–15 giây và task T01 bên dưới chỉ phản ánh thiết kế ban đầu; không áp chúng để cấu hình hoặc smoke binary hiện hành.
+
 Đã triển khai source MVP và kiểm thử tự động. **Ngày 2026-09-10 đã áp migration và bật tính năng trên máy Development theo yêu cầu người dùng; chưa gọi provider có phí hoặc nghiệm thu ảnh/video thật.** Không coi kết quả kiểm thử bằng HTTP giả lập là bằng chứng endpoint, credential hoặc chất lượng model trên môi trường đích đã đạt.
 
 ## Bật trên máy Development — 2026-09-10
@@ -13,7 +15,7 @@ Ngày cập nhật: 2026-09-10. Nhánh: `vid-short`.
 - Bằng chứng cục bộ: `artifacts/outfit-enablement/outfit-enablement-preflight.json` và `outfit-enablement-applied.json`. Backup nằm trong thư mục backup của SQL Server; giữ backup và database rehearsal để đối chiếu. Không coi lần bật Development này là rollout production hoặc bằng chứng API contract Kling đã được xác minh.
 - Tắt lại trên máy này bằng cách đặt hai override về `false`, đồng bộ override desktop cạnh binary và khởi động lại server/desktop. Giữ schema, lịch sử và snapshot.
 
-## Cách sử dụng sau khi môi trường được bật
+## Cách sử dụng MVP Kling ngày 2026-09-10 — lịch sử
 
 Bổ sung giao diện 2026-09-10: trang Video ngắn có nút vào chế độ phối trang phục ngay phía trên form mô tả. Nút mở popup với `CharacterOutfit` đã chọn, không phát sinh AI. Ba test tích hợp kiểm từ nút này đến hai ô ảnh sau khi tạo dự án, đóng/mở lại popup thường và chặn khi feature tắt hoặc generation đang chạy. Release solution và desktop Debug build đạt; .NET **1221 Passed / 0 Failed / 5 Skipped**, frontend **183 Passed / 0 Failed / 0 Skipped**. Đã kiểm hash bundle được đưa vào cả hai bản desktop.
 
@@ -25,7 +27,7 @@ Bổ sung giao diện 2026-09-10: trang Video ngắn có nút vào chế độ p
 
 Tỷ lệ, thời lượng và lựa chọn audio cố định theo dự án đã tạo. Đổi ảnh nguồn, bối cảnh **hoặc chuyển động** trong bản đầu đều tăng revision và yêu cầu tạo/duyệt lại ảnh, video. Bản đầu dùng hai ảnh riêng; chưa có đường bỏ bước phối đồ cho một ảnh nhân vật đã mặc sẵn trang phục. Các lựa chọn chưa bấm Lưu không được coi là thiết lập hiện hành.
 
-## Phần đã triển khai
+## Phần đã triển khai trong MVP Kling — lịch sử
 
 | Task | Source và kiểm thử | Phần cần môi trường thật |
 |---|---|---|
@@ -53,7 +55,7 @@ Các file chính:
 
 Video request mới có composition ID, revision, quote ID và SHA-256 ảnh trong request snapshot. Snapshot JSON của request video cũ không bị thêm field null làm đổi hash idempotency. First-frame Fal/Veo dài vẫn dùng service/gate riêng.
 
-## Điều kiện bật và rehearsal
+## Điều kiện bật và rehearsal của MVP Kling — lịch sử
 
 Cờ mặc định đều tắt:
 

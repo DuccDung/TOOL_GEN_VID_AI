@@ -105,6 +105,123 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         }
     }
 
+    public IReadOnlyList<VietsubVoiceModelStatus> GetModelStatuses()
+    {
+        var statuses = new List<VietsubVoiceModelStatus>(VietsubVoiceModelCatalog.Voices.Count + 1)
+        {
+            ModelStatus(
+                VietsubVoiceCatalog.PiperVoiceId,
+                "Piper · Nữ tiếng Việt",
+                VietsubVoiceEngines.Piper,
+                VietsubVoiceCatalog.PiperModelId,
+                VietsubVoiceCatalog.PiperModelVersion,
+                "VAIS-1000 CC BY 4.0; Piper runtime GPL-3.0",
+                [
+                    (ModelPath, ModelSize, ModelSha256),
+                    (ConfigPath, ConfigSize, ConfigSha256)
+                ])
+        };
+
+        foreach (var voice in VietsubVoiceModelCatalog.Voices)
+        {
+            statuses.Add(ModelStatus(
+                voice.VoiceId,
+                voice.DisplayName,
+                "KOKORO_LOCAL_MODEL",
+                VietsubVoiceModelCatalog.ModelId,
+                VietsubVoiceModelCatalog.Revision,
+                VietsubVoiceModelCatalog.License,
+                ModelFiles(voice)));
+        }
+        return statuses;
+    }
+
+    public async Task<VietsubVoiceModelStatus> InstallModelAsync(
+        string voiceId,
+        IProgress<VietsubVoiceModelInstallProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (!_featureEnabled)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.FeatureDisabled, "Cài model giọng local đang bị khóa.");
+
+        var isPiper = string.Equals(voiceId, VietsubVoiceCatalog.PiperVoiceId, StringComparison.Ordinal);
+        var voice = isPiper ? null : VietsubVoiceModelCatalog.Find(voiceId);
+        if (!isPiper && voice is null)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelNotApproved, "Giọng local không thuộc danh mục đã duyệt.");
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var files = isPiper
+                ? new List<(VietsubVoiceModelFile File, string Path)>
+                {
+                    (new("vi_VN-vais1000-medium.onnx", ModelSize, ModelSha256), ModelPath),
+                    (new("vi_VN-vais1000-medium.onnx.json", ConfigSize, ConfigSha256), ConfigPath)
+                }
+                : new List<(VietsubVoiceModelFile File, string Path)>
+                {
+                    (voice!.VoicePack, ModelFilePath(voice.VoicePack)),
+                    (VietsubVoiceModelCatalog.CoreModel, ModelFilePath(VietsubVoiceModelCatalog.CoreModel)),
+                    (VietsubVoiceModelCatalog.Config, ModelFilePath(VietsubVoiceModelCatalog.Config))
+                };
+            if (files.Any(item => PathHasReparsePoint(item.Path) || PathHasReparsePoint(item.Path + ".part")))
+                throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelInvalid,
+                    "Đường dẫn tài nguyên giọng local không hợp lệ.");
+            var pending = files.Where(item => !IsVerifiedFile(item.Path, item.File.Size, item.File.Sha256)).ToArray();
+            if (pending.Length == 0) return GetModelStatuses().First(status => status.VoiceId == voiceId);
+
+            var bytesToDownload = pending.Sum(item => item.File.Size);
+            EnsureDiskSpace(bytesToDownload + 64L * 1024 * 1024);
+            var directory = isPiper ? ModelDirectory : ModelPackDirectory;
+            TOOL_LOCAL.SystemSetup.SystemSetupPaths.EnsureSafeDirectory(directory);
+            Directory.CreateDirectory(directory);
+
+            long completed = 0;
+            foreach (var item in pending)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                TOOL_LOCAL.SystemSetup.SystemSetupPaths.EnsureSafeDirectory(Path.GetDirectoryName(item.Path)!);
+                if (new[] { item.Path, item.Path + ".part" }.Any(path =>
+                    File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0))
+                    throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelInvalid,
+                        "Đường dẫn tài nguyên giọng local không hợp lệ.");
+                var uri = isPiper
+                    ? item.File.RelativePath.EndsWith(".json", StringComparison.Ordinal) ? ConfigUri : ModelUri
+                    : VietsubVoiceModelCatalog.DownloadUri(item.File);
+                var stage = item.File.RelativePath.StartsWith("voicepacks/", StringComparison.Ordinal)
+                    ? "VOICEPACK" : item.File.RelativePath.EndsWith(".json", StringComparison.Ordinal) ? "CONFIG" : "MODEL";
+                var adapter = progress is null ? null : new ModelProgressAdapter(voiceId, progress);
+                await DownloadVerifiedAsync(
+                    uri, item.Path, item.File.Size, item.File.Sha256,
+                    stage, completed * 100d / bytesToDownload, item.File.Size * 100d / bytesToDownload,
+                    adapter, cancellationToken,
+                    partialSuffix: ".part",
+                    progressMessage: $"Đang tải tài nguyên {stage.ToLowerInvariant()} cho giọng {voiceId}.");
+                completed += item.File.Size;
+            }
+
+            var status = GetModelStatuses().First(item => item.VoiceId == voiceId);
+            if (status.Status != "READY")
+                throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelInvalid, "Tài nguyên model vừa cài không vượt qua kiểm tra.");
+            progress?.Report(new(voiceId, "READY", 100, status.Message, bytesToDownload, bytesToDownload));
+            return status;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (VietsubVoiceException exception) when (exception.Code is not VietsubVoiceErrorCodes.ModelNotApproved)
+        {
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelInstallFailed,
+                "Không thể cài tài nguyên giọng local. Hãy kiểm tra mạng và dung lượng đĩa rồi thử lại.",
+                innerException: exception);
+        }
+        catch (Exception exception) when (exception is IOException or HttpRequestException or InvalidDataException or UnauthorizedAccessException)
+        {
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelInstallFailed,
+                "Không thể cài tài nguyên giọng local. Hãy kiểm tra mạng và dung lượng đĩa rồi thử lại.",
+                innerException: exception);
+        }
+        finally { _gate.Release(); }
+    }
+
     internal string ComponentDirectory => _componentRoot;
 
     public async Task<VietsubVoiceRuntimeStatus> InstallAsync(
@@ -209,11 +326,15 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
     private string RuntimeRoot => _useVersionedRuntime ? Path.Combine(_componentRoot, "runtime", RuntimeVersion)
         : Path.Combine(_componentRoot, "runtime");
     private string ModelDirectory => Path.Combine(_componentRoot, "model");
+    private string ModelPackDirectory => Path.Combine(
+        Path.GetDirectoryName(_componentRoot)!, "model-packs", "kokoro-vietnamese", VietsubVoiceModelCatalog.Revision);
     private string PythonPath => Path.Combine(RuntimeRoot, ".venv", "Scripts", "python.exe");
     private string UvPath => Path.Combine(RuntimeRoot, "uv.exe");
     private string UvArchivePath => Path.Combine(RuntimeRoot, $"uv-{UvVersion}.zip");
     private string ModelPath => Path.Combine(ModelDirectory, "vi_VN-vais1000-medium.onnx");
     private string ConfigPath => Path.Combine(ModelDirectory, "vi_VN-vais1000-medium.onnx.json");
+    private string ModelFilePath(VietsubVoiceModelFile file) => Path.Combine(
+        ModelPackDirectory, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
     private string MarkerPath => Path.Combine(_componentRoot, ".ready.json");
     private string RequestDirectory => Path.Combine(_componentRoot, "requests");
     private static string WorkerPath => Path.Combine(AppContext.BaseDirectory, "workers", "piper_worker.py");
@@ -228,7 +349,9 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         double basePercent,
         double spanPercent,
         IProgress<VietsubVoiceRuntimeInstallProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string partialSuffix = ".partial",
+        string? progressMessage = null)
     {
         if (IsVerifiedFile(destination, expectedSize, expectedHash)) return;
         if (uri.Scheme != Uri.UriSchemeHttps || !AllowedDownloadHosts.Contains(uri.Host))
@@ -237,7 +360,7 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        var partial = destination + ".partial";
+        var partial = destination + partialSuffix;
         TryDelete(partial);
         try
         {
@@ -272,7 +395,7 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
                 progress?.Report(new(
                     stage,
                     Math.Min(basePercent + spanPercent, basePercent + processed * spanPercent / expectedSize),
-                    stage == "MODEL" ? "Đang tải model giọng nữ tiếng Việt." : "Đang tải component Piper đã ký checksum.",
+                    progressMessage ?? (stage == "MODEL" ? "Đang tải model giọng nữ tiếng Việt." : "Đang tải component Piper đã ký checksum."),
                     processed,
                     expectedSize));
             }
@@ -571,6 +694,75 @@ internal sealed class VietsubVoiceComponentStore : IDisposable
     private long GetInstalledBytes() => new[] { ModelPath, ConfigPath }
         .Where(File.Exists)
         .Sum(path => new FileInfo(path).Length);
+
+    private IReadOnlyList<(string Path, long Size, string Sha256)> ModelFiles(VietsubVoiceModelDefinition voice) =>
+    [
+        (ModelFilePath(VietsubVoiceModelCatalog.CoreModel),
+            VietsubVoiceModelCatalog.CoreModel.Size, VietsubVoiceModelCatalog.CoreModel.Sha256),
+        (ModelFilePath(VietsubVoiceModelCatalog.Config),
+            VietsubVoiceModelCatalog.Config.Size, VietsubVoiceModelCatalog.Config.Sha256),
+        (ModelFilePath(voice.VoicePack), voice.VoicePack.Size, voice.VoicePack.Sha256)
+    ];
+
+    private VietsubVoiceModelStatus ModelStatus(
+        string voiceId,
+        string displayName,
+        string engineId,
+        string modelId,
+        string modelVersion,
+        string license,
+        IReadOnlyList<(string Path, long Size, string Sha256)> files)
+    {
+        var requiredBytes = files.Sum(file => file.Size);
+        if (!_featureEnabled)
+            return new(voiceId, displayName, engineId, modelId, modelVersion,
+                "DISABLED", 0, requiredBytes, license, "Giọng local đang bị khóa bởi feature flag.");
+
+        try
+        {
+            if (files.Any(file => PathHasReparsePoint(file.Path)))
+                return new(voiceId, displayName, engineId, modelId, modelVersion,
+                    "INVALID", 0, requiredBytes, license, "Đường dẫn file model không hợp lệ.");
+            var installedBytes = files.Where(file => File.Exists(file.Path))
+                .Sum(file => new FileInfo(file.Path).Length);
+            var checks = files.Select(file =>
+                (Exists: File.Exists(file.Path), Verified: IsVerifiedFile(file.Path, file.Size, file.Sha256))).ToArray();
+            var status = checks.All(check => check.Verified) ? "READY"
+                : checks.Any(check => check.Exists && !check.Verified) ? "INVALID" : "NOT_INSTALLED";
+            var message = status switch
+            {
+                "READY" => "Tài nguyên model đã cài và xác minh dung lượng, SHA-256.",
+                "INVALID" => "File model không khớp bản đã pin. Hãy cài lại giọng này.",
+                _ => "Tài nguyên model chưa được cài đầy đủ."
+            };
+            return new(voiceId, displayName, engineId, modelId, modelVersion,
+                status, installedBytes, requiredBytes, license, message);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new(voiceId, displayName, engineId, modelId, modelVersion,
+                "INVALID", 0, requiredBytes, license, "Không thể xác minh file model trên máy này.");
+        }
+    }
+
+    private sealed class ModelProgressAdapter(string voiceId, IProgress<VietsubVoiceModelInstallProgress> progress)
+        : IProgress<VietsubVoiceRuntimeInstallProgress>
+    {
+        public void Report(VietsubVoiceRuntimeInstallProgress update) =>
+            progress.Report(new(voiceId, update.Stage, update.Percent, update.Message,
+                update.BytesProcessed, update.TotalBytes));
+    }
+
+    private static bool PathHasReparsePoint(string path)
+    {
+        if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            return true;
+        for (var directory = new DirectoryInfo(Path.GetDirectoryName(path)!);
+             directory is not null; directory = directory.Parent)
+            if (directory.Exists && (directory.Attributes & FileAttributes.ReparsePoint) != 0)
+                return true;
+        return false;
+    }
 
     private static string Sha256File(string path)
     {

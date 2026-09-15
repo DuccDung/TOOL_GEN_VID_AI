@@ -14,7 +14,7 @@
 - Khi policy local bật, native approval không tự trở thành final approval. Render chỉ dùng converted result hoặc ngoại lệ native được duyệt còn khớp hash/snapshot; bỏ qua cảnh chưa đủ duyệt và báo lỗi nếu không còn cảnh nào.
 - Giữ native, anchor, checkpoint và kết quả; dọn intermediate theo thao tác xác nhận có allowlist. Model mặc định tắt cho đến khi có nghiệm thu thật; chi tiết trạng thái ở nhật ký triển khai.
 
-> Nguồn sự thật nghiệp vụ hiện hành. Rà soát theo source ngày 2026-09-07.
+> Nguồn sự thật nghiệp vụ hiện hành. Rà soát theo source tại commit `8f10cc9` ngày 2026-09-15; trạng thái rollout phải tra theo môi trường.
 
 Trạng thái triển khai nằm trong `BOI_CANH_HE_THONG_HIEN_HANH.md`; kiến trúc kỹ thuật nằm trong `KIEN_TRUC_KY_THUAT.md`; hướng dẫn vận hành nằm trong `VAN_HANH_VA_PHAT_HANH.md`.
 
@@ -86,6 +86,8 @@ Project có hai cấu trúc:
 
 `LongForm` và `Default` là scope của video provider policy, không phải tên cấu trúc project. Project gắn `OrganizationId`, `CreatedByUserId` và snapshot provider/model/policy/resolution/speech production policy. Đổi policy organization chỉ ảnh hưởng project mới.
 
+Tạo project và lưu nháp không tự gọi OpenAI/Veo/Kling, không reserve budget và không tự coi scene/first frame/clip là đã duyệt. Mỗi request AI sau đó phải qua access, rate, budget và idempotency; nơi workflow có quote/xác nhận thì quote phải khớp đúng request trước outbound. Thay nội dung, nhân vật, scene, ratio hoặc policy snapshot qua luồng chuyển hợp lệ phải vô hiệu kết quả phụ thuộc nhưng giữ request/usage lịch sử để đối soát.
+
 ## 7. Video dài và content plan
 
 - OpenAI dùng Responses API, JSON Schema, `store=false` và safety identifier là hash user ID.
@@ -108,13 +110,15 @@ Project có hai cấu trúc:
 - Server xác minh duration, ratio, resolution, audio và reference capability; submit idempotent và không tự failover model/provider.
 - Worker server là nơi polling duy nhất, cache output trước khi hoàn tất và settle terminal.
 - Desktop tải qua relative proxy, dùng `.part`, kiểm tra MIME/size/hash/FFprobe rồi tạo local asset.
-- Kling là mặc định. BytePlus Seedance và Fal/Veo có adapter nhưng mặc định Disabled và phải rollout riêng.
+- Kling là default catalog/video dài khi policy tổ chức chọn Kling. Video ngắn mới yêu cầu Fal/Veo theo snapshot `LongForm`, không tự dùng Kling; BytePlus Seedance và Fal/Veo có adapter nhưng được seed `Disabled` và phải rollout riêng.
 - Fal Standard/Fast là endpoint riêng, không fallback. Output URL gốc không rời server.
 
 ## 10. Video ngắn
 
 - `DirectShortVideo` có một scene 4/6/8 giây, tỷ lệ 9:16 hoặc 16:9, dùng Veo 3.1 Standard/Fast qua Fal ở 720p theo snapshot policy `LongForm`; chỉ hỗ trợ policy Native Audio, desktop có thể tắt tiếng sau tải. Thiếu policy Veo/rate/credential phải dừng trước outbound.
+- `TextOnly` là mode mặc định; `CharacterOutfit` cần bật cả cờ server/desktop và ảnh nhân vật + trang phục đã kiểm. Cờ tắt không loại bỏ phụ thuộc schema 4.1.9 của bảng quote `vf.ShortVideoOperations` cho `TextOnly`. Không cấp quyền CRUD hai bảng 4.1.9 cho desktop; quote/approval được server sở hữu.
 - Cả `TextOnly` và `CharacterOutfit` bắt buộc `SceneFirstFrame` Approved/current. TextOnly tạo ảnh từ nội dung qua OpenAI; CharacterOutfit dùng ảnh mặc thử đã duyệt. Ảnh và video có bước báo giá/xác nhận/duyệt riêng, kể cả clip tắt tiếng.
+- Quote phải còn hiệu lực và khớp project/scene/revision/input hash, provider/model/rate/credential snapshot trước submit; `Unknown` hoặc request chưa terminal không được tự submit lại để "phục hồi". Desktop reconnect lấy lại status/output của request cũ, kiểm file/lineage rồi mới cho duyệt/render.
 - Dự án đã snapshot Kling cần thao tác **Chuyển dự án sang Veo** có xác nhận thời lượng/tỷ lệ. Không tự sửa snapshot khi mở dự án hay khi policy tổ chức đổi. Chuyển không gọi AI hoặc giữ ngân sách; giữ lịch sử, vô hiệu báo giá cũ, chỉ giữ ảnh mặc thử đã duyệt khi tỷ lệ không đổi và ảnh đúng yêu cầu. Chặn chuyển khi còn request chưa có kết quả cuối.
 - Không gọi OpenAI để viết lại content và không áp policy tiếng Việt dành riêng cho video dài.
 - Khi tắt audio, desktop strip toàn bộ audio khỏi output local; provider policy không làm thay đổi cấu trúc workflow.
@@ -151,6 +155,7 @@ Quy tắc Canonical Voice:
 ## 13. Vietsub local-first
 
 - `VietsubProjectId` độc lập project video. `vs.Projects` giữ registry metadata/ownership/audit; dữ liệu biên tập, media và path nằm local. Riêng thao tác **Dịch Cloud** chủ động gửi snapshot text có giới hạn vào job server, mã hóa và dọn theo retention; không upload video/audio/path.
+- System Setup sau đăng nhập/license/organization hiển thị dashboard trước rồi dùng modal kiểm FFmpeg/OCR/Qwen/Piper cho Owner/OrganizationAdmin/BillingManager/Member; Viewer không thuộc gate. Khi thiếu component bắt buộc, React khóa nền và host C# từ chối command nghiệp vụ; chỉ mở sau khi mọi component không `DISABLED` được kiểm `READY`. `NOT_INSTALLED`, checksum sai hoặc probe hỏng phải có luồng cài/sửa/thử lại, không biến thành READY do một cờ UI.
 - Workspace thuộc exact organization + owner; COPY sao chép/hash atomically, LINK phát hiện source mất/đổi.
 - Playback dùng virtual HTTPS URL và HTTP Range, không lộ absolute path; mọi mutation dùng track revision.
 - Cue manual/locked không bị job ghi đè. Local job có state/checkpoint/pause/resume/retry/cancel và recovery.

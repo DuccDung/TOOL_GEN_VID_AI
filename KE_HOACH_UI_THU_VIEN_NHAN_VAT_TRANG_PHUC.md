@@ -4,6 +4,8 @@ Ngày lập: 2026-09-10. Nhánh khảo sát: `vid-short`.
 
 Trạng thái cập nhật 2026-09-11: **đã triển khai source UI01–UI13, build/kiểm thử và tài liệu UI14–UI15**. Xem [biên bản kết quả và các giới hạn nghiệm thu](TRIEN_KHAI_UI_THU_VIEN_VIDEO_NGAN.md). Nghiệm thu bằng ảnh người dùng/provider thật và ý kiến người dùng về giao diện là bước tiếp theo. Yêu cầu: bố cục theo ảnh mẫu #2; hàng nhân vật theo ảnh #3; hàng trang phục theo ảnh #4.
 
+> Các bảng "Hiện trạng" và "Phần cần bổ sung" bên dưới là snapshot khảo sát trước khi UI01–UI13 được triển khai, không phải danh sách thiếu tính năng của checkout hiện hành. Luồng video ngắn từ 2026-09-11 dùng Veo 3.1/Fal và cần 4.1.9 cho quote `TextOnly`; xem [triển khai Veo](TRIEN_KHAI_VIDEO_NGAN_VEO.md) và [bối cảnh source/rollout](BOI_CANH_HE_THONG_HIEN_HANH.md) trước khi lập task mới. Các ảnh mẫu là yêu cầu giao diện lịch sử, không phải asset source of truth.
+
 **1. Kết quả cần đạt**
 
 Người dùng mở trang Video ngắn, nhập nội dung, chọn một nhân vật và một bộ trang phục từ hai hàng ảnh thu nhỏ, tạo/duyệt ảnh mặc thử rồi tạo video. Ảnh đã thêm được lưu vào thư viện để dùng cho các dự án sau, còn lựa chọn của từng dự án được giữ riêng.

@@ -31,6 +31,8 @@ export type VietsubModuleState = {
   voiceWorkspace?: VietsubVoiceWorkspace | null;
   voiceRuntime?: VietsubVoiceRuntimeStatus | null;
   voiceInstallProgress?: VietsubVoiceRuntimeInstallProgress | null;
+  voiceModels?: VietsubVoiceModelStatus[] | null;
+  voiceModelInstallProgress?: VietsubVoiceModelInstallProgress | null;
   voiceNotice?: string | null;
   jobs: VietsubJobSummary[];
   activeJob?: VietsubJobSummary | null;
@@ -120,6 +122,30 @@ export type VietsubVoiceRuntimeStatus = {
 };
 
 export type VietsubVoiceRuntimeInstallProgress = {
+  stage: string;
+  percent: number;
+  message: string;
+  bytesProcessed: number;
+  totalBytes: number;
+};
+
+// READY describes pinned, hash-verified model assets only. Voice synthesis uses its own runtime gate.
+export type VietsubVoiceModelStatus = {
+  voiceId: string;
+  displayName: string;
+  engineId: string;
+  modelId: string;
+  modelVersion: string;
+  status: 'READY' | 'NOT_INSTALLED' | 'INVALID' | 'DISABLED';
+  installedBytes: number;
+  requiredBytes: number;
+  license: string;
+  message: string;
+};
+
+export type VietsubVoiceModelInstallProgress = {
+  projectId: string;
+  voiceId: string;
   stage: string;
   percent: number;
   message: string;

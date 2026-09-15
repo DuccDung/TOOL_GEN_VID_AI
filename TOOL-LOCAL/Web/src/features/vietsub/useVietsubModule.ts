@@ -88,6 +88,8 @@ const disabledState: VietsubModuleState = {
   voiceWorkspace: null,
   voiceRuntime: null,
   voiceInstallProgress: null,
+  voiceModels: null,
+  voiceModelInstallProgress: null,
   voiceNotice: null,
   jobs: [],
   activeJob: null,
@@ -164,6 +166,8 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
         voiceWorkspace: null,
         voiceRuntime: null,
         voiceInstallProgress: null,
+        voiceModels: null,
+        voiceModelInstallProgress: null,
         voiceNotice: null,
         jobs: [],
         activeJob: null,
@@ -244,6 +248,8 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
             ),
             voiceWorkspace: payload.voiceWorkspace ?? null,
             voiceRuntime: payload.voiceRuntime ?? current.voiceRuntime,
+            voiceModels: keepsCurrentEditor ? current.voiceModels : null,
+            voiceModelInstallProgress: keepsCurrentEditor ? current.voiceModelInstallProgress : null,
             ocrSettings: payload.ocrSettings ?? current.ocrSettings,
             jobs: payload.jobs ?? [],
             activeJob: payload.activeJob ?? null,
@@ -443,6 +449,30 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
           voiceRuntime: current.voiceRuntime
             ? { ...current.voiceRuntime, status: 'BUSY', ready: false, message: progress.message }
             : current.voiceRuntime
+        }));
+        return;
+      }
+
+      if (message.type === 'vietsub.voice.models.status' && message.payload) {
+        const payload = message.payload as { projectId: string; models: NonNullable<VietsubModuleState['voiceModels']> };
+        if (payload.projectId !== selectedProjectIdRef.current || !Array.isArray(payload.models)) return;
+        setState((current) => ({
+          ...current,
+          voiceModels: payload.models,
+          voiceModelInstallProgress: null
+        }));
+        return;
+      }
+
+      if (message.type === 'vietsub.voice.model.install.progress' && message.payload) {
+        const progress = message.payload as NonNullable<VietsubModuleState['voiceModelInstallProgress']>;
+        if (progress.projectId !== selectedProjectIdRef.current) return;
+        setState((current) => ({
+          ...current,
+          busy: true,
+          loading: true,
+          voiceModelInstallProgress: progress,
+          voiceNotice: null
         }));
         return;
       }
@@ -784,7 +814,9 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
         }
         setState((current) => {
           const translationError = errorCode.startsWith('TRANSLATION_') || errorCode.startsWith('CLOUD_');
-          const voiceError = errorCode.startsWith('VOICE_');
+          const voiceModelCancelled = errorCode === 'vietsub_operation_cancelled'
+            && Boolean(current.voiceModelInstallProgress);
+          const voiceError = errorCode.startsWith('VOICE_') || voiceModelCancelled;
           const videoExportError = errorCode.startsWith('vietsub_export_');
           const invalidatesEditor = errorCode === 'vietsub_project_not_found'
             || errorCode === 'vietsub_access_denied';
@@ -831,9 +863,11 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
             voiceNotice: invalidatesEditor
               ? null
               : voiceError
-                ? message.error?.message ?? 'Không thể tạo giọng tiếng Việt.'
+                ? voiceModelCancelled ? 'Tải model giọng local đã hủy.'
+                  : message.error?.message ?? 'Không thể cài hoặc tạo giọng tiếng Việt.'
                 : current.voiceNotice,
-            voiceInstallProgress: voiceError ? null : current.voiceInstallProgress
+            voiceInstallProgress: voiceError ? null : current.voiceInstallProgress,
+            voiceModelInstallProgress: voiceError ? null : current.voiceModelInstallProgress
           };
         });
       }
@@ -887,6 +921,8 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
         voiceWorkspace: null,
         voiceRuntime: null,
         voiceInstallProgress: null,
+        voiceModels: null,
+        voiceModelInstallProgress: null,
         voiceNotice: null,
         ocrSettings: disabledState.ocrSettings,
         ocrPreview: null,
@@ -1077,6 +1113,21 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     setState((current) => ({ ...current, voiceNotice: null }));
     runProjectOperation('vietsub.voice.runtime.install');
   }, [runProjectOperation]);
+
+  const refreshVoiceModels = useCallback(() => {
+    if (!featureEnabled || !selectedProjectIdRef.current) return;
+    setState((current) => ({ ...current, voiceNotice: null }));
+    postToHost('vietsub.voice.models.status');
+  }, [featureEnabled, setState]);
+
+  const installVoiceModel = useCallback((voiceId: string) => {
+    const projectId = selectedProjectIdRef.current;
+    if (!projectId || !state.voiceModels?.some(model => model.voiceId === voiceId && model.status !== 'READY')) return;
+    setState((current) => ({ ...current, voiceNotice: null }));
+    runProjectOperation('vietsub.voice.model.install', {
+      expectedProjectId: projectId, voiceId
+    } satisfies import('../../types').VietsubInstallVoiceModelRequest);
+  }, [runProjectOperation, state.voiceModels]);
 
   const dismissTranslationResourceAlert = useCallback(() => {
     translationResourceActionRef.current = null;
@@ -1362,6 +1413,8 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     installTranslationRuntime,
     startVoice,
     installVoiceRuntime,
+    refreshVoiceModels,
+    installVoiceModel,
     dismissTranslationResourceAlert,
     continueTranslationAfterResourceWarning,
     pauseJob,

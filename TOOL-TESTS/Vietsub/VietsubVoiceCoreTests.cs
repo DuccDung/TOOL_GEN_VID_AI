@@ -121,6 +121,75 @@ public sealed class VietsubVoiceCoreTests : IDisposable
     }
 
     [Fact]
+    public void ModelCatalog_ReportsPerVoiceResourceStatusWithoutChangingPiperRuntimeReadiness()
+    {
+        using var store = new VietsubVoiceComponentStore(new VietsubAppPaths(_root), featureEnabled: true);
+
+        var models = store.GetModelStatuses();
+
+        Assert.Equal(15, models.Count);
+        Assert.All(models, model => Assert.Equal("NOT_INSTALLED", model.Status));
+        Assert.Contains(models, model => model.VoiceId == "kokoro-vi:hung_thinh"
+            && model.DisplayName == "Hưng Thịnh" && model.RequiredBytes > 300_000_000);
+        Assert.Equal("NOT_INSTALLED", store.GetStatus().Status);
+    }
+
+    [Fact]
+    public async Task ModelInstaller_RejectsUnknownVoiceAndRedirectOutsidePinnedHttpsHosts()
+    {
+        var handler = new RedirectHandler(new Uri("http://127.0.0.1/model.pt"));
+        using var store = new VietsubVoiceComponentStore(new VietsubAppPaths(_root), true, handler);
+
+        var unknown = await Assert.ThrowsAsync<VietsubVoiceException>(
+            () => store.InstallModelAsync("kokoro-vi:unknown", null, CancellationToken.None));
+        Assert.Equal(VietsubVoiceErrorCodes.ModelNotApproved, unknown.Code);
+        Assert.Equal(0, handler.RequestCount);
+
+        var blocked = await Assert.ThrowsAsync<VietsubVoiceException>(
+            () => store.InstallModelAsync("kokoro-vi:hung_thinh", null, CancellationToken.None));
+        Assert.Equal(VietsubVoiceErrorCodes.ModelInstallFailed, blocked.Code);
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal("NOT_INSTALLED", store.GetModelStatuses()
+            .Single(model => model.VoiceId == "kokoro-vi:hung_thinh").Status);
+    }
+
+    [Fact]
+    public async Task ModelInstaller_DoesNotPromoteAssetWithWrongSize()
+    {
+        using var store = new VietsubVoiceComponentStore(
+            new VietsubAppPaths(_root), true, new WrongModelBodyHandler());
+
+        var error = await Assert.ThrowsAsync<VietsubVoiceException>(
+            () => store.InstallModelAsync("kokoro-vi:mai_linh", null, CancellationToken.None));
+
+        Assert.Equal(VietsubVoiceErrorCodes.ModelInstallFailed, error.Code);
+        Assert.Equal("NOT_INSTALLED", store.GetModelStatuses()
+            .Single(model => model.VoiceId == "kokoro-vi:mai_linh").Status);
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.part", SearchOption.AllDirectories));
+    }
+
+    [LocalVoiceModelFact]
+    public async Task ModelInstaller_DownloadsPinnedAssetsAndSharesTheCoreModelAcrossVoices()
+    {
+        using var store = new VietsubVoiceComponentStore(new VietsubAppPaths(_root), true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+
+        var first = await store.InstallModelAsync("kokoro-vi:hung_thinh", null, timeout.Token);
+        Assert.Equal("READY", first.Status);
+        Assert.Equal("NOT_INSTALLED", store.GetModelStatuses()
+            .Single(model => model.VoiceId == "kokoro-vi:mai_linh").Status);
+
+        var modelPath = Path.Combine(_root, "components", "voice", "model-packs",
+            "kokoro-vietnamese", VietsubVoiceModelCatalog.Revision, "kokoro_vi.onnx");
+        var modelWriteTime = File.GetLastWriteTimeUtc(modelPath);
+        var second = await store.InstallModelAsync("kokoro-vi:mai_linh", null, timeout.Token);
+
+        Assert.Equal("READY", second.Status);
+        Assert.Equal(modelWriteTime, File.GetLastWriteTimeUtc(modelPath));
+        Assert.Equal("NOT_INSTALLED", store.GetStatus().Status); // Downloading Kokoro assets does not install Piper.
+    }
+
+    [Fact]
     public async Task ComponentStore_RejectsRedirectOutsidePinnedHttpsHosts()
     {
         var paths = new VietsubAppPaths(_root);
@@ -807,7 +876,12 @@ public sealed class VietsubVoiceCoreTests : IDisposable
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        var fullRoot = Path.GetFullPath(_root);
+        var fullTemp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
+        if (!fullRoot.StartsWith(fullTemp + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || !Path.GetFileName(fullRoot).StartsWith("videomaker-vietsub-voice-", StringComparison.Ordinal))
+            throw new InvalidOperationException("Unsafe Vietsub test cleanup path.");
+        if (Directory.Exists(fullRoot)) Directory.Delete(fullRoot, recursive: true);
     }
 
     private sealed class FixedDurationSynthesizer(int durationMilliseconds) : IVietsubVoiceSynthesizer
@@ -868,6 +942,17 @@ public sealed class VietsubVoiceCoreTests : IDisposable
             response.Headers.Location = location;
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class WrongModelBodyHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new ByteArrayContent(new byte[32])
+            });
     }
 
     private sealed class RedirectThenErrorHandler(Uri location) : HttpMessageHandler

@@ -1,12 +1,16 @@
 # Hướng dẫn AI agent — TOOL-SERVER
 
-> Ngữ cảnh liên module: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-07.
+> Ngữ cảnh liên module: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Rà soát source: 2026-09-15.
 
 Áp dụng thêm `../AGENTS.md`. Đọc `../VAN_HANH_VA_PHAT_HANH.md` khi chạm database, credential, pricing, provider rollout, payment hoặc release.
 
 ## Trách nhiệm
 
-Server là ranh giới tin cậy duy nhất cho auth/session/device/license, organization/RBAC, budget/usage/audit, catalog/rate/credential, OpenAI/Kling/BytePlus/Fal, polling/settlement/output proxy, SePay/seat, Vietsub registry và desktop release.
+Server là ranh giới tin cậy duy nhất cho auth/session/device/license, organization/RBAC, budget/usage/audit, catalog/rate/credential, OpenAI/Kling/BytePlus/Fal, polling/settlement/output proxy, SePay/seat, Vietsub registry/Dịch Cloud, TikTok OAuth/token/job và desktop release.
+
+Video ngắn mới `DirectShortVideo` dùng Fal/Veo 3.1 theo policy scope `LongForm`. `TextOnly` và `CharacterOutfit` đều phải có first frame Approved/current, quote/xác nhận AI riêng, policy/rate/credential/budget/idempotency và lineage khi duyệt/render. Bảng quote `vf.ShortVideoOperations` từ migration 4.1.9 phục vụ cả `TextOnly`; cờ `Generation:ShortVideoCharacterOutfit:Enabled=false` không miễn trừ schema. Giữ đọc/chuyển project Kling video ngắn cũ bằng thao tác có xác nhận, không fallback Kling cho project mới.
+
+TikTok Direct Post là module độc lập theo user trong schema `social`: server sở hữu OAuth/token/credential Admin/job/polling; desktop giữ byte video và signed upload URL native. `TikTok:MultiAccountEnabled=true` trong cấu hình source workspace không tự chứng minh schema 4.1.8, credential Active hoặc integration runtime đã bật trên môi trường đích.
 
 Controller phải mỏng; validation nghiệp vụ, transaction và idempotency nằm trong service.
 
@@ -69,4 +73,4 @@ Không gọi provider, ghi submit mới hoặc release reservation khi trạng t
 - Thay EF/schema phải thêm migration idempotent và cập nhật least-privilege.
 - Thay worker phải có test retry/restart/idempotency/settlement.
 - Thay authorization phải có test dương và cross-user/cross-org/Viewer.
-- Không giả định migration đến 4.1.5 đã chạy trên database đích chỉ vì source build thành công.
+- Không giả định bất kỳ migration nào đến 4.1.9 đã chạy trên database đích chỉ vì source build thành công; kiểm mã `ai.SchemaVersions` theo module, bảng/constraint/quyền và runtime trước startup bootstrap catalog.

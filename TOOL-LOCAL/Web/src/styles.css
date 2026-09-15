@@ -629,8 +629,30 @@ button { color: inherit; }
     rgba(8,18,34,.72);
   backdrop-filter: blur(9px) saturate(.82);
 }
-.vietsub-voice-install-modal { width: min(540px,100%); padding: 30px; }
+.vietsub-voice-install-modal { width: min(820px,100%); max-height: min(90vh,820px); padding: 30px; display: flex; flex-direction: column; }
 .vietsub-voice-install-eyebrow { color: #168263; }
+.vietsub-voice-model-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 18px 0 10px; color: #52657d; font-size: 12px; }
+.vietsub-voice-model-toolbar button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cbd8e6; border-radius: 8px; padding: 7px 10px; color: #24496d; background: #f6f9fc; cursor: pointer; }
+.vietsub-voice-model-toolbar button:disabled { opacity: .5; cursor: default; }
+.vietsub-voice-model-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,230px),1fr)); align-content: start; gap: 12px; min-height: 70px; overflow-y: auto; padding: 4px 6px 4px 0; }
+.vietsub-voice-model-error { margin: 0 0 10px; padding: 9px 11px; border: 1px solid #efc2c2; border-radius: 8px; color: #9f3131; background: #fff4f4; font-size: 12px; }
+.vietsub-voice-model-row { display: flex; flex-direction: column; justify-content: space-between; gap: 12px; min-width: 0; min-height: 240px; aspect-ratio: 1; padding: 16px; background: #f8fafc; border: 1px solid #dce7f3; border-radius: 14px; }
+.vietsub-voice-model-info { min-width: 0; }
+.vietsub-voice-model-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.vietsub-voice-model-info strong,.vietsub-voice-model-info small { display: block; }
+.vietsub-voice-model-info strong { min-width: 0; color: #26364b; font-size: 14px; line-height: 1.35; }
+.vietsub-voice-model-info small { margin-top: 8px; color: #66788e; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.vietsub-voice-model-action { display: flex; align-items: stretch; gap: 8px; margin-top: auto; }
+.vietsub-voice-model-button { display: inline-flex; flex: 1 1 0; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 38px; padding: 8px; border: 1px solid #b9cee5; border-radius: 9px; background: #fff; color: #265c91; font-size: 11px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: background .16s ease,border-color .16s ease; }
+.vietsub-voice-model-button:hover { background: #edf5ff; border-color: #7faad7; }
+.vietsub-voice-model-button:focus-visible { outline: 2px solid #2d74bb; outline-offset: 2px; }
+.vietsub-voice-model-button:disabled { opacity: .5; cursor: default; }
+.vietsub-voice-model-button svg { flex: 0 0 auto; }
+.vietsub-voice-model-info .vietsub-voice-preview-error { color: #a83b3b; }
+.vietsub-voice-model-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 7px; color: #6b7788; background: #edf1f5; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.vietsub-voice-model-status.is-ready { color: #168263; background: #e8f7f0; }
+.vietsub-voice-model-status.is-invalid { color: #ad7131; background: #fff3e4; }
+.vietsub-voice-install-modal .confirmation-actions { flex: 0 0 auto; }
 .vietsub-voice-install-summary { display: grid; gap: 8px; margin-top: 20px; }
 .vietsub-voice-install-item {
   display: grid;

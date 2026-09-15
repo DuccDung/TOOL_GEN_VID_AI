@@ -141,6 +141,28 @@ internal sealed record VietsubVoiceRuntimeInstallProgress(
     long BytesProcessed,
     long TotalBytes);
 
+// READY here means that the pinned model files are installed and hash-verified.
+// It is separate from the Piper runtime READY state and does not authorize synthesis.
+internal sealed record VietsubVoiceModelStatus(
+    string VoiceId,
+    string DisplayName,
+    string EngineId,
+    string ModelId,
+    string ModelVersion,
+    string Status,
+    long InstalledBytes,
+    long RequiredBytes,
+    string License,
+    string Message);
+
+internal sealed record VietsubVoiceModelInstallProgress(
+    string VoiceId,
+    string Stage,
+    double Percent,
+    string Message,
+    long BytesProcessed,
+    long TotalBytes);
+
 internal sealed record VietsubStartVoiceInput(Guid ExpectedTrackId, int ExpectedTrackRevision);
 
 internal sealed record VietsubVoiceSettingsSnapshot(
@@ -290,6 +312,9 @@ internal static class VietsubVoiceErrorCodes
     public const string RuntimeNotInstalled = "VOICE_RUNTIME_NOT_INSTALLED";
     public const string RuntimeInvalid = "VOICE_RUNTIME_INVALID";
     public const string RuntimeInstallFailed = "VOICE_RUNTIME_INSTALL_FAILED";
+    public const string ModelNotApproved = "VOICE_MODEL_NOT_APPROVED";
+    public const string ModelInstallFailed = "VOICE_MODEL_INSTALL_FAILED";
+    public const string ModelInvalid = "VOICE_MODEL_INVALID";
     public const string WorkerFailed = "VOICE_WORKER_FAILED";
     public const string WorkerTimeout = "VOICE_WORKER_TIMEOUT";
     public const string WorkerProtocolInvalid = "VOICE_WORKER_PROTOCOL_INVALID";

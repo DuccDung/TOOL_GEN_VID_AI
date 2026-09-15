@@ -25,6 +25,9 @@ internal sealed record BilibiliJobRequest(string? JobId = null);
 [System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
 internal sealed record VietsubStartCloudTranslationRequest(Guid ExpectedTrackId, int ExpectedTrackRevision);
 
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+internal sealed record VietsubInstallVoiceModelRequest(Guid ExpectedProjectId, string VoiceId);
+
 internal sealed record WebMessageError(
     string Code,
     string Message,

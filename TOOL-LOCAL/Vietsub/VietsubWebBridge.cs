@@ -376,6 +376,16 @@ internal sealed class VietsubWebBridge : IDisposable
                 case "vietsub.voice.runtime.status":
                     PostVoiceRuntimeStatus(request.RequestId);
                     break;
+                case "vietsub.voice.models.status":
+                    await PostVoiceModelStatusesAsync(request.RequestId, cancellationToken);
+                    break;
+                case "vietsub.voice.model.install":
+                    await RunProjectOperationAsync(
+                        request.RequestId,
+                        token => InstallVoiceModelAsync(request, request.RequestId, token),
+                        cancellationToken,
+                        notifyCompletion: true);
+                    break;
                 case "vietsub.voice.runtime.install":
                     await RunProjectOperationAsync(
                         request.RequestId,
@@ -1324,6 +1334,51 @@ internal sealed class VietsubWebBridge : IDisposable
     {
         var status = RequireVoiceService().GetRuntimeStatus();
         Post(new WebMessageResponse("vietsub.voice.runtime.status", requestId, status));
+    }
+
+    private async Task PostVoiceModelStatusesAsync(string requestId, CancellationToken token)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var models = await RequireVoiceService().GetModelStatusesAsync(
+            session, context.UserId, context.OrganizationId, token);
+        Post(new WebMessageResponse("vietsub.voice.models.status", requestId,
+            new { projectId = session.Manifest.ProjectId, models }));
+    }
+
+    private sealed class VoiceModelBridgeProgress(Action<VietsubVoiceModelInstallProgress> report)
+        : IProgress<VietsubVoiceModelInstallProgress>
+    {
+        public void Report(VietsubVoiceModelInstallProgress value) => report(value);
+    }
+
+    private async Task InstallVoiceModelAsync(
+        WebMessageRequest request, string requestId, CancellationToken token)
+    {
+        var session = RequireProjectSession();
+        var context = RequireContext();
+        var input = request.Payload.Deserialize<VietsubInstallVoiceModelRequest>(_jsonOptions)
+            ?? throw new JsonException("Thiếu mã giọng local cần cài.");
+        if (input.ExpectedProjectId == Guid.Empty || input.ExpectedProjectId != session.Manifest.ProjectId
+            || string.IsNullOrWhiteSpace(input.VoiceId) || input.VoiceId.Length > 80)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelNotApproved,
+                "Dự án hoặc giọng local cần cài không hợp lệ.");
+
+        var progress = new VoiceModelBridgeProgress(update =>
+            Post(new WebMessageResponse("vietsub.voice.model.install.progress", requestId,
+                new { projectId = session.Manifest.ProjectId, update.VoiceId, update.Stage,
+                    update.Percent, update.Message, update.BytesProcessed, update.TotalBytes })));
+        try
+        {
+            await RequireVoiceService().InstallModelAsync(
+                session, context.UserId, context.OrganizationId, input.VoiceId, progress, token);
+            await PostVoiceModelStatusesAsync(requestId, token);
+        }
+        catch (VietsubVoiceException)
+        {
+            await PostVoiceModelStatusesAsync(requestId, CancellationToken.None);
+            throw;
+        }
     }
 
     private async Task InstallVoiceRuntimeAsync(

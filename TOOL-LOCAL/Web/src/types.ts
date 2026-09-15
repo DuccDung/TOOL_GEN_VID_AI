@@ -13,6 +13,11 @@ export type VietsubStartCloudTranslationRequest = {
   expectedTrackRevision: number;
 };
 
+export type VietsubInstallVoiceModelRequest = {
+  expectedProjectId: string;
+  voiceId: string;
+};
+
 export type ProjectSummary = {
   projectId: string;
   organizationId?: string | null;

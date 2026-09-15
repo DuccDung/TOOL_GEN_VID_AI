@@ -1,5 +1,21 @@
 # Bối cảnh hệ thống hiện hành
 
+## Snapshot source được rà soát — 2026-09-15
+
+Checkout được rà soát để cập nhật context là nhánh `main`, commit `8f10cc9`; `git status --short` sạch trước khi sửa tài liệu. Đây là snapshot **source/project file/cấu hình mặc định/migration**, không phải ảnh chụp server, desktop hoặc SQL đang chạy. Không chạy build/test, migration, provider/model thật hoặc smoke UI trong lượt rà soát tài liệu này. Các số Passed/Failed/Skipped bên dưới thuộc những lần kiểm thử có commit/môi trường riêng; không dùng chúng làm kết quả hiện hành của checkout này.
+
+Đường gọi chính đã đối chiếu: `Web/src/App.tsx` → `bridge.ts` → `Form1`/`DashboardBridge`/bridge module → `ServerGenerationClient` → `TOOL-SERVER/Controllers/GenerationController.cs` → `GenerationService`/`GenerationAccessService`/`AiBudgetService` → adapter provider. `VideoPollingWorker` trên server tiếp tục status/cache/settlement khi desktop đóng; status API chỉ đọc task đã lưu. Vietsub media/cue/SQLite/render và Bilibili download ở desktop; riêng job Dịch Cloud gửi snapshot **text** giới hạn đến server. TikTok dùng OAuth/token/job ở server, còn byte video và upload URL tạm chỉ ở desktop native.
+
+Binary hiện hành phụ thuộc schema `4.1.9-short-video-outfit` cho `vf.ShortVideoOperations`, kể cả mode video ngắn `TextOnly`; cờ phối trang phục tắt không bỏ phụ thuộc này. Migration trong repository hoặc báo cáo đã áp trên `DUNGDEV / VideoFactory` không chứng minh schema của môi trường khác. Cần kiểm `ai.SchemaVersions`, bảng/constraint/quyền desktop và dữ liệu liên quan trên database đích trước khi khởi động server mới, vì startup bootstrap catalog có thể ghi database.
+
+### Cập nhật danh mục giọng Vietsub local — 2026-09-15
+
+Rà soát source trên nhánh `main`, commit `8f10cc9`, với working tree đã có thay đổi chưa commit trước lượt cập nhật tài liệu này. Nút **Tạo giọng Việt** hiện mở modal chọn **15 giọng local**: Piper VAIS-1000 và 14 voicepack Kokoro Vietnamese đã pin. Modal hiển thị card vuông; **Nghe thử** và **Cài giọng** dùng cùng kiểu nút. `vietsub.voice.models.status` lấy trạng thái file model trên máy qua host C#: chỉ file đủ dung lượng và khớp SHA-256 mới hiện **Sẵn sàng**; file thiếu hiện **Cài giọng**, file sai hiện **Cần cài lại/Cài lại**. Cài đặt chỉ tải các file model đã pin của giọng được bấm, dùng `.part`, xác minh rồi publish nguyên tử; Kokoro dùng chung ONNX model/config giữa các voicepack. **Sẵn sàng trong modal là trạng thái tài nguyên model**, tách biệt với Piper runtime `READY`; chưa có Kokoro runtime hoặc job tạo giọng Kokoro, và job tạo âm thanh phụ đề vẫn dùng Piper. Giọng AI chưa thuộc modal này.
+
+Mỗi giọng có một WAV nghe thử đóng gói trong `TOOL-LOCAL/Web/public/voice-previews/`, phát được trước khi cài model; `manifest.json` ghi voice ID, revision model và SHA-256. Modal chỉ dùng URL local cố định theo voice ID và một trình phát tại một thời điểm, có tạm dừng/tiếp tục và dừng khi đóng. Source `Web/index.html` đã thêm `'self'` vào `media-src` để WebView2 cho phép tải WAV từ `https://app.local/voice-previews/`; trước sửa, chính CSP này chặn phát mẫu dù WAV có trong bundle. Lượt sửa source ngay trước cập nhật tài liệu đã build frontend và desktop Release/Debug đạt; frontend **228 Passed / 0 Failed / 0 Skipped**, .NET **1.355 Passed / 0 Failed / 7 Skipped**. Lượt tài liệu này **không chạy lại build/test**. Chưa có smoke nghe thử trực tiếp trên WebView2 sau sửa CSP, chưa nghiệm thu chất lượng giọng trên máy đích, và các bài model opt-in bị Skipped không chứng minh runtime/model đã đạt.
+
+Kokoro model card ghi Apache-2.0 nhưng quyền dữ liệu/voicepack LarVoice và quyền phân phối các WAV tạo từ chúng chưa được xác minh độc lập. Cần rà soát [provenance](third_party/voice/PROVENANCE.md) và [license notice](third_party/voice/LICENSES.md), nghe kiểm tra và smoke trên bundle đích trước phát hành công khai; source, build và trạng thái model trong modal không chứng minh đã rollout production.
+
 ### Hợp nhất chọn lọc `main` vào `local-2` — 2026-09-15
 
 Nhận thay đổi video ngắn Veo/nhân vật-trang phục, thư viện video ngắn, phục hồi tải output và Bilibili từ `origin/main` tại `9b8052c`. Giữ nguyên Vietsub, gate SystemSetup, chức năng Đăng TikTok hiện hành và không nhận tính năng Publishing mới có luồng đăng TikTok; giữ nguyên các file `.tmp` của `local-2`. Xung đột trong composition desktop/React được ghép theo từng phần. Restore/build Release đạt; .NET 1.352 Passed / 0 Failed / 6 Skipped, frontend 224 Passed / 0 Failed / 0 Skipped. Chưa chạy migration, provider có phí, đăng TikTok, model opt-in hoặc phát hành.
@@ -45,28 +61,35 @@ Migration có trong repository không chứng minh migration đã chạy trên d
 | Gateway AI theo tổ chức | Có auth, membership/role, ownership, pricing, budget, idempotency, credential version, reservation/settlement và request log | Rehearsal database, cấu hình từng môi trường, smoke và quan sát vận hành |
 | OpenAI content/image/speech | Adapter, catalog, policy, content pacing, TTS/transcription và luồng quyết toán đã có | Credential/rate thật và smoke có kiểm soát; speech không phải fallback mặc định |
 | Canonical Voice và speech verification | Voice profile/version, catalog/preview, TTS WAV, technical validation, audio mix/render và audited review đã có. Canonical Voice hỗ trợ ghép WAV cho cả lời dẫn và thoại nhân vật; module lip-sync Cloud đã loại bỏ. Video dài Provider Native nghe/duyệt trực tiếp và không gọi ASR | Migration 4.1.3–4.1.5, TTS/transcription rate theo scope, staging smoke và rollout flag; cần nghe nghiệm thu video thực tế |
-| Kling video | Luồng video dài/ngắn, Native Audio, polling, recovery và output proxy đã có | Smoke trả phí theo model/policy được duyệt |
+| Kling video | Luồng video dài và dữ liệu project video ngắn Kling cũ còn để đọc/chuyển có xác nhận; Native Audio, polling, recovery và output proxy đã có. Video ngắn mới dùng Veo, không tự fallback Kling | Smoke trả phí theo model/policy được duyệt; xác minh chuyển project cũ và lineage |
 | BytePlus Seedance | Adapter, polling và catalog đã có; seed mặc định `Disabled` | Rate, credential, allowlist output thực tế và rollout riêng |
-| Fal/Veo | Adapter, polling và luồng `SceneFirstFrame` cho `LongForm` đã có; seed mặc định `Disabled` | Migration 4.1.1 trên môi trường đích, rate/credential và smoke trả phí |
+| Fal/Veo | Adapter, polling và `SceneFirstFrame` Approved/current cho video dài `OpenAiStructuredPlan` và video ngắn `DirectShortVideo`; cả hai dùng policy scope `LongForm`. Seed mặc định `Disabled` | Migration 4.1.1 và 4.1.9 trên môi trường đích, policy/model/rate/credential/budget và smoke trả phí riêng từng mode |
+| Video ngắn Veo | `TextOnly` và `CharacterOutfit` có quote/confirm/approval riêng cho ảnh đầu cảnh và clip; một scene 4/6/8 giây, 9:16 hoặc 16:9. `CharacterOutfit` có hai cờ server/desktop mặc định tắt; `TextOnly` vẫn dùng `vf.ShortVideoOperations` | Schema 4.1.9, first-frame lineage, review ảnh/video, provider paid smoke và render/export trên media thật |
 | SePay/license/seat | Payment order, webhook matching, organization provisioning và seat allocation đã có trong source; mặc định `Enabled=false` | Staging rehearsal, secret/webhook validation, QR/bank config, idempotency và đối soát |
-| TikTok Direct Post | Đã có OAuth, credential Admin, upload local, server polling và quản lý nhiều tài khoản; người dùng báo luồng đăng hiện tại hoạt động | Nhiều tài khoản cần migration 4.1.8, bật MultiAccountEnabled và smoke riêng trên môi trường được phép |
+| TikTok Direct Post | Đã có OAuth, credential Admin, upload local, server polling và quản lý nhiều tài khoản. Báo cáo người dùng về luồng đăng cũ thuộc môi trường riêng, không phải smoke checkout này | Nhiều tài khoản cần migration 4.1.8, cấu hình/runtime tương ứng và smoke riêng trên môi trường được phép |
+| Tải Bilibili | Menu, quét link video/kênh public, hàng đợi tải local và kiểm MP4/checksum/probe đã có; không phát sinh AI budget | Smoke mạng/kênh public trên môi trường đích, ghi rõ kết quả quét chưa đầy đủ khi nguồn giới hạn |
 | Vietsub editor | Workspace local, manifest JSON schema 7 (SQLite schema 6), timeline/editor, thiết kế phụ đề và lật riêng hình video hai chiều theo project, mixer âm gốc/giọng Việt có mute/gain/auto-duck, preview hai kênh cùng playhead và xuất MP4 burn-in + audio mix qua ASS/FFmpeg với publish `.partial` đã kiểm tra | Smoke desktop trên bundle phát hành, nghe/đo audio output, nghiệm thu UX và đối chiếu preview/ASS/libass trên bộ video dọc-ngang, gồm cả hình lật và phụ đề không lật |
+| System Setup khởi động | React modal hiển thị sau dashboard; nền bị khóa và host C# chặn command nghiệp vụ cho Owner/OrganizationAdmin/BillingManager/Member đến khi component không `DISABLED` đều `READY`. Viewer không thuộc gate | Smoke WebView2/Windows sạch, cài/sửa package thật, probe FFmpeg/OCR/Qwen/Piper và kiểm phục hồi/hủy |
 | Paddle OCR local | Luồng OCR local và test liên quan đã có; feature mặc định bật | Runtime/model bundle thật, smoke Anh/Trung và đo tài nguyên |
 | Dịch local Qwen | Worker x64 cô lập, IPC, readiness fingerprint, apply/retry/cancel và hai resource profile Standard/Low-memory đã có; RAM/commit thấp là cảnh báo có xác nhận được snapshot vào job, còn hard blocker thực tế vẫn chặn; feature mặc định tắt | Verify model thật, benchmark mức khuyến nghị Low-memory 6 GB, probe Anh/Trung và smoke desktop cả nhánh cảnh báo; test opt-in đang có thể `Skipped` |
-| Giọng local Piper | Pipeline phrase/cache/checkpoint, worker Python cô lập, kiểm tra WAV/SHA-256, fit tối đa 1.20x với diagnostic không chặn, FFmpeg timeline, playback nội bộ và UI đã có; một giọng Việt, feature mặc định bật nhưng runtime/model chỉ tải sau xác nhận | Verify runtime/model thật, kiểm kê license/dependency Python, benchmark CPU, nghe nghiệm thu và smoke desktop trên bundle phát hành |
+| Giọng local Piper | Pipeline phrase/cache/checkpoint, worker Python cô lập, kiểm tra WAV/SHA-256, fit tối đa 1.20x với diagnostic không chặn, FFmpeg timeline, playback nội bộ và UI đã có; Piper VAIS-1000 vẫn là giọng dùng cho job tạo âm thanh phụ đề, feature mặc định bật nhưng runtime/model chỉ tải sau xác nhận | Verify runtime/model thật, kiểm kê license/dependency Python, benchmark CPU, nghe nghiệm thu và smoke desktop trên bundle phát hành |
+| Danh mục giọng Vietsub local | Modal có 15 giọng Piper/Kokoro để kiểm tra/cài model theo voice ID và nghe WAV mẫu đóng gói trước khi cài. `READY` ở đây chỉ là size/SHA-256 của model trên máy; source CSP đã cho phép media `'self'`. Kokoro chưa có runtime/tạo giọng trong ứng dụng | Smoke nghe thử WebView2 sau sửa CSP, thử tải/probe model trên máy đích, rà soát quyền Kokoro/LarVoice và WAV mẫu trước phân phối |
+| Đồng nhất giọng Veo local | Policy theo project, anchor/job/worker Python CPU, review và render guard đã có; desktop flag mặc định bật nhưng project/runtime vẫn phải qua gate riêng | Model/runtime thật, 2–3 clip tiếng Việt có quyền sử dụng, nghe A/B, khẩu hình/âm nền và hiệu năng trên máy đích |
 | Dịch Cloud OpenAI | Contract/API/worker, budget Vietsub, apply CAS/SRT và CTA Cloud đã nối; 4.1.6 đã rehearsal và áp local `DUNGDEV / VideoFactory` ngày 2026-09-10 theo biên bản trước merge; cấu hình workspace kế thừa `local-2` bật `Enabled=true`, model `gpt-5.6-luna` | Xác minh schema/quyền/rate/credential/budget trên môi trường đích, nhiều instance SQL và smoke OpenAI có phí; merge không xác minh lại database hoặc gọi provider |
 | Updater/setup/distribution | Source kiểm tra manifest, checksum, backup/rollback và package đã có | Bundle release thật, ký/phê duyệt, smoke install/update/rollback |
 | Workflow media mở rộng | Một số lớp và UI nền đã có; local voice, mixer theo project và xuất MP4 burn-in có trộn timeline giọng Việt đã có trong source nhưng chưa rollout | Whisper, cloud translation và smoke nghe/đo bản xuất Vietsub trên FFmpeg bundle phát hành chưa hoàn tất end-to-end |
 
 ## Mặc định quan trọng
 
-- Kling 3.0 Native Audio 720p là lựa chọn video mặc định trong catalog source.
+- Kling 3.0 Native Audio 720p là model mặc định **trong catalog source**; project video ngắn mới yêu cầu Fal/Veo theo policy `LongForm`, không dùng default Kling để fallback.
 - OpenAI Text/Image/Voice và Kling có catalog hoạt động theo seed hiện hành; khả dụng thực tế còn phụ thuộc policy, rate và credential.
 - BytePlus và Fal được seed `Disabled`, không tự bật khi deploy.
 - Fal/Veo chỉ áp dụng `LongForm`, cần `SceneFirstFrame` Approved/current đúng tỷ lệ.
+- `Generation:ShortVideoCharacterOutfit:Enabled=false` trên server và `Features:ShortVideoCharacterOutfitEnabled=false` trên desktop. Tắt hai cờ không miễn trừ schema 4.1.9 cho quote video ngắn `TextOnly`.
 - Source server có `CanonicalVoiceEnabled=true` và `SpeechVerificationEnabled=true`; desktop có `SpeechSynchronizationEnabled=false`. Cấu hình runtime có thể ghi đè; flag không thay thế credential, rate, budget hoặc readiness.
 - SePay mặc định `Payments:Sepay:Enabled=false`.
 - Item TikTok mặc định hiển thị với `Features:TikTokEnabled=true`; server có `TikTok:AdminManagedCredentialsEnabled=true` nhưng chưa bật runtime khi không có credential database `Active`, giữ `TikTok:Enabled=false`, `TikTok:EmergencyDisabled=false`, `TikTok:AuditedForPublicPosting=false` và source không chứa secret.
+- `TikTok:MultiAccountEnabled=true` là mặc định của workspace này; môi trường khác cần schema 4.1.8 và kiểm runtime/cấu hình riêng.
 - Desktop có `VietsubEnabled=true`, `VietsubOcrEnabled=true`, `VietsubLocalTranslationEnabled=false`, `VietsubLocalVoiceEnabled=true`; máy chưa có Piper/model sẽ ở trạng thái `NOT_INSTALLED` và yêu cầu người dùng chủ động xác nhận cài.
 - Desktop mặc định còn có connection string SQL workflow; đây là trạng thái chuyển tiếp, không phải kiến trúc đích.
 
@@ -127,6 +150,7 @@ Chuỗi migration đang có trong source:
 22. `VideoFactory.4.1.7.TikTokAdminCredentials.sql`
 23. `VideoFactory.4.1.8.TikTokMultiAccount.sql`
 24. `VideoFactory.4.1.8.LocalVoiceConsistency.sql`
+25. `VideoFactory.4.1.9.ShortVideoCharacterOutfit.sql`
 
 Các migration lip-sync Cloud 4.1.6/4.1.7 được giữ để tương thích dữ liệu lịch sử; module thực thi đã loại bỏ. Migration cùng tiền tố số của các module dùng mã SchemaVersions riêng.
 
@@ -222,7 +246,7 @@ Mốc bổ sung quản lý TikTok Developer App trong Global Admin ngày 2026-09
 
 ## Việc còn mở ưu tiên
 
-1. Chạy migration rehearsal đến 4.1.8 trên bản sao database, gồm project kind của budget/ledger và concurrency Cloud, sau đó rollout từng môi trường có backup/restore đã thử.
+1. Rehearsal chuỗi migration cần cho binary hiện hành đến 4.1.9 trên bản sao database, gồm project kind của budget/ledger, concurrency Cloud và quote video ngắn `TextOnly`/`CharacterOutfit`; xác minh least-privilege và rollout từng môi trường có backup/restore đã thử.
 2. Đăng ký/review TikTok app, xác minh credential bằng OAuth Admin trên Desktop và smoke nhiều tài khoản/upload/status trên môi trường được phép.
 3. Cấu hình rate/credential/policy/budget và smoke riêng cho từng provider; không gộp Kling, BytePlus và Fal thành một cờ hoàn tất.
 4. Rehearsal SePay ở staging, gồm duplicate webhook, late payment, seat shortage và rollback vận hành.

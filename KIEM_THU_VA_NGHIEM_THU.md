@@ -1,5 +1,9 @@
 # Kiểm thử và nghiệm thu VideoMaker
 
+> Ma trận áp dụng cho source hiện hành; rà soát dependency tại commit `8f10cc9` ngày 2026-09-15. Những mục có ngày/commit và số test bên dưới là **biên bản lịch sử**, không phải kết quả chạy mới trên checkout hoặc môi trường đang dùng.
+
+Để kết luận một tính năng sẵn sàng, báo riêng: source/contract/migration có mặt; build/test tự động trên commit đích với Passed/Failed/Skipped; clone/schema/quyền trên database đích; smoke runtime/model/provider/UI trên máy/bundle đích; quyết định rollout production. Không cộng test model/SQL opt-in bị `Skipped` vào Passed và không thay smoke thật bằng fake HTTP/model.
+
 ### Hợp nhất chọn lọc `main` vào `local-2` — xác minh 2026-09-15
 
 Checkout tích hợp từ `local-2` `959aeb9` và `origin/main` `9b8052c`: `dotnet restore`, `dotnet build -c Release --no-restore`, `npm ci` và `npm run build` đều Passed. `dotnet test -c Release --no-build -- xUnit.ParallelizeTestCollections=false`: **1.352 Passed / 0 Failed / 6 Skipped / 1.358 Total**. `npm test -- --maxWorkers=1 --no-file-parallelism`: **224 Passed / 0 Failed / 0 Skipped** trên 39 file. Các bài model/runtime và SQL opt-in bị Skipped không được coi là nghiệm thu. Không chạy SQL thay đổi dữ liệu, provider có phí, đăng TikTok hoặc phát hành.
@@ -42,7 +46,7 @@ Bổ sung triển khai 2026-09-10: `LocalVoiceDeploymentTests` kiểm cấu hìn
 
 Trước production cần rehearsal migration trên clone, UI WebView2 thật, 2–3 clip Veo tiếng Việt cùng nhân vật, giọng nam/nữ, âm nền, lỗi/no-speech/multiple-speaker, restart/retry, nghe A/B và đo CPU/RAM/thời gian. Thiếu clip thật hoặc model test bị skip phải ghi chưa nghiệm thu. Module và test chuyên biệt cloud LipSync đã xóa; migration lịch sử được giữ nguyên. Không tính test đã loại bỏ vào Passed hoặc Skipped.
 
-> Ma trận kiểm thử và Definition of Done. Rà soát ngày 2026-09-07.
+> Ma trận kiểm thử và Definition of Done. Dependency source/migration được rà soát tại commit `8f10cc9` ngày 2026-09-15; các biên bản cũ giữ nguyên thời điểm gốc.
 
 Kết quả phải ghi rõ thời điểm, commit/worktree, môi trường và số Passed/Failed/Skipped. Không dùng mốc lịch sử như kết quả của lần thay đổi mới.
 
@@ -76,15 +80,18 @@ Không dùng `npm install` để âm thầm đổi lockfile trong một thay đ�
 | DTO/contract public | Build toàn solution; test serialization/validation; server và desktop consumer |
 | Auth/license/device/role | Negative matrix JWT/session/device/license/membership/role/ownership; revoke/expiry |
 | AI generation | Idempotency, pricing missing, budget reservation/settlement/release, provider errors, worker retry và output proxy |
+| Video ngắn Veo | `TextOnly`/`CharacterOutfit`, quote ảnh và clip tách riêng, first frame Approved/current, revision/input hash, policy `LongForm`, 4/6/8 giây, 9:16/16:9, chuyển Kling cũ có xác nhận, `Unknown` không submit lại, clip/tắt audio/render/export lineage |
 | Credential | Permission matrix, encrypt/decrypt, rotate version, redaction và task dùng version cũ |
 | Migration | Static migration tests, apply trên clone, chạy lại idempotency, query verify và restore rehearsal |
 | WebView bridge | TypeScript/C# contract, invalid message, busy/cancel/reconnect, organization/project switching |
 | Media/download/render | Path traversal, `.part`, MIME/signature/size/hash, FFprobe, ApprovedGenerationId và FFmpeg integration |
 | Canonical Voice/speech | Feature flag, voice catalog/alias/preview context, pacing, TTS/ASR cost gate, WAV validation, approval/lineage, mix/render và audited review |
 | Vietsub/OCR | Manifest/SQLite/revision/lock, path safety, cue/source/language, cancel/retry và atomic SRT |
+| System Setup startup | Dashboard xuất hiện trước modal, `inert`/focus/không đóng bằng Esc, role/context, host C# chặn command, checksum/probe từng component, install/repair/retry/cancel và Windows sạch |
 | Translation runtime | Worker safety/protocol/readiness tests; model integration và benchmark opt-in; desktop smoke |
 | Local voice | Phrase/cache/revision, worker protocol, WAV/hash/path, fit 1.20x, FFmpeg timeline, playback authorization; runtime/model thật và nghe smoke là opt-in |
 | TikTok | OAuth state/PKCE/user-device binding, app credential Pending/Active và mã hóa theo ID, Global Admin authorization/audit, token encryption, creator policy, idempotency, chunk/Range, exact host, path/URL redaction, recovery và polling |
+| Bilibili | URL/host public, quét video/kênh phân trang và kết quả chưa đầy đủ, chọn đúng job, hủy/thử lại, tool pinned checksum, `.part`/signature/hash/FFprobe/không ghi đè; smoke mạng public có giới hạn nguồn |
 | SePay/seat | Options validation, duplicate/concurrent webhook, matching, expiry, capacity, idempotency và relational tests |
 | Updater/setup | Manifest/hash, managed files, install/update/rollback trên VM hoặc máy sạch |
 
@@ -142,6 +149,10 @@ Với migration 4.1.2–4.1.5, kiểm tra thêm failure details không lộ nộ
 Với migration 4.1.6, kiểm tra unique connection/idempotency theo user, FK user/device, ciphertext token/upload URL, row version và desktop principal không có quyền trực tiếp schema `social`.
 
 Với migration 4.1.7, kiểm tra duy nhất một credential `Pending`/`Active`, payload mã hóa, FK OAuth session tới credential, singleton integration settings, audit evidence constraint và không cấp thêm quyền SQL cho desktop.
+
+Với hai migration 4.1.8 của TikTok và LocalVoice, xác minh **hai mã `ai.SchemaVersions` riêng**, account-bound OAuth/attempt/history snapshot và cột/policy/lineage voice local. Không suy từ một mã 4.1.8 rằng module kia đã áp. Không xóa migration 4.1.6/4.1.7 lip-sync Cloud lịch sử chỉ vì runtime hiện hành đã loại bỏ.
+
+Với migration 4.1.9, xác minh mã `4.1.9-short-video-outfit`, `vf.ShortVideoOutfits`, `vf.ShortVideoOperations`, index/CHECK/FK, DENY CRUD cho `VideoMakerDesktopRole` và quote `TextOnly` qua server API khi cờ `CharacterOutfit=false`. Binary hiện hành vẫn cần bảng quote dù mode phối đồ tắt; kết quả test static `ShortVideoOutfitMigrationTests` không thay apply hai lần/verify trên clone và schema môi trường đích.
 
 Không apply migration vào database thật chỉ để hoàn thành checklist test.
 
@@ -381,6 +392,8 @@ Một thay đổi được coi là hoàn tất khi:
 - [ ] Không có secret hoặc dữ liệu nhạy cảm trong source/log/artifact.
 - [ ] Monitoring, support note và rollback đã sẵn sàng.
 - [ ] [BOI_CANH_HE_THONG_HIEN_HANH.md](BOI_CANH_HE_THONG_HIEN_HANH.md) chỉ được cập nhật bằng kết quả vừa thực sự chạy.
+
+Khi thay **chỉ Markdown**, kiểm `git diff --check`, đường link/file được dẫn, phiên bản migration và tên cờ/DTO theo source; báo rõ build/test/migration/smoke **không chạy**. Không chèn số Passed mới hoặc nâng mức readiness/rollout vì một lượt sửa context.
 
 ## 11. Mẫu báo cáo
 

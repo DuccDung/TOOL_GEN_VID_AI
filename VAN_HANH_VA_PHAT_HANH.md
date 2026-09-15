@@ -20,7 +20,7 @@ Kho mới ở `%LOCALAPPDATA%\VideoMaker\ShortVideoLibrary`, tách scope user/or
 
 ## Video ngắn phối trang phục — source 2026-09-10
 
-Hai cờ `Generation:ShortVideoCharacterOutfit:Enabled` (server) và `Features:ShortVideoCharacterOutfitEnabled` (desktop) mặc định tắt. Trước bật môi trường mới, rehearsal `VideoFactory.4.1.9.ShortVideoCharacterOutfit.sql` hai lần trên clone có backup/restore đã thử, rồi áp least-privilege; deploy server/desktop cùng contract và xác minh rate/credential/budget cùng API contract Kling thực tế. Riêng máy Development `DUNGDEV / VideoFactory` đã được người dùng yêu cầu áp migration và bật ngày 2026-09-10 sau backup/restore, rehearsal và kiểm schema/quyền. Override server nằm trong Development user-secrets, override desktop nằm trong `appsettings.user.json` của source và cạnh binary Debug/Release; không đổi mặc định phát hành. Đã khởi động lại server/desktop và smoke HTTPS, chưa gọi provider có phí hoặc nghiệm thu ảnh/video thật. Khi tắt cờ, giữ polling video/cleanup/reconciliation và dữ liệu lịch sử; không rollback binary không hiểu lineage để render project mới. [Các bước triển khai, đối soát Unknown và phần cần người vận hành xác nhận](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md).
+Hai cờ `Generation:ShortVideoCharacterOutfit:Enabled` (server) và `Features:ShortVideoCharacterOutfitEnabled` (desktop) mặc định tắt. Trước bật môi trường mới, rehearsal `VideoFactory.4.1.9.ShortVideoCharacterOutfit.sql` hai lần trên clone có backup/restore đã thử, rồi áp least-privilege; deploy server/desktop cùng contract và xác minh rate/credential/budget cùng first-frame, quote, approval và API Fal/Veo thực tế. Riêng máy Development `DUNGDEV / VideoFactory` đã được người dùng yêu cầu áp migration và bật ngày 2026-09-10 sau backup/restore, rehearsal và kiểm schema/quyền. Override server nằm trong Development user-secrets, override desktop nằm trong `appsettings.user.json` của source và cạnh binary Debug/Release; không đổi mặc định phát hành. Đã khởi động lại server/desktop và smoke HTTPS, chưa gọi provider có phí hoặc nghiệm thu ảnh/video thật. Khi tắt cờ, giữ polling video/cleanup/reconciliation và dữ liệu lịch sử; không rollback binary không hiểu lineage để render project mới. [Các bước triển khai, đối soát Unknown và phần cần người vận hành xác nhận](TRIEN_KHAI_VIDEO_NGAN_NHAN_VAT_TRANG_PHUC.md).
 
 ### Veo local voice — bổ sung 2026-09-09
 
@@ -30,7 +30,7 @@ Chỉ bật Features.VeoLocalVoiceConsistencyEnabled ở desktop nghiệm thu, k
 
 Bổ sung 2026-09-10: cấu hình desktop trong repository đã bật flag theo yêu cầu triển khai. Máy này đặt `LocalVoice:ComponentRoot=D:\VideoMakerLocalVoice\v1`, `LocalVoice:TemporaryRoot=D:\VideoMakerLocalVoice\tmp` trong `appsettings.user.json` được Git bỏ qua; không đưa đường dẫn máy vào cấu hình phát hành. Có thể chuẩn bị component trước đăng nhập bằng `powershell -NoProfile -File scripts/Prepare-VeoLocalVoice.ps1 -Mode Prepare`; `-Mode Verify` kiểm byte và nạp lại model, `-Mode Status` chỉ đọc trạng thái. Ba lệnh đều chạy binary đã build và đọc cấu hình bên cạnh binary. Không ghi tay READY. Hướng dẫn máy đích và phần nghiệm thu còn lại: [HUONG_DAN_CHAY_DONG_NHAT_GIONG_VEO_LOCAL.md](HUONG_DAN_CHAY_DONG_NHAT_GIONG_VEO_LOCAL.md).
 
-> Runbook chuẩn cho database, secret, provider, speech, SePay, desktop bundle và rollback. Rà soát ngày 2026-09-07.
+> Runbook chuẩn cho database, secret, provider, speech, SePay, desktop bundle và rollback. Rà soát chuỗi source tại commit `8f10cc9` ngày 2026-09-15.
 
 Không chạy nội dung tài liệu này trên production nếu chưa xác định rõ instance/database, người phê duyệt, backup đã kiểm tra và phương án restore. Các giá trị trong dấu `<...>` là placeholder, không được commit secret thật.
 
@@ -76,11 +76,14 @@ database/VideoFactory.4.1.6.TikTokPublishing.sql
 database/VideoFactory.4.1.7.TikTokAdminCredentials.sql
 database/VideoFactory.4.1.8.TikTokMultiAccount.sql
 database/VideoFactory.4.1.8.LocalVoiceConsistency.sql
+database/VideoFactory.4.1.9.ShortVideoCharacterOutfit.sql
 ```
 
-Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
+Đây là thứ tự **dependency source cho binary hiện hành**, không phải xác nhận đã áp trên database nào. Các file 4.1.6/4.1.7 lip-sync Cloud còn trong repository để bảo toàn lịch sử nhưng module runtime đã loại bỏ; không tự chạy hoặc xóa chúng chỉ vì cùng tiền tố version. Những migration cùng số thuộc module khác nhau có mã `ai.SchemaVersions` riêng; kiểm **mã version cụ thể**, bảng, constraint, FK và quyền, không chỉ so số lớn nhất. Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
 
 4.1.6 thay nullability của project budget/ledger và thêm tham chiếu Vietsub. Áp migration trước khi chạy binary server mới, kể cả Cloud còn disabled. Không rollback về worker cũ sau khi có reservation Vietsub. Quy trình cấu hình, giữ payload, đối soát Unknown và dừng rollout nằm trong [runbook Dịch Cloud](HUONG_DAN_VAN_HANH_DICH_CLOUD_VIETSUB.md).
+
+4.1.9 tạo `vf.ShortVideoOutfits` và `vf.ShortVideoOperations`, ghi `4.1.9-short-video-outfit` trong `ai.SchemaVersions` và DENY CRUD trực tiếp cho `VideoMakerDesktopRole`. `TextOnly` lưu quote video trong `ShortVideoOperations`; cờ `CharacterOutfit=false` không cho phép bỏ migration. Khi kiểm môi trường đích, xác minh hai bảng/version/index/CHECK/FK/DENY và quote `TextOnly` hoạt động qua server API trước khi bật tạo video ngắn. Không chạy server mới chỉ để "kiểm thử" schema: startup bootstrap catalog có thể ghi database.
 
 ### 2.2 Chạy rehearsal
 
@@ -160,8 +163,9 @@ Không rotate production chỉ để test giao diện.
 
 ### Fal/Veo
 
-- Cần migration 4.1.1, first-frame workflow và policy `LongForm`.
+- Cần migration 4.1.1 cho first frame và 4.1.9 cho quote video ngắn, policy `LongForm`, model Veo 3.1 Standard/Fast, rate/credential/budget Active theo tổ chức.
 - Xác minh first frame Approved/current, tỷ lệ đúng và không có T2V fallback.
+- Với `DirectShortVideo`, kiểm riêng `TextOnly` và `CharacterOutfit`: quote ảnh/video, xác nhận chi phí từng bước, lineage composition/revision, chuyển project Kling cũ có xác nhận, status/cache/reconnect và render/export. Không dùng Kling để fallback khi Veo chưa sẵn sàng.
 - Bật catalog theo môi trường/tổ chức sau smoke image-to-video có phí được phê duyệt.
 
 Mỗi provider có rollback flag/policy riêng. Tắt provider chặn request mới nhưng worker vẫn cần xử lý an toàn task đã gửi.

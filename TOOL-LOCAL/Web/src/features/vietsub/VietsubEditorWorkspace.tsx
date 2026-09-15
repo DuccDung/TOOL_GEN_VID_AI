@@ -84,6 +84,8 @@ export function VietsubEditorWorkspace({
   onInstallTranslationRuntime,
   onStartVoice,
   onInstallVoiceRuntime,
+  onRefreshVoiceModels,
+  onInstallVoiceModel,
   onPauseJob,
   onResumeJob,
   onRetryJob,
@@ -597,6 +599,8 @@ export function VietsubEditorWorkspace({
             voiceWorkspace={state.voiceWorkspace}
             voiceRuntime={state.voiceRuntime}
             voiceInstallProgress={state.voiceInstallProgress}
+            voiceModels={state.voiceModels}
+            voiceModelInstallProgress={state.voiceModelInstallProgress}
             voiceNotice={state.voiceNotice}
             voiceNoticeId={state.noticeEvents?.voiceNotice?.id}
             activeJob={state.activeJob}
@@ -612,6 +616,9 @@ export function VietsubEditorWorkspace({
             onInstallTranslationRuntime={onInstallTranslationRuntime}
             onStartVoice={onStartVoice}
             onInstallVoiceRuntime={onInstallVoiceRuntime}
+            onRefreshVoiceModels={onRefreshVoiceModels}
+            onInstallVoiceModel={onInstallVoiceModel}
+            onCancelVoiceModelInstall={onCancelOperation}
             onPauseJob={onPauseJob}
             onResumeJob={onResumeJob}
             onRetryJob={onRetryJob}

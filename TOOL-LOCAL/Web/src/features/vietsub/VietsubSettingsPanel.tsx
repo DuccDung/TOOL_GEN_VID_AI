@@ -43,7 +43,9 @@ import type {
   VietsubTranslationRuntimeStatus,
   VietsubVoiceRuntimeInstallProgress,
   VietsubVoiceRuntimeStatus,
-  VietsubVoiceWorkspace
+  VietsubVoiceWorkspace,
+  VietsubVoiceModelStatus,
+  VietsubVoiceModelInstallProgress
 } from './types';
 import {
   getVietsubTranslationInstallStageLabel,
@@ -73,6 +75,8 @@ type VietsubSettingsPanelProps = {
   voiceWorkspace?: VietsubVoiceWorkspace | null;
   voiceRuntime?: VietsubVoiceRuntimeStatus | null;
   voiceInstallProgress?: VietsubVoiceRuntimeInstallProgress | null;
+  voiceModels?: VietsubVoiceModelStatus[] | null;
+  voiceModelInstallProgress?: VietsubVoiceModelInstallProgress | null;
   voiceNotice?: string | null;
   voiceNoticeId?: number;
   activeJob?: VietsubJobSummary | null;
@@ -87,6 +91,9 @@ type VietsubSettingsPanelProps = {
   onInstallTranslationRuntime: () => void;
   onStartVoice: () => void;
   onInstallVoiceRuntime: () => void;
+  onRefreshVoiceModels?: () => void;
+  onInstallVoiceModel?: (voiceId: string) => void;
+  onCancelVoiceModelInstall?: () => void;
   onPauseJob: (jobId: string) => void;
   onResumeJob: (jobId: string) => void;
   onRetryJob: (jobId: string) => void;
@@ -112,6 +119,8 @@ export function VietsubSettingsPanel({
   voiceWorkspace,
   voiceRuntime,
   voiceInstallProgress,
+  voiceModels,
+  voiceModelInstallProgress,
   voiceNotice,
   voiceNoticeId = 0,
   activeJob,
@@ -123,8 +132,9 @@ export function VietsubSettingsPanel({
   onStartOcr,
   onStartTranslation,
   onInstallTranslationRuntime,
-  onStartVoice,
-  onInstallVoiceRuntime,
+  onRefreshVoiceModels,
+  onInstallVoiceModel,
+  onCancelVoiceModelInstall,
   onPauseJob,
   onResumeJob,
   onRetryJob,
@@ -145,10 +155,6 @@ export function VietsubSettingsPanel({
   const closeOcrDialog = useCallback(() => setOcrDialogOpen(false), []);
   const closeTranslationDialog = useCallback(() => setTranslationDialogOpen(false), []);
   const closeVoiceInstallDialog = useCallback(() => setVoiceInstallDialogOpen(false), []);
-  const confirmVoiceRuntimeInstall = useCallback(() => {
-    setVoiceInstallDialogOpen(false);
-    onInstallVoiceRuntime();
-  }, [onInstallVoiceRuntime]);
 
   useEffect(() => setDraft(ocrSettings), [ocrSettings]);
 
@@ -196,13 +202,6 @@ export function VietsubSettingsPanel({
   const translationJob = activeJob && ['TRANSLATE_LOCAL', 'TRANSLATE_CLOUD'].includes(activeJob.type) ? activeJob : null;
   const voiceJob = activeJob?.type === 'SYNTHESIZE_VOICE_LOCAL' ? activeJob : null;
   const translationRuntimeView = getVietsubTranslationRuntimeView(translationRuntime);
-  const voiceReady = Boolean(voiceRuntime?.ready);
-  const voiceEligible = Boolean(
-    activeTrack
-    && (activeTrack.voiceEnabledCueCount ?? activeTrack.cueCount) > 0
-    && (activeTrack.voiceTranslatedCueCount ?? activeTrack.translatedCueCount)
-      === (activeTrack.voiceEnabledCueCount ?? activeTrack.cueCount)
-  );
   const reviewTimingCount = voiceWorkspace?.timingDiagnostics.filter(
     (item) => item.status === 'REVIEW_REQUIRED'
   ).length ?? 0;
@@ -286,32 +285,28 @@ export function VietsubSettingsPanel({
         <button
           type="button"
           className="vietsub-tool-action is-voice"
-          aria-haspopup={!voiceReady ? 'dialog' : undefined}
-          aria-controls={!voiceReady ? 'vietsub-voice-install-dialog' : undefined}
-          disabled={busy || Boolean(activeJob) || voiceRuntime?.status === 'DISABLED' || (voiceReady && !voiceEligible)}
+          aria-haspopup="dialog"
+          aria-controls="vietsub-voice-model-dialog"
+          disabled={busy || Boolean(activeJob) || voiceRuntime?.status === 'DISABLED'}
           onClick={() => {
-            if (voiceReady) onStartVoice();
-            else setVoiceInstallDialogOpen(true);
+            setVoiceInstallDialogOpen(true);
+            onRefreshVoiceModels?.();
           }}
         >
           <span className="vietsub-tool-action-icon"><Volume2 size={20} /></span>
           <span className="vietsub-tool-action-copy">
             <strong>{voiceWorkspace?.requiresRebuild ? 'Cập nhật giọng Việt' : voiceComplete ? 'Tạo lại giọng Việt' : 'Tạo giọng Việt'}</strong>
-            <small>{voiceReady && !voiceEligible
-              ? activeTrack?.voiceEnabledCueCount === 0 ? 'Không có câu được chọn để tạo giọng.'
-                : 'Hoàn thành bản dịch cho các câu được chọn tạo giọng.'
-              : voiceWorkspace?.requiresRebuild ? 'Lựa chọn câu đã đổi. Cần cập nhật giọng trước khi xuất.'
-                : 'Tạo giọng cho các câu đã chọn, giữ nguyên thời gian.'}</small>
+            <small>Mở danh sách giọng local và cài tài nguyên model.</small>
           </span>
-          {voiceInstallProgress
+          {voiceModelInstallProgress
+            ? <span className="vietsub-tool-action-badge is-running">{voiceModelInstallProgress.percent.toFixed(0)}%</span>
+            : voiceInstallProgress
             ? <span className="vietsub-tool-action-badge is-running">{voiceInstallProgress.percent.toFixed(0)}%</span>
             : voiceJob
               ? <span className="vietsub-tool-action-badge is-running">{voiceJob.progressPercent.toFixed(0)}%</span>
               : voiceComplete
                 ? <span className="vietsub-tool-action-badge is-complete">Đã tạo</span>
-                : !voiceReady && voiceRuntime?.status !== 'DISABLED'
-                  ? <span className="vietsub-tool-action-badge is-warning">Cần cài giọng</span>
-                  : <Play className="vietsub-tool-action-arrow" size={16} />}
+                : <Play className="vietsub-tool-action-arrow" size={16} />}
         </button>
       </div>
 
@@ -457,10 +452,14 @@ export function VietsubSettingsPanel({
 
       {voiceInstallDialogOpen && (
         <VietsubVoiceInstallModal
-          requiredBytes={voiceRuntime?.requiredBytes ?? 0}
-          modelVersion={voiceRuntime?.modelVersion}
+          models={voiceModels}
+          installProgress={voiceModelInstallProgress}
+          errorMessage={voiceNotice}
+          busy={busy || Boolean(activeJob)}
           onDismiss={closeVoiceInstallDialog}
-          onConfirm={confirmVoiceRuntimeInstall}
+          onRefresh={() => onRefreshVoiceModels?.()}
+          onInstall={(voiceId) => onInstallVoiceModel?.(voiceId)}
+          onCancelInstall={onCancelVoiceModelInstall}
         />
       )}
     </aside>

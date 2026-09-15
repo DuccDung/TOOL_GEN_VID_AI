@@ -1,6 +1,6 @@
 # Hướng dẫn AI agent — TOOL-LOCAL
 
-> Ngữ cảnh liên module: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Cập nhật rà soát: 2026-09-07.
+> Ngữ cảnh liên module: [../BOI_CANH_HE_THONG_HIEN_HANH.md](../BOI_CANH_HE_THONG_HIEN_HANH.md). Rà soát source: 2026-09-15.
 
 Áp dụng thêm `../AGENTS.md`. File này bao phủ WinForms, WebView bridge, React, media và Vietsub local.
 
@@ -13,6 +13,10 @@
 - `Media`: FFmpeg/FFprobe, validation, trim, speech/audio mix và render.
 - `WebView` + `Web/src`: message contract, UI/state/busy/error.
 - `Vietsub`: workspace, SQLite, playback, timeline, subtitle, OCR, dịch local và tạo giọng local.
+- `SystemSetup`: gate khởi động hai lớp modal React + host C#, kiểm FFmpeg/OCR/Qwen/Piper, cài/sửa/probe theo role và context.
+- `TikTok`: OAuth PKCE native, file/video path và signed upload URL chỉ ở host; React chỉ nhận metadata an toàn.
+- `Bilibili`: quét public, hàng đợi tải trong phiên, tool pinned và xác minh MP4 local; không có AI budget.
+- `Generation/ShortVideoWorkflowService`: `TextOnly`/`CharacterOutfit`, quote/first-frame/approval Veo qua server; thư viện ảnh local SQLite theo user+organization.
 
 ## Gateway-only và phiên đăng nhập
 
@@ -42,6 +46,7 @@
 - Chạy media preflight trước provider generation khi output cần FFmpeg.
 - Download qua `.part`, giới hạn size/MIME, xác minh SHA-256 và probe trước promote.
 - Retry lỗi local dùng lại provider request/output đã có, không submit cloud lần hai.
+- Video ngắn mới dùng Fal/Veo 3.1, không fallback Kling. Cả hai mode cần `SceneFirstFrame` Approved/current và quote ảnh/video riêng; quote `TextOnly` phụ thuộc migration server 4.1.9 ngay cả khi cờ phối đồ tắt.
 - Native Audio cần playback/manual approval theo policy. Canonical Voice phải giữ đúng voice version, speech hash và lineage.
 - Render chỉ dùng approved asset đúng scene/generation/voice/speech snapshot và hash trên disk.
 - FFmpeg dùng argument list, timeout/cancellation và giới hạn stderr; không ghép command string từ input người dùng.
@@ -58,6 +63,7 @@
 - Piper local voice dùng component đã pin, kiểm tra RIFF/PCM/SHA-256 và playback registry theo đúng project/track/revision.
 - `VietsubLocalTranslationEnabled=false` mặc định. `VietsubLocalVoiceEnabled=true` chỉ hiển thị/cài đặt workflow; thiếu runtime/model trả `NOT_INSTALLED`.
 - Test model/benchmark `Skipped` không chứng minh production-ready.
+- Setup phải giữ modal và gate C# đồng bộ: component không `DISABLED` chưa `READY` thì command nghiệp vụ bị chặn. Marker/UI flag không thay checksum/probe runtime trên máy hiện hành.
 
 ## Kiểm tra
 
