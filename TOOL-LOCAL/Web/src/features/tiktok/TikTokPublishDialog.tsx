@@ -29,7 +29,7 @@ export function TikTokPublishDialog({ state, onDismiss, onCancel, onNewAttempt }
   }[phase];
   const detail = {
     preparing: 'Đang kiểm tra video và cài đặt bài đăng của bạn.',
-    uploading: feedback.canCancel ? 'Giữ VideoMaker mở và kết nối mạng trong khi tải video.' : 'Đang chờ TikTok xác nhận tải video. Tiến trình của bài này sẽ được cập nhật tự động.',
+    uploading: feedback.canCancel ? 'Giữ taphoatool mở và kết nối mạng trong khi tải video.' : 'Đang chờ TikTok xác nhận tải video. Tiến trình của bài này sẽ được cập nhật tự động.',
     processing: 'Video đã được gửi. TikTok có thể cần vài phút hoặc lâu hơn để xử lý. Bạn có thể thu nhỏ cửa sổ này.',
     success: 'TikTok đã xác nhận đăng video thành công trên tài khoản đã chọn.',
     error: feedback.message || 'Hãy kiểm tra kết nối và cài đặt bài đăng trước khi thử lại.',

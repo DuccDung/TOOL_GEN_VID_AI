@@ -1,4 +1,6 @@
-using System.Net.Mail;
+using System.Text.Json;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 using TOOL_LOCAL.Authentication;
 
 namespace TOOL_LOCAL;
@@ -6,392 +8,342 @@ namespace TOOL_LOCAL;
 public sealed class LoginForm : Form
 {
     private readonly AccountSessionManager _sessionManager;
-    private readonly AuthTextBox _emailField = new();
-    private readonly AuthTextBox _passwordField = new();
-    private readonly AuthButton _loginButton = new();
-    private readonly AuthButton _googleButton = new();
-    private readonly AuthButton _facebookButton = new();
-    private readonly CheckBox _rememberCheckBox = new();
-    private readonly LinkLabel _forgotPasswordLink = new();
-    private readonly LinkLabel _registerLink = new();
-    private readonly Label _statusLabel = new();
+    private readonly string _webRoot;
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly WebView2 _webView;
+    private readonly Panel _loadingPanel;
+    private readonly Label _loadingLabel;
+    private readonly JsonSerializerOptions _webJson = new(JsonSerializerDefaults.Web);
+    private LoginWebViewState _viewState = new(true, "Đang kiểm tra phiên đăng nhập...", false);
+    private bool _restoreStarted;
+    private bool _operationBusy;
 
-    public LoginForm(AccountSessionManager sessionManager)
+    public LoginForm(AccountSessionManager sessionManager) : this(sessionManager, null)
     {
-        _sessionManager = sessionManager;
-        InitializeUi();
-        Shown += RestoreSessionOnShown;
     }
 
-    private void InitializeUi()
+    internal LoginForm(AccountSessionManager sessionManager, string? webRoot)
     {
-        SuspendLayout();
-        Text = "VideoMaker - Đăng nhập";
+        _sessionManager = sessionManager;
+        _webRoot = webRoot ?? Path.Combine(AppContext.BaseDirectory, "wwwroot");
+        Icon = BrandIdentity.WindowIcon;
+        Text = "taphoatool - Đăng nhập";
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         MinimizeBox = true;
         ClientSize = new Size(600, 800);
         AutoScaleMode = AutoScaleMode.Dpi;
-        Font = new Font(AuthTheme.FontFamily, 9f);
         BackColor = AuthTheme.BackgroundTop;
 
-        var background = new AuthBackgroundPanel { Dock = DockStyle.Fill };
-        var brand = new BrandHeader
+        _webView = new WebView2
         {
-            Location = new Point(135, 24),
-            Size = new Size(330, 82)
+            Dock = DockStyle.Fill,
+            Visible = false,
+            DefaultBackgroundColor = AuthTheme.BackgroundTop
         };
-        var card = new AuthCardPanel
+        _loadingLabel = new Label
         {
-            Location = new Point(82, 128),
-            Size = new Size(436, 574)
+            Dock = DockStyle.Fill,
+            Text = "Đang khởi tạo giao diện đăng nhập taphoatool...",
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font(AuthTheme.FontFamily, 10f),
+            ForeColor = AuthTheme.TextSecondary
         };
+        _loadingPanel = new Panel { Dock = DockStyle.Fill, BackColor = AuthTheme.BackgroundTop };
+        _loadingPanel.Controls.Add(_loadingLabel);
+        Controls.Add(_webView);
+        Controls.Add(_loadingPanel);
+        _loadingPanel.BringToFront();
 
-        var title = CreateCenteredLabel(
-            "Đăng nhập",
-            new Point(43, 32),
-            new Size(350, 38),
-            18f,
-            FontStyle.Bold,
-            AuthTheme.TextPrimary);
-        var subtitle = CreateCenteredLabel(
-            "Chào mừng bạn trở lại!",
-            new Point(43, 68),
-            new Size(350, 22),
-            9.3f,
-            FontStyle.Regular,
-            AuthTheme.TextSecondary);
-
-        ConfigureField(
-            _emailField,
-            "Email",
-            "Nhập email của bạn",
-            AuthFieldIcon.Email,
-            new Point(43, 99));
-        ConfigureField(
-            _passwordField,
-            "Mật khẩu",
-            "Nhập mật khẩu",
-            AuthFieldIcon.Lock,
-            new Point(43, 178),
-            true);
-
-        _rememberCheckBox.Text = "Ghi nhớ đăng nhập";
-        _rememberCheckBox.Checked = true;
-        _rememberCheckBox.AutoSize = true;
-        _rememberCheckBox.Location = new Point(43, 264);
-        _rememberCheckBox.Font = new Font(AuthTheme.FontFamily, 8.8f);
-        _rememberCheckBox.ForeColor = AuthTheme.TextPrimary;
-        _rememberCheckBox.BackColor = Color.Transparent;
-        _rememberCheckBox.Cursor = Cursors.Hand;
-
-        ConfigureLink(_forgotPasswordLink, "Quên mật khẩu?", new Point(253, 263), new Size(140, 23));
-        _forgotPasswordLink.TextAlign = ContentAlignment.MiddleRight;
-        _forgotPasswordLink.LinkClicked += ForgotPasswordLinkOnClicked;
-
-        _loginButton.Text = "Đăng nhập";
-        _loginButton.LeadingGlyph = "➜";
-        _loginButton.GlyphColor = Color.White;
-        _loginButton.Location = new Point(43, 303);
-        _loginButton.Size = new Size(350, 46);
-        _loginButton.Click += LoginButtonOnClick;
-
-        ConfigureStatusLabel(_statusLabel, new Point(43, 352), new Size(350, 25));
-
-        var divider = new AuthDivider
-        {
-            Text = "Hoặc đăng nhập với",
-            Location = new Point(43, 378),
-            Size = new Size(350, 28)
-        };
-
-        ConfigureSocialButton(_googleButton, "Đăng nhập với Google", "G", Color.FromArgb(219, 68, 55), 411);
-        ConfigureSocialButton(_facebookButton, "Đăng nhập với Facebook", "f", Color.FromArgb(24, 119, 242), 461);
-        _googleButton.Click += (_, _) => ShowUnavailableFeature("Đăng nhập Google");
-        _facebookButton.Click += (_, _) => ShowUnavailableFeature("Đăng nhập Facebook");
-
-        var accountPrompt = CreateLabel(
-            "Chưa có tài khoản?",
-            new Point(92, 525),
-            new Size(145, 24),
-            9f,
-            FontStyle.Regular,
-            AuthTheme.TextPrimary);
-        accountPrompt.TextAlign = ContentAlignment.MiddleRight;
-        ConfigureLink(_registerLink, "Đăng ký ngay", new Point(238, 525), new Size(110, 24));
-        _registerLink.TextAlign = ContentAlignment.MiddleLeft;
-        _registerLink.LinkClicked += RegisterLinkOnClicked;
-
-        card.Controls.AddRange([
-            title,
-            subtitle,
-            _emailField,
-            _passwordField,
-            _rememberCheckBox,
-            _forgotPasswordLink,
-            _loginButton,
-            _statusLabel,
-            divider,
-            _googleButton,
-            _facebookButton,
-            accountPrompt,
-            _registerLink
-        ]);
-
-        var securityFooter = new SecurityFooter
-        {
-            Location = new Point(135, 724),
-            Size = new Size(330, 28)
-        };
-
-        background.Controls.AddRange([brand, card, securityFooter]);
-        Controls.Add(background);
-        AcceptButton = _loginButton;
-        ResumeLayout(false);
+        Shown += InitializeWebViewOnShown;
+        FormClosed += (_, _) => _lifetime.Cancel();
     }
 
-    private async void RestoreSessionOnShown(object? sender, EventArgs eventArgs)
+    private async void InitializeWebViewOnShown(object? sender, EventArgs eventArgs)
     {
-        SetBusy(true, "Đang kiểm tra phiên đăng nhập...");
         try
         {
-            if (await _sessionManager.TryRestoreAsync())
+            var loginPath = Path.Combine(_webRoot, "login.html");
+            if (!File.Exists(loginPath))
+                throw new InvalidOperationException("Không tìm thấy giao diện đăng nhập đã build.");
+
+            var userDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ToolGenPostVideo", "LoginWebView2");
+            Directory.CreateDirectory(userDataFolder);
+            var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder);
+            if (_lifetime.IsCancellationRequested) return;
+            await _webView.EnsureCoreWebView2Async(environment);
+            if (_lifetime.IsCancellationRequested) return;
+
+            var core = _webView.CoreWebView2;
+            core.SetVirtualHostNameToFolderMapping(LoginWebMessageContracts.HostName, _webRoot,
+                CoreWebView2HostResourceAccessKind.DenyCors);
+            core.Settings.AreDevToolsEnabled = false;
+            core.Settings.AreDefaultContextMenusEnabled = false;
+            core.Settings.IsStatusBarEnabled = false;
+            core.PermissionRequested += (_, args) => args.State = CoreWebView2PermissionState.Deny;
+            core.NewWindowRequested += (_, args) => args.Handled = true;
+            core.NavigationStarting += (_, args) =>
+            {
+                if (!LoginWebMessageContracts.IsTrustedPage(args.Uri)) args.Cancel = true;
+            };
+            core.NavigationCompleted += (_, args) =>
+            {
+                if (_lifetime.IsCancellationRequested) return;
+                if (!args.IsSuccess)
+                {
+                    ShowStartupError("Không thể tải giao diện đăng nhập WebView2.");
+                    return;
+                }
+
+                _loadingPanel.Visible = false;
+                _webView.Visible = true;
+                _webView.BringToFront();
+            };
+            core.WebMessageReceived += WebViewOnWebMessageReceived;
+            var webVersion = File.GetLastWriteTimeUtc(loginPath).Ticks;
+            core.Navigate($"https://{LoginWebMessageContracts.HostName}/login.html?v={webVersion}");
+        }
+        catch (WebView2RuntimeNotFoundException)
+        {
+            ShowStartupError("Máy tính chưa cài Microsoft Edge WebView2 Runtime.");
+        }
+        catch (Exception) when (!_lifetime.IsCancellationRequested)
+        {
+            ShowStartupError("Không thể khởi tạo giao diện đăng nhập WebView2.");
+        }
+    }
+
+    private async void WebViewOnWebMessageReceived(object? sender,
+        CoreWebView2WebMessageReceivedEventArgs eventArgs)
+    {
+        string message;
+        try
+        {
+            message = eventArgs.TryGetWebMessageAsString();
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        if (!LoginWebMessageContracts.TryRead(eventArgs.Source, message,
+            out var request) || request is null || _lifetime.IsCancellationRequested)
+            return;
+
+        switch (request.Type)
+        {
+            case "auth.ready":
+                PostState(request.RequestId);
+                if (!_restoreStarted)
+                {
+                    _restoreStarted = true;
+                    await RestoreSessionAsync(request.RequestId);
+                }
+                break;
+            case "auth.login":
+                await LoginAsync(request);
+                break;
+            case "auth.register.open":
+                OpenRegister(request.RequestId);
+                break;
+            case "auth.password-reset.open":
+                OpenPasswordReset(request);
+                break;
+            case "auth.social.unavailable":
+                ShowSocialUnavailable(request);
+                break;
+        }
+    }
+
+    private async Task RestoreSessionAsync(string requestId)
+    {
+        if (_operationBusy) return;
+        _operationBusy = true;
+        SetState(new(true, "Đang kiểm tra phiên đăng nhập...", false), requestId);
+        try
+        {
+            if (await _sessionManager.TryRestoreAsync(_lifetime.Token))
             {
                 CompleteAuthentication();
                 return;
             }
 
-            SetBusy(false, string.Empty);
-            _emailField.FocusInput();
+            SetState(new(false, string.Empty, false, FocusField: "email"), requestId);
+        }
+        catch (AccountClientException exception)
+        {
+            SetState(new(false, exception.Message, true, FocusField: "email"), requestId);
         }
         catch (HttpRequestException)
         {
-            SetBusy(false, "Không thể kết nối tới Account Server.", true);
+            SetState(new(false, "Không thể kết nối tới Account Server.", true,
+                FocusField: "email"), requestId);
         }
-        catch (TaskCanceledException)
+        catch (TaskCanceledException) when (!_lifetime.IsCancellationRequested)
         {
-            SetBusy(false, "Kết nối tới Server đã hết thời gian chờ.", true);
+            SetState(new(false, "Kết nối tới Server đã hết thời gian chờ.", true,
+                FocusField: "email"), requestId);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception) when (!_lifetime.IsCancellationRequested)
+        {
+            SetState(new(false, "Không thể kiểm tra phiên đăng nhập.", true,
+                FocusField: "email"), requestId);
+        }
+        finally
+        {
+            _operationBusy = false;
         }
     }
 
-    private async void LoginButtonOnClick(object? sender, EventArgs eventArgs)
+    private async Task LoginAsync(LoginWebRequest request)
     {
-        if (!ValidateLoginInput())
+        if (_operationBusy || !_restoreStarted) return;
+        if (!LoginWebMessageContracts.TryReadLogin(request.Payload, out var email,
+            out var password, out var rememberMe, out var validationError))
         {
+            SetState(validationError ?? new(false, "Thông tin đăng nhập không hợp lệ.", true),
+                request.RequestId);
             return;
         }
 
-        SetBusy(true, "Đang đăng nhập...");
+        _operationBusy = true;
+        SetState(new(true, "Đang đăng nhập...", false), request.RequestId);
         try
         {
-            await _sessionManager.LoginAsync(
-                _emailField.Value,
-                _passwordField.Value,
-                _rememberCheckBox.Checked);
+            await _sessionManager.LoginAsync(email, password, rememberMe, _lifetime.Token);
             CompleteAuthentication();
         }
         catch (AccountClientException exception)
         {
-            SetBusy(false, exception.Message, true);
-            ShowServerErrors(exception.Errors);
+            var emailError = GetFieldError(exception, "email");
+            var passwordError = GetFieldError(exception, "password");
             if (exception.Code.Equals("invalid_credentials", StringComparison.OrdinalIgnoreCase))
-            {
-                _passwordField.ShowError("Email hoặc mật khẩu không đúng.");
-                _passwordField.FocusInput();
-            }
+                passwordError ??= "Email hoặc mật khẩu không đúng.";
+            SetState(new(false, exception.Message, true, emailError, passwordError,
+                emailError is not null ? "email" : "password"), request.RequestId);
         }
-        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        catch (HttpRequestException)
         {
-            SetBusy(false, GetSafeMessage(exception), true);
+            SetState(new(false, "Không thể kết nối tới Account Server.", true), request.RequestId);
+        }
+        catch (TaskCanceledException) when (!_lifetime.IsCancellationRequested)
+        {
+            SetState(new(false, "Kết nối tới Server đã hết thời gian chờ.", true), request.RequestId);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception) when (!_lifetime.IsCancellationRequested)
+        {
+            SetState(new(false, "Không thể đăng nhập. Vui lòng thử lại.", true), request.RequestId);
+        }
+        finally
+        {
+            _operationBusy = false;
         }
     }
 
-    private bool ValidateLoginInput()
+    private void OpenRegister(string requestId)
     {
-        _emailField.ClearError();
-        _passwordField.ClearError();
-        SetStatus(string.Empty);
-        AuthTextBox? firstInvalidField = null;
-
-        var email = _emailField.Value.Trim();
-        if (string.IsNullOrWhiteSpace(email))
+        if (_operationBusy || !_restoreStarted) return;
+        _operationBusy = true;
+        try
         {
-            _emailField.ShowError("Vui lòng nhập email.");
-            firstInvalidField = _emailField;
-        }
-        else if (!MailAddress.TryCreate(email, out var address) ||
-                 !string.Equals(address.Address, email, StringComparison.OrdinalIgnoreCase))
-        {
-            _emailField.ShowError("Email không đúng định dạng.");
-            firstInvalidField = _emailField;
-        }
-
-        if (string.IsNullOrEmpty(_passwordField.Value))
-        {
-            _passwordField.ShowError("Vui lòng nhập mật khẩu.");
-            firstInvalidField ??= _passwordField;
-        }
-
-        firstInvalidField?.FocusInput();
-        return firstInvalidField is null;
-    }
-
-    private void ShowServerErrors(IReadOnlyDictionary<string, string[]> errors)
-    {
-        foreach (var (field, fieldErrors) in errors)
-        {
-            var message = fieldErrors.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-            if (message is null)
+            using var registerForm = new RegisterForm(_sessionManager);
+            if (registerForm.ShowDialog(this) == DialogResult.OK && _sessionManager.Current is not null)
             {
-                continue;
-            }
-
-            if (field.Equals("email", StringComparison.OrdinalIgnoreCase))
-            {
-                _emailField.ShowError(message);
-            }
-            else if (field.Equals("password", StringComparison.OrdinalIgnoreCase))
-            {
-                _passwordField.ShowError(message);
+                CompleteAuthentication();
+                return;
             }
         }
-    }
-
-    private void RegisterLinkOnClicked(object? sender, LinkLabelLinkClickedEventArgs eventArgs)
-    {
-        using var registerForm = new RegisterForm(_sessionManager);
-        if (registerForm.ShowDialog(this) == DialogResult.OK)
+        finally
         {
-            CompleteAuthentication();
+            _operationBusy = false;
         }
+
+        SetState(new(false, string.Empty, false), requestId);
     }
 
-    private void ForgotPasswordLinkOnClicked(object? sender, LinkLabelLinkClickedEventArgs eventArgs)
+    private void OpenPasswordReset(LoginWebRequest request)
     {
-        using var forgotPasswordForm = new ForgotPasswordForm(_sessionManager, _emailField.Value);
-        forgotPasswordForm.ShowDialog(this);
+        if (_operationBusy || !_restoreStarted) return;
+        string? email = null;
+        if (LoginWebMessageContracts.TryReadString(request.Payload, "email", 320, out var value))
+            email = value.Trim();
+
+        _operationBusy = true;
+        try
+        {
+            using var forgotPasswordForm = new ForgotPasswordForm(_sessionManager, email);
+            forgotPasswordForm.ShowDialog(this);
+        }
+        finally
+        {
+            _operationBusy = false;
+        }
+
+        SetState(new(false, string.Empty, false), request.RequestId);
+    }
+
+    private void ShowSocialUnavailable(LoginWebRequest request)
+    {
+        if (_operationBusy || !_restoreStarted ||
+            !LoginWebMessageContracts.TryReadString(request.Payload, "provider", 20,
+                out var provider) || provider is not ("Google" or "Facebook"))
+            return;
+        SetState(new(false, $"Đăng nhập {provider} chưa được cấu hình.", false),
+            request.RequestId);
+    }
+
+    private void SetState(LoginWebViewState state, string? requestId = null)
+    {
+        _viewState = state;
+        PostState(requestId);
+    }
+
+    private void PostState(string? requestId = null)
+    {
+        if (_lifetime.IsCancellationRequested || _webView.CoreWebView2 is null) return;
+        var json = JsonSerializer.Serialize(new
+        {
+            type = "auth.state",
+            requestId = requestId ?? Guid.NewGuid().ToString(),
+            payload = _viewState
+        }, _webJson);
+        _webView.CoreWebView2.PostWebMessageAsJson(json);
     }
 
     private void CompleteAuthentication()
     {
+        if (_lifetime.IsCancellationRequested || _sessionManager.Current is null) return;
         DialogResult = DialogResult.OK;
         Close();
     }
 
-    private void ShowUnavailableFeature(string feature) =>
-        SetStatus($"{feature} chưa được cấu hình.", false);
-
-    private void SetBusy(bool busy, string status, bool error = false)
+    private void ShowStartupError(string message)
     {
-        _emailField.Enabled = !busy;
-        _passwordField.Enabled = !busy;
-        _rememberCheckBox.Enabled = !busy;
-        _forgotPasswordLink.Enabled = !busy;
-        _loginButton.Enabled = !busy;
-        _googleButton.Enabled = !busy;
-        _facebookButton.Enabled = !busy;
-        _registerLink.Enabled = !busy;
-        _loginButton.Text = busy ? "Đang xử lý..." : "Đăng nhập";
-        SetStatus(status, error);
-        UseWaitCursor = busy;
+        if (_lifetime.IsCancellationRequested) return;
+        _loadingLabel.Text = message;
+        MessageBox.Show(this, message, "Đăng nhập chưa sẵn sàng", MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
+        DialogResult = DialogResult.Cancel;
+        Close();
     }
 
-    private void SetStatus(string status, bool error = false)
+    private static string? GetFieldError(AccountClientException exception, string field)
     {
-        _statusLabel.Text = status;
-        _statusLabel.ForeColor = error ? AuthTheme.Danger : AuthTheme.TextSecondary;
-    }
-
-    private static string GetSafeMessage(Exception exception) => exception switch
-    {
-        AccountClientException accountException => accountException.Message,
-        TaskCanceledException => "Kết nối tới Server đã hết thời gian chờ.",
-        _ => "Không thể kết nối tới Account Server."
-    };
-
-    private static void ConfigureField(
-        AuthTextBox field,
-        string label,
-        string placeholder,
-        AuthFieldIcon icon,
-        Point location,
-        bool isPassword = false)
-    {
-        field.LabelText = label;
-        field.PlaceholderText = placeholder;
-        field.FieldIcon = icon;
-        field.IsPassword = isPassword;
-        field.Location = location;
-        field.Size = new Size(350, 78);
-    }
-
-    private static void ConfigureSocialButton(
-        AuthButton button,
-        string text,
-        string glyph,
-        Color glyphColor,
-        int y)
-    {
-        button.Primary = false;
-        button.Text = text;
-        button.LeadingGlyph = glyph;
-        button.GlyphColor = glyphColor;
-        button.Location = new Point(43, y);
-        button.Size = new Size(350, 42);
-    }
-
-    private static Label CreateCenteredLabel(
-        string text,
-        Point location,
-        Size size,
-        float fontSize,
-        FontStyle fontStyle,
-        Color color)
-    {
-        var label = CreateLabel(text, location, size, fontSize, fontStyle, color);
-        label.TextAlign = ContentAlignment.MiddleCenter;
-        return label;
-    }
-
-    private static Label CreateLabel(
-        string text,
-        Point location,
-        Size size,
-        float fontSize,
-        FontStyle fontStyle,
-        Color color) =>
-        new()
+        foreach (var (name, messages) in exception.Errors)
         {
-            Text = text,
-            Location = location,
-            Size = size,
-            Font = new Font(AuthTheme.FontFamily, fontSize, fontStyle),
-            ForeColor = color,
-            BackColor = Color.Transparent
-        };
+            if (name.Equals(field, StringComparison.OrdinalIgnoreCase))
+                return messages.FirstOrDefault(message => !string.IsNullOrWhiteSpace(message));
+        }
 
-    private static void ConfigureLink(LinkLabel link, string text, Point location, Size size)
-    {
-        link.Text = text;
-        link.Location = location;
-        link.Size = size;
-        link.Font = new Font(AuthTheme.FontFamily, 8.8f, FontStyle.Bold);
-        link.LinkColor = AuthTheme.Primary;
-        link.ActiveLinkColor = AuthTheme.PrimaryDark;
-        link.VisitedLinkColor = AuthTheme.Primary;
-        link.BackColor = Color.Transparent;
-        link.Cursor = Cursors.Hand;
-    }
-
-    private static void ConfigureStatusLabel(Label label, Point location, Size size)
-    {
-        label.Location = location;
-        label.Size = size;
-        label.Font = new Font(AuthTheme.FontFamily, 8.3f);
-        label.ForeColor = AuthTheme.TextSecondary;
-        label.TextAlign = ContentAlignment.MiddleCenter;
-        label.AutoEllipsis = true;
-        label.BackColor = Color.Transparent;
+        return null;
     }
 }

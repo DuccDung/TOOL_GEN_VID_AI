@@ -158,64 +158,22 @@ internal sealed class BrandHeader : Control
     {
         var graphics = eventArgs.Graphics;
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
 
-        const int contentWidth = 232;
+        const int contentWidth = 250;
         var startX = (Width - contentWidth) / 2;
-        var iconRectangle = new Rectangle(startX, 6, 43, 34);
-        using (var iconPath = AuthTheme.RoundedRectangle(iconRectangle, 7))
-        using (var iconBrush = new LinearGradientBrush(
-                   iconRectangle,
-                   Color.FromArgb(104, 159, 250),
-                   Color.FromArgb(52, 112, 232),
-                   LinearGradientMode.ForwardDiagonal))
-        {
-            graphics.FillPath(iconBrush, iconPath);
-        }
-
-        using (var lensBrush = new SolidBrush(Color.FromArgb(66, 126, 237)))
-        {
-            var lens = new[]
-            {
-                new Point(iconRectangle.Right - 2, iconRectangle.Top + 10),
-                new Point(iconRectangle.Right + 12, iconRectangle.Top + 5),
-                new Point(iconRectangle.Right + 12, iconRectangle.Bottom - 5),
-                new Point(iconRectangle.Right - 2, iconRectangle.Bottom - 10)
-            };
-            graphics.FillPolygon(lensBrush, lens);
-        }
-
-        using (var playBrush = new SolidBrush(Color.White))
-        {
-            var play = new[]
-            {
-                new Point(iconRectangle.Left + 16, iconRectangle.Top + 9),
-                new Point(iconRectangle.Left + 16, iconRectangle.Bottom - 9),
-                new Point(iconRectangle.Left + 29, iconRectangle.Top + 17)
-            };
-            graphics.FillPolygon(playBrush, play);
-        }
+        var logoRectangle = new Rectangle(startX, 2, 64, 52);
+        var logoSource = new Rectangle(350, 225, 680, 565);
+        graphics.DrawImage(BrandIdentity.Logo, logoRectangle, logoSource, GraphicsUnit.Pixel);
 
         using var brandFont = new Font(AuthTheme.FontFamily, 17f, FontStyle.Bold, GraphicsUnit.Point);
-        var textX = iconRectangle.Right + 21;
+        var textX = logoRectangle.Right + 13;
         TextRenderer.DrawText(
             graphics,
-            "Video",
+            BrandIdentity.DisplayName,
             brandFont,
-            new Point(textX, 8),
+            new Point(textX, 11),
             AuthTheme.TextPrimary,
-            TextFormatFlags.NoPadding);
-        var videoWidth = TextRenderer.MeasureText(
-            graphics,
-            "Video",
-            brandFont,
-            Size.Empty,
-            TextFormatFlags.NoPadding).Width;
-        TextRenderer.DrawText(
-            graphics,
-            "Maker",
-            brandFont,
-            new Point(textX + videoWidth, 8),
-            AuthTheme.Primary,
             TextFormatFlags.NoPadding);
 
         using var sloganFont = new Font(AuthTheme.FontFamily, 9f, FontStyle.Regular, GraphicsUnit.Point);

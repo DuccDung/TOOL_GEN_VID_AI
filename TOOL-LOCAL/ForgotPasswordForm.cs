@@ -28,7 +28,8 @@ public sealed class ForgotPasswordForm : Form
     private void InitializeUi(string? initialEmail)
     {
         SuspendLayout();
-        Text = "VideoMaker - Quên mật khẩu";
+        Icon = BrandIdentity.WindowIcon;
+        Text = "taphoatool - Quên mật khẩu";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;

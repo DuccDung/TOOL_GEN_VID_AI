@@ -69,7 +69,7 @@ export function VietsubTranslationResourceModal({
         >
           <TriangleAlert size={17} />
           <span>
-            Bạn có thể đóng bớt ứng dụng để giảm rủi ro. Nếu vẫn tiếp tục, VideoMaker sẽ thử nạp
+            Bạn có thể đóng bớt ứng dụng để giảm rủi ro. Nếu vẫn tiếp tục, taphoatool sẽ thử nạp
             worker; tác vụ chỉ dừng khi model hoặc worker thực sự không thể chạy.
           </span>
         </div>

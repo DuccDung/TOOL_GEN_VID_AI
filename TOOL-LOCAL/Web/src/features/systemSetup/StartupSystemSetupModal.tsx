@@ -158,10 +158,10 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
         <header className="startup-setup-header">
           <span className="startup-setup-icon" aria-hidden="true"><Package size={25} /></span>
           <div>
-            <span className="startup-setup-eyebrow">CHUẨN BỊ VIDEOMAKER</span>
+            <span className="startup-setup-eyebrow">CHUẨN BỊ TAPHOATOOL</span>
             <h1 id="startup-setup-title">{onlyResourceWarning
               ? 'Qwen cần kiểm tra lại bộ nhớ'
-              : repairRequired ? 'VideoMaker cần sửa thành phần' : 'VideoMaker cần bổ sung thành phần'}</h1>
+              : repairRequired ? 'taphoatool cần sửa thành phần' : 'taphoatool cần bổ sung thành phần'}</h1>
             <p id="startup-setup-summary">
               {!snapshot
                 ? 'Đang tải trạng thái các thành phần trên máy này…'
@@ -205,7 +205,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
 
         <div className="startup-setup-progress" role="status" aria-live="polite">
           <div><span>{progressMessage}</span>{progressPercent != null && <strong>{Math.round(progressPercent)}%</strong>}</div>
-          {active && <progress aria-label="Tiến độ chuẩn bị VideoMaker" max={100} value={progressPercent ?? undefined} />}
+          {active && <progress aria-label="Tiến độ chuẩn bị taphoatool" max={100} value={progressPercent ?? undefined} />}
         </div>
 
         {requiresResourceConfirmation && !active && (

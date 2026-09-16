@@ -147,7 +147,7 @@ internal sealed partial class DashboardBridge
         catch (IOException)
         { throw new ArgumentException("Không thể đọc hoặc lưu ảnh/bản nháp. Hãy kiểm tra dung lượng ổ đĩa, quyền truy cập và thử lại; lựa chọn hiện tại vẫn được giữ."); }
         catch (Microsoft.Data.Sqlite.SqliteException)
-        { throw new ArgumentException("Không thể lưu hoặc mở thư viện trên máy. Hãy kiểm tra dung lượng ổ đĩa và đóng cửa sổ VideoMaker khác đang dùng cùng thư viện rồi thử lại."); }
+        { throw new ArgumentException("Không thể lưu hoặc mở thư viện trên máy. Hãy kiểm tra dung lượng ổ đĩa và đóng cửa sổ taphoatool khác đang dùng cùng thư viện rồi thử lại."); }
         finally { _shortLibraryLock.Release(); }
     }
 }

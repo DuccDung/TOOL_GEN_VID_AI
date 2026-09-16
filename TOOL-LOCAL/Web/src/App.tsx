@@ -920,7 +920,7 @@ function App() {
         setBusy(false);
         if (message.type === 'desktop.settings.updated') {
           notify(nextSettings.restartRequired
-            ? 'Đã lưu cài đặt. Hãy đóng và mở lại VideoMaker để áp dụng.'
+            ? 'Đã lưu cài đặt. Hãy đóng và mở lại taphoatool để áp dụng.'
             : 'Cài đặt đồng bộ lời nói đã được cập nhật.');
         }
         return;
@@ -977,7 +977,7 @@ function App() {
         setConfirmation({
           eyebrow: 'BỘ XỬ LÝ VIDEO',
           title: 'Cài lại FFmpeg và FFprobe?',
-          description: `VideoMaker sẽ dùng package ${release.version} (build ${release.buildNumber}, ${formatUpdateSize(release.sizeBytes)}) từ máy chủ để sửa chữa trọn bộ công cụ media.`,
+          description: `taphoatool sẽ dùng package ${release.version} (build ${release.buildNumber}, ${formatUpdateSize(release.sizeBytes)}) từ máy chủ để sửa chữa trọn bộ công cụ media.`,
           note: 'Package sẽ được kiểm tra kích thước, SHA-256, manifest và license. Ứng dụng sẽ khởi động lại; thao tác không gọi provider AI và không phát sinh chi phí.',
           confirmLabel: 'Cài bộ xử lý video',
           onConfirm: () => {
@@ -1320,7 +1320,7 @@ function App() {
         eyebrow: 'XÁC NHẬN TẢI CLIP',
         title: `Tải ${selectedScenes.length} clip đã tạo về máy?`,
         description: `Video đã hoàn thành trên server và đang chờ lưu về máy.\n${providerLabel} · ${currentDashboard.providerStatus.videoModel ?? 'Model theo policy'} · ${currentDashboard.providerStatus.videoResolution ?? '720p'} · ${videoAudioLabel}\nTổng thời lượng: khoảng ${totalSeconds} giây\n\n${spokenPreview}`,
-        note: 'VideoMaker sẽ tiếp tục từ provider request hiện có, chỉ tải và kiểm tra clip bằng FFmpeg; không gửi yêu cầu tạo video mới và không phát sinh chi phí provider mới. Sau khi tải xong, bạn cần nghe và duyệt hình cùng Native Audio.',
+        note: 'taphoatool sẽ tiếp tục từ provider request hiện có, chỉ tải và kiểm tra clip bằng FFmpeg; không gửi yêu cầu tạo video mới và không phát sinh chi phí provider mới. Sau khi tải xong, bạn cần nghe và duyệt hình cùng Native Audio.',
         confirmLabel: `Tải ${selectedScenes.length} clip`,
         onConfirm: () => {
           setBusy(true);
@@ -2321,7 +2321,7 @@ function LicenseGateOverlay({
         aria-describedby="license-gate-description"
       >
         <header className="license-gate-header">
-          <div className="license-gate-brand"><Crown size={21} /><span>VIDEOMAKER</span></div>
+          <div className="license-gate-brand"><span className="license-gate-brand-mark"><img src="/brand/taphoatool-logo.png" alt="" /></span><span>taphoatool</span></div>
           {canPurchase && <button type="button" className="license-gate-logout" disabled={logoutBusy} onClick={onLogout}>
             {logoutBusy ? <LoaderCircle className="spin" size={16} /> : <LogOut size={16} />}{logoutBusy ? 'Đang đăng xuất…' : 'Đăng xuất'}
           </button>}
@@ -2337,7 +2337,7 @@ function LicenseGateOverlay({
                   {licenseAccessTitle(license)}
                 </h1>
                 <p id="license-gate-description">
-                  {license.accessMessage || 'Bạn cần một gói đang hoạt động để sử dụng các tính năng VideoMaker.'}
+                  {license.accessMessage || 'Bạn cần một gói đang hoạt động để sử dụng các tính năng taphoatool.'}
                 </p>
               </div>
             </div>
@@ -2362,7 +2362,7 @@ function LicenseGateOverlay({
                           {recommended && <span className="license-plan-badge">Phổ biến</span>}
                         </div>
                         <h2>{offer.name}</h2>
-                        <p>{offer.description || `Quyền sử dụng VideoMaker trong ${offer.durationDays} ngày.`}</p>
+                        <p>{offer.description || `Quyền sử dụng taphoatool trong ${offer.durationDays} ngày.`}</p>
                         <div className="license-plan-price"><strong>{formatVnd(offer.priceVnd)}</strong><span>cho {offer.durationDays} ngày</span></div>
                         <div className={`license-seat-availability ${offer.organizationSeatAvailable ? 'available' : 'unavailable'}`}>
                           {offer.organizationSeatAvailable
@@ -2684,7 +2684,7 @@ function UpdateModal({
         <div className="update-icon"><RefreshCw size={25} /></div>
         <div className="update-copy">
           <span className="update-eyebrow">{notice.isMandatory ? 'CẬP NHẬT BẮT BUỘC' : 'PHIÊN BẢN MỚI'}</span>
-          <h2 id="update-title">VideoMaker {release.version}</h2>
+          <h2 id="update-title">taphoatool {release.version}</h2>
           <p>Build {release.buildNumber} · {release.channel} · {formatUpdateSize(release.sizeBytes)}</p>
         </div>
         {release.releaseNotes && <div className="update-notes">{release.releaseNotes}</div>}
@@ -2724,7 +2724,7 @@ function MediaToolInstallModal({ progress }: { progress: DesktopUpdateProgress }
         <div className="update-copy">
           <span className="update-eyebrow">CÀI BỘ XỬ LÝ VIDEO</span>
           <h2 id="media-install-title">Đang sửa chữa FFmpeg</h2>
-          <p>Đừng đóng VideoMaker trong lúc package đang được tải và kiểm tra.</p>
+          <p>Đừng đóng taphoatool trong lúc package đang được tải và kiểm tra.</p>
         </div>
         <div className="update-progress">
           <div><span>{progress.message}</span><strong>{progress.percent}%</strong></div>
@@ -2732,7 +2732,7 @@ function MediaToolInstallModal({ progress }: { progress: DesktopUpdateProgress }
         </div>
         <div className="media-install-note">
           <ShieldCheck size={17} />
-          <span>VideoMaker chỉ sử dụng package đã có manifest, license và SHA-256 hợp lệ.</span>
+          <span>taphoatool chỉ sử dụng package đã có manifest, license và SHA-256 hợp lệ.</span>
         </div>
       </section>
     </div>
@@ -2781,8 +2781,8 @@ function Sidebar({
       <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}
         inert={interactionLocked ? true : undefined} aria-hidden={interactionLocked ? true : undefined}>
         <div className="brand">
-          <div className="brand-mark"><Clapperboard size={25} /></div>
-          <div className="brand-copy"><strong>VideoMaker</strong><span>Tự động tạo video</span></div>
+          <div className="brand-mark"><img src="/brand/taphoatool-logo.png" alt="" /></div>
+          <div className="brand-copy"><strong>taphoatool</strong><span>Tự động tạo video</span></div>
           <button
             className="sidebar-toggle"
             type="button"
@@ -6408,7 +6408,7 @@ function DesktopSettingsPage({
           {configured ? <Volume2 size={19} /> : <VolumeX size={19} />}
           <span>
             <strong>{configured ? 'Bật đồng bộ lời nói' : 'Đồng bộ lời nói đang tắt'}</strong>
-            <small>Lưu riêng cho ứng dụng VideoMaker trên máy hiện tại.</small>
+            <small>Lưu riêng cho ứng dụng taphoatool trên máy hiện tại.</small>
           </span>
           <i aria-hidden="true"><b /></i>
         </button>
@@ -6418,7 +6418,7 @@ function DesktopSettingsPage({
             <RefreshCw size={18} />
             <div>
               <strong>Đã lưu thay đổi</strong>
-              <p>Hãy đóng hoàn toàn rồi mở lại VideoMaker để cấu hình mới có hiệu lực.</p>
+              <p>Hãy đóng hoàn toàn rồi mở lại taphoatool để cấu hình mới có hiệu lực.</p>
             </div>
           </div>
         )}
@@ -6456,7 +6456,7 @@ function ApiKeysPage({
         <span><ShieldCheck size={22} /></span>
         <div>
           <strong>API AI được quản lý tập trung</strong>
-          <p>Khóa OpenAI và provider video chỉ lưu trên VideoMaker Server. Máy người dùng không nhận khóa và mọi yêu cầu AI đều đi qua gateway của tổ chức.</p>
+          <p>Khóa OpenAI và provider video chỉ lưu trên máy chủ. Máy người dùng không nhận khóa và mọi yêu cầu AI đều đi qua gateway của tổ chức.</p>
         </div>
       </section>
       <div className="api-layout">

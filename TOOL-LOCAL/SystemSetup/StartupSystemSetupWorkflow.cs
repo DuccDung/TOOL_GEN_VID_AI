@@ -82,7 +82,7 @@ internal sealed class StartupSystemSetupWorkflow : IDisposable
             if (_repairApplication is null)
                 throw new SetupException(
                     "system_setup_repair_unavailable",
-                    "Không có package cùng phiên bản để sửa OCR/FFmpeg. Hãy cài lại bản VideoMaker đầy đủ.");
+                    "Không có package cùng phiên bản để sửa OCR/FFmpeg. Hãy cài lại bản taphoatool đầy đủ.");
 
             var progress = new Progress<DesktopUpdateProgress>(update =>
             {

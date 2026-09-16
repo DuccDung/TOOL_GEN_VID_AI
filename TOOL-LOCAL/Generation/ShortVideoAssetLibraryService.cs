@@ -53,7 +53,7 @@ internal sealed class ShortVideoAssetLibraryService
             await db.OpenAsync(ct);
             using (var version = Command(db, "PRAGMA user_version"))
                 if (Convert.ToInt32(await version.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture) > 1)
-                    throw new ArgumentException("Thư viện được tạo bởi bản VideoMaker mới hơn. Hãy cập nhật ứng dụng trước khi mở.");
+                    throw new ArgumentException("Thư viện được tạo bởi bản taphoatool mới hơn. Hãy cập nhật ứng dụng trước khi mở.");
             using var schema = Command(db, """
                 PRAGMA foreign_keys=ON;
                 CREATE TABLE IF NOT EXISTS Assets(Id TEXT PRIMARY KEY,Kind TEXT NOT NULL,Name TEXT NOT NULL,

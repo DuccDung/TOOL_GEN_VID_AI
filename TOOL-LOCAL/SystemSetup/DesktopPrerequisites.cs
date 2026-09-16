@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
+using TOOL_LOCAL.Authentication;
 
 namespace TOOL_LOCAL.SystemSetup;
 
@@ -11,12 +12,12 @@ internal static class DesktopPrerequisites
     {
         if (!OperatingSystem.IsWindows() || RuntimeInformation.OSArchitecture != Architecture.X64 || !Environment.Is64BitProcess)
         {
-            MessageBox.Show("Bản VideoMaker này yêu cầu Windows x64 để chạy OCR, Qwen và Piper.",
+            MessageBox.Show("Bản taphoatool này yêu cầu Windows x64 để chạy OCR, Qwen và Piper.",
                 "Hệ thống chưa phù hợp", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
         }
         if (HasWebView()) return true;
-        using var form = new Form { Text = "Chuẩn bị giao diện VideoMaker", StartPosition = FormStartPosition.CenterScreen,
+        using var form = new Form { Icon = BrandIdentity.WindowIcon, Text = "Chuẩn bị giao diện taphoatool", StartPosition = FormStartPosition.CenterScreen,
             ClientSize = new Size(580, 210), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
         var text = new Label { Left = 24, Top = 22, Width = 530, Height = 100,
             Text = "Máy này chưa có Microsoft Edge WebView2 Runtime.\n\nMở trang Microsoft, cài Evergreen Runtime x64 rồi bấm Kiểm tra lại. Bước này không cần mở dự án." };

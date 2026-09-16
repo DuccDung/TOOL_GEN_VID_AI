@@ -42,7 +42,7 @@ internal sealed class DesktopPackageUpdateService(HttpClient httpClient)
             var installedUpdater = Path.Combine(installedUpdaterDirectory, UpdaterExecutableName);
             if (!File.Exists(installedUpdater))
             {
-                throw new FileNotFoundException("Không tìm thấy VideoMaker Updater trong bản cài đặt.", installedUpdater);
+                throw new FileNotFoundException("Không tìm thấy trình cập nhật taphoatool trong bản cài đặt.", installedUpdater);
             }
 
             var stagedUpdaterDirectory = Path.Combine(updateDirectory, "updater-runtime");
@@ -53,7 +53,7 @@ internal sealed class DesktopPackageUpdateService(HttpClient httpClient)
                 "ToolGenPostVideo",
                 "UpdateLogs",
                 $"update-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
-            progress?.Report(new DesktopUpdateProgress("ready", 100, "Đã tải xong. VideoMaker sẽ khởi động lại..."));
+            progress?.Report(new DesktopUpdateProgress("ready", 100, "Đã tải xong. taphoatool sẽ khởi động lại..."));
             var startInfo = new ProcessStartInfo
             {
                 FileName = stagedUpdater,
@@ -70,7 +70,7 @@ internal sealed class DesktopPackageUpdateService(HttpClient httpClient)
             startInfo.ArgumentList.Add(LauncherExecutableName);
             startInfo.ArgumentList.Add("--log");
             startInfo.ArgumentList.Add(logPath);
-            _ = Process.Start(startInfo) ?? throw new InvalidOperationException("Không thể khởi động VideoMaker Updater.");
+            _ = Process.Start(startInfo) ?? throw new InvalidOperationException("Không thể khởi động trình cập nhật taphoatool.");
         }
         catch
         {

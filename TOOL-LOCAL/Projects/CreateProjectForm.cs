@@ -1,3 +1,5 @@
+using TOOL_LOCAL.Authentication;
+
 namespace TOOL_LOCAL.Projects;
 
 public sealed class CreateProjectForm : Form
@@ -13,6 +15,7 @@ public sealed class CreateProjectForm : Form
 
     public CreateProjectForm()
     {
+        Icon = BrandIdentity.WindowIcon;
         Text = "Tạo video project";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;

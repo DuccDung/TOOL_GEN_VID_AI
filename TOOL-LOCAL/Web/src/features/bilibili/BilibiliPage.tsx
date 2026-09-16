@@ -45,7 +45,7 @@ export function BilibiliPage({ module }: { module: BilibiliModule }) {
       <span className="bili-local-badge">Lưu trên máy</span>
     </div>
 
-    {!module.hosted && <div className="bili-notice" role="status">Mở trong ứng dụng VideoMaker để quét và tải video.</div>}
+    {!module.hosted && <div className="bili-notice" role="status">Mở trong ứng dụng taphoatool để quét và tải video.</div>}
     {error && <div className="bili-notice bili-error" role="alert"><AlertCircle size={18} /><span>{error}</span>
       <button type="button" onClick={module.dismissError} aria-label="Đóng thông báo"><X size={16} /></button></div>}
 

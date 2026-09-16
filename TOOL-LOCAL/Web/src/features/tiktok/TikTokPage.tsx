@@ -74,8 +74,8 @@ export function TikTokPage({ module }: { module: TikTokModule }) {
           <div className="tiktok-logo">♪</div>
           <h2>{state.feature.isCredentialVerification ? 'Xác minh ứng dụng TikTok' : 'Kết nối tài khoản TikTok'}</h2>
           <p>{state.feature.isCredentialVerification
-            ? 'Tài khoản VideoMaker này được phép xác minh. Bấm Kết nối TikTok và cấp quyền trong trình duyệt, sau đó quay lại Admin xem kết quả. Cài đặt Admin sẽ mở sau khi xác minh thành công.'
-            : 'VideoMaker sẽ mở trang ủy quyền chính thức trong trình duyệt. Mật khẩu TikTok không đi qua ứng dụng.'}</p>
+            ? 'Tài khoản taphoatool này được phép xác minh. Bấm Kết nối TikTok và cấp quyền trong trình duyệt, sau đó quay lại Admin xem kết quả. Cài đặt Admin sẽ mở sau khi xác minh thành công.'
+            : 'taphoatool sẽ mở trang ủy quyền chính thức trong trình duyệt. Mật khẩu TikTok không đi qua ứng dụng.'}</p>
           {state.error && <ErrorBanner message={state.error} onClose={module.clearError} />}
           <button className="start-button" disabled={state.busy} onClick={() => module.connect()}>
             {state.busy ? <LoaderCircle className="spin" size={18} /> : <Link2 size={18} />}

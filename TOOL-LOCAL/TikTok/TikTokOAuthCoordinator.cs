@@ -165,7 +165,7 @@ internal sealed class TikTokOAuthCoordinator(ITikTokGatewayClient gatewayClient)
     private static async Task WriteBrowserResponseAsync(Stream stream, bool success, CancellationToken cancellationToken)
     {
         var title = success ? "Đã kết nối TikTok" : "Không thể kết nối TikTok";
-        var detail = success ? "Bạn có thể đóng cửa sổ này và quay lại VideoMaker." : "Hãy quay lại VideoMaker và thử lại.";
+        var detail = success ? "Bạn có thể đóng cửa sổ này và quay lại taphoatool." : "Hãy quay lại taphoatool và thử lại.";
         var body = $"<!doctype html><html lang=\"vi\"><meta charset=\"utf-8\"><title>{title}</title>" +
                    $"<body style=\"font-family:Segoe UI,sans-serif;padding:40px\"><h1>{title}</h1><p>{detail}</p></body></html>";
         var bytes = Encoding.UTF8.GetBytes(body);

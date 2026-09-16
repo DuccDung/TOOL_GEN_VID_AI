@@ -26,7 +26,8 @@ public sealed class RegisterForm : Form
     private void InitializeUi()
     {
         SuspendLayout();
-        Text = "VideoMaker - Đăng ký";
+        Icon = BrandIdentity.WindowIcon;
+        Text = "taphoatool - Đăng ký";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;

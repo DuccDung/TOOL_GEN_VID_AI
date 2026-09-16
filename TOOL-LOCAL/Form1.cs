@@ -93,6 +93,7 @@ public partial class Form1 : Form
     public Form1()
     {
         InitializeComponent();
+        Icon = BrandIdentity.WindowIcon;
     }
 
     internal Form1(
@@ -188,7 +189,7 @@ public partial class Form1 : Form
     private void ConfigureWindow()
     {
         SuspendLayout();
-        Text = "VideoMaker";
+        Text = "taphoatool";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1024, 700);
         ClientSize = new Size(1440, 900);
@@ -211,7 +212,7 @@ public partial class Form1 : Form
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
-            Text = "Đang khởi tạo giao diện VideoMaker...",
+            Text = "Đang khởi tạo giao diện taphoatool...",
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 11f),
             ForeColor = Color.FromArgb(91, 105, 128)

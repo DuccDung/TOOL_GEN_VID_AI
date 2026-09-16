@@ -60,7 +60,7 @@ internal sealed class DesktopUpdateApiClient(
         {
             throw new AccountClientException(
                 "media_tool_repair_package_not_found",
-                "Không tìm thấy package VideoMaker cùng phiên bản để sửa chữa. Hãy cài lại bản VideoMaker đầy đủ hoặc liên hệ quản trị viên.",
+                "Không tìm thấy package taphoatool cùng phiên bản để sửa chữa. Hãy cài lại bản taphoatool đầy đủ hoặc liên hệ quản trị viên.",
                 (int)HttpStatusCode.NotFound);
         }
 

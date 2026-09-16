@@ -10,7 +10,8 @@
     <Version>1.0.0</Version>
     <DesktopBuildNumber>1</DesktopBuildNumber>
     <AssemblyName>TOOL-LOCAL</AssemblyName>
-    <Product>VideoMaker</Product>
+    <Product>taphoatool</Product>
+    <ApplicationIcon>Brand\taphoatool.ico</ApplicationIcon>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
   </PropertyGroup>
@@ -49,6 +50,11 @@
     <EmbeddedResource Include="..\third_party\bilibili\LICENSE" LogicalName="Bilibili.LICENSE" />
     <EmbeddedResource Include="..\third_party\bilibili\THIRD_PARTY_LICENSES.txt" LogicalName="Bilibili.THIRD_PARTY_LICENSES.txt" />
     <EmbeddedResource Include="..\third_party\bilibili\PROVENANCE.md" LogicalName="Bilibili.PROVENANCE.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Web\public\brand\taphoatool-logo.png" LogicalName="TapHoaTool.Logo" />
+    <EmbeddedResource Include="Brand\taphoatool.ico" LogicalName="TapHoaTool.WindowIcon" />
   </ItemGroup>
 
   <ItemGroup>

@@ -92,7 +92,7 @@ describe('App startup Setup gate', () => {
     const get = bridge.posts.filter(post => post.type === 'system.setup.get').at(-1)!;
     await emit({ type: 'system.setup.status', requestId: get.requestId, payload: setupSnapshot(false) });
 
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('VideoMaker cần bổ sung thành phần');
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('taphoatool cần bổ sung thành phần');
     expect(container.querySelector('.app-main')?.hasAttribute('inert')).toBe(true);
     expect(container.querySelector('.sidebar')?.hasAttribute('inert')).toBe(true);
     expect(bridge.vietsubFeatureEnabled.at(-1)).toBe(false);
