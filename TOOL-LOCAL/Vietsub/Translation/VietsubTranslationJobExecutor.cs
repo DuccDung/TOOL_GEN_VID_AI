@@ -71,7 +71,7 @@ internal sealed class VietsubTranslationJobExecutor(
             new VietsubJobProgressUpdate(
                 "TRANSLATION_PREPARE",
                 15,
-                1,
+                Math.Max(1, context.Job.ProgressPercent),
                 "Đang kiểm tra track, fingerprint và checkpoint dịch local."),
             cancellationToken);
 
@@ -178,7 +178,7 @@ internal sealed class VietsubTranslationJobExecutor(
             totalItems = seeds.Length;
         }
 
-        var state = RestoreCheckpoint(context.Job.CheckpointJson, totalItems);
+        var state = RestoreItemCounts(RestoreCheckpoint(context.Job.CheckpointJson, totalItems), existingItems);
         foreach (var (item, status) in resumeGuards)
         {
             state = state with { StaleItems = state.StaleItems + 1 };
@@ -193,12 +193,15 @@ internal sealed class VietsubTranslationJobExecutor(
                 cancellationToken: cancellationToken);
         }
 
+        var restoredProcessed = state.CompletedItems + state.ReviewItems + state.InvalidItems + state.StaleItems;
+        var restoredProgress = totalItems == 0 ? 90 : Math.Clamp(5 + 85d * restoredProcessed / totalItems, 5, 90);
         await context.ReportProgressAsync(
             new VietsubJobProgressUpdate(
                 "TRANSLATION_PREPARE",
                 100,
-                5,
-                $"Đã lập {scenes.Count} scene cho {totalItems} cue."),
+                Math.Max(context.Job.ProgressPercent, restoredProgress),
+                $"Đã lưu {state.CompletedItems + state.ReviewItems}/{totalItems} câu dịch. Đang chuẩn bị phần còn lại.",
+                JsonSerializer.Serialize(state, JsonOptions)),
             cancellationToken);
 
         foreach (var scene in scenes)
@@ -490,7 +493,8 @@ internal sealed class VietsubTranslationJobExecutor(
                 }
             }
 
-            state = state with { LastCompletedScene = scene.SceneNumber };
+            state = RestoreItemCounts(state, await translationStore.LoadJobItemsAsync(
+                project.ProjectId, context.Job.Id, cancellationToken)) with { LastCompletedScene = scene.SceneNumber };
             await context.SaveCheckpointAsync(
                 JsonSerializer.Serialize(state, JsonOptions),
                 cancellationToken);
@@ -500,8 +504,8 @@ internal sealed class VietsubTranslationJobExecutor(
                 new VietsubJobProgressUpdate(
                     "TRANSLATION_EXECUTE",
                     totalItems == 0 ? 100 : 100d * processed / totalItems,
-                    Math.Clamp(progress, 5, 90),
-                    $"Đã xử lý {processed}/{totalItems} cue dịch local.",
+                    Math.Max(context.Job.ProgressPercent, Math.Clamp(progress, 5, 90)),
+                    $"Đã lưu {state.CompletedItems + state.ReviewItems}/{totalItems} câu dịch; đã xử lý {processed}/{totalItems} câu.",
                     JsonSerializer.Serialize(state, JsonOptions)),
                 cancellationToken);
         }
@@ -510,7 +514,7 @@ internal sealed class VietsubTranslationJobExecutor(
             new VietsubJobProgressUpdate(
                 "TRANSLATION_WRITE_ARTIFACT",
                 20,
-                92,
+                Math.Max(92, context.Job.ProgressPercent),
                 "Đang ghi SRT tiếng Việt."),
             cancellationToken);
         var finalTrack = (await subtitleStore.LoadTracksAsync(project.ProjectId, cancellationToken))
@@ -615,6 +619,16 @@ internal sealed class VietsubTranslationJobExecutor(
                 "Engine trả result không khớp engine/version đã snapshot cho job.");
         }
     }
+
+    private static VietsubTranslationCheckpoint RestoreItemCounts(
+        VietsubTranslationCheckpoint state, IReadOnlyList<VietsubTranslationJobItem> items) => state with
+    {
+        CompletedItems = items.Count(x => x.Status == VietsubTranslationJobItemStatuses.Completed),
+        ReviewItems = items.Count(x => x.Status == VietsubTranslationJobItemStatuses.Review),
+        InvalidItems = items.Count(x => x.Status == VietsubTranslationJobItemStatuses.Invalid),
+        StaleItems = items.Count(x => x.Status is VietsubTranslationJobItemStatuses.Stale or VietsubTranslationJobItemStatuses.SkippedLocked),
+        FailedItems = items.Count(x => x.Status == VietsubTranslationJobItemStatuses.Failed)
+    };
 
     private static VietsubTranslationCheckpoint RestoreCheckpoint(string? json, int totalItems)
     {

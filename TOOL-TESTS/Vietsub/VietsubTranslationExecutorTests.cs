@@ -587,7 +587,7 @@ public sealed class VietsubTranslationExecutorTests : IDisposable
             queued.Id);
 
         Assert.Equal(VietsubJobStatusNames.Completed, completed.Status);
-        Assert.Equal(2, completed.AttemptCount);
+        Assert.Equal(1, completed.AttemptCount);
         Assert.Equal(2, provider.CallCount);
         var track = Assert.Single(await fixture.Subtitles.LoadTracksAsync(fixture.Project.ProjectId));
         Assert.Equal(2, track.Revision);
@@ -597,6 +597,44 @@ public sealed class VietsubTranslationExecutorTests : IDisposable
             queued.Id));
         Assert.Equal(VietsubTranslationJobItemStatuses.Completed, item.Status);
         Assert.Equal(1, item.AttemptCount);
+    }
+
+    [Fact]
+    public async Task Executor_ResumeKeepsSavedCuesAndProgressAfterPartialTranslation()
+    {
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeTranslationProvider(async (request, call, ct) =>
+        {
+            if (call == 2)
+            {
+                waiting.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            return FakeTranslationProvider.CreateResult(request);
+        });
+        var first = Cue(0, "Keep saved", "alice");
+        var second = Cue(20_000, "Continue here", "bob");
+        await using var fixture = await CreateFixtureAsync(provider, [first, second]);
+        await using var session = fixture.CreateSession();
+        await session.StartAsync();
+        await fixture.Service.UpdateSettingsAsync(session, "owner", fixture.Project.OrganizationId, Settings(), default);
+        var job = await fixture.Service.StartAsync(session, "owner", fixture.Project.OrganizationId,
+            new("CONTINUE", fixture.Track.TrackId, fixture.Track.Revision), default);
+        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var paused = await fixture.Manager.PauseAsync(fixture.Project.ProjectId, job.Id);
+        Assert.True(paused.ProgressPercent > 40);
+        var updates = new System.Collections.Concurrent.ConcurrentQueue<double>();
+        fixture.Manager.JobChanged += (_, e) => { if (e.Job.Id == job.Id) updates.Enqueue(e.Job.ProgressPercent); };
+        await fixture.Manager.ResumeAsync(fixture.Project.ProjectId, job.Id);
+        var done = await WaitForTerminalAsync(fixture.Manager, fixture.Project.ProjectId, job.Id);
+        Assert.Equal("COMPLETED", done.Status);
+        Assert.All(updates, value => Assert.True(value >= paused.ProgressPercent, $"Progress dropped to {value}"));
+        Assert.Equal(3, provider.CallCount);
+        Assert.Equal([first.CueId], provider.RequestedTargetCueIds.ElementAt(0));
+        Assert.All(provider.RequestedTargetCueIds.Skip(1), ids => Assert.Equal([second.CueId], ids));
+        var track = Assert.Single(await fixture.Subtitles.LoadTracksAsync(fixture.Project.ProjectId));
+        Assert.Equal(3, track.Revision);
+        Assert.All(track.Cues, cue => Assert.NotEmpty(cue.TranslatedText));
     }
 
     [Fact]

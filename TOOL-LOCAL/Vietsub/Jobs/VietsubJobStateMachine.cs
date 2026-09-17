@@ -56,12 +56,18 @@ internal static class VietsubJobStateMachine
             return;
         }
 
+        // A pause/restart continues the same attempt. Only an explicit retry after
+        // failure consumes another attempt, persisted before it is queued again.
+        if (job.Status == VietsubJobStatus.Failed && next == VietsubJobStatus.Pending)
+        {
+            job.AttemptCount++;
+        }
         job.Status = next;
         job.UpdatedAtUtc = nowUtc;
         if (next == VietsubJobStatus.Running)
         {
             job.StartedAtUtc ??= nowUtc;
-            job.AttemptCount++;
+            job.AttemptCount = Math.Max(1, job.AttemptCount);
             job.CompletedAtUtc = null;
             job.ErrorCode = null;
             job.ErrorMessage = null;

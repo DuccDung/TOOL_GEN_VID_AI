@@ -167,8 +167,49 @@ public sealed class VietsubJobTests : IDisposable
             queued.Id,
             VietsubJobStatusNames.Completed);
 
-        Assert.Equal(2, completed.AttemptCount);
+        Assert.Equal(1, completed.AttemptCount);
         Assert.Equal(2, executor.AttemptCount);
+    }
+
+    [Fact]
+    public async Task Manager_RepeatedPausesAndRestartDoNotConsumeRetryBudget()
+    {
+        var (_, store) = CreateStore();
+        var executor = new WaitingExecutor();
+        var project = Guid.NewGuid();
+        Guid id;
+        await using (var manager = new VietsubJobManager(store, new VietsubJobExecutorRegistry([executor])))
+        {
+            id = (await manager.EnqueueAsync(project, VietsubJobTypes.OcrLocal, ["OCR"], maxAttempts: 1)).Id;
+            for (var i = 0; i < 5; i++)
+            {
+                await executor.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+                var paused = await manager.PauseAsync(project, id);
+                Assert.Equal(1, paused.AttemptCount);
+                await manager.ResumeAsync(project, id);
+            }
+            await executor.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.Equal(VietsubJobStatus.Interrupted, (await store.GetAsync(project, id))!.Status);
+        await using var reopened = new VietsubJobManager(store, new VietsubJobExecutorRegistry([executor]));
+        await reopened.ResumeAsync(project, id);
+        await executor.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, (await reopened.GetAsync(project, id))!.AttemptCount);
+        await reopened.CancelAsync(project, id);
+    }
+
+    [Fact]
+    public async Task Manager_RealFailuresStillExhaustRetryBudget()
+    {
+        var (_, store) = CreateStore();
+        await using var manager = new VietsubJobManager(store, new VietsubJobExecutorRegistry([new FailingExecutor()]));
+        var project = Guid.NewGuid();
+        var id = (await manager.EnqueueAsync(project, VietsubJobTypes.OcrLocal, ["OCR"], maxAttempts: 2)).Id;
+        Assert.Equal(1, (await WaitForStatusAsync(manager, project, id, "FAILED")).AttemptCount);
+        await manager.RetryAsync(project, id);
+        Assert.Equal(2, (await WaitForStatusAsync(manager, project, id, "FAILED")).AttemptCount);
+        var error = await Assert.ThrowsAsync<VietsubJobException>(() => manager.RetryAsync(project, id));
+        Assert.Equal("vietsub_job_attempts_exhausted", error.Code);
     }
 
     [Fact]
@@ -266,6 +307,24 @@ public sealed class VietsubJobTests : IDisposable
         {
             Directory.Delete(_root, recursive: true);
         }
+    }
+
+    private sealed class WaitingExecutor : IVietsubJobExecutor
+    {
+        public string JobType => VietsubJobTypes.OcrLocal;
+        public System.Threading.Channels.Channel<bool> Started { get; } = System.Threading.Channels.Channel.CreateUnbounded<bool>();
+        public async Task ExecuteAsync(VietsubJobExecutionContext context, CancellationToken ct)
+        {
+            await Started.Writer.WriteAsync(true, ct);
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        }
+    }
+
+    private sealed class FailingExecutor : IVietsubJobExecutor
+    {
+        public string JobType => VietsubJobTypes.OcrLocal;
+        public Task ExecuteAsync(VietsubJobExecutionContext context, CancellationToken ct) =>
+            throw new VietsubJobExecutionException("TEST_FAILURE", "Expected failure", true);
     }
 
     private sealed class CompletingExecutor : IVietsubJobExecutor

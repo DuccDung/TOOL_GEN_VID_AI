@@ -549,12 +549,24 @@ internal sealed class VietsubTranslationStore(
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task<bool> TryCommitCueResultAsync(
+    public Task<bool> TryCommitCueResultAsync(
         Guid projectId,
         Guid jobId,
         VietsubTranslationCueCommit result,
         string checkpointJson,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        TryCommitCueResultCoreAsync(projectId, jobId, result, checkpointJson, false, cancellationToken);
+
+    public Task<bool> TryRecoverCloudCueResultAsync(Guid projectId, Guid jobId,
+        VietsubTranslationCueCommit result, string checkpointJson, CancellationToken cancellationToken = default)
+    {
+        if (result.TranslationSource != VietsubTranslationSources.CloudAuto)
+            throw new ArgumentException("Chỉ được khôi phục kết quả Cloud từ snapshot cũ.");
+        return TryCommitCueResultCoreAsync(projectId, jobId, result, checkpointJson, true, cancellationToken);
+    }
+
+    private async Task<bool> TryCommitCueResultCoreAsync(Guid projectId, Guid jobId,
+        VietsubTranslationCueCommit result, string checkpointJson, bool recoverCloud, CancellationToken cancellationToken)
     {
         if (result.TranslationSource is not (VietsubTranslationSources.LocalAuto or VietsubTranslationSources.CloudAuto))
             throw new ArgumentException("Nguồn bản dịch tự động không hợp lệ.");
@@ -597,7 +609,8 @@ internal sealed class VietsubTranslationStore(
                       SELECT 1 FROM local_jobs job
                       WHERE job.id = $jobId AND job.project_id = $projectId
                         AND ($translationSource <> 'CLOUD_AUTO' OR job.input_track_id = subtitle_cues.track_id)
-                        AND job.status IN ('RUNNING', 'PAUSING')
+                        AND (($recoverCloud = 0 AND job.status IN ('RUNNING', 'PAUSING'))
+                          OR ($recoverCloud = 1 AND job.type = 'TRANSLATE_CLOUD' AND job.status IN ('CANCELLED', 'FAILED')))
                   )
                   AND EXISTS (
                       SELECT 1 FROM translation_job_items item
@@ -622,6 +635,7 @@ internal sealed class VietsubTranslationStore(
             cue.Parameters.AddWithValue("$expectedSpeaker", result.ExpectedSpeaker);
             cue.Parameters.AddWithValue("$jobId", jobId.ToString("D"));
             cue.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+            cue.Parameters.AddWithValue("$recoverCloud", recoverCloud ? 1 : 0);
             if (await cue.ExecuteNonQueryAsync(cancellationToken) != 1)
             {
                 await transaction.RollbackAsync(cancellationToken);
@@ -653,7 +667,8 @@ internal sealed class VietsubTranslationStore(
                 UPDATE local_jobs
                 SET checkpoint_json = $checkpointJson, updated_at_utc = $updatedAtUtc
                 WHERE id = $jobId AND project_id = $projectId
-                  AND status IN ('RUNNING', 'PAUSING');
+                  AND (($recoverCloud = 0 AND status IN ('RUNNING', 'PAUSING'))
+                    OR ($recoverCloud = 1 AND type = 'TRANSLATE_CLOUD' AND status IN ('CANCELLED', 'FAILED')));
                 """;
             metadata.Parameters.AddWithValue("$updatedAtUtc", now.ToString("O"));
             metadata.Parameters.AddWithValue("$cueId", result.CueId.ToString("D"));
@@ -669,6 +684,7 @@ internal sealed class VietsubTranslationStore(
             metadata.Parameters.AddWithValue("$inputFingerprint", NormalizeFingerprint(result.InputFingerprint));
             metadata.Parameters.AddWithValue("$checkpointJson", checkpointJson);
             metadata.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+            metadata.Parameters.AddWithValue("$recoverCloud", recoverCloud ? 1 : 0);
             await metadata.ExecuteNonQueryAsync(cancellationToken);
         }
 

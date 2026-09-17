@@ -145,6 +145,27 @@ internal sealed class VietsubJobStore(
         return jobs;
     }
 
+    public async Task<IReadOnlyList<VietsubLocalJob>> ListCloudRecoveryJobsAsync(
+        Guid projectId, Guid trackId, CancellationToken cancellationToken = default)
+    {
+        ValidateIds(projectId, trackId);
+        await InitializeAsync(projectId, cancellationToken);
+        await using var connection = await OpenAsync(projectId, cancellationToken);
+        await using var command = connection.CreateCommand();
+        // Recovery must not depend on the UI's most recent 20 jobs.
+        command.CommandText = JobSelectSql + "\n" + """
+            WHERE project_id = $projectId AND input_track_id = $trackId
+              AND type = 'TRANSLATE_CLOUD' AND status IN ('CANCELLED', 'FAILED')
+            ORDER BY created_at_utc DESC;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        command.Parameters.AddWithValue("$trackId", trackId.ToString("D"));
+        var jobs = new List<VietsubLocalJob>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) jobs.Add(ReadJob(reader));
+        return jobs;
+    }
+
     public async Task<bool> HasActiveAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
         ValidateProjectId(projectId);

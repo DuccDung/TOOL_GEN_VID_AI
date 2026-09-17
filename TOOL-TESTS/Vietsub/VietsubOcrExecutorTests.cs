@@ -159,7 +159,7 @@ public sealed class VietsubOcrExecutorTests : IDisposable
         var outputTrack = Assert.Single(await subtitles.LoadTracksAsync(project.ProjectId));
         var cue = Assert.Single(outputTrack.Cues);
 
-        Assert.Equal(2, completed.AttemptCount);
+        Assert.Equal(1, completed.AttemptCount);
         Assert.Equal(0, cue.StartMilliseconds);
         Assert.Equal(20_000, cue.EndMilliseconds);
         Assert.Equal("Hello subtitle", cue.OriginalText);

@@ -286,12 +286,14 @@ internal static class Program
                              licenseManager,
                              generationClient));
                     var cloudClient = new VietsubCloudTranslationClient(generationHttpClient, sessionManager, licenseManager);
+                    var cloudResults = new VietsubCloudTranslationResults(vietsubProjectStore, vietsubSubtitleStore,
+                        translationStore, vietsubPaths, cloudClient);
                     var cloudExecutor = new VietsubCloudTranslationJobExecutor(vietsubProjectStore, vietsubSubtitleStore,
-                        translationStore, vietsubPaths, localJobAuthorizer, cloudClient, vietsubJobStore);
+                        cloudResults, vietsubPaths, localJobAuthorizer, cloudClient, vietsubJobStore);
                     vietsubJobManager = new VietsubJobManager(vietsubJobStore,
                         new VietsubJobExecutorRegistry([ocrExecutor, translationExecutor, cloudExecutor, voiceExecutor]));
                     vietsubCloudTranslationService = new VietsubCloudTranslationService(localJobAuthorizer, cloudClient,
-                        vietsubSubtitleStore, vietsubPaths, vietsubJobStore, vietsubJobManager);
+                        vietsubSubtitleStore, vietsubPaths, vietsubJobStore, vietsubJobManager, cloudResults);
                     vietsubVideoExportService = new VietsubVideoExportService(
                         localJobAuthorizer,
                         vietsubProjectStore,

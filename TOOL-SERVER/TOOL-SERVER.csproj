@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>TOOL_SERVER</RootNamespace>
     <UserSecretsId>tool-gen-post-video-server-4e532ba1-d7be-487c-9a66-028baf210dc7</UserSecretsId>
+	<UseAppHost>false</UseAppHost>
   </PropertyGroup>
 
   <ItemGroup>

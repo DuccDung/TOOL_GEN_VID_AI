@@ -78,7 +78,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         {
             throw InvalidTransition("Chỉ job đang chờ mới có thể bắt đầu.");
         }
-        if (job.AttemptCount >= job.MaxAttempts)
+        if (job.AttemptCount > job.MaxAttempts)
         {
             throw new VietsubJobException(
                 "vietsub_job_attempts_exhausted",
@@ -284,7 +284,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
                 jobId,
                 VietsubJobStatus.Running,
                 "STARTED",
-                $"Bắt đầu lần chạy {job.AttemptCount + 1}/{job.MaxAttempts}.",
+                $"Bắt đầu lần chạy {Math.Max(1, job.AttemptCount)}/{job.MaxAttempts}.",
                 cancellationToken: CancellationToken.None);
             RaiseChanged(job);
 
@@ -424,7 +424,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         string eventType,
         CancellationToken cancellationToken)
     {
-        if (job.AttemptCount >= job.MaxAttempts)
+        if (job.Status == VietsubJobStatus.Failed && job.AttemptCount >= job.MaxAttempts)
         {
             throw new VietsubJobException(
                 "vietsub_job_attempts_exhausted",

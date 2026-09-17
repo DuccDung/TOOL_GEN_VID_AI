@@ -960,7 +960,7 @@ function VietsubProjectWorkflowProgress({
   return (
     <section className="vietsub-project-workflow" aria-label="Tiến độ xử lý dự án">
       <div className="vietsub-project-workflow-heading">
-        <div><span>LUỒNG XỬ LÝ</span><strong>{guidance}</strong></div>
+        <div><span>TỔNG TIẾN ĐỘ</span><strong>{guidance}</strong></div>
         <b>{animatedProgress}%</b>
       </div>
       <div
@@ -973,6 +973,9 @@ function VietsubProjectWorkflowProgress({
       >
         <span style={{ width: `${animatedProgress}%` }}><i /></span>
       </div>
+      {hasOcr && <p className="vietsub-project-translation-count">
+        {`Đã dịch ${activeTrack?.translatedCueCount ?? 0}/${activeTrack?.cueCount ?? 0} câu`}
+      </p>}
       <ol className="vietsub-project-workflow-steps">
         {stages.map((stage, index) => (
           <li className={`is-${stage.status}`} key={stage.key} aria-current={stage.status === 'active' ? 'step' : undefined}>
@@ -1015,7 +1018,9 @@ function resolveWorkflowStage({
   lockedDetail: string;
 }): VietsubWorkflowStage {
   if (job && !['COMPLETED', 'CANCELLED'].includes(job.status)) {
-    const jobRatio = clamp(job.progressPercent / 100, 0, 1);
+    // Translation jobs may cover only the remaining cues. Overall workflow
+    // progress follows the saved track, including results from earlier jobs.
+    const jobRatio = key === 'translation' ? ratio : clamp(job.progressPercent / 100, 0, 1);
     if (job.status === 'FAILED') {
       return { key, label, detail: job.errorCode === 'CLOUD_UNKNOWN' ? 'Cần quản trị viên đối soát' : 'Thất bại · có thể thử lại', status: 'error', ratio: jobRatio };
     }

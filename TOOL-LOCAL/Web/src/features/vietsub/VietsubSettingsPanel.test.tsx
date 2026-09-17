@@ -336,7 +336,24 @@ describe('Vietsub project tools', () => {
     expect(html).toContain('70%');
     expect(html).toContain('Thử lại');
     expect(html).toContain('Cần kiểm tra bước Dịch');
-    expect(html).toContain('aria-valuenow="57"');
+    expect(html).toContain('aria-valuenow="47"');
+    expect(html).toContain('Đã dịch 2/5 câu');
     expect(html).toContain('class="is-error"');
   });
+
+  it.each(['PENDING', 'RUNNING', 'PAUSED', 'INTERRUPTED', 'CANCELLED'] as const)(
+    'giữ tiến độ tổng theo câu đã lưu khi tác vụ dịch ở trạng thái %s', status => {
+      const html = renderSettings({ activeTrackId: 'track', tracks: [{
+        trackId: 'track', displayName: 'OCR', languageCode: 'en', source: 'PADDLE_OCR_LOCAL',
+        revision: 51, cueCount: 100, translatedCueCount: 50, warningCueCount: 0, updatedAtUtc: ''
+      }] }, { activeJob: {
+        id: 'job', projectId: 'project', type: 'TRANSLATE_CLOUD', status, progressPercent: 1,
+        attemptCount: 3, maxAttempts: 3, createdAtUtc: '', updatedAtUtc: '', steps: []
+      } });
+      expect(html).toContain('TỔNG TIẾN ĐỘ');
+      expect(html).toContain('aria-valuenow="50"');
+      expect(html).toContain('Đã dịch 50/100 câu');
+      if (status === 'PAUSED' || status === 'INTERRUPTED') expect(html).toContain('Tiếp tục');
+    }
+  );
 });

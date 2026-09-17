@@ -1173,6 +1173,7 @@ button { color: inherit; }
 .vietsub-project-workflow-track > span { position: relative; display: block; height: 100%; min-width: 0; overflow: hidden; background: linear-gradient(90deg,#3980d8,#4c9be5 55%,#27a47c); border-radius: inherit; transition: width .38s cubic-bezier(.22,.8,.25,1); }
 .vietsub-project-workflow-track > span > i { position: absolute; inset: 0; background: linear-gradient(100deg,transparent 15%,rgba(255,255,255,.65) 48%,transparent 78%); transform: translateX(-110%); }
 .vietsub-project-workflow-track.is-moving > span > i { animation: vietsub-workflow-shine 1.35s ease-in-out infinite; }
+.vietsub-project-translation-count { margin: 0 0 8px; color: #40556e; font-size: 8px; font-variant-numeric: tabular-nums; }
 .vietsub-project-workflow-steps { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
 .vietsub-project-workflow-steps li { position: relative; display: grid; min-width: 0; grid-template-columns: 22px minmax(0,1fr); align-items: center; gap: 5px; padding: 1px 7px; }
 .vietsub-project-workflow-steps li:first-child { padding-left: 0; }
@@ -1636,8 +1637,8 @@ button { color: inherit; }
 .vietsub-timeline-artifact-placeholder.is-waveform { color: #98663d; background: #fff7ed; }
 @keyframes vietsub-artifact-loading { to { background-position-x: -200%; } }
 .vietsub-timeline-content .vietsub-timeline-video-track > span { position: relative; z-index: 3; height: 100%; }
-.vietsub-timeline-voice-track { position: relative; display: grid; height: 30px; overflow: hidden; color: #73869c; font-size: 7px; background: #f1f6fb; border-bottom: 1px solid #e1e8f0; place-items: center; }
-.vietsub-timeline-voice-track img { position: relative; z-index: 1; display: block; width: 100%; height: 100%; object-fit: fill; opacity: .92; user-select: none; }
+.vietsub-timeline-voice-track { position: relative; display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr); height: 30px; padding: 4px 0; overflow: hidden; color: #73869c; font-size: 7px; background: #f1f6fb; border-bottom: 1px solid #e1e8f0; place-items: center; }
+.vietsub-timeline-voice-track img { position: relative; z-index: 1; display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: fill; opacity: .92; user-select: none; }
 .vietsub-timeline-voice-track span { position: relative; z-index: 3; padding: 0 8px; }
 .vietsub-timeline-voice-track.is-failed { color: #a46435; background: #fff8ef; }
 .vietsub-timeline-voice-track.is-no_audio { color: #8290a0; background: #f6f8fb; }

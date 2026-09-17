@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TOOL_LOCAL.Authentication;
 using TOOL_LOCAL.Vietsub.Api;
 using TOOL_LOCAL.Vietsub.Domain;
 using TOOL_LOCAL.Vietsub.Jobs;
@@ -14,7 +15,7 @@ internal sealed record VietsubCloudLocalSnapshot(VietsubCloudStartRequest Reques
 
 internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer authorizer,
     IVietsubCloudTranslationClient client, VietsubSubtitleStore subtitles, VietsubAppPaths paths,
-    VietsubJobStore jobs, VietsubJobManager manager)
+    VietsubJobStore jobs, VietsubJobManager manager, VietsubCloudTranslationResults results)
 {
     public Task<VietsubCloudAvailability> AvailabilityAsync(VietsubProjectSession session, CancellationToken ct) =>
         client.AvailabilityAsync(session.Manifest.ProjectId, session.Manifest.OrganizationId, ct);
@@ -30,6 +31,13 @@ internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer 
             throw new VietsubTranslationException("TRANSLATION_SOURCE_TRACK_REQUIRED", "Bạn cần quét OCR nhận dạng phụ đề trước khi dịch.");
         if (track.Revision != input.ExpectedTrackRevision)
             throw new VietsubTranslationException("TRANSLATION_TRACK_CHANGED", "Phụ đề đã thay đổi. Hãy tải lại trước khi dịch.");
+        // A cancelled server job may still have a batch finishing under its lease.
+        // Wait for it to become inactive before draining its final results.
+        if (await jobs.HasActiveAsync(project.ProjectId, ct)
+            || await client.FindAsync(project.ProjectId, org, Guid.Empty, ct) is not null)
+            throw new VietsubTranslationException("CLOUD_JOB_ACTIVE", "Dự án đang có tác vụ chưa dừng xong. Hãy tiếp tục tác vụ hiện tại hoặc chờ tác vụ dừng hoàn tất.");
+        await RecoverPreviousResultsAsync(project, userId, org, track.TrackId, ct);
+        track = await results.CurrentTrackAsync(project.ProjectId, track.TrackId, ct);
         var operation = Guid.NewGuid();
         var cues = track.Cues.Select((cue, index) => new VietsubCloudCue(cue.CueId, index, cue.StartMilliseconds,
             cue.EndMilliseconds, cue.Speaker, cue.OriginalText, IsTarget(track.TrackId, cue), Fingerprint(track.TrackId, cue),
@@ -38,9 +46,6 @@ internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer 
         var request = new VietsubCloudStartRequest(org, operation, track.TrackId, track.Revision, track.LanguageCode, "vi", cues,
             BuildContext(project.TranslationSettings));
         VietsubCloudSnapshot.Validate(request);
-        // Resolve an existing remote job before allowing another operation for this project.
-        if (await client.FindAsync(project.ProjectId, org, Guid.Empty, ct) is not null)
-            throw new VietsubTranslationException("CLOUD_JOB_ACTIVE", "Dự án đang có tác vụ Dịch Cloud. Hãy tiếp tục tác vụ hiện tại.");
         var available = await client.AvailabilityAsync(project.ProjectId, org, ct);
         if (!available.Available) throw new VietsubTranslationException(available.ErrorCode ?? "CLOUD_UNAVAILABLE", available.Message ?? "Dịch Cloud chưa sẵn sàng.");
         var snapshot = new VietsubCloudLocalSnapshot(request, track.Cues.ToDictionary(x => x.CueId, x => x.UpdatedAtUtc));
@@ -49,6 +54,51 @@ internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer 
         return await manager.EnqueueAsync(project.ProjectId, VietsubJobTypes.TranslateCloud,
             ["CLOUD_PREPARE", "CLOUD_TRANSLATE", "CLOUD_APPLY"], JsonSerializer.Serialize(parameters, VietsubCloudSnapshot.JsonOptions),
             track.TrackId, track.Revision, maxAttempts: 10, cancellationToken: ct);
+    }
+
+    private async Task RecoverPreviousResultsAsync(VietsubProjectManifest project, string userId, Guid org,
+        Guid trackId, CancellationToken ct)
+    {
+        foreach (var local in await jobs.ListCloudRecoveryJobsAsync(project.ProjectId, trackId, ct))
+        {
+            var p = JsonSerializer.Deserialize<VietsubCloudJobParameters>(local.ParametersJson, VietsubCloudSnapshot.JsonOptions)
+                ?? throw new InvalidDataException();
+            if (p.OrganizationId != org || p.UserId != userId || p.TrackId != trackId)
+                throw new InvalidDataException("Ngữ cảnh tác vụ Cloud không khớp dự án.");
+            try
+            {
+                var remote = await client.FindAsync(project.ProjectId, org, p.OperationId, ct);
+                if (remote is null) continue; // The saved operation was never submitted.
+                VietsubCloudTranslationResults.CheckRemote(remote, p);
+                if (!VietsubCloudStates.IsTerminal(remote.Status))
+                    throw new VietsubTranslationException("CLOUD_JOB_ACTIVE", "Hãy tiếp tục tác vụ Cloud hiện tại để nhận kết quả.");
+                if (remote.ResultExpiresAtUtc <= DateTime.UtcNow) continue;
+                var snapshot = await results.LoadSnapshotAsync(local, p, ct);
+                var items = await results.ApplyAsync(local, p, snapshot, remote, recovering: true, ct);
+                if (items.Any(x => VietsubCloudTranslationResults.Applied(x.Status)))
+                    await VietsubTranslatedArtifactWriter.WriteAsync(paths, subtitles, project.ProjectId,
+                        await results.CurrentTrackAsync(project.ProjectId, trackId, ct), ct);
+            }
+            catch (AccountClientException e) when (e.StatusCode == 410 && e.Code == "CLOUD_RESULT_EXPIRED")
+            {
+                // Expired/acknowledged results are no longer available; retain all local receipts.
+            }
+            catch (HttpRequestException)
+            {
+                throw new VietsubTranslationException("CLOUD_SYNC_PENDING",
+                    "Chưa nhận đủ kết quả của lượt dịch trước do mất kết nối. Hãy thử lại để đồng bộ trước khi dịch tiếp.");
+            }
+            catch (Exception e) when (e is JsonException or InvalidDataException or ArgumentException)
+            {
+                throw new VietsubTranslationException("CLOUD_SNAPSHOT_INVALID",
+                    "Dữ liệu lượt dịch trước không hợp lệ. Chưa gửi yêu cầu dịch mới.");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                throw new VietsubTranslationException("CLOUD_LOCAL_STORAGE",
+                    "Chưa đọc hoặc lưu được kết quả của lượt dịch trước. Hãy kiểm tra dữ liệu dự án và dung lượng ổ đĩa rồi thử lại.");
+            }
+        }
     }
 
     internal static bool IsTarget(Guid trackId, VietsubSubtitleCue cue) => !cue.OriginalLocked && !cue.TranslationLocked

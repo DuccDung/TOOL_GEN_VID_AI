@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="9.0.20" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.20" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <Import Project="..\TOOL-TESTS\ServerTestFiles.props" />
+  <ItemGroup>
+    <Compile Include="..\TOOL-TESTS\GlobalUsings.cs" Link="GlobalUsings.cs" />
+    <Compile Include="..\TOOL-TESTS\TikTok\TikTokUploadUrlCases.cs" Link="TikTokUploadUrlCases.cs" />
+    <Compile Include="@(ServerTestSource)" />
+    <ProjectReference Include="..\TOOL-SERVER\TOOL-SERVER.csproj" />
+  </ItemGroup>
+
+</Project>
