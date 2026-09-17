@@ -180,7 +180,8 @@ public sealed class VietsubTranslationBridgeTests : IDisposable
         await WaitForTerminalAsync(fixture.Manager, fixture.Project.ProjectId, job.Id);
         var parameters = VietsubTranslationJobParameters.Parse(job.ParametersJson);
 
-        Assert.Equal(3, parameters.StrategyVersion);
+        Assert.Equal(4, parameters.StrategyVersion);
+        Assert.Equal(VietsubTranslationExecutionPolicies.CpuOnly, parameters.ExecutionPolicy);
         Assert.True(parameters.ResourceWarningAccepted);
         Assert.True(provider.LastResourceWarningAccepted);
         Assert.Equal(1, provider.CallCount);

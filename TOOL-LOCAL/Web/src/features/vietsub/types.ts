@@ -23,6 +23,7 @@ export type VietsubModuleState = {
   subtitleNotice?: string | null;
   translationNotice?: string | null;
   translationResourceAlert?: VietsubTranslationResourceAlert | null;
+  translationGpuFallbackAlert?: { jobId: string; message: string; dismissed: boolean } | null;
   ocrSettings: VietsubOcrSettings;
   ocrRuntime?: VietsubOcrRuntimeStatus | null;
   ocrPreview?: VietsubOcrPreviewResult | null;
@@ -89,6 +90,10 @@ export type VietsubTranslationRuntimeStatus = {
   requiresResourceConfirmation?: boolean;
   resourceWarningCode?: string | null;
   resourceWarningMessage?: string | null;
+  accelerationInstalled?: boolean;
+  effectiveBackend?: string | null;
+  deviceName?: string | null;
+  fallbackMessage?: string | null;
 };
 
 export type VietsubTranslationRuntimeInstallProgress = {
@@ -307,6 +312,7 @@ export type VietsubTimelineMediaEvent = {
 };
 
 export type VietsubProjectSummary = {
+  translationExecutionPolicy?: import('../../types').VietsubTranslationExecutionPolicy | null;
   projectId: string;
   name: string;
   status: string;

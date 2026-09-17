@@ -1271,6 +1271,10 @@ button { color: inherit; }
 .vietsub-translation-mode-option-heading em.is-ready { color: #177152; background: #e5f6ed; }
 .vietsub-translation-mode-option-heading em.is-warning { color: #936216; background: #fff0d2; }
 .vietsub-translation-mode-option > p { margin: 15px 0; color: #6c7c90; font-size: 8.5px; line-height: 1.55; }
+.vietsub-translation-mode-option > label { display: grid; gap: 6px; margin: 8px 0; font-size: 9px; font-weight: 700; }
+.vietsub-translation-mode-option select { width: 100%; min-width: 0; max-width: 100%; padding: 8px; color: #30465f; background: #fff; border: 1px solid #bcd5ed; border-radius: 7px; }
+.vietsub-translation-mode-option > small { margin-bottom: 12px; font-size: 8px; line-height: 1.5; }
+.vietsub-translation-mode-option > button + button { margin-top: 10px; }
 .vietsub-translation-mode-option > button { display: inline-flex; width: 100%; min-height: 39px; align-items: center; justify-content: center; gap: 7px; margin-top: auto; color: #fff; font-size: 9px; font-weight: 800; background: #2f73c9; border: 1px solid #2f73c9; border-radius: 8px; cursor: pointer; }
 .vietsub-translation-mode-option > button:hover:not(:disabled) { background: #2867b7; }
 .vietsub-translation-mode-option > button:disabled { color: #929dab; background: #e8ebef; border-color: #dde2e7; cursor: not-allowed; }

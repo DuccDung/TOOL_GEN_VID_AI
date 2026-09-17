@@ -9,6 +9,23 @@
     "version": "0.27.0",
     "license": "MIT"
   },
+  "optionalAcceleration": {
+    "packVersion": "llamasharp-0.27.0-cuda12-12.4-v1",
+    "platform": "win-x64-nvidia",
+    "backendPackage": "LLamaSharp.Backend.Cuda12.Windows",
+    "backendVersion": "0.27.0",
+    "cublasVersion": "12.4.5.8",
+    "cudartVersion": "12.4.127",
+    "licenses": ["MIT", "NVIDIA CUDA Toolkit EULA"],
+    "licenseFile": "LICENSE-NVIDIA-CUDA-12.4.txt",
+    "downloadBytes": 618209328,
+    "requiredInstallFreeBytes": 2621440000,
+    "executionPolicies": ["AUTO", "CPU_ONLY"],
+    "offloadLayers": [12, 24, 36],
+    "workerProtocolVersion": 2,
+    "cpuReadyWithoutAcceleration": true,
+    "productionRolloutVerified": false
+  },
   "model": {
     "fileName": "Qwen3-4B-Q4_K_M.gguf",
     "sizeBytes": 2497280256,

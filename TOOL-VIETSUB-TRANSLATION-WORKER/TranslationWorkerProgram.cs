@@ -20,6 +20,7 @@ internal static class TranslationWorkerProgram
             "probe-fail-en" => new ProbeFailureTranslationWorkerEngine("PROBING_EN"),
             "probe-fail-zh" => new ProbeFailureTranslationWorkerEngine("PROBING_ZH"),
             "backend-preflight" => new BackendPreflightTranslationWorkerEngine(forceMissing: false),
+            "backend-preflight-cuda" => new BackendPreflightTranslationWorkerEngine(forceMissing: false, cuda: true),
             "backend-preflight-missing" => new BackendPreflightTranslationWorkerEngine(forceMissing: true),
             _ => new QwenTranslationWorkerEngine()
         };

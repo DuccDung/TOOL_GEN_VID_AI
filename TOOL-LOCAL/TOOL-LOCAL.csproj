@@ -107,6 +107,7 @@
     <Content Include="$(TranslationNoticeDirectory)\COMPONENT_MANIFEST.json" Link="third_party\translation\COMPONENT_MANIFEST.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(TranslationNoticeDirectory)\checksums.sha256" Link="third_party\translation\checksums.sha256" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(TranslationNoticeDirectory)\NUGET_HASHES.sha512" Link="third_party\translation\NUGET_HASHES.sha512" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TranslationNoticeDirectory)\LICENSE-NVIDIA-CUDA-12.4.txt" Link="third_party\translation\LICENSE-NVIDIA-CUDA-12.4.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(TranslationNoticeDirectory)\LICENSE-LLAMASHARP-AND-LLAMA.CPP-MIT.txt" Link="third_party\translation\LICENSE-LLAMASHARP-AND-LLAMA.CPP-MIT.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt" Link="third_party\translation\LICENSE-QWEN3-APACHE-2.0.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
@@ -125,6 +126,7 @@
   </Target>
 
   <Target Name="ValidateTranslationNotices" BeforeTargets="Publish">
+    <Error Condition="!Exists('$(TranslationNoticeDirectory)\LICENSE-NVIDIA-CUDA-12.4.txt')" Text="CUDA third-party license is missing." />
     <Error Condition="!Exists('$(TranslationNoticeDirectory)\PROVENANCE.md')" Text="Translation provenance is missing: $(TranslationNoticeDirectory)\PROVENANCE.md" />
     <Error Condition="!Exists('$(TranslationNoticeDirectory)\COMPONENT_MANIFEST.json')" Text="Translation component manifest is missing: $(TranslationNoticeDirectory)\COMPONENT_MANIFEST.json" />
     <Error Condition="!Exists('$(TranslationNoticeDirectory)\checksums.sha256')" Text="Translation model checksum is missing: $(TranslationNoticeDirectory)\checksums.sha256" />

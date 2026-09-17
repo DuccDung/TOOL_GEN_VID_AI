@@ -1875,6 +1875,7 @@ function App() {
             onInstallVoiceModel={vietsub.installVoiceModel}
             onSelectVoice={vietsub.selectVoice}
             onDismissTranslationResourceAlert={vietsub.dismissTranslationResourceAlert}
+            onDismissTranslationGpuFallbackAlert={vietsub.dismissTranslationGpuFallbackAlert}
             onContinueTranslationAfterResourceWarning={vietsub.continueTranslationAfterResourceWarning}
             onPauseJob={vietsub.pauseJob}
             onResumeJob={vietsub.resumeJob}

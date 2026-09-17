@@ -24,7 +24,7 @@ Các báo cáo build/test và triển khai ở đây gắn với checkout, thờ
 |---|---|
 | `TOOL-SERVER` | ASP.NET Core API/Razor Admin; auth, license, SePay, tổ chức, budget, pricing, credential, AI Gateway, polling và proxy/cache output. |
 | `TOOL-LOCAL` | WinForms + WebView2/React; đăng nhập, chọn tổ chức, workflow video, workspace, FFmpeg và Vietsub. |
-| `TOOL-VIETSUB-TRANSLATION-WORKER` | Worker x64 CPU cô lập LLamaSharp/Qwen; không có Cloud client hoặc database workflow. |
+| `TOOL-VIETSUB-TRANSLATION-WORKER` | Worker x64 cô lập LLamaSharp/Qwen, CPU và gói NVIDIA CUDA tùy chọn; không có Cloud client hoặc database workflow. |
 | `TOOL-SHARED.Contracts` | DTO public giữa server và desktop. |
 | `TOOL-DISTRIBUTION` | Kiểm tra manifest, provenance và SHA-256 của bundle phân phối. |
 | `TOOL-TESTS` | xUnit cho nghiệp vụ, bảo mật, migration, worker, updater và media. |

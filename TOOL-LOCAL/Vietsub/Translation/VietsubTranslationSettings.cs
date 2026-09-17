@@ -40,6 +40,7 @@ internal sealed class VietsubTranslationSettings
     public string TargetLanguageCode { get; set; } = "vi";
 
     public string EnginePolicy { get; set; } = VietsubTranslationEnginePolicies.NotSelected;
+    public string ExecutionPolicy { get; set; } = VietsubTranslationExecutionPolicies.Auto;
 
     public int ContextCueCount { get; set; } = VietsubTranslationLimits.DefaultContextCueCount;
 
@@ -75,6 +76,8 @@ internal sealed class VietsubTranslationSettings
 
         TargetLanguageCode = "vi";
         EnginePolicy = VietsubTranslationEnginePolicies.Normalize(EnginePolicy);
+        if (ExecutionPolicy is not (VietsubTranslationExecutionPolicies.Auto or VietsubTranslationExecutionPolicies.CpuOnly))
+            throw new InvalidDataException("Chế độ CPU/GPU của project không hợp lệ.");
         ContextCueCount = Math.Clamp(ContextCueCount, 0, 10);
         SceneMaximumTargetCues = Math.Clamp(SceneMaximumTargetCues, 1, 30);
         SceneGapMilliseconds = Math.Clamp(SceneGapMilliseconds, 1_000, 60_000);

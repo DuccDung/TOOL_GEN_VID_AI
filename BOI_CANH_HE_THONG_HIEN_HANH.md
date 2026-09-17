@@ -1,5 +1,13 @@
 # Bối cảnh hệ thống hiện hành
 
+## Sửa lỗi GPU Vietsub khi đổi worker — 2026-09-17
+
+Triển khai trên `main`, nền `e7e8e83`, giữ các thay đổi CPU/GPU chưa commit đã có. Đã tái hiện EOF của worker dò GPU bị chủ động dừng tác động sang worker mới và gây `TRANSLATION_PROCESS_CRASHED`, khiến job Auto chuyển CPU. `VietsubTranslationWorkerClient` hiện cô lập trạng thái theo phiên, chờ stdout/stderr kết thúc trước thay process, hủy request đúng phiên và xử lý dispose trong lúc startup/request mà không giải phóng semaphore quá sớm. Không sửa model, protocol, GPU planner, checkpoint hoặc dữ liệu project.
+
+Restore/Release build solution đạt **0 Warning / 0 Error**; frontend **252 Passed / 0 Failed / 0 Skipped**. Full .NET mặc định trên binary cuối: **1.405 Passed / 1 Failed / 11 Skipped**; lỗi `LoginForm_LoadsWebViewAndAuthenticatesThroughTheHost` ở cleanup `BeginInvoke`, chạy riêng đạt **1 Passed / 0 Failed / 0 Skipped**. Full suite chạy lại trên cùng binary với `-- xUnit.ParallelizeTestCollections=false` đạt **1.406 Passed / 0 Failed / 11 Skipped** trong một lượt đầy đủ. Sáu case lifecycle mới đều Passed; trước sửa hai regression EOF đến muộn đều Failed đúng nguyên nhân. Giữ báo cáo lượt mặc định để theo dõi độ ổn định WebView2; không cộng lượt riêng thành full suite xanh hoặc tính model/SQL bị Skipped là đạt.
+
+GPU model chạy riêng **1 Passed / 0 Failed / 0 Skipped**: ba chu kỳ dò GPU → reset → nạp mới với profile Standard, RTX 3050 Laptop / driver 610.62 dùng **24 layer CUDA**, cả fixture Anh và Trung đều dịch thành công ở mỗi chu kỳ. Đây là kiểm chứng trực tiếp worker trên máy hiện hành; chưa smoke job qua desktop đăng nhập thật, Windows sạch, bundle hoặc rollout production. Job cũ có `CpuFallback=true` tiếp tục CPU khi resume; job Local mới chọn `AUTO` được thử GPU. Chi tiết và đường dẫn bằng chứng ở [nhật ký tăng tốc CPU/GPU](TRIEN_KHAI_TANG_TOC_DICH_CPU_GPU.md).
+
 ## Lựa chọn giọng và tạo audio Vietsub — source checkout 2026-09-15
 
 Rà soát và triển khai trên nhánh `main`, HEAD `52f0931`, working tree sạch trước thay đổi; phần triển khai này **chưa commit**. Source đã nối modal 15 giọng với `VoiceSettings` của project local, job snapshot đúng voice và executor chọn Piper hoặc Kokoro CPU theo snapshot. Kokoro dùng runtime Python x64 riêng với dependency hash-locked và probe WAV theo voice; `READY` của file model không tự thành `SynthesisReady`. Timeline khác engine/model/version/voice được loại khỏi preview/export; không có fallback engine khi runtime lỗi.

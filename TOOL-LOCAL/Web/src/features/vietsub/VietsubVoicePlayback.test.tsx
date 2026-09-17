@@ -114,7 +114,7 @@ async function openWorkspace(mediaId: string) {
     project, state, onRefresh: noOp, onCreateProject: noOp, onOpenProject: noOp, onRenameProject: noOp,
     onCloseProject: saved, onImportMedia: noOp, onUpdateOcrSettings: saved, onPreviewOcr: noOp, onStartOcr: noOp,
     onStartTranslation: noOp, onInstallTranslationRuntime: noOp, onStartVoice: noOp, onInstallVoiceRuntime: noOp,
-    onDismissTranslationResourceAlert: noOp, onContinueTranslationAfterResourceWarning: noOp,
+    onDismissTranslationResourceAlert: noOp, onDismissTranslationGpuFallbackAlert: noOp, onContinueTranslationAfterResourceWarning: noOp,
     onPauseJob: noOp, onResumeJob: noOp, onRetryJob: noOp, onCancelJob: noOp, onActivateOcrTrack: noOp,
     onImportSrt: noOp, onActivateSubtitleTrack: noOp, onLoadSubtitlePage: noOp, onLoadTimelineWindow: noOp,
     onRequestTimelineThumbnails: noOp, onRequestTimelineWaveform: noOp, onUpdateSubtitleCue: saved,

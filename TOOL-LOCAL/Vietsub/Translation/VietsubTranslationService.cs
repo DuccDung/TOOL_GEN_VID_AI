@@ -25,14 +25,18 @@ internal sealed record VietsubTranslationSettingsInput(
     string StyleInstructions,
     IReadOnlyList<VietsubTranslationGlossaryInput> Glossary);
 
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
 internal sealed record VietsubStartTranslationInput(
     string RunMode,
     Guid ExpectedTrackId,
     int ExpectedTrackRevision,
-    bool ConfirmResourceWarning = false);
+    bool ConfirmResourceWarning = false,
+    string ExecutionPolicy = VietsubTranslationExecutionPolicies.CpuOnly);
 
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
 internal sealed record VietsubInstallTranslationRuntimeInput(
-    bool ConfirmResourceWarning = false);
+    bool ConfirmResourceWarning = false,
+    bool InstallAcceleration = false);
 
 internal sealed record VietsubTranslationSettingsSnapshot(
     string SourceLanguageCode,
@@ -57,7 +61,8 @@ internal sealed record VietsubTranslationJobParameters(
     string ConfigurationFingerprint,
     VietsubTranslationSettingsSnapshot Settings,
     string? RuntimeProfileId = null,
-    bool ResourceWarningAccepted = false)
+    bool ResourceWarningAccepted = false,
+    string ExecutionPolicy = VietsubTranslationExecutionPolicies.CpuOnly)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -69,7 +74,7 @@ internal sealed record VietsubTranslationJobParameters(
         {
             var value = JsonSerializer.Deserialize<VietsubTranslationJobParameters>(json, JsonOptions)
                 ?? throw new JsonException("Translation job parameters rỗng.");
-            if (value.StrategyVersion is not (1 or 2 or 3)
+            if (value.StrategyVersion is not (1 or 2 or 3 or 4)
                 || value.InputTrackId == Guid.Empty
                 || value.InputRevision < 1
                 || string.IsNullOrWhiteSpace(value.EngineId)
@@ -81,6 +86,8 @@ internal sealed record VietsubTranslationJobParameters(
             _ = VietsubTranslationLimits.NormalizeSourceLanguage(value.Settings.SourceLanguageCode);
             _ = VietsubTranslationLimits.NormalizeTargetLanguage(value.Settings.TargetLanguageCode);
             _ = VietsubTranslationRunModes.Normalize(value.RunMode);
+            if (value.ExecutionPolicy is not (VietsubTranslationExecutionPolicies.Auto or VietsubTranslationExecutionPolicies.CpuOnly))
+                throw new JsonException("Chế độ CPU/GPU của translation job không hợp lệ.");
             if (value.ConfigurationFingerprint.Length != 64
                 || !value.ConfigurationFingerprint.All(Uri.IsHexDigit))
             {
@@ -99,9 +106,11 @@ internal sealed record VietsubTranslationJobParameters(
                 1 => value with
                 {
                     RuntimeProfileId = VietsubTranslationWorkerProfiles.StandardProfileId,
-                    ResourceWarningAccepted = false
+                    ResourceWarningAccepted = false,
+                    ExecutionPolicy = VietsubTranslationExecutionPolicies.CpuOnly
                 },
-                2 => value with { ResourceWarningAccepted = false },
+                2 => value with { ResourceWarningAccepted = false, ExecutionPolicy = VietsubTranslationExecutionPolicies.CpuOnly },
+                3 => value with { ExecutionPolicy = VietsubTranslationExecutionPolicies.CpuOnly },
                 _ => value
             };
         }
@@ -128,6 +137,8 @@ internal sealed class VietsubTranslationService(
     public IReadOnlyList<VietsubTranslationRuntimeStatus> GetRuntimeStatuses() =>
         providerRegistry.GetStatuses();
 
+    public VietsubTranslationExecutionState? GetExecutionState(Guid jobId) => providerRegistry.GetExecutionState(jobId);
+
     public VietsubTranslationRuntimeStatus GetRuntimeStatus()
     {
         var statuses = GetRuntimeStatuses();
@@ -144,6 +155,17 @@ internal sealed class VietsubTranslationService(
     {
         ArgumentNullException.ThrowIfNull(input);
         await AuthorizeAsync(userId, organizationId, session.Manifest, cancellationToken);
+        if (input.InstallAcceleration)
+        {
+            try
+            {
+                using var lease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+                var accepted = ResolveResourceWarningAcceptance(GetRuntimeStatus(), input.ConfirmResourceWarning);
+                await providerRegistry.InstallAccelerationAsync(progress, cancellationToken, accepted);
+                return GetRuntimeStatus();
+            }
+            catch (TOOL_LOCAL.SystemSetup.SetupException e) { throw new VietsubTranslationException(e.Code, e.Message); }
+        }
         if (SetupCoordinator is { } setup)
         {
             try
@@ -208,6 +230,8 @@ internal sealed class VietsubTranslationService(
         ArgumentNullException.ThrowIfNull(input);
         var project = session.Manifest;
         await AuthorizeAsync(userId, organizationId, project, cancellationToken);
+        if (input.ExecutionPolicy is not (VietsubTranslationExecutionPolicies.Auto or VietsubTranslationExecutionPolicies.CpuOnly))
+            throw new VietsubTranslationException(VietsubTranslationErrorCodes.ContextInvalid, "Chế độ CPU/GPU không hợp lệ.");
         var runMode = VietsubTranslationRunModes.NormalizeRequired(input.RunMode);
         if (input.ExpectedTrackId == Guid.Empty || input.ExpectedTrackRevision < 1)
         {
@@ -262,7 +286,7 @@ internal sealed class VietsubTranslationService(
                 "project-memory-v1",
                 RuntimeProfileId: runtimeProfileId));
         var parameters = new VietsubTranslationJobParameters(
-            runtimeProfileId is null ? 1 : 3,
+            runtimeProfileId is null ? 1 : 4,
             runMode,
             track.TrackId,
             track.Revision,
@@ -271,7 +295,8 @@ internal sealed class VietsubTranslationService(
             configurationFingerprint,
             snapshot,
             runtimeProfileId,
-            resourceWarningAccepted);
+            resourceWarningAccepted,
+            input.ExecutionPolicy);
 
         VietsubJobSummary job;
         try
@@ -297,7 +322,11 @@ internal sealed class VietsubTranslationService(
 
         try
         {
-            await session.UpdateAsync(manifest => manifest.Status = VietsubProjectStatuses.Processing, cancellationToken);
+            await session.UpdateAsync(manifest =>
+            {
+                manifest.Status = VietsubProjectStatuses.Processing;
+                manifest.TranslationSettings.ExecutionPolicy = input.ExecutionPolicy;
+            }, cancellationToken);
             await session.FlushAsync(cancellationToken);
             await jobManager.StartAsync(project.ProjectId, job.Id, cancellationToken);
             return job;
@@ -334,6 +363,7 @@ internal sealed class VietsubTranslationService(
             SourceLanguageCode = input.SourceLanguageCode,
             TargetLanguageCode = input.TargetLanguageCode,
             EnginePolicy = input.EnginePolicy,
+            ExecutionPolicy = project.TranslationSettings.ExecutionPolicy,
             ContextCueCount = input.ContextCueCount,
             SceneMaximumTargetCues = input.SceneMaximumTargetCues,
             SceneGapMilliseconds = input.SceneGapMilliseconds,

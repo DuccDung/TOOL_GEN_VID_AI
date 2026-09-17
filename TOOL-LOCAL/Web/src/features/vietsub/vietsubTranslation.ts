@@ -32,6 +32,7 @@ export function createVietsubTranslationResourceAlert(
 export type VietsubTranslationRunMode = 'CONTINUE' | 'RETRY_FAILED' | 'RESTART_UNLOCKED';
 
 export type VietsubTranslationStartPayload = {
+  executionPolicy?: import('../../types').VietsubTranslationExecutionPolicy;
   runMode: VietsubTranslationRunMode;
   expectedTrackId: string;
   expectedTrackRevision: number;
@@ -39,6 +40,7 @@ export type VietsubTranslationStartPayload = {
 };
 
 export type VietsubTranslationInstallPayload = {
+  installAcceleration?: boolean;
   confirmResourceWarning: boolean;
 };
 
@@ -198,6 +200,7 @@ export function getVietsubTranslationInstallStageLabel(stage: string): string {
   switch (stage) {
     case 'REUSING_LOCAL': return 'Tái sử dụng model local';
     case 'DOWNLOADING': return 'Tải model';
+    case 'DOWNLOADING_CUDA': return 'Tải tăng tốc NVIDIA';
     case 'VERIFYING': return 'Kiểm tra model';
     case 'LOW_MEMORY_FALLBACK': return 'Chuyển sang chế độ tiết kiệm RAM';
     case 'LOADING': return 'Nạp model trong worker';
@@ -212,7 +215,8 @@ export function getVietsubTranslationInstallStageLabel(stage: string): string {
 export function createVietsubTranslationStartPayload(
   workspace: VietsubSubtitleWorkspace | null | undefined,
   runMode: VietsubTranslationRunMode = 'CONTINUE',
-  confirmResourceWarning = false
+  confirmResourceWarning = false,
+  executionPolicy?: import('../../types').VietsubTranslationExecutionPolicy
 ): VietsubTranslationStartPayload | null {
   const activeTrack = workspace?.tracks.find((track) => track.trackId === workspace.activeTrackId);
   if (!workspace?.activeTrackId
@@ -226,6 +230,7 @@ export function createVietsubTranslationStartPayload(
 
   return {
     runMode,
+    ...(executionPolicy ? { executionPolicy } : {}),
     expectedTrackId: activeTrack.trackId,
     expectedTrackRevision: activeTrack.revision,
     confirmResourceWarning

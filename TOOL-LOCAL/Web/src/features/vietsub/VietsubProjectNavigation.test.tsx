@@ -33,7 +33,7 @@ function Harness() {
     onCloseProject={module.closeProject} onRegisterBeforeLeave={module.registerBeforeLeave}
     onImportMedia={noOp} onUpdateOcrSettings={saved} onPreviewOcr={noOp} onStartOcr={noOp}
     onStartTranslation={noOp} onInstallTranslationRuntime={noOp} onStartVoice={noOp} onInstallVoiceRuntime={noOp}
-    onDismissTranslationResourceAlert={noOp} onContinueTranslationAfterResourceWarning={noOp}
+    onDismissTranslationResourceAlert={noOp} onDismissTranslationGpuFallbackAlert={noOp} onContinueTranslationAfterResourceWarning={noOp}
     onPauseJob={noOp} onResumeJob={noOp} onRetryJob={noOp} onCancelJob={noOp} onActivateOcrTrack={noOp}
     onImportSrt={noOp} onActivateSubtitleTrack={noOp} onLoadSubtitlePage={module.loadSubtitlePage}
     onLoadTimelineWindow={noOp} onRequestTimelineThumbnails={noOp} onRequestTimelineWaveform={noOp}

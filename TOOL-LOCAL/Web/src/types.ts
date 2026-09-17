@@ -13,6 +13,22 @@ export type VietsubStartCloudTranslationRequest = {
   expectedTrackRevision: number;
 };
 
+export type VietsubTranslationExecutionPolicy = 'AUTO' | 'CPU_ONLY';
+export type VietsubTranslationExecutionStatus = {
+  projectId: string;
+  organizationId: string;
+  jobId: string;
+  effectiveBackend?: string | null;
+  deviceName?: string | null;
+  fallbackMessage?: string | null;
+  cpuFallback?: boolean;
+  fallbackCode?: string | null;
+};
+export type VietsubInstallTranslationAccelerationRequest = {
+  confirmResourceWarning: boolean;
+  installAcceleration: boolean;
+};
+
 export type VietsubInstallVoiceModelRequest = {
   expectedProjectId: string;
   voiceId: string;

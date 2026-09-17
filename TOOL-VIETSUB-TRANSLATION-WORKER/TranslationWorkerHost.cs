@@ -114,6 +114,7 @@ internal sealed class TranslationWorkerHost : IAsyncDisposable
             switch (envelope.Type)
             {
                 case VietsubTranslationWorkerProtocol.Load:
+                case VietsubTranslationWorkerProtocol.ProbeHardware:
                 case VietsubTranslationWorkerProtocol.Infer:
                     StartOperation(envelope, cancellationToken);
                     break;
@@ -188,6 +189,7 @@ internal sealed class TranslationWorkerHost : IAsyncDisposable
         {
             object result = envelope.Type switch
             {
+                VietsubTranslationWorkerProtocol.ProbeHardware => CudaHardwareProbe.Capture(),
                 VietsubTranslationWorkerProtocol.Load => await _engine.LoadAsync(
                     VietsubTranslationWorkerProtocol.ReadPayload<VietsubTranslationWorkerLoadRequest>(envelope),
                     cancellationToken),

@@ -16,7 +16,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
     private readonly VietsubTranslationComponentStore _componentStore;
-    private readonly VietsubTranslationWorkerClient _workerClient;
+    private readonly IVietsubTranslationWorkerClient _workerClient;
     private readonly SemaphoreSlim _installGate = new(1, 1);
     private readonly SemaphoreSlim _inferenceGate = new(1, 1);
     private VietsubTranslationWorkerRuntimeProfile _runtimeProfile;
@@ -26,7 +26,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
 
     public QwenGgufVietsubTranslationProvider(
         VietsubTranslationComponentStore componentStore,
-        VietsubTranslationWorkerClient? workerClient = null,
+        IVietsubTranslationWorkerClient? workerClient = null,
         VietsubTranslationWorkerRuntimeProfile? runtimeProfile = null)
     {
         _componentStore = componentStore;
@@ -55,6 +55,8 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
                 profileId,
                 Environment.ProcessorCount);
             _loadResult = null;
+            _executionConfig = null;
+            _executionSelected = false;
         }
 
         return true;
@@ -148,6 +150,11 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
             {
                 await _workerClient.ResetAsync();
                 _loadResult = null;
+                _executionConfig = null;
+                _executionState = new();
+                _executionSelected = false;
+                _executionPolicy = VietsubTranslationExecutionPolicies.CpuOnly;
+                _saveExecution = null;
                 if (install)
                     await _componentStore.InstallModelAsync(progress, cancellationToken);
                 else
@@ -249,9 +256,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
 
             try
             {
-                EnsureResourcesAvailable(request.ResourceWarningAccepted);
-                await EnsureWorkerLoadedAsync(request.ResourceWarningAccepted, cancellationToken);
-                return await TranslateCoreAsync(request, "TRANSLATING", cancellationToken);
+                return await TranslateWithAccelerationAsync(request, cancellationToken);
             }
             catch (VietsubTranslationException exception)
                 when (exception.Code is
@@ -476,14 +481,17 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
                 inspection.Message);
         }
 
-        var fingerprint = VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(
-            _runtimeProfile.InferenceConfig);
+        var config = _executionConfig ?? _runtimeProfile.InferenceConfig;
+        var fingerprint = VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(config);
         if (_workerClient.IsLoaded(fingerprint))
         {
             return;
         }
 
         var component = VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km;
+        // LLamaSharp native selection is process-global; every config change needs a fresh worker.
+        await _workerClient.ResetAsync();
+        EnsureResourcesAvailable(resourceWarningAccepted);
         _loadResult = await _workerClient.LoadAsync(
             new VietsubTranslationWorkerLoadRequest(
                 _componentStore.ComponentsRoot,
@@ -494,7 +502,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
                 component.ModelFileName,
                 component.ModelSizeBytes,
                 component.ModelSha256,
-                _runtimeProfile.InferenceConfig,
+                config,
                 _runtimeProfile.ResourceRequirements,
                 resourceWarningAccepted),
             progress: null,
@@ -835,7 +843,11 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
         resources?.RequiresConfirmation == true
             ? VietsubTranslationErrorCodes.ResourceConfirmationRequired
             : null,
-        resources?.RequiresConfirmation == true ? resources.Message : null);
+        resources?.RequiresConfirmation == true ? resources.Message : null,
+        CudaInstalled,
+        _executionState.Backend,
+        _executionState.DeviceName,
+        _executionState.CpuFallback ? VietsubTranslationGpuPlanner.FallbackMessage(_executionState.FallbackCode) : null);
 
     private static string NormalizeTranslation(string? value) => (value ?? string.Empty)
         .Replace("\r\n", "\n", StringComparison.Ordinal)

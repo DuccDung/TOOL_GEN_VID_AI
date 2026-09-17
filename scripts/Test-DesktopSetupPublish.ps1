@@ -12,6 +12,9 @@ $required = @(
     'Sdcb.PaddleOCR.Models.LocalV5.dll', 'paddle_inference_c.dll', 'OpenCvSharpExtern.dll',
     'tools\ffmpeg\ffmpeg.exe', 'tools\ffmpeg\ffprobe.exe', 'tools\ffmpeg\checksums.sha256',
     '_translation_worker\VideoMaker.Vietsub.TranslationWorker.exe',
+    '_translation_worker\LLamaSharp.dll',
+    '_translation_worker\runtimes\win-x64\native\avx2\ggml-cpu.dll',
+    'third_party\translation\LICENSE-NVIDIA-CUDA-12.4.txt',
     '_translation_worker\VideoMaker.Vietsub.TranslationWorker.dll', 'wwwroot\index.html'
 )
 # Managed OCR assemblies may be inside a single-file desktop publish.

@@ -94,7 +94,7 @@ describe('dismissible Vietsub notices', () => {
     const props: VietsubPageProps = { state, onRefresh: noop, onCreateProject: noop, onOpenProject: noop, onRenameProject: noop,
       onCloseProject: saved, onImportMedia: noop, onUpdateOcrSettings: saved, onPreviewOcr: noop, onStartOcr: noop,
       onStartTranslation: noop, onInstallTranslationRuntime: noop, onStartVoice: noop, onInstallVoiceRuntime: noop,
-      onDismissTranslationResourceAlert: noop, onContinueTranslationAfterResourceWarning: noop,
+      onDismissTranslationResourceAlert: noop, onDismissTranslationGpuFallbackAlert: noop, onContinueTranslationAfterResourceWarning: noop,
       onPauseJob: noop, onResumeJob: noop, onRetryJob: noop, onCancelJob: noop, onActivateOcrTrack: noop,
       onImportSrt: noop, onActivateSubtitleTrack: noop, onLoadSubtitlePage: noop, onLoadTimelineWindow: noop,
       onRequestTimelineThumbnails: noop, onRequestTimelineWaveform: noop, onUpdateSubtitleCue: saved,

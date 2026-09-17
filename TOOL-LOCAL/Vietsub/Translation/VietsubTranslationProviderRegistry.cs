@@ -24,7 +24,11 @@ internal sealed record VietsubTranslationRuntimeStatus(
     bool LowMemoryMode = false,
     bool RequiresResourceConfirmation = false,
     string? ResourceWarningCode = null,
-    string? ResourceWarningMessage = null);
+    string? ResourceWarningMessage = null,
+    bool AccelerationInstalled = false,
+    string? EffectiveBackend = null,
+    string? DeviceName = null,
+    string? FallbackMessage = null);
 
 internal sealed class VietsubTranslationProviderRegistry(
     IEnumerable<IVietsubLocalTranslationProvider>? providers = null,
@@ -100,6 +104,18 @@ internal sealed class VietsubTranslationProviderRegistry(
                 "Bản desktop này không có component dịch local được duyệt để cài đặt.");
         await provider.InstallAsync(progress, cancellationToken, resourceWarningAccepted);
     }
+
+    public Task InstallAccelerationAsync(IProgress<VietsubTranslationRuntimeInstallProgress>? progress,
+        CancellationToken ct, bool warningAccepted)
+    {
+        EnsureFeatureEnabled();
+        var provider = _providers.OfType<QwenGgufVietsubTranslationProvider>().FirstOrDefault()
+            ?? throw new VietsubTranslationException(VietsubTranslationErrorCodes.RuntimeNotInstalled, "Thiếu engine Qwen.");
+        return provider.InstallAccelerationAsync(progress, ct, warningAccepted);
+    }
+
+    public VietsubTranslationExecutionState? GetExecutionState(Guid jobId) =>
+        _providers.OfType<QwenGgufVietsubTranslationProvider>().FirstOrDefault()?.GetExecutionState(jobId);
 
     public IVietsubLocalTranslationProvider ResolveForStart(
         string sourceLanguageCode,

@@ -266,6 +266,8 @@ describe('Vietsub project tools', () => {
     expect(html).toContain('id="vietsub-translation-mode-dialog"');
     expect(html).toContain('Dịch Local');
     expect(html).toContain('Dịch bằng Local');
+    expect(html).toContain('Tự động — kết hợp CPU và GPU NVIDIA');
+    expect(html).toContain('Chỉ dùng CPU');
     expect(html).toContain('Dịch Cloud');
     expect(html).toMatch(/class="vietsub-translation-mode-option is-cloud" aria-disabled="true"/);
     expect(html).toMatch(/<button type="button" disabled=""><svg[^]*?Dịch Cloud<\/button>/);

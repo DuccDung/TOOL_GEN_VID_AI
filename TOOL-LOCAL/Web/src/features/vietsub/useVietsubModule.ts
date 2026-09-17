@@ -44,6 +44,8 @@ type JobStatusRequest = {
 type TranslationResourceAction = {
   action: 'TRANSLATE' | 'INSTALL';
   runMode?: VietsubTranslationRunMode;
+  executionPolicy?: import('../../types').VietsubTranslationExecutionPolicy;
+  installAcceleration?: boolean;
 };
 
 const defaultSubtitleQuery: VietsubSubtitlePageQuery = {
@@ -259,6 +261,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
             translationNotice: keepsCurrentEditor ? current.translationNotice : null,
             cloudAvailability: keepsCurrentEditor ? current.cloudAvailability : null,
             translationResourceAlert: keepsCurrentEditor ? current.translationResourceAlert : null,
+            translationGpuFallbackAlert: keepsCurrentEditor ? current.translationGpuFallbackAlert : null,
             voiceNotice: keepsCurrentEditor ? current.voiceNotice : null,
             timelineMediaEvent: keepsCurrentMedia ? current.timelineMediaEvent : null
           };
@@ -364,6 +367,25 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
         return;
       }
 
+      if (message.type === 'vietsub.translation.execution' && message.payload) {
+        const execution = message.payload as import('../../types').VietsubTranslationExecutionStatus;
+        if (execution.projectId !== selectedProjectIdRef.current || execution.organizationId !== organizationIdRef.current) return;
+        setState(current => {
+          if (current.activeJob?.id !== execution.jobId || current.activeJob.type !== 'TRANSLATE_LOCAL') return current;
+          const showFallback = execution.cpuFallback === true && Boolean(execution.fallbackMessage)
+            && current.translationGpuFallbackAlert?.jobId !== execution.jobId;
+          return { ...current,
+            translationRuntime: current.translationRuntime ? {
+              ...current.translationRuntime, effectiveBackend: execution.effectiveBackend,
+              deviceName: execution.deviceName, fallbackMessage: execution.fallbackMessage
+            } : null,
+            translationGpuFallbackAlert: showFallback
+              ? { jobId: execution.jobId, message: execution.fallbackMessage!, dismissed: false }
+              : current.translationGpuFallbackAlert
+          };
+        });
+        return;
+      }
       if (message.type === 'vietsub.translation.runtime.status' && message.payload) {
         const runtime = message.payload as NonNullable<VietsubModuleState['translationRuntime']>;
         translationRuntimeStatusRef.current = runtime;
@@ -859,6 +881,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
             translationResourceAlert: invalidatesEditor
               ? null
               : translationResourceAlert ?? current.translationResourceAlert,
+            translationGpuFallbackAlert: invalidatesEditor ? null : current.translationGpuFallbackAlert,
             translationInstallProgress: translationError ? null : current.translationInstallProgress,
             voiceNotice: invalidatesEditor
               ? null
@@ -907,6 +930,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
       setState((current) => ({
         ...current,
         cloudAvailability: null,
+        translationGpuFallbackAlert: null,
         selectedProject: null,
         mediaImportProgress: null,
         subtitleWorkspace: null,
@@ -1007,8 +1031,9 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     runProjectOperation('vietsub.job.ocr', settings);
   }, [runProjectOperation]);
 
-  const startTranslation = useCallback((runMode: VietsubTranslationRunMode = 'CONTINUE') => {
-    const payload = createVietsubTranslationStartPayload(state.subtitleWorkspace, runMode, false);
+  const startTranslation = useCallback((runMode: VietsubTranslationRunMode = 'CONTINUE',
+    executionPolicy?: import('../../types').VietsubTranslationExecutionPolicy) => {
+    const payload = createVietsubTranslationStartPayload(state.subtitleWorkspace, runMode, false, executionPolicy);
     if (!payload) {
       translationResourceActionRef.current = null;
       setState((current) => ({
@@ -1026,7 +1051,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
       'TRANSLATE',
       runMode
     );
-    translationResourceActionRef.current = { action: 'TRANSLATE', runMode };
+    translationResourceActionRef.current = { action: 'TRANSLATE', runMode, executionPolicy };
     if (state.translationRuntime?.requiresResourceConfirmation && resourceWarning) {
       setState((current) => ({
         ...current,
@@ -1070,13 +1095,13 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     } finally { cloudSubmittingRef.current = false; }
   }, [runProjectOperation]);
 
-  const installTranslationRuntime = useCallback(() => {
+  const installTranslationRuntime = useCallback((installAcceleration = false) => {
     const resourceWarning = createVietsubTranslationResourceAlert(
       state.translationRuntime?.resourceWarningCode,
       state.translationRuntime?.resourceWarningMessage,
       'INSTALL'
     );
-    translationResourceActionRef.current = { action: 'INSTALL' };
+    translationResourceActionRef.current = { action: 'INSTALL', installAcceleration };
     if (state.translationRuntime?.requiresResourceConfirmation && resourceWarning) {
       setState((current) => ({
         ...current,
@@ -1091,7 +1116,8 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
       translationResourceAlert: null
     }));
     translationRuntimeStatusRef.current = null;
-    runProjectOperation('vietsub.translation.runtime.install', { confirmResourceWarning: false });
+    runProjectOperation('vietsub.translation.runtime.install', { confirmResourceWarning: false,
+      ...(installAcceleration ? { installAcceleration: true } : {}) });
   }, [runProjectOperation, state.translationRuntime]);
 
   const startVoice = useCallback(() => {
@@ -1144,6 +1170,11 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     setState((current) => ({ ...current, translationResourceAlert: null }));
   }, []);
 
+  const dismissTranslationGpuFallbackAlert = useCallback(() => {
+    setState(current => ({ ...current, translationGpuFallbackAlert: current.translationGpuFallbackAlert
+      ? { ...current.translationGpuFallbackAlert, dismissed: true } : null }));
+  }, []);
+
   const continueTranslationAfterResourceWarning = useCallback(() => {
     const pendingAction = translationResourceActionRef.current;
     translationResourceActionRef.current = null;
@@ -1159,14 +1190,16 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     }));
     if (pendingAction.action === 'INSTALL') {
       translationRuntimeStatusRef.current = null;
-      runProjectOperation('vietsub.translation.runtime.install', { confirmResourceWarning: true });
+      runProjectOperation('vietsub.translation.runtime.install', { confirmResourceWarning: true,
+        ...(pendingAction.installAcceleration ? { installAcceleration: true } : {}) });
       return;
     }
 
     const payload = createVietsubTranslationStartPayload(
       state.subtitleWorkspace,
       pendingAction.runMode ?? 'CONTINUE',
-      true
+      true,
+      pendingAction.executionPolicy
     );
     if (!payload) {
       setState((current) => ({
@@ -1425,6 +1458,7 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     installVoiceModel,
     selectVoice,
     dismissTranslationResourceAlert,
+    dismissTranslationGpuFallbackAlert,
     continueTranslationAfterResourceWarning,
     pauseJob,
     resumeJob,

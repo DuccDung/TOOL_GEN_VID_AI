@@ -76,7 +76,8 @@ internal sealed record VietsubProjectSummary(
     bool NeedsRecovery,
     bool ServerSynchronized,
     string? ServerSyncErrorCode,
-    VietsubMediaSummary? SourceVideo = null);
+    VietsubMediaSummary? SourceVideo = null,
+    string? TranslationExecutionPolicy = null);
 
 internal static class VietsubMediaImportModes
 {

@@ -32,6 +32,12 @@ function workspace(activeTrack: VietsubSubtitleTrackSummary): VietsubSubtitleWor
 }
 
 describe('createVietsubTranslationStartPayload', () => {
+  it('keeps the chosen CPU/GPU policy through resource confirmation', () => {
+    expect(createVietsubTranslationStartPayload(workspace(track()), 'CONTINUE', true, 'AUTO'))
+      .toMatchObject({ executionPolicy: 'AUTO', confirmResourceWarning: true });
+    expect(createVietsubTranslationStartPayload(workspace(track()), 'CONTINUE', false, 'CPU_ONLY'))
+      .toMatchObject({ executionPolicy: 'CPU_ONLY' });
+  });
   it('requires an active OCR track with cues', () => {
     expect(createVietsubTranslationStartPayload(null)).toBeNull();
     expect(createVietsubTranslationStartPayload(workspace(track({ source: 'IMPORTED_SRT' })))).toBeNull();

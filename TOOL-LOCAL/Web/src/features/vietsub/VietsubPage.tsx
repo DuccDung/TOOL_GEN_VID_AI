@@ -13,6 +13,7 @@ import type {
 import { VietsubEditorWorkspace } from './VietsubEditorWorkspace';
 import { VietsubProjectLibrary } from './VietsubProjectLibrary';
 import { VietsubTranslationResourceModal } from './VietsubTranslationResourceModal';
+import { VietsubTranslationGpuFallbackModal } from './VietsubTranslationGpuFallbackModal';
 import type { VietsubTranslationRunMode } from './vietsubTranslation';
 import { VietsubNotice } from './VietsubNotice';
 
@@ -28,16 +29,17 @@ export type VietsubPageProps = {
   onUpdateOcrSettings: (settings: VietsubOcrSettings) => Promise<boolean>;
   onPreviewOcr: (settings: VietsubOcrSettings, timestampMilliseconds: number) => void;
   onStartOcr: (settings: VietsubOcrSettings) => void;
-  onStartTranslation: (runMode?: VietsubTranslationRunMode) => void;
+  onStartTranslation: (runMode?: VietsubTranslationRunMode, executionPolicy?: import('../../types').VietsubTranslationExecutionPolicy) => void;
   onStartCloudTranslation?: () => void;
   onRefreshCloudAvailability?: () => void;
-  onInstallTranslationRuntime: () => void;
+  onInstallTranslationRuntime: (installAcceleration?: boolean) => void;
   onStartVoice: () => void;
   onInstallVoiceRuntime: () => void;
   onRefreshVoiceModels?: () => void;
   onInstallVoiceModel?: (voiceId: string) => void;
   onSelectVoice?: (voiceId: string) => Promise<boolean>;
   onDismissTranslationResourceAlert: () => void;
+  onDismissTranslationGpuFallbackAlert: () => void;
   onContinueTranslationAfterResourceWarning: () => void;
   onPauseJob: (jobId: string) => void;
   onResumeJob: (jobId: string) => void;
@@ -98,6 +100,12 @@ export function VietsubPage(props: VietsubPageProps) {
           onDismiss={props.onDismissTranslationResourceAlert}
           onContinue={props.onContinueTranslationAfterResourceWarning}
         />
+      )}
+      {state.selectedProject && !state.translationResourceAlert && state.translationGpuFallbackAlert
+        && !state.translationGpuFallbackAlert.dismissed
+        && !['FAILED', 'CANCELLED'].includes(state.jobs.find(job => job.id === state.translationGpuFallbackAlert?.jobId)?.status ?? '') && (
+        <VietsubTranslationGpuFallbackModal message={state.translationGpuFallbackAlert.message}
+          onDismiss={props.onDismissTranslationGpuFallbackAlert} />
       )}
     </div>
   );

@@ -16,7 +16,21 @@
 - llama.cpp repository: `https://github.com/ggml-org/llama.cpp`
 - License: MIT, included in `LICENSE-LLAMASHARP-AND-LLAMA.CPP-MIT.txt`
 
-## Model
+## Optional NVIDIA acceleration — 2026-09-17
+
+The CPU baseline remains bundled. The optional CUDA pack is downloaded directly from pinned upstream archives by `VietsubTranslationCudaInstaller`; it is not resolved through a floating NuGet dependency. The pack is Windows x64 only and uses the same LLamaSharp 0.27.0 API and Qwen GGUF. Complete archive and individual native SHA-256 allowlists are in `VietsubTranslationCudaInstaller.cs` and the shared `VietsubTranslationAcceleration.cs`. The worker verifies these before loading native code.
+
+| Archive | Version | License | Source |
+|---|---|---|---|
+| LLamaSharp.Backend.Cuda12.Windows | 0.27.0 | MIT | https://api.nuget.org/v3-flatcontainer/llamasharp.backend.cuda12.windows/0.27.0/llamasharp.backend.cuda12.windows.0.27.0.nupkg |
+| CUDA cuBLAS | 12.4.5.8 | NVIDIA CUDA Toolkit EULA | https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-12.4.5.8-archive.zip |
+| CUDA Runtime | 12.4.127 | NVIDIA CUDA Toolkit EULA | https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.4.127-archive.zip |
+
+NVIDIA archive hashes were verified against `https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.4.1.json`. The unmodified upstream license is preserved in `LICENSE-NVIDIA-CUDA-12.4.txt` (SHA-256 `e2c71babfd18a8e69542dd7e9ca018f9caa438094001a58e6bc4d8c999bf0d07`) and installed as `LICENSE-NVIDIA.txt`. The selected cuBLAS/cuBLASLt/cudart DLL families appear in Attachment A of that license. The complete agreement, NVIDIA-only scope and distribution conditions continue to apply; GPU functionality or a model probe is not a release approval.
+
+CPU and CUDA readiness evidence are separate. Driver/device UUID, model, worker/protocol, CPU kernels, CUDA dependencies, inference config and planner version bind the CUDA probe; free VRAM is checked on each new load and is not a permanent readiness claim. Backend changes restart the isolated worker. Old job strategy versions retain CPU execution and existing semantic fingerprints.
+
+## Model (unchanged artifact)
 
 - Component ID: `qwen3-4b-q4-k-m-cpu`
 - Engine version: `bc64014-llamasharp-0.27.0-adapter-1`
@@ -32,6 +46,6 @@ The desktop installer first checks native-defined local development cache locati
 
 LLamaSharp/llama.cpp inference runs only in the packaged x64 translation worker, not inside the WinForms process. The desktop and worker both enforce bounded IPC/resource checks; runtime readiness is recorded only after the worker, backend, native library, configuration and English/Chinese probes match the approved fingerprint.
 
-The native runtime policy defines two allowlisted CPU profiles without changing the model artifact: Standard uses the original 8 GiB total / 4 GiB available physical / 6 GiB available commit gate; Low-memory uses a 6 GiB total / 3 GiB available physical / 4 GiB available commit hard floor with a smaller batch and scene size. The Low-memory thresholds remain subject to the documented real-model benchmark and desktop smoke gate before production rollout.
+The native runtime policy defines two allowlisted resource profiles without changing the model artifact: Standard recommends 8 GiB total / 4 GiB available physical / 6 GiB available commit; Low-memory recommends 6 GiB total / 3 GiB available physical / 4 GiB available commit with a smaller batch and scene size. Falling below these recommendations requires explicit resource-warning confirmation; integrity/platform checks and actual load failures remain blocking. The profiles remain subject to the documented real-model benchmark and desktop smoke gate before production rollout.
 
 The GGUF model is an optional component and is not stored in source control. No subtitle, prompt, credential or provider request is sent to a Cloud inference service. Production enablement remains a separate acceptance decision; provenance alone is not evidence that model integration, benchmark or desktop smoke test passed.

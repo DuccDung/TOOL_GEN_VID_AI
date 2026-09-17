@@ -87,8 +87,8 @@ type VietsubSettingsPanelProps = {
   onUpdateOcrSettings: (settings: VietsubOcrSettings) => Promise<boolean>;
   onPreviewOcr: (settings: VietsubOcrSettings, timestampMilliseconds: number) => void;
   onStartOcr: (settings: VietsubOcrSettings) => void;
-  onStartTranslation: (runMode?: VietsubTranslationRunMode) => void;
-  onInstallTranslationRuntime: () => void;
+  onStartTranslation: (runMode?: VietsubTranslationRunMode, executionPolicy?: import('../../types').VietsubTranslationExecutionPolicy) => void;
+  onInstallTranslationRuntime: (installAcceleration?: boolean) => void;
   onStartVoice: () => void;
   onInstallVoiceRuntime: () => void;
   onRefreshVoiceModels?: () => void;
@@ -434,6 +434,7 @@ export function VietsubSettingsPanel({
 
       {translationDialogOpen && (
         <VietsubTranslationModeModal
+          initialExecutionPolicy={project.translationExecutionPolicy ?? 'AUTO'}
           runtime={translationRuntime}
           cloudAvailability={cloudAvailability}
           onStartCloud={() => {
@@ -443,9 +444,9 @@ export function VietsubSettingsPanel({
           installProgress={translationInstallProgress}
           busy={busy || Boolean(activeJob)}
           onDismiss={closeTranslationDialog}
-          onStartLocal={() => {
+          onStartLocal={(executionPolicy) => {
             setTranslationDialogOpen(false);
-            onStartTranslation('CONTINUE');
+            onStartTranslation('CONTINUE', executionPolicy);
           }}
           onInstallLocal={() => {
             setTranslationDialogOpen(false);
@@ -727,7 +728,8 @@ export function VietsubTranslationModeModal({
   busy,
   onDismiss,
   onStartLocal,
-  onInstallLocal
+  onInstallLocal,
+  initialExecutionPolicy = 'AUTO'
 }: {
   cloudAvailability?: VietsubCloudAvailability | null;
   onStartCloud?: () => void;
@@ -735,9 +737,11 @@ export function VietsubTranslationModeModal({
   installProgress?: VietsubTranslationRuntimeInstallProgress | null;
   busy: boolean;
   onDismiss: () => void;
-  onStartLocal: () => void;
+  onStartLocal: (executionPolicy?: import('../../types').VietsubTranslationExecutionPolicy) => void;
   onInstallLocal: () => void;
+  initialExecutionPolicy?: import('../../types').VietsubTranslationExecutionPolicy;
 }) {
+  const [executionPolicy, setExecutionPolicy] = useState(initialExecutionPolicy);
   const { dialogRef, keepFocusInside } = useVietsubModalAccessibility(onDismiss);
   const runtimeView = getVietsubTranslationRuntimeView(runtime);
   const localDisabled = busy || (!runtimeView.canTranslate && !runtimeView.canInstall);
@@ -796,6 +800,20 @@ export function VietsubTranslationModeModal({
               <em className={localBadgeClass}>{localBadge}</em>
             </div>
             <p>Nội dung phụ đề được xử lý trong worker local và không gửi lên dịch vụ bên ngoài.</p>
+            <label>
+              Xử lý trên máy
+              <select aria-label="Xử lý dịch local" value={executionPolicy} disabled={busy}
+                onChange={event => setExecutionPolicy(event.target.value as import('../../types').VietsubTranslationExecutionPolicy)}>
+                <option value="AUTO">Tự động — kết hợp CPU và GPU NVIDIA</option>
+                <option value="CPU_ONLY">Chỉ dùng CPU</option>
+              </select>
+            </label>
+            <small>{executionPolicy === 'AUTO'
+              ? 'Khi bấm dịch, ứng dụng tự kiểm tra GPU. Nếu không dùng được, sẽ thông báo và chuyển sang CPU.'
+              : 'Dịch bằng CPU trên máy.'}</small>
+            {runtime?.effectiveBackend && <p role="status">Lần xử lý gần nhất: {runtime.effectiveBackend === 'cuda12'
+              ? `CPU + GPU · ${runtime.deviceName ?? 'NVIDIA'}` : 'CPU'}</p>}
+            {runtime?.fallbackMessage && <p role="status">{runtime.fallbackMessage}</p>}
             {!runtime?.ready && (
               <div className="vietsub-mode-status">
                 <Info size={15} />
@@ -822,7 +840,7 @@ export function VietsubTranslationModeModal({
               type="button"
               data-autofocus="true"
               disabled={localDisabled}
-              onClick={runtimeView.canTranslate ? onStartLocal : onInstallLocal}
+              onClick={runtimeView.canTranslate ? () => onStartLocal(executionPolicy) : onInstallLocal}
             >
               {runtimeView.canTranslate ? <Languages size={16} /> : <Download size={16} />}
               {localActionLabel}

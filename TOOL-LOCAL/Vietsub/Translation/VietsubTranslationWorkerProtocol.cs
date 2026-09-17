@@ -8,9 +8,10 @@ namespace TOOL_LOCAL.Vietsub.Translation;
 
 internal static class VietsubTranslationWorkerProtocol
 {
-    public const int Version = 1;
+    public const int Version = 2;
     public const int MaximumFrameBytes = 1024 * 1024;
-    public const string WorkerVersion = "1.0.0";
+    public const string WorkerVersion = "1.1.0";
+    public const string ProbeHardware = "probeHardware";
 
     public const string Hello = "hello";
     public const string Load = "load";
@@ -93,10 +94,16 @@ internal static class VietsubTranslationWorkerProtocol
     public static string ComputeWorkerBinaryFingerprint(string workerDirectory)
     {
         var directory = Path.GetFullPath(workerDirectory);
+        var native = Path.Combine(directory, "runtimes", "win-x64", "native", VietsubTranslationWorkerProfiles.SelectAvxName());
         var files = new[]
         {
             Path.Combine(directory, "VideoMaker.Vietsub.TranslationWorker.exe"),
-            Path.Combine(directory, "VideoMaker.Vietsub.TranslationWorker.dll")
+            Path.Combine(directory, "VideoMaker.Vietsub.TranslationWorker.dll"),
+            Path.Combine(directory, "LLamaSharp.dll"),
+            Path.Combine(native, "llama.dll"),
+            Path.Combine(native, "ggml.dll"),
+            Path.Combine(native, "ggml-base.dll"),
+            Path.Combine(native, "ggml-cpu.dll")
         };
         if (files.Any(path => !File.Exists(path)))
         {
@@ -228,7 +235,8 @@ internal sealed record VietsubTranslationWorkerInferenceConfig(
     string AvxPolicy,
     string ProfileId,
     string PromptProfileId,
-    string SamplingProfileId);
+    string SamplingProfileId,
+    string? GpuDeviceId = null);
 
 internal sealed record VietsubTranslationWorkerRuntimeProfile(
     string ProfileId,
@@ -334,7 +342,9 @@ internal sealed record VietsubTranslationWorkerLoadResult(
     string AvxLevel,
     string NativeLibraryHash,
     string ConfigFingerprint,
-    VietsubTranslationWorkerMetrics Metrics);
+    VietsubTranslationWorkerMetrics Metrics,
+    VietsubTranslationGpuDevice? Device = null,
+    int OffloadedLayers = 0);
 
 internal sealed record VietsubTranslationWorkerInferRequest(
     string Stage,
@@ -358,7 +368,8 @@ internal sealed record VietsubTranslationWorkerMetrics(
     long PrivateBytes,
     long PeakWorkingSetBytes,
     ulong AvailablePhysicalBytes,
-    ulong AvailableCommitBytes);
+    ulong AvailableCommitBytes,
+    ulong PeakDeviceUsedBytes = 0);
 
 internal sealed class VietsubTranslationWorkerProtocolException(
     string message,

@@ -20,7 +20,8 @@ internal sealed record VietsubTranslationCheckpoint(
     int FailedItems,
     int MemoryHits,
     int CacheHits,
-    int ProviderCalls);
+    int ProviderCalls,
+    VietsubTranslationExecutionState? Execution = null);
 
 internal sealed class VietsubTranslationJobExecutor(
     VietsubProjectStore projectStore,
@@ -179,6 +180,14 @@ internal sealed class VietsubTranslationJobExecutor(
         }
 
         var state = RestoreItemCounts(RestoreCheckpoint(context.Job.CheckpointJson, totalItems), existingItems);
+        if (provider is QwenGgufVietsubTranslationProvider qwen)
+        {
+            await qwen.BeginExecutionAsync(parameters.ExecutionPolicy, state.Execution, async (execution, ct) =>
+            {
+                state = state with { Execution = execution };
+                await context.SaveCheckpointAsync(JsonSerializer.Serialize(state, JsonOptions), ct);
+            }, cancellationToken, jobId: context.Job.Id);
+        }
         foreach (var (item, status) in resumeGuards)
         {
             state = state with { StaleItems = state.StaleItems + 1 };
@@ -505,7 +514,9 @@ internal sealed class VietsubTranslationJobExecutor(
                     "TRANSLATION_EXECUTE",
                     totalItems == 0 ? 100 : 100d * processed / totalItems,
                     Math.Max(context.Job.ProgressPercent, Math.Clamp(progress, 5, 90)),
-                    $"Đã lưu {state.CompletedItems + state.ReviewItems}/{totalItems} câu dịch; đã xử lý {processed}/{totalItems} câu.",
+                    $"Đã lưu {state.CompletedItems + state.ReviewItems}/{totalItems} câu dịch; đã xử lý {processed}/{totalItems} câu."
+                        + (state.Execution?.CpuFallback == true ? " GPU không khả dụng; đang tiếp tục bằng CPU."
+                            : state.Execution?.Backend == "cuda12" ? $" CPU + GPU: {state.Execution.DeviceName}." : ""),
                     JsonSerializer.Serialize(state, JsonOptions)),
                 cancellationToken);
         }

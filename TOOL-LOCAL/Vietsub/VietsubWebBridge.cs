@@ -1669,6 +1669,17 @@ internal sealed class VietsubWebBridge : IDisposable
             eventArgs.Job.ProjectId,
             eventArgs.Job.Id,
             "JOB_NOTIFICATION_FAILED");
+        if (eventArgs.Job.Type == VietsubJobTypes.TranslateLocal
+            && _translationService?.GetExecutionState(eventArgs.Job.Id) is { } execution
+            && _projectSession is { } currentSession)
+        {
+            TryPostJobNotification(new WebMessageResponse("vietsub.translation.execution", null,
+                new VietsubTranslationExecutionStatus(eventArgs.Job.ProjectId, currentSession.Manifest.OrganizationId,
+                    eventArgs.Job.Id, execution.Backend, execution.DeviceName,
+                    execution.CpuFallback ? VietsubTranslationGpuPlanner.FallbackMessage(execution.FallbackCode) : null,
+                    execution.CpuFallback, execution.FallbackCode)),
+                eventArgs.Job.ProjectId, eventArgs.Job.Id, "TRANSLATION_EXECUTION_NOTIFICATION_FAILED");
+        }
     }
 
     private async Task CompleteTranslationJobOnceAsync(VietsubJobSummary job)
@@ -2180,7 +2191,8 @@ internal sealed class VietsubWebBridge : IDisposable
 
     private VietsubProjectSummary ToSelectedProjectSummary(VietsubProjectManifest manifest)
     {
-        var summary = VietsubProjectStore.ToSummary(manifest);
+        var summary = VietsubProjectStore.ToSummary(manifest) with
+        { TranslationExecutionPolicy = manifest.TranslationSettings.ExecutionPolicy };
         if (manifest.SourceVideo is null || _mediaImportService is null)
         {
             return summary;
