@@ -9,6 +9,29 @@ public sealed class VietsubTranslationWorkerSafetyTests
     private const ulong GiB = 1024UL * 1024 * 1024;
 
     [Fact]
+    public void Experimental_executors_require_benchmark_mode_and_change_runtime_fingerprint()
+    {
+        Assert.True(VietsubTranslationExecutorModes.IsAllowed(VietsubTranslationExecutorModes.Reuse, false));
+        foreach (var mode in new[] { VietsubTranslationExecutorModes.Legacy, VietsubTranslationExecutorModes.PrefixCache })
+        {
+            Assert.False(VietsubTranslationExecutorModes.IsAllowed(mode, false));
+            Assert.True(VietsubTranslationExecutorModes.IsAllowed(mode, true));
+            var config = VietsubTranslationWorkerProfiles.CreateSafeCpuProfile(8);
+            Assert.NotEqual(VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(config),
+                VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(config with { ExecutorMode = mode }));
+        }
+        Assert.False(VietsubTranslationExecutorModes.IsAllowed("from-dom", true));
+    }
+
+    [Fact]
+    public void Previous_worker_protocol_is_rejected()
+    {
+        var envelope = VietsubTranslationWorkerProtocol.Create(VietsubTranslationWorkerProtocol.Hello, "r1");
+        Assert.Throws<VietsubTranslationWorkerProtocolException>(() =>
+            VietsubTranslationWorkerProtocol.ValidateEnvelope(envelope with { ProtocolVersion = 2 }));
+    }
+
+    [Fact]
     public void Resource_gate_distinguishes_total_physical_available_physical_and_commit()
     {
         var requirements = new VietsubTranslationResourceRequirements(8 * GiB, 4 * GiB, 6 * GiB);

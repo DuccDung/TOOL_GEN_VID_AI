@@ -27,6 +27,7 @@ import type {
   VietsubAudioMixSettings,
   VietsubMediaSummary,
   VietsubSubtitleStyle,
+  VietsubSubtitleMaskSettings,
   VietsubVideoTransformSettings
 } from './types';
 import {
@@ -43,13 +44,15 @@ import {
 } from './vietsubSubtitleStyle';
 import {
   cloneVideoTransformSettings,
+  flipMaskRegion,
   defaultVietsubVideoTransformSettings
 } from './vietsubVideoTransform';
 import { VietsubSubtitleOverlay, useVideoContentRect } from './VietsubSubtitleOverlay';
+import { VietsubSubtitleMaskOverlay } from './VietsubSubtitleMaskOverlay';
 import { useSynchronizedVoice } from './useSynchronizedVoice';
 import { VietsubNotice } from './VietsubNotice';
 
-type DesignerTab = 'TEXT' | 'EFFECTS' | 'POSITION' | 'AUDIO';
+type DesignerTab = 'TEXT' | 'EFFECTS' | 'POSITION' | 'MASK' | 'AUDIO';
 type PreviewMode = 'FIT' | 'FILL';
 
 export function VietsubSubtitleDesignerModal({
@@ -102,6 +105,7 @@ export function VietsubSubtitleDesignerModal({
   const [activeTab, setActiveTab] = useState<DesignerTab>('TEXT');
   const [playing, setPlaying] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [discardRequested, setDiscardRequested] = useState(false);
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
   const [previewMode, setPreviewMode] = useState<PreviewMode>('FIT');
@@ -154,6 +158,20 @@ export function VietsubSubtitleDesignerModal({
     previewMode === 'FILL' ? 'cover' : 'contain'
   );
   const displayRatioLabel = formatAspectRatio(displayWidth, displayHeight);
+  const maskDraft = videoTransformDraft.subtitleMask;
+  const displayedMask = flipMaskRegion(maskDraft, videoTransformDraft);
+  const changeMask = (mask: VietsubSubtitleMaskSettings) => {
+    setVideoTransformDraft(current => ({ ...current, subtitleMask: mask }));
+  };
+  const changeMaskGeometry = (key: 'x' | 'y' | 'width' | 'height', percent: number) => {
+    const value = Math.round(percent * 100) / 10000;
+    const next = { ...displayedMask, [key]: value };
+    next.width = Math.max(0.02, Math.min(1, next.width));
+    next.height = Math.max(0.02, Math.min(1, next.height));
+    next.x = Math.max(0, Math.min(1 - next.width, next.x));
+    next.y = Math.max(0, Math.min(1 - next.height, next.y));
+    changeMask(flipMaskRegion(next, videoTransformDraft));
+  };
 
   const requestClose = useCallback(() => {
     if (savingRef.current || (busy && exportRequested)) return;
@@ -274,37 +292,39 @@ export function VietsubSubtitleDesignerModal({
     }
   };
 
-  const save = async () => {
-    if (!dirty || saving || busy) return;
+  const persistDraft = async () => {
+    savingRef.current = true;
     setSaving(true);
-    const saved = await onSave(
-      cloneSubtitleStyle(draft),
-      cloneAudioMixSettings(audioDraft),
-      cloneVideoTransformSettings(videoTransformDraft)
-    );
-    setSaving(false);
-    if (!saved) return;
-    setBaseline(cloneSubtitleStyle(draft));
-    setAudioBaseline(cloneAudioMixSettings(audioDraft));
-    setVideoTransformBaseline(cloneVideoTransformSettings(videoTransformDraft));
+    setSaveError(null);
+    try {
+      const saved = await onSave(cloneSubtitleStyle(draft), cloneAudioMixSettings(audioDraft),
+        cloneVideoTransformSettings(videoTransformDraft));
+      if (!saved) {
+        setSaveError('Chưa lưu được thiết kế. Hãy thử lại trước khi xuất video.');
+        return false;
+      }
+      setBaseline(cloneSubtitleStyle(draft));
+      setAudioBaseline(cloneAudioMixSettings(audioDraft));
+      setVideoTransformBaseline(cloneVideoTransformSettings(videoTransformDraft));
+      return true;
+    } catch {
+      setSaveError('Chưa lưu được thiết kế. Hãy thử lại trước khi xuất video.');
+      return false;
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const save = async () => {
+    if (!dirty || savingRef.current || busy) return;
+    if (!await persistDraft()) return;
     onClose();
   };
 
   const exportVideo = async () => {
-    if (saving || busy || !hasTranslatedSubtitles) return;
-    if (dirty) {
-      setSaving(true);
-      const saved = await onSave(
-        cloneSubtitleStyle(draft),
-        cloneAudioMixSettings(audioDraft),
-        cloneVideoTransformSettings(videoTransformDraft)
-      );
-      setSaving(false);
-      if (!saved) return;
-      setBaseline(cloneSubtitleStyle(draft));
-      setAudioBaseline(cloneAudioMixSettings(audioDraft));
-      setVideoTransformBaseline(cloneVideoTransformSettings(videoTransformDraft));
-    }
+    if (savingRef.current || busy || !hasTranslatedSubtitles) return;
+    if (dirty && !await persistDraft()) return;
     setExportRequested(true);
     onExportVideo();
   };
@@ -328,7 +348,7 @@ export function VietsubSubtitleDesignerModal({
           <div>
             <span>THIẾT KẾ THÀNH PHẨM</span>
             <h2 id="vietsub-subtitle-designer-title">Phụ đề, hình ảnh và âm thanh</h2>
-            <p>Xem trước phụ đề, lật hình video và cân bằng hai lớp âm thanh của dự án.</p>
+            <p>Che phụ đề gốc, thiết kế chữ Việt, lật hình và cân bằng âm thanh của dự án.</p>
           </div>
           <button ref={closeButtonRef} type="button" disabled={busy && exportRequested} onClick={requestClose} aria-label="Đóng thiết kế thành phẩm">
             <X size={19} />
@@ -364,6 +384,7 @@ export function VietsubSubtitleDesignerModal({
                   type="button"
                   className={videoTransformDraft.flipHorizontal ? 'is-active' : ''}
                   aria-pressed={videoTransformDraft.flipHorizontal}
+                  disabled={saving || busy}
                   onClick={() => setVideoTransformDraft((current) => ({
                     ...current,
                     flipHorizontal: !current.flipHorizontal
@@ -375,6 +396,7 @@ export function VietsubSubtitleDesignerModal({
                   type="button"
                   className={videoTransformDraft.flipVertical ? 'is-active' : ''}
                   aria-pressed={videoTransformDraft.flipVertical}
+                  disabled={saving || busy}
                   onClick={() => setVideoTransformDraft((current) => ({
                     ...current,
                     flipVertical: !current.flipVertical
@@ -428,12 +450,21 @@ export function VietsubSubtitleDesignerModal({
                     voiceAudioRef.current?.pause();
                   }}
                 />
+                <VietsubSubtitleMaskOverlay
+                  mask={maskDraft}
+                  transform={videoTransformDraft}
+                  contentRect={contentRect}
+                  sourceHeight={displayHeight}
+                  interactive={activeTab === 'MASK' && !saving && !busy}
+                  interactionScale={previewZoom / 100}
+                  onChange={changeMask}
+                />
                 {subtitlesVisible && (
                   <VietsubSubtitleOverlay
                     text={subtitleText}
                     style={draft}
                     contentRect={contentRect}
-                    interactive
+                    interactive={activeTab !== 'MASK' && !saving && !busy}
                     interactionScale={previewZoom / 100}
                     onPositionChange={changePosition}
                   />
@@ -469,11 +500,13 @@ export function VietsubSubtitleDesignerModal({
               <button type="button" disabled={previewZoom === 100} onClick={() => setPreviewZoom(100)}>100%</button>
             </div>
             <p className="vietsub-subtitle-preview-note">
-              <Move size={12} /> Kéo trực tiếp phụ đề để đặt vị trí; dùng phím mũi tên để tinh chỉnh 0,5% (giữ Shift: 2%).
+              <Move size={12} /> {activeTab === 'MASK'
+                ? 'Kéo vùng che để di chuyển, kéo góc để đổi kích thước; phím mũi tên: 0,5% (giữ Shift: 2%).'
+                : 'Kéo trực tiếp phụ đề để đặt vị trí; dùng phím mũi tên để tinh chỉnh 0,5% (giữ Shift: 2%).'}
             </p>
           </div>
 
-          <div className={`vietsub-subtitle-designer-controls ${busy || saving ? 'is-busy' : ''}`} aria-busy={busy || saving}>
+          <div className={`vietsub-subtitle-designer-controls ${busy || saving ? 'is-busy' : ''}`} aria-busy={busy || saving} inert={busy || saving}>
             <div className="vietsub-subtitle-presets" aria-label="Mẫu thiết kế phụ đề">
               {vietsubSubtitlePresets.map((preset) => (
                 <button
@@ -493,6 +526,7 @@ export function VietsubSubtitleDesignerModal({
               <button type="button" role="tab" aria-selected={activeTab === 'TEXT'} className={activeTab === 'TEXT' ? 'is-active' : ''} onClick={() => setActiveTab('TEXT')}>Chữ</button>
               <button type="button" role="tab" aria-selected={activeTab === 'EFFECTS'} className={activeTab === 'EFFECTS' ? 'is-active' : ''} onClick={() => setActiveTab('EFFECTS')}>Hiệu ứng</button>
               <button type="button" role="tab" aria-selected={activeTab === 'POSITION'} className={activeTab === 'POSITION' ? 'is-active' : ''} onClick={() => setActiveTab('POSITION')}>Vị trí</button>
+              <button type="button" role="tab" aria-selected={activeTab === 'MASK'} className={activeTab === 'MASK' ? 'is-active' : ''} onClick={() => setActiveTab('MASK')}>Che sub gốc</button>
               <button type="button" role="tab" aria-selected={activeTab === 'AUDIO'} className={activeTab === 'AUDIO' ? 'is-active' : ''} onClick={() => setActiveTab('AUDIO')}>Âm thanh</button>
             </div>
 
@@ -567,6 +601,41 @@ export function VietsubSubtitleDesignerModal({
               </div>
             )}
 
+            {activeTab === 'MASK' && (
+              <div className="vietsub-subtitle-control-section vietsub-subtitle-mask-controls" role="tabpanel" aria-label="Che sub gốc">
+                <label className="vietsub-subtitle-toggle-field">
+                  <span><strong>Che phụ đề gốc</strong><small>Áp dụng vùng che xuyên suốt video</small></span>
+                  <input type="checkbox" checked={maskDraft.enabled} onChange={event => changeMask({ ...maskDraft, enabled: event.target.checked })} />
+                </label>
+                <p className="vietsub-subtitle-mask-help">Kéo khung lên chữ gốc. Chọn làm mờ để giữ màu nền video, hoặc lớp màu để chỉnh độ trong suốt.</p>
+                <fieldset disabled={!maskDraft.enabled || saving || busy}>
+                  <label className="vietsub-subtitle-wide-field">
+                    <span>Kiểu che</span>
+                    <select value={maskDraft.mode} onChange={event => changeMask({ ...maskDraft, mode: event.target.value as VietsubSubtitleMaskSettings['mode'] })}>
+                      <option value="BLUR">Làm mờ nền (giữ hình video)</option>
+                      <option value="SOLID">Lớp màu (chỉnh độ trong suốt)</option>
+                    </select>
+                  </label>
+                  {maskDraft.mode === 'SOLID' ? <><label className="vietsub-subtitle-mask-color">
+                    <span>Màu vùng che</span>
+                    <input type="color" aria-label="Màu vùng che" value={maskDraft.color} onChange={event => changeMask({ ...maskDraft, color: event.target.value.toUpperCase() })} />
+                    <output>{maskDraft.color}</output>
+                  </label>
+                    <RangeField label="Độ trong suốt" value={Math.round((1 - (maskDraft.opacity ?? 1)) * 100)} min={0} max={100} step={1} suffix="%" onChange={value => changeMask({ ...maskDraft, opacity: (100 - value) / 100 })} />
+                    <p className="vietsub-subtitle-mask-help">Tăng độ trong suốt để nhìn thấy nền video. 100% sẽ hiện nguyên hình và chữ gốc.</p>
+                  </> : <>
+                    <RangeField label="Mức làm mờ" value={maskDraft.blurPercent} min={0.2} max={4} step={0.1} suffix="% chiều cao" onChange={value => changeMask({ ...maskDraft, blurPercent: value })} />
+                    <p className="vietsub-subtitle-mask-help">Giữ màu nền video và làm nhòe chữ gốc. Tăng mức mờ nếu còn thấy nét chữ.</p>
+                  </>}
+                  <RangeField label="Vùng che · X" value={displayedMask.x * 100} min={0} max={100 - displayedMask.width * 100} step={0.1} suffix="%" onChange={value => changeMaskGeometry('x', value)} />
+                  <RangeField label="Vùng che · Y" value={displayedMask.y * 100} min={0} max={100 - displayedMask.height * 100} step={0.1} suffix="%" onChange={value => changeMaskGeometry('y', value)} />
+                  <RangeField label="Chiều rộng vùng che" value={displayedMask.width * 100} min={2} max={100} step={0.1} suffix="%" onChange={value => changeMaskGeometry('width', value)} />
+                  <RangeField label="Chiều cao vùng che" value={displayedMask.height * 100} min={2} max={100} step={0.1} suffix="%" onChange={value => changeMaskGeometry('height', value)} />
+                </fieldset>
+                <p className="vietsub-subtitle-mask-help">Vùng che đi theo hình khi lật video. Phụ đề Việt hiển thị phía trên vùng che.</p>
+              </div>
+            )}
+
             {activeTab === 'AUDIO' && (
               <div className="vietsub-subtitle-control-section vietsub-audio-mixer" role="tabpanel">
                 <div className="vietsub-audio-mixer-heading">
@@ -625,7 +694,7 @@ export function VietsubSubtitleDesignerModal({
         </div>
 
         <footer className="vietsub-subtitle-designer-footer">
-          <span>{notice || (dirty ? 'Có thay đổi chưa lưu' : 'Hình ảnh, phụ đề và âm thanh đã đồng bộ với dự án')}</span>
+          <span role={saveError ? 'alert' : undefined}>{saveError || notice || (dirty ? 'Có thay đổi chưa lưu' : 'Hình ảnh, phụ đề và âm thanh đã đồng bộ với dự án')}</span>
           <div>
             <button type="button" className="is-secondary" disabled={saving || busy} onClick={() => {
               setDraft(cloneSubtitleStyle(defaultVietsubSubtitleStyle));
@@ -741,7 +810,7 @@ function RangeField({
   return (
     <label className="vietsub-subtitle-range-field">
       <span><strong>{label}</strong><output>{formatValue(value)} {suffix}</output></span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input type="range" aria-label={label} min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
 }

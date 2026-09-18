@@ -311,6 +311,22 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
         runner.BeforeRenderAsync = null;
         await projectStore.SaveAsync(project);
 
+        runner.BeforeRenderAsync = async () =>
+        {
+            var changedProject = await projectStore.LoadForBackgroundJobAsync(project.ProjectId);
+            changedProject.VideoTransformSettings.SubtitleMask.Enabled = true;
+            await projectStore.SaveAsync(changedProject);
+        };
+        var maskDestination = Path.Combine(_root, "out", "mask-changed-during-export.mp4");
+        var maskError = await Assert.ThrowsAsync<VietsubVideoExportException>(() => service.ExportAsync(
+            session, "owner", project.OrganizationId, maskDestination, CancellationToken.None));
+        Assert.Equal(VietsubVideoExportErrorCodes.TrackChanged, maskError.Code);
+        Assert.False(File.Exists(maskDestination));
+        Assert.DoesNotContain(Directory.EnumerateFiles(Path.GetDirectoryName(maskDestination)!),
+            path => path.Contains(".partial.mp4", StringComparison.OrdinalIgnoreCase));
+        runner.BeforeRenderAsync = null;
+        await projectStore.SaveAsync(project);
+
         // Selecting no voice permits original audio; restoring a selection requires a current timeline.
         var revision = await subtitleStore.SetVoiceEnabledAsync(project.ProjectId, track.TrackId,
             track.Revision, [track.Cues[0].CueId], false);

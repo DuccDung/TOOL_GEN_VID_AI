@@ -5,7 +5,8 @@ namespace TOOL_LOCAL.Vietsub.Translation;
 internal sealed record VietsubTranslationExecutionState(
     string? Backend = null, string? DeviceName = null, string? DeviceId = null,
     string? DriverVersion = null, int Layers = 0, bool CpuFallback = false,
-    int GpuRetries = 0, string? FallbackCode = null, string? NativeFingerprint = null);
+    int GpuRetries = 0, string? FallbackCode = null, string? NativeFingerprint = null,
+    string? PlannerPolicy = null);
 
 internal sealed partial class QwenGgufVietsubTranslationProvider
 {
@@ -15,6 +16,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider
     private Func<VietsubTranslationExecutionState, CancellationToken, Task>? _saveExecution;
     private bool _executionSelected;
     private Guid? _executionJobId;
+    private int? _maximumPlannedTargetCues;
     internal VietsubTranslationExecutionState? GetExecutionState(Guid jobId) =>
         _executionJobId == jobId ? _executionState : null;
     private string CudaDirectory => VietsubTranslationCudaPack.DirectoryPath(_componentStore.ComponentsRoot);
@@ -22,12 +24,19 @@ internal sealed partial class QwenGgufVietsubTranslationProvider
 
     internal async Task BeginExecutionAsync(string policy, VietsubTranslationExecutionState? previous,
         Func<VietsubTranslationExecutionState, CancellationToken, Task> saveExecution, CancellationToken ct,
-        Guid? jobId = null)
+        Guid? jobId = null, int? maximumPlannedTargetCues = null)
     {
         await _inferenceGate.WaitAsync(ct);
         try
         {
             _executionPolicy = VietsubTranslationExecutionPolicies.Validate(policy);
+            if (maximumPlannedTargetCues is <= 0 or > 30)
+                throw new ArgumentOutOfRangeException(nameof(maximumPlannedTargetCues));
+            _maximumPlannedTargetCues = maximumPlannedTargetCues;
+            if (previous is not null && (!VietsubTranslationGpuPlanner.IsApprovedLayerCount(previous.Layers)
+                || previous.GpuRetries < 0))
+                throw new VietsubTranslationException(VietsubTranslationErrorCodes.ContextInvalid,
+                    "Trạng thái tăng tốc của job không hợp lệ.");
             _executionJobId = jobId;
             _executionState = previous ?? new();
             _saveExecution = saveExecution;
@@ -42,10 +51,15 @@ internal sealed partial class QwenGgufVietsubTranslationProvider
     private async Task<VietsubTranslationSceneResult> TranslateWithAccelerationAsync(
         VietsubTranslationSceneRequest request, CancellationToken ct)
     {
+        var targetCount = request.Cues.Count(cue => cue.IsTarget);
+        var qualificationTargets = Math.Max(targetCount, _maximumPlannedTargetCues ?? targetCount);
         if (!_executionSelected)
         {
             _executionSelected = true;
             _executionConfig = _runtimeProfile.InferenceConfig;
+            if (_executionState.GpuRetries >= VietsubTranslationGpuPlanner.MaximumGpuFailures)
+                await SaveExecutionAsync(_executionState with { CpuFallback = true, Backend = "cpu", Layers = 0,
+                    DeviceId = null, DeviceName = null, DriverVersion = null, NativeFingerprint = null }, ct);
             if (_executionPolicy == VietsubTranslationExecutionPolicies.Auto && !_executionState.CpuFallback)
             {
                 try
@@ -59,11 +73,19 @@ internal sealed partial class QwenGgufVietsubTranslationProvider
                     else
                     {
                         var hardware = await _workerClient.ProbeHardwareAsync(ct);
-                        var device = hardware.Devices.OrderByDescending(VietsubTranslationGpuPlanner.SelectLayers).FirstOrDefault();
-                        var layers = device is null ? 0 : VietsubTranslationGpuPlanner.SelectLayers(device);
-                        if (_executionState.GpuRetries > 0) layers = Math.Min(layers, _executionState.Layers);
+                        var maximumLayers = _executionState.Layers > 0 ? _executionState.Layers
+                            : _executionState.GpuRetries > 0 ? 0 : 36;
+                        var device = hardware.Devices
+                            .Where(d => _executionState.DeviceId is null || d.Id == _executionState.DeviceId)
+                            .OrderByDescending(d => VietsubTranslationGpuPlanner.SelectLayersForScene(d, maximumLayers, qualificationTargets)).FirstOrDefault();
+                        var layers = device is null ? 0 : VietsubTranslationGpuPlanner.SelectLayersForScene(device, maximumLayers, qualificationTargets);
                         if (layers > 0)
+                        {
                             _executionConfig = _runtimeProfile.InferenceConfig with { GpuLayerCount = layers, GpuDeviceId = device!.Id };
+                            // Save admission before loading: even an interrupted first load must not raise the cap on resume.
+                            await SaveExecutionAsync(_executionState with { Layers = layers, DeviceId = device.Id,
+                                PlannerPolicy = VietsubTranslationGpuPlanner.PolicyVersion }, ct);
+                        }
                         else await SaveExecutionAsync(_executionState with { CpuFallback = true, Backend = "cpu", Layers = 0,
                             DeviceId = null, DeviceName = null, DriverVersion = null, NativeFingerprint = null,
                             FallbackCode = hardware.ErrorCode ?? (device is null ? "TRANSLATION_GPU_UNAVAILABLE" : "TRANSLATION_GPU_MEMORY") }, ct);
@@ -76,6 +98,18 @@ internal sealed partial class QwenGgufVietsubTranslationProvider
                         DeviceId = null, DeviceName = null, DriverVersion = null, NativeFingerprint = null, FallbackCode = e.Code }, ct);
                 }
             }
+        }
+
+        if (!VietsubTranslationGpuPlanner.IsQualifiedForScene(_executionConfig!.GpuLayerCount, targetCount))
+        {
+            await _workerClient.ResetAsync();
+            _loadResult = null;
+            _executionConfig = _executionConfig with { GpuLayerCount = 24 };
+            // This is a quality cap, not a failed GPU attempt. Persist before loading the
+            // conservative tier and never raise it again within this job (including resume).
+            await SaveExecutionAsync(_executionState with { Backend = null, Layers = 24,
+                NativeFingerprint = null, FallbackCode = "TRANSLATION_GPU_QUALITY_CAP",
+                PlannerPolicy = VietsubTranslationGpuPlanner.PolicyVersion }, ct);
         }
 
         while (true)
@@ -98,19 +132,38 @@ internal sealed partial class QwenGgufVietsubTranslationProvider
             catch (VietsubTranslationException e) when (_executionConfig!.GpuLayerCount > 0
                 && _executionPolicy == VietsubTranslationExecutionPolicies.Auto && VietsubTranslationGpuPlanner.CanFallback(e.Code))
             {
-                var lower = _executionState.GpuRetries == 0 && e.Code is "TRANSLATION_GPU_MEMORY" or "TRANSLATION_RUNTIME_OUT_OF_MEMORY"
+                var lower = _executionState.GpuRetries + 1 < VietsubTranslationGpuPlanner.MaximumGpuFailures
+                    && e.Code is "TRANSLATION_GPU_MEMORY" or "TRANSLATION_RUNTIME_OUT_OF_MEMORY"
                     ? VietsubTranslationGpuPlanner.ReduceLayers(_executionConfig.GpuLayerCount) : 0;
+                var deviceId = _executionConfig.GpuDeviceId;
                 await _workerClient.ResetAsync();
                 _loadResult = null;
-                _executionConfig = _runtimeProfile.InferenceConfig with
-                { GpuLayerCount = lower, GpuDeviceId = lower > 0 ? _executionConfig.GpuDeviceId : null };
                 // Persist before retry. Resume after app restart must not oscillate back to GPU.
                 await SaveExecutionAsync(_executionState with
                 { CpuFallback = lower == 0, GpuRetries = _executionState.GpuRetries + 1, FallbackCode = e.Code,
-                    Backend = lower == 0 ? "cpu" : null, Layers = lower, DeviceId = null, DeviceName = null,
-                    DriverVersion = null, NativeFingerprint = null }, ct);
+                    Backend = lower == 0 ? "cpu" : null, Layers = lower, DeviceId = lower > 0 ? deviceId : null, DeviceName = null,
+                    DriverVersion = null, NativeFingerprint = null, PlannerPolicy = VietsubTranslationGpuPlanner.PolicyVersion }, ct);
+                if (lower > 0)
+                {
+                    lower = await SelectLowerLayersAsync(lower, deviceId!, ct);
+                    await SaveExecutionAsync(_executionState with { CpuFallback = lower == 0, Layers = lower,
+                        Backend = lower == 0 ? "cpu" : null, DeviceId = lower > 0 ? deviceId : null }, ct);
+                }
+                _executionConfig = _runtimeProfile.InferenceConfig with
+                { GpuLayerCount = lower, GpuDeviceId = lower > 0 ? deviceId : null };
             }
         }
+    }
+
+    private async Task<int> SelectLowerLayersAsync(int maximumLayers, string deviceId, CancellationToken ct)
+    {
+        try
+        {
+            var hardware = await _workerClient.ProbeHardwareAsync(ct);
+            var device = hardware.Devices.SingleOrDefault(d => d.Id == deviceId);
+            return device is null ? 0 : VietsubTranslationGpuPlanner.SelectLayers(device, maximumLayers);
+        }
+        catch (VietsubTranslationException e) when (VietsubTranslationGpuPlanner.CanFallback(e.Code)) { return 0; }
     }
 
     private async Task SaveExecutionAsync(VietsubTranslationExecutionState state, CancellationToken ct)
@@ -144,10 +197,28 @@ internal sealed partial class QwenGgufVietsubTranslationProvider
                 EnsureResourcesAvailable(warningAccepted);
                 _executionConfig = _runtimeProfile.InferenceConfig with
                 { GpuLayerCount = VietsubTranslationGpuPlanner.SelectLayers(device), GpuDeviceId = device.Id };
-                await EnsureWorkerLoadedAsync(warningAccepted, ct);
-                await EnsureCudaProbeAsync(progress, ct, force: true);
+                for (var failures = 0; ; failures++)
+                {
+                    try
+                    {
+                        await EnsureWorkerLoadedAsync(warningAccepted, ct);
+                        await EnsureCudaProbeAsync(progress, ct, force: true);
+                        break;
+                    }
+                    catch (VietsubTranslationException e) when (failures + 1 < VietsubTranslationGpuPlanner.MaximumGpuFailures
+                        && e.Code is "TRANSLATION_GPU_MEMORY" or "TRANSLATION_RUNTIME_OUT_OF_MEMORY")
+                    {
+                        await _workerClient.ResetAsync();
+                        _loadResult = null;
+                        var lower = VietsubTranslationGpuPlanner.ReduceLayers(_executionConfig.GpuLayerCount);
+                        if (lower > 0) lower = await SelectLowerLayersAsync(lower, device.Id, ct);
+                        if (lower == 0) throw;
+                        _executionConfig = _runtimeProfile.InferenceConfig with { GpuLayerCount = lower, GpuDeviceId = device.Id };
+                    }
+                }
                 _executionState = new(_loadResult!.BackendIdentity, device.Name, device.Id, device.DriverVersion,
-                    _loadResult.OffloadedLayers, NativeFingerprint: _loadResult.NativeLibraryHash);
+                    _loadResult.OffloadedLayers, NativeFingerprint: _loadResult.NativeLibraryHash,
+                    PlannerPolicy: VietsubTranslationGpuPlanner.PolicyVersion);
                 progress?.Report(new("READY", 100, $"Tăng tốc NVIDIA đã vượt probe Anh/Trung → Việt trên {device.Name}.", 1, 1));
             }
             catch (InvalidDataException e)

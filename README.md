@@ -36,6 +36,8 @@ Solution: `TOOL_GEN_POST_VIDEO.slnx`.
 
 ## Luồng sản phẩm
 
+Nút **Thông tin gói** mở chi tiết gói của tài khoản (trạng thái, ngày bắt đầu/hết hạn và thiết bị). **Nâng cấp gói** mở bảng so sánh giá, thời hạn và quyền lợi lấy từ server; hỗ trợ tải lại khi lỗi hoặc chưa có gói mở bán. Hai popup hiện dùng để xem thông tin; nâng cấp/gia hạn được hướng dẫn liên hệ quản trị viên.
+
 Nút **Tạo video mới** mở popup chọn **Video ngắn** hoặc **Video dài**, nhập nội dung rồi lưu và mở project mới trong tổ chức đang chọn. Tạo project chưa gọi AI; video ngắn lưu sẵn một cảnh và chỉ tạo clip khi người dùng bấm tạo video, xác nhận chi phí.
 
 ### Video dài
@@ -68,7 +70,9 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 
 - Registry metadata nằm trên server; workspace, SQLite, media, cue và artifact nằm local. Khi chọn **Dịch Cloud**, server nhận snapshot text có giới hạn và gọi OpenAI; người dùng không chọn model hay nhập key.
 - Editor hỗ trợ COPY/LINK, playback Range, SRT, timeline, thumbnail, waveform và PaddleOCR English/Chinese.
+- Trong Thiết kế thành phẩm, tab **Che sub gốc** cho phép kéo/đổi kích thước vùng phủ màu hoặc làm mờ, lưu theo dự án và áp dụng khi xuất MP4. [Cách dùng và kiểm chứng](CHE_PHU_DE_GOC.md).
 - Dịch local Qwen chạy trong worker x64 riêng và mặc định tắt tới khi model/benchmark/smoke đạt.
+- Tăng tốc dịch local: tái sử dụng executor, chọn layer CUDA theo VRAM và fallback có giới hạn; xem [cấu hình, benchmark và phạm vi nghiệm thu](NANG_CAP_TOC_DO_DICH_LOCAL.md).
 - Chọn giọng Vietsub lưu vào project local; job tạo audio dùng đúng engine/model/voice đã snapshot. Piper hoặc Kokoro chỉ sẵn sàng khi model và runtime của giọng đó được cài, kiểm checksum và probe WAV; `NOT_INSTALLED` không phải `READY`. Kokoro vẫn cần benchmark, nghe nghiệm thu, smoke desktop và rà soát quyền voicepack trước phát hành.
 
 ### Setup hệ thống khi mở desktop

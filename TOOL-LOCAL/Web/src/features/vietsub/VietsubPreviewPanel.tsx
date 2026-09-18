@@ -14,7 +14,9 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react';
-import type { VietsubMediaImportProgress, VietsubProjectSummary, VietsubSubtitleStyle } from './types';
+import type { VietsubMediaImportProgress, VietsubProjectSummary, VietsubSubtitleStyle, VietsubVideoTransformSettings } from './types';
+import { defaultVietsubSubtitleMask, defaultVietsubVideoTransformSettings } from './vietsubVideoTransform';
+import { VietsubSubtitleMaskOverlay } from './VietsubSubtitleMaskOverlay';
 import { VietsubSubtitleOverlay, useVideoContentRect } from './VietsubSubtitleOverlay';
 import { defaultVietsubSubtitleStyle } from './vietsubSubtitleStyle';
 import { VietsubNotice } from './VietsubNotice';
@@ -34,6 +36,7 @@ type VietsubPreviewPanelProps = {
   subtitlesVisible: boolean;
   activeSubtitleText?: string | null;
   subtitleStyle?: VietsubSubtitleStyle;
+  videoTransformSettings?: VietsubVideoTransformSettings;
   onImportMedia: (mode: 'COPY' | 'LINK') => void;
   onPlayheadChange: (milliseconds: number) => void;
   onDurationChange: (milliseconds: number) => void;
@@ -61,6 +64,7 @@ export function VietsubPreviewPanel({
   subtitlesVisible,
   activeSubtitleText,
   subtitleStyle = defaultVietsubSubtitleStyle,
+  videoTransformSettings = defaultVietsubVideoTransformSettings,
   onImportMedia,
   onPlayheadChange,
   onDurationChange,
@@ -80,11 +84,14 @@ export function VietsubPreviewPanel({
     video.muted = muted;
   }, [media?.playbackUrl, muted, playbackVolume, videoRef]);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const rotation = (((media?.rotationDegrees ?? 0) % 360) + 360) % 360;
+  const displayWidth = (rotation === 90 || rotation === 270 ? media?.height : media?.width) ?? 16;
+  const displayHeight = (rotation === 90 || rotation === 270 ? media?.width : media?.height) ?? 9;
   const contentRect = useVideoContentRect(
     stageRef,
     videoRef,
-    media?.width ?? 16,
-    media?.height ?? 9
+    displayWidth,
+    displayHeight
   );
 
   return (
@@ -115,6 +122,7 @@ export function VietsubPreviewPanel({
                   ref={videoRef}
                   preload="metadata"
                   src={media.playbackUrl}
+                  style={{ transform: `scale(${videoTransformSettings.flipHorizontal ? -1 : 1}, ${videoTransformSettings.flipVertical ? -1 : 1})` }}
                   onClick={onTogglePlaying}
                   onLoadedMetadata={(event) => {
                     const video = event.currentTarget;
@@ -130,6 +138,8 @@ export function VietsubPreviewPanel({
                   onPause={() => onPlayingChange(false)}
                   onEnded={() => onPlayingChange(false)}
                 />
+                <VietsubSubtitleMaskOverlay mask={videoTransformSettings.subtitleMask ?? defaultVietsubSubtitleMask}
+                  transform={videoTransformSettings} contentRect={contentRect} sourceHeight={displayHeight} />
                 {subtitlesVisible && activeSubtitleText?.trim() && (
                   <VietsubSubtitleOverlay
                     text={activeSubtitleText}

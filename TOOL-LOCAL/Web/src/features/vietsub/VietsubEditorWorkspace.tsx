@@ -747,6 +747,7 @@ export function VietsubEditorWorkspace({
             subtitlesVisible={subtitlesVisible}
             activeSubtitleText={activeSubtitleText}
             subtitleStyle={state.subtitleStyle}
+            videoTransformSettings={state.videoTransformSettings}
             onImportMedia={onImportMedia}
             onPlayheadChange={updatePlayhead}
             onDurationChange={setDurationMilliseconds}

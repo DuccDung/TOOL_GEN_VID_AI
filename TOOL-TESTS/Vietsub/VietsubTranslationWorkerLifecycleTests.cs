@@ -5,6 +5,41 @@ namespace TOOL_TESTS.Vietsub;
 
 public sealed class VietsubTranslationWorkerLifecycleTests
 {
+    [Fact]
+    public async Task Shutdown_does_not_dispose_native_resources_while_inference_ignores_cancellation()
+    {
+        var start = new ProcessStartInfo(VietsubTranslationWorkerClientOptions.CreateDefault().WorkerExecutablePath)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        start.Environment[TestMode] = "ignore-infer-cancel";
+        using var worker = Process.Start(start)!;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        var input = worker.StandardInput.BaseStream;
+        var stdout = worker.StandardOutput.BaseStream;
+        try
+        {
+            Assert.Equal(VietsubTranslationWorkerProtocol.Hello,
+                (await VietsubTranslationWorkerFrameCodec.ReadAsync(stdout, deadline.Token))!.Type);
+            await VietsubTranslationWorkerFrameCodec.WriteAsync(input,
+                VietsubTranslationWorkerProtocol.Create(VietsubTranslationWorkerProtocol.Infer, "infer",
+                    new VietsubTranslationWorkerInferRequest("TEST", "fixture", "root ::= \"[]\"", 32, 100)), deadline.Token);
+            while (await worker.StandardError.ReadLineAsync(deadline.Token) is { } line)
+                if (line == "test_inference_entered") break;
+            var diagnostics = worker.StandardError.ReadToEndAsync(deadline.Token);
+            await VietsubTranslationWorkerFrameCodec.WriteAsync(input,
+                VietsubTranslationWorkerProtocol.Create(VietsubTranslationWorkerProtocol.Shutdown, "shutdown"), deadline.Token);
+            await worker.WaitForExitAsync(deadline.Token);
+            Assert.Equal(70, worker.ExitCode);
+            Assert.DoesNotContain("test_unsafe_engine_dispose", await diagnostics);
+        }
+        finally
+        {
+            if (!worker.HasExited) { worker.Kill(entireProcessTree: true); await worker.WaitForExitAsync(); }
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

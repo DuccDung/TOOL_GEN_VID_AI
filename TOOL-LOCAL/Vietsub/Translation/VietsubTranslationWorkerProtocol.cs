@@ -8,9 +8,9 @@ namespace TOOL_LOCAL.Vietsub.Translation;
 
 internal static class VietsubTranslationWorkerProtocol
 {
-    public const int Version = 2;
+    public const int Version = 3;
     public const int MaximumFrameBytes = 1024 * 1024;
-    public const string WorkerVersion = "1.1.0";
+    public const string WorkerVersion = "1.2.0";
     public const string ProbeHardware = "probeHardware";
 
     public const string Hello = "hello";
@@ -236,7 +236,17 @@ internal sealed record VietsubTranslationWorkerInferenceConfig(
     string ProfileId,
     string PromptProfileId,
     string SamplingProfileId,
-    string? GpuDeviceId = null);
+    string? GpuDeviceId = null,
+    string ExecutorMode = VietsubTranslationExecutorModes.Reuse);
+
+internal static class VietsubTranslationExecutorModes
+{
+    public const string Reuse = "reuse-stateless-v1";
+    public const string Legacy = "legacy-stateless-v1";
+    public const string PrefixCache = "prefix-cache-experimental-v1";
+    public static bool IsAllowed(string mode, bool benchmark) => mode == Reuse
+        || (benchmark && mode is Legacy or PrefixCache);
+}
 
 internal sealed record VietsubTranslationWorkerRuntimeProfile(
     string ProfileId,
@@ -369,7 +379,13 @@ internal sealed record VietsubTranslationWorkerMetrics(
     long PeakWorkingSetBytes,
     ulong AvailablePhysicalBytes,
     ulong AvailableCommitBytes,
-    ulong PeakDeviceUsedBytes = 0);
+    ulong PeakDeviceUsedBytes = 0,
+    double ExecutorInitializationMilliseconds = 0,
+    double? FirstOutputMilliseconds = null,
+    bool ExecutorCreated = false,
+    int? PromptTokens = null,
+    int? GeneratedTokens = null,
+    int ReusedPromptTokens = 0);
 
 internal sealed class VietsubTranslationWorkerProtocolException(
     string message,

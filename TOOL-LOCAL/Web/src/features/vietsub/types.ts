@@ -420,6 +420,19 @@ export type VietsubAudioMixSettings = {
 export type VietsubVideoTransformSettings = {
   flipHorizontal: boolean;
   flipVertical: boolean;
+  subtitleMask?: VietsubSubtitleMaskSettings;
+};
+
+export type VietsubSubtitleMaskSettings = {
+  enabled: boolean;
+  mode: 'SOLID' | 'BLUR';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  blurPercent: number;
+  opacity?: number;
 };
 
 export type VietsubSubtitlePageQuery = {

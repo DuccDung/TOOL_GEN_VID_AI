@@ -297,8 +297,12 @@ internal sealed class TranslationWorkerHost : IAsyncDisposable
             {
                 await operation.Task.WaitAsync(TimeSpan.FromSeconds(2));
             }
-            catch (Exception exception) when (exception is OperationCanceledException or TimeoutException)
+            catch (OperationCanceledException) { }
+            catch (TimeoutException)
             {
+                // Native decode can ignore cancellation until a batch finishes. Never dispose its
+                // context/weights or write gate concurrently. The isolated process owns these resources.
+                Environment.Exit(70);
             }
         }
     }

@@ -1042,6 +1042,7 @@ internal sealed class VietsubWebBridge : IDisposable
         audioMixSettings.Normalize();
         var videoTransformSettings = payload.VideoTransformSettings?.Copy()
             ?? session.Manifest.VideoTransformSettings.Copy();
+        videoTransformSettings.Normalize();
         await session.UpdateAsync(manifest =>
         {
             manifest.SubtitleStyle = style;

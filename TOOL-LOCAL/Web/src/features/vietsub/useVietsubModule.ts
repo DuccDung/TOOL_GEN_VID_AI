@@ -1338,15 +1338,18 @@ export function useVietsubModule(featureEnabled: boolean, organizationId: string
     audioMixSettings: VietsubAudioMixSettings,
     videoTransformSettings: VietsubVideoTransformSettings
   ) => {
+    const projectId = selectedProjectIdRef.current;
     const completed = await runAwaitableOperation('vietsub.subtitle.style.update', {
       style,
       audioMixSettings,
       videoTransformSettings
     });
-    if (completed) {
-      setState((current) => ({ ...current, subtitleStyle: style, audioMixSettings, videoTransformSettings }));
+    if (completed && projectId === selectedProjectIdRef.current) {
+      setState((current) => current.selectedProject?.projectId === projectId
+        ? { ...current, subtitleStyle: style, audioMixSettings, videoTransformSettings }
+        : current);
     }
-    return completed;
+    return completed && projectId === selectedProjectIdRef.current;
   }, [runAwaitableOperation]);
 
   const updateCueVoice = useCallback(async (cueIds: string[], voiceEnabled: boolean,

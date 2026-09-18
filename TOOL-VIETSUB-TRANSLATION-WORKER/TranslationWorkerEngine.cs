@@ -34,6 +34,9 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
     private static NativeLogConfig.LLamaLogCallback? _nativeLogCallback;
     private LLamaWeights? _weights;
     private ModelParams? _modelParameters;
+    private StatelessExecutor? _executor;
+    private QwenPrefixCacheExecutor? _prefixExecutor;
+    private string _executorMode = VietsubTranslationExecutorModes.Reuse;
     private string? _configFingerprint;
     private string? _backendIdentity;
     private string? _nativeLibraryHash;
@@ -97,6 +100,7 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
                 UseMemorymap = request.Config.UseMemoryMap,
                 UseMemoryLock = false
             };
+            _executorMode = request.Config.ExecutorMode;
             _diagnosticComponentRoot = request.ComponentRoot;
             _loadingModel = true;
             try { _weights = await LLamaWeights.LoadFromFileAsync(_modelParameters, cancellationToken); }
@@ -181,18 +185,43 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
             SamplingPipeline = sampling,
             AntiPrompts = ["<|im_end|>", "<|endoftext|>"]
         };
-        var executor = new StatelessExecutor(_weights, _modelParameters)
-        {
-            ApplyTemplate = true,
-            SystemMessage = SystemPrompt
-        };
         var raw = new StringBuilder();
         _nativeAllocationFailed = false;
+        _peakDeviceUsedBytes = 0;
+        var executorCreated = false;
+        double initializationMilliseconds = 0;
+        double? firstOutputMilliseconds = null;
         long nextDeviceSample = 0;
         try
         {
-            await foreach (var fragment in executor.InferAsync(request.Prompt, inference, cancellationToken))
+            cancellationToken.ThrowIfCancellationRequested();
+            IAsyncEnumerable<string> fragments;
+            var initialization = Stopwatch.StartNew();
+            if (_executorMode == VietsubTranslationExecutorModes.PrefixCache)
             {
+                executorCreated = _prefixExecutor is null;
+                _prefixExecutor ??= new QwenPrefixCacheExecutor(_weights, _modelParameters, SystemPrompt);
+                fragments = _prefixExecutor.InferAsync(request.Prompt, inference, cancellationToken);
+            }
+            else
+            {
+                var executor = _executor;
+                if (executor is null || _executorMode == VietsubTranslationExecutorModes.Legacy)
+                {
+                    executor = new StatelessExecutor(_weights, _modelParameters)
+                    {
+                        ApplyTemplate = true,
+                        SystemMessage = SystemPrompt
+                    };
+                    executorCreated = true;
+                    if (_executorMode != VietsubTranslationExecutorModes.Legacy) _executor = executor;
+                }
+                fragments = executor.InferAsync(request.Prompt, inference, cancellationToken);
+            }
+            initializationMilliseconds = initialization.Elapsed.TotalMilliseconds;
+            await foreach (var fragment in fragments)
+            {
+                if (fragment.Length > 0) firstOutputMilliseconds ??= stopwatch.Elapsed.TotalMilliseconds;
                 raw.Append(fragment);
                 if (_device is not null && stopwatch.ElapsedMilliseconds >= nextDeviceSample)
                 {
@@ -209,12 +238,24 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
                 }
             }
         }
+        catch (OperationCanceledException) { DisposeExecutors(); throw; }
         catch (Exception e) when (e is not OperationCanceledException && _device is not null && _nativeAllocationFailed)
         {
+            DisposeExecutors();
             throw new TranslationWorkerException("TRANSLATION_GPU_MEMORY", "GPU hết bộ nhớ khi xử lý scene.", true, e);
         }
+        catch { DisposeExecutors(); throw; }
 
-        return new VietsubTranslationWorkerInferResult(raw.ToString(), CaptureMetrics(stopwatch));
+        cancellationToken.ThrowIfCancellationRequested();
+        return new VietsubTranslationWorkerInferResult(raw.ToString(), CaptureMetrics(stopwatch) with
+        {
+            ExecutorInitializationMilliseconds = initializationMilliseconds,
+            FirstOutputMilliseconds = firstOutputMilliseconds,
+            ExecutorCreated = executorCreated,
+            PromptTokens = _prefixExecutor?.PromptTokens,
+            GeneratedTokens = _prefixExecutor?.GeneratedTokens,
+            ReusedPromptTokens = _prefixExecutor?.ReusedPromptTokens ?? 0
+        });
     }
 
     private static void ValidateLoadRequest(VietsubTranslationWorkerLoadRequest request)
@@ -256,7 +297,8 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
             || !string.Equals(request.ModelSha256, ModelSha256, StringComparison.Ordinal)
             || !(standardProductionConfig || lowMemoryProductionConfig || benchmarkConfig)
             || !IsApprovedResourceRequirements(request.Config.ProfileId, request.ResourceRequirements)
-            || request.Config.GpuLayerCount is not (0 or 12 or 24 or 36)
+            || !VietsubTranslationGpuPlanner.IsApprovedLayerCount(request.Config.GpuLayerCount)
+            || !VietsubTranslationExecutorModes.IsAllowed(request.Config.ExecutorMode, benchmarkMode)
             || (request.Config.GpuLayerCount == 0 ? request.Config.GpuDeviceId is not null
                 : request.Config.GpuDeviceId is null || !Regex.IsMatch(request.Config.GpuDeviceId, "^GPU-[a-f0-9-]{36}$"))
             || !request.Config.UseMemoryMap
@@ -510,8 +552,19 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
             _peakDeviceUsedBytes);
     }
 
+    private void DisposeExecutors()
+    {
+        // The host waits for the active operation before disposing the engine.
+        // StatelessExecutor closes each inference context itself, including on cancellation.
+        _executor?.Context.Dispose();
+        _executor = null;
+        _prefixExecutor?.Dispose();
+        _prefixExecutor = null;
+    }
+
     private void DisposeModel()
     {
+        DisposeExecutors();
         _weights?.Dispose();
         _weights = null;
         _modelParameters = null;
@@ -563,8 +616,9 @@ internal sealed class BackendPreflightTranslationWorkerEngine(bool forceMissing,
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal sealed class EchoTranslationWorkerEngine : ITranslationWorkerEngine
+internal sealed class EchoTranslationWorkerEngine(bool ignoreInferenceCancellation = false) : ITranslationWorkerEngine
 {
+    private bool _inferenceActive;
     public Task<VietsubTranslationWorkerLoadResult> LoadAsync(
         VietsubTranslationWorkerLoadRequest request,
         CancellationToken cancellationToken) => Task.FromResult(new VietsubTranslationWorkerLoadResult(
@@ -574,13 +628,25 @@ internal sealed class EchoTranslationWorkerEngine : ITranslationWorkerEngine
             VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(request.Config),
             new VietsubTranslationWorkerMetrics(1, 1, 1, 1, 1, 1)));
 
-    public Task<VietsubTranslationWorkerInferResult> InferAsync(
+    public async Task<VietsubTranslationWorkerInferResult> InferAsync(
         VietsubTranslationWorkerInferRequest request,
-        CancellationToken cancellationToken) => Task.FromResult(new VietsubTranslationWorkerInferResult(
-            "[]",
-            new VietsubTranslationWorkerMetrics(1, 1, 1, 1, 1, 1)));
+        CancellationToken cancellationToken)
+    {
+        _inferenceActive = true;
+        if (ignoreInferenceCancellation)
+        {
+            Console.Error.WriteLine("test_inference_entered");
+            await Task.Delay(Timeout.InfiniteTimeSpan, CancellationToken.None);
+        }
+        _inferenceActive = false;
+        return new("[]", new VietsubTranslationWorkerMetrics(1, 1, 1, 1, 1, 1));
+    }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        if (_inferenceActive) Console.Error.WriteLine("test_unsafe_engine_dispose");
+        return ValueTask.CompletedTask;
+    }
 }
 
 internal sealed class ProbeFailureTranslationWorkerEngine(string failureStage)

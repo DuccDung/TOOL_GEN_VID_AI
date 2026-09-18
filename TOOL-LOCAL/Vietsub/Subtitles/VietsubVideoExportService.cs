@@ -128,6 +128,7 @@ internal sealed class VietsubVideoExportService(
         audioMixSettings.Normalize();
         var audioMixFingerprint = JsonSerializer.Serialize(audioMixSettings, JsonOptions);
         var videoTransformSettings = project.VideoTransformSettings.Copy();
+        videoTransformSettings.Normalize();
         var videoTransformFingerprint = JsonSerializer.Serialize(videoTransformSettings, JsonOptions);
         var voiceWorkspace = await voiceStore.LoadWorkspaceAsync(
             project.ProjectId,
@@ -196,7 +197,9 @@ internal sealed class VietsubVideoExportService(
                 media.Metadata.DurationSeconds,
                 media.Metadata.HasAudio,
                 audioMixSettings,
-                videoTransformSettings);
+                videoTransformSettings,
+                displayWidth,
+                displayHeight);
             var progressPath = Path.Combine(tempDirectory, "ffmpeg-progress.txt");
             var monitoredArguments = new List<string> { "-progress", progressPath, "-stats_period", "0.5", "-nostats" };
             monitoredArguments.AddRange(renderArguments);
@@ -388,7 +391,9 @@ internal sealed class VietsubVideoExportService(
         decimal durationSeconds,
         bool sourceHasAudio,
         VietsubAudioMixSettings settings,
-        VietsubVideoTransformSettings videoTransformSettings)
+        VietsubVideoTransformSettings videoTransformSettings,
+        int displayWidth = 0,
+        int displayHeight = 0)
     {
         var includeOriginal = ShouldIncludeOriginalAudio(sourceHasAudio, settings);
         var includeVoice = ShouldIncludeTranslatedVoice(voiceTimelinePath, settings);
@@ -405,6 +410,8 @@ internal sealed class VietsubVideoExportService(
         }
 
         var videoFilters = new List<string>(3);
+        var maskFilter = VietsubSubtitleMaskFilter.Build(videoTransformSettings.SubtitleMask, displayWidth, displayHeight);
+        if (maskFilter is not null) videoFilters.Add(maskFilter);
         if (videoTransformSettings.FlipHorizontal) videoFilters.Add("hflip");
         if (videoTransformSettings.FlipVertical) videoFilters.Add("vflip");
         videoFilters.Add(subtitleFilter);

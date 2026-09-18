@@ -16,7 +16,7 @@ internal static class VietsubProjectStatuses
 
 internal sealed class VietsubProjectManifest
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 

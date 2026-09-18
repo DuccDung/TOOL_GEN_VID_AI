@@ -1,5 +1,7 @@
 # Tăng tốc dịch Local bằng CPU + NVIDIA GPU
 
+> Đây là biên bản triển khai ban đầu (worker 1.1.0 / protocol 2). Source nâng cấp worker 1.2.0 / protocol 3, tái sử dụng executor và bổ sung layer 28/30/32 được ghi riêng tại [Nâng cấp tốc độ dịch local](NANG_CAP_TOC_DO_DICH_LOCAL.md). Các số đo bên dưới thuộc từng lượt lịch sử, không phải nghiệm thu bản nâng cấp.
+
 Rà soát/triển khai ngày 2026-09-17, nhánh `main`, nền commit `e7e8e83`; thay đổi trong working tree, chưa commit. Phạm vi: dịch Qwen local trên Windows x64. OCR, tạo giọng và Dịch Cloud có pipeline riêng.
 
 ## Hành vi đã triển khai

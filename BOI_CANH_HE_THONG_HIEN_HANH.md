@@ -1,5 +1,41 @@
 # Bối cảnh hệ thống hiện hành
 
+## Popup Thông tin gói và Nâng cấp gói — 2026-09-18
+
+Hai nút Sidebar/Header đã mở popup thật. **Thông tin gói** hiển thị gói, trạng thái, ngày bắt đầu/hết hạn, số thiết bị và tổ chức được cấp nếu có. **Nâng cấp gói** tải giá, thời hạn, số thiết bị, quyền lợi và tình trạng chỗ từ server; nhận diện gói hiện tại và hỗ trợ lỗi/rỗng/thử lại. Phạm vi hiện tại là xem thông tin, hướng dẫn liên hệ quản trị viên để nâng cấp/gia hạn; không tạo thanh toán QR hoặc thay đổi license. Giữ nguyên bridge/API/SePay và luồng thanh toán của license gate. Popup đóng bằng nút/Esc, giữ Tab/Shift+Tab bên trong, trả focus; bỏ qua phản hồi cũ sau đóng, timeout hoặc đổi tài khoản.
+
+Xác minh trên `main`, nền `9646a7b4eaf271f79bd3278b36a96e0932661c58`, working tree chưa commit và giữ các thay đổi Vietsub/dịch có sẵn. Restore, npm ci, frontend build và Release solution build đạt; **6 Warning NU1900 / 0 Error** do audit NuGet không truy cập được, Vite còn cảnh báo chunk >500 kB. Frontend **268 Passed / 0 Failed / 0 Skipped**, 43 file, gồm 9 ca App/bridge mới. Chrome headless dùng bundle production với bridge/dữ liệu giả đạt **6/6** trường hợp hai popup tại 1366×900, 768×650 và 390×720; kiểm tràn ngang, cuộn, bàn phím và focus, đã xem ảnh. Lỗi Tab phát hiện ở vòng đầu đã sửa và kiểm lại.
+
+Full .NET collection tuần tự **1466 Passed / 1 Failed / 13 Skipped / 1480 Total**, 4 phút 10 giây. Bài lỗi `VietsubTimelineLayoutIntegrationTests.WebView2_keeps_label_descenders_and_waveforms_visible_at_multiple_zoom_levels` báo căn giữa chữ tại zoom đầu, cùng lỗi đã ghi ở lượt vùng che trước. Kiểm tra riêng nhóm contract giao diện/license bridge và bài Timeline sau build cuối: **21 Passed / 0 Failed / 0 Skipped**; không coi lượt full là đạt, không sửa source/assertion Timeline và chưa kết luận nguyên nhân. Các bài model/SQL opt-in bị bỏ qua không được tính là nghiệm thu.
+
+Artifact: `D:\VideoMakerDiagnostics\license-information-20260918` (log, TRX, ảnh và `verification.json`). Asset web khớp SHA-256 với wwwroot Release; diff check đạt. Chưa smoke desktop đăng nhập với catalog thật, chưa thay đổi database/cấu hình thanh toán hoặc phát hành production.
+
+## Vùng che giữ nền video và lớp màu trong suốt — 2026-09-18
+
+Sau phản hồi vùng che đen, đổi mặc định mask mới sang **Làm mờ nền (giữ hình video)**. Lớp màu có thanh **Độ trong suốt** 0–100%; preview và FFmpeg áp alpha riêng cho vùng che, giữ chữ Việt rõ. Alpha màu dự phòng cho mask mới là 0,35 (65% trong suốt). Cấu hình SOLID đã lưu thiếu alpha vẫn đọc là 1; người dùng đổi kiểu che hoặc thanh trong suốt rồi lưu, không tự ghi lại dự án. Trường `opacity` tùy chọn được validate hữu hạn/0–1, giữ JSON schema 8 và SQLite schema 6.
+
+Trên `main`, nền `9646a7b`, working tree chưa commit: restore/build Release và npm ci/build thành công. Build có **6 cảnh báo NU1900 / 0 Error** do NuGet không truy cập được dịch vụ audit; Vite còn cảnh báo chunk >500 kB. Frontend **259 Passed / 0 Failed / 0 Skipped**; nhóm mask/style/export C# **46 Passed / 0 Failed / 0 Skipped**, gồm pixel FFmpeg tại alpha 0/0,35/1. Hai fixture browser cho lớp màu trong suốt và BLUR đạt, đã xem ảnh. Full .NET collection tuần tự **1466 Passed / 1 Failed / 13 Skipped / 1480 Total**; lỗi căn giữa Timeline tại zoom đầu. Chạy riêng bài Timeline trên cùng binary đạt **1 Passed / 0 Failed / 0 Skipped**; chưa kết luận nguyên nhân, không coi lượt full là đạt. Không đổi assertion hoặc source Timeline.
+
+Artifact: `D:\VideoMakerDiagnostics\subtitle-mask-transparency-20260918`. Asset web và wwwroot Release khớp SHA-256; diff check đạt. Chưa smoke với video/dự án người dùng hoặc phát hành. [Cách chuyển vùng đen cũ sang giữ nền và chi tiết kiểm chứng](CHE_PHU_DE_GOC.md).
+
+## Che phụ đề gốc trong Thiết kế thành phẩm — 2026-09-18
+
+Thêm tab **Che sub gốc** trong cửa sổ **Phụ đề, hình ảnh và âm thanh**: bật/tắt, phủ màu kín/làm mờ, kéo vùng chữ nhật và đổi kích thước ở tám cạnh/góc, điều chỉnh bằng thanh trượt hoặc bàn phím. Một vùng cố định áp dụng xuyên suốt video, nằm dưới chữ Việt và đi theo hình khi lật; hỗ trợ tính tọa độ ở FIT/FILL và zoom. Lưu và lưu trước xuất dùng contract thiết kế hiện hành; preview ngoài modal hiển thị vùng che đã lưu. Manifest JSON nâng 7 → 8 với che mặc định tắt, giữ lật hình; SQLite vẫn schema 6. FFmpeg áp dụng che → lật → phụ đề; snapshot vùng che đổi giữa render thì không publish file tạm.
+
+Kiểm chứng trên `main`, nền `9646a7b`, working tree chưa commit và có sẵn nâng cấp dịch local từ phiên trước. Restore, Release build, npm ci/build đạt; MSBuild 0 Warning / 0 Error, Vite còn cảnh báo chunk trên 500 kB. Frontend **257 Passed / 0 Failed / 0 Skipped**. Nhóm mask/style/export C# **40 Passed / 0 Failed / 0 Skipped**, gồm tám trường hợp FFmpeg thật. Full .NET chạy collection tuần tự **1461 Passed / 0 Failed / 13 Skipped / 1474 Total**, 4 phút 25 giây. Chromium headless với component/CSS hiện hành và video tổng hợp đạt sáu tình huống viewport/zoom/FIT/FILL; đã xem ảnh, kiểm vị trí và thứ tự lớp. Asset web và wwwroot Release khớp SHA-256; diff check đạt.
+
+Các bài model/runtime và SQL opt-in bị Skipped không được tính là đạt. Chưa smoke desktop đăng nhập/video người dùng hoặc phát hành production. Blur của trình duyệt và FFmpeg có thể khác nhẹ ở kernel/biên; không khẳng định giống từng pixel. [Cách dùng, source và bằng chứng](CHE_PHU_DE_GOC.md); artifact ở `D:\VideoMakerDiagnostics\subtitle-mask-20260918`.
+
+## Nâng cấp tốc độ dịch local — 2026-09-17–18
+
+Triển khai trên `main`, nền `9646a7b`, working tree sạch trước thay đổi; chưa commit hoặc phát hành. Worker 1.2.0 / IPC 3 tái sử dụng `StatelessExecutor` trong phiên nạp model, vẫn tạo context inference/sampling riêng cho mỗi request. Planner `qwen4b-cuda12-v3` thêm 28/30/32 layer, giữ dự phòng VRAM và giới hạn tối đa ba lần GPU thất bại; lưu admission/retry trước load, resume không tăng lại layer. Cache prefix có source thử nghiệm và benchmark riêng, chưa bật cho job bình thường.
+
+Kiểm tra nội dung model thật phát hiện các mức mới làm thay đổi nghĩa trong fixture 12 câu. Vì vậy chỉ chọn 28/30/32 khi mọi nhóm đã lập kế hoạch trong job có tối đa 6 target cue; nhóm lớn dùng các mức cũ 12/24/36. Nhóm 2/6 câu của corpus khảo sát cho output trùng baseline; không suy ra chất lượng trên mọi phụ đề. Cache bản dịch, prompt/sampling, cue manual/locked, CAS và SRT atomic giữ nguyên. Bản cũ cũng có lỗi chất lượng trong fixture lớn; nâng cấp tốc độ này không được coi là sửa toàn bộ chất lượng model.
+
+Restore/Release build đạt 0 Warning / 0 Error ở MSBuild; Vite còn cảnh báo chunk trên 500 kB. Frontend **252 Passed / 0 Failed / 0 Skipped**. Full .NET trên binary cuối: lượt song song mặc định **1.442 Passed / 1 Failed / 13 Skipped**, lỗi khởi tạo PaddleOCR; lượt đầy đủ chạy tuần tự trên cùng binary **1.443 Passed / 0 Failed / 13 Skipped**. Không cộng lượt chạy rời để coi lượt mặc định đã đạt, không tính model/SQL opt-in Skipped là đã nghiệm thu. Hash binary, benchmark RTX 3050 và kiểm thử chạy dài nằm trong [biên bản nâng cấp tốc độ](NANG_CAP_TOC_DO_DICH_LOCAL.md). Chưa smoke job qua desktop đăng nhập thật, Windows sạch, bundle hoặc rollout production.
+
+Benchmark model thật trên binary cuối, RTX 3050 Laptop 4 GiB / driver 610.62: **1 Passed / 0 Failed / 0 Skipped**, bên trong **15/15 lượt cấu hình Passed**. Với corpus 16 cue chia nhóm 2/6, ba vòng đo cho thời gian inference trung bình từ **28,492 giây** (cách cũ 24 layer) xuống **18,203 giây** (reuse 32 layer), giảm **36,1%**; output trùng baseline. Không gồm load model và không áp dụng kết luận này cho job có nhóm lớn. Kiểm thử native chạy liên tục 100 nhóm cho reuse/prefix đạt trên binary khảo sát trước giới hạn chất lượng; biên bản phân biệt rõ hai bộ binary.
+
 ## Sửa lỗi GPU Vietsub khi đổi worker — 2026-09-17
 
 Triển khai trên `main`, nền `e7e8e83`, giữ các thay đổi CPU/GPU chưa commit đã có. Đã tái hiện EOF của worker dò GPU bị chủ động dừng tác động sang worker mới và gây `TRANSLATION_PROCESS_CRASHED`, khiến job Auto chuyển CPU. `VietsubTranslationWorkerClient` hiện cô lập trạng thái theo phiên, chờ stdout/stderr kết thúc trước thay process, hủy request đúng phiên và xử lý dispose trong lúc startup/request mà không giải phóng semaphore quá sớm. Không sửa model, protocol, GPU planner, checkpoint hoặc dữ liệu project.

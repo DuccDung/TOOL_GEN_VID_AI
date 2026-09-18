@@ -6,11 +6,20 @@ internal sealed class VietsubVideoTransformSettings
 
     public bool FlipVertical { get; set; }
 
+    public VietsubSubtitleMaskSettings SubtitleMask { get; set; } = new();
+
+    public void Normalize()
+    {
+        SubtitleMask ??= new();
+        SubtitleMask.Normalize();
+    }
+
     public static VietsubVideoTransformSettings CreateDefault() => new();
 
     public VietsubVideoTransformSettings Copy() => new()
     {
         FlipHorizontal = FlipHorizontal,
-        FlipVertical = FlipVertical
+        FlipVertical = FlipVertical,
+        SubtitleMask = SubtitleMask?.Copy() ?? new()
     };
 }

@@ -12,12 +12,190 @@ public sealed class VietsubTranslationAccelerationTests
     [InlineData(1024, 0)]
     [InlineData(2100, 12)]
     [InlineData(3259, 24)]
+    [InlineData(3500, 28)]
+    [InlineData(3700, 30)]
+    [InlineData(3962, 32)]
     [InlineData(6000, 36)]
     public void Planner_reserves_desktop_memory_and_limits_approved_offload(int freeMiB, int layers)
     {
-        var device = Device with { FreeBytes = (ulong)freeMiB * 1024 * 1024 };
+        var device = Device with { FreeBytes = (ulong)freeMiB << 20, TotalBytes = 8UL << 30 };
         Assert.Equal(layers, VietsubTranslationGpuPlanner.SelectLayers(device));
         Assert.Equal(0, VietsubTranslationGpuPlanner.SelectLayers(device with { ComputeMajor = 5 }));
+    }
+
+    [Theory]
+    [InlineData(12, 0)]
+    [InlineData(24, 12)]
+    [InlineData(28, 24)]
+    [InlineData(30, 28)]
+    [InlineData(32, 30)]
+    [InlineData(36, 32)]
+    public void Planner_checks_exact_free_memory_boundaries_and_resume_cap(int layers, int previous)
+    {
+        var threshold = VietsubTranslationGpuPlanner.RequiredBytes(layers);
+        var device = Device with { TotalBytes = 8UL << 30, FreeBytes = threshold - 1 };
+        Assert.Equal(previous, VietsubTranslationGpuPlanner.SelectLayers(device));
+        Assert.Equal(layers, VietsubTranslationGpuPlanner.SelectLayers(device with { FreeBytes = threshold }));
+        Assert.Equal(layers, VietsubTranslationGpuPlanner.SelectLayers(device with { FreeBytes = threshold + 1 }));
+        Assert.Equal(previous, VietsubTranslationGpuPlanner.SelectLayers(device with { FreeBytes = 8UL << 30 }, previous));
+        Assert.False(VietsubTranslationGpuPlanner.IsApprovedLayerCount(31));
+        Assert.Throws<ArgumentOutOfRangeException>(() => VietsubTranslationGpuPlanner.RequiredBytes(-1));
+    }
+
+    [Fact]
+    public void Planner_does_not_trust_free_memory_exceeding_physical_VRAM()
+    {
+        Assert.Equal(32, VietsubTranslationGpuPlanner.SelectLayers(Device with { FreeBytes = 8UL << 30 }));
+    }
+
+    [Theory]
+    [InlineData(2, 32)]
+    [InlineData(6, 32)]
+    [InlineData(7, 24)]
+    [InlineData(12, 24)]
+    public void Intermediate_tiers_are_only_qualified_for_small_target_groups(int targets, int expected)
+    {
+        var device = Device with { FreeBytes = 3962UL << 20 };
+        Assert.Equal(expected, VietsubTranslationGpuPlanner.SelectLayersForScene(device, 36, targets));
+        Assert.Equal(36, VietsubTranslationGpuPlanner.SelectLayersForScene(
+            device with { FreeBytes = 6UL << 30, TotalBytes = 8UL << 30 }, 36, targets));
+    }
+
+    [Fact]
+    public async Task Large_first_scene_uses_existing_tier_without_attempting_unqualified_GPU_levels()
+    {
+        await using var fixture = new Fixture();
+        fixture.Worker.HardwareDevice = Device with { FreeBytes = 3962UL << 20 };
+        fixture.Worker.TargetCount = 12;
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(12), default);
+        Assert.Equal(new[] { 24 }, fixture.Worker.Loads);
+    }
+
+    [Fact]
+    public async Task Job_with_a_later_large_scene_avoids_an_unnecessary_high_tier_load()
+    {
+        await using var fixture = new Fixture();
+        fixture.Worker.HardwareDevice = Device with { FreeBytes = 3962UL << 20 };
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (_, _) => Task.CompletedTask, default,
+            maximumPlannedTargetCues: 12);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(new[] { 24 }, fixture.Worker.Loads);
+    }
+
+    [Theory]
+    [InlineData(28)]
+    [InlineData(30)]
+    [InlineData(32)]
+    public async Task Growing_scene_downgrades_before_inference_and_resume_keeps_quality_cap(int initialLayers)
+    {
+        await using var fixture = new Fixture();
+        fixture.Worker.HardwareDevice = Device with { FreeBytes = VietsubTranslationGpuPlanner.RequiredBytes(initialLayers) };
+        VietsubTranslationExecutionState? saved = null;
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (s, _) => { saved = s; return Task.CompletedTask; }, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        fixture.Worker.TargetCount = 12;
+        await fixture.Provider.TranslateAsync(Request(12), default);
+        Assert.Equal(new[] { initialLayers, 24 }, fixture.Worker.Loads);
+        Assert.Equal(24, saved!.Layers);
+        Assert.Equal(0, saved.GpuRetries);
+        Assert.False(saved.CpuFallback);
+        Assert.Equal("TRANSLATION_GPU_QUALITY_CAP", saved.FallbackCode);
+        fixture.Worker.TargetCount = 1;
+        await fixture.Provider.BeginExecutionAsync("AUTO", saved, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(new[] { initialLayers, 24, 24 }, fixture.Worker.Loads);
+    }
+
+    [Theory]
+    [InlineData(28)]
+    [InlineData(30)]
+    [InlineData(32)]
+    [InlineData(36)]
+    public async Task High_layers_have_bounded_OOM_fallback_and_persist_before_retry(int layers)
+    {
+        await using var fixture = new Fixture();
+        fixture.Worker.HardwareDevice = Device with { TotalBytes = 8UL << 30,
+            FreeBytes = VietsubTranslationGpuPlanner.RequiredBytes(layers) };
+        fixture.Worker.LoadError = n => n > 0 ? "TRANSLATION_GPU_MEMORY" : null;
+        var states = new List<VietsubTranslationExecutionState>();
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (s, _) => { states.Add(s); return Task.CompletedTask; }, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(new[] { layers, 24, 12, 0 }, fixture.Worker.Loads);
+        Assert.Equal(new[] { layers, 24, 12, 0 }, states.Select(s => s.Layers).Distinct());
+        Assert.Equal(3, states[^1].GpuRetries);
+        Assert.True(states[^1].CpuFallback);
+        Assert.All(states, s => Assert.Equal(VietsubTranslationGpuPlanner.PolicyVersion, s.PlannerPolicy));
+        await fixture.Provider.BeginExecutionAsync("AUTO", states[^1], (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(0, fixture.Worker.Loads[^1]);
+    }
+
+    [Theory]
+    [InlineData(24, 0)]
+    [InlineData(28, 0)]
+    [InlineData(30, 0)]
+    [InlineData(24, 1)]
+    [InlineData(12, 2)]
+    public async Task Resume_never_raises_previously_selected_layer_count(int layers, int failures)
+    {
+        await using var fixture = new Fixture();
+        fixture.Worker.HardwareDevice = Device with { FreeBytes = 3962UL << 20 };
+        // Previous releases persisted no PlannerPolicy field.
+        var previous = JsonSerializer.Deserialize<VietsubTranslationExecutionState>(
+            JsonSerializer.Serialize(new { Layers = layers, GpuRetries = failures, DeviceId = Device.Id }));
+        Assert.Null(previous!.PlannerPolicy);
+        await fixture.Provider.BeginExecutionAsync("AUTO", previous, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(new[] { layers }, fixture.Worker.Loads);
+    }
+
+    [Fact]
+    public async Task Retry_rechecks_free_VRAM_after_stopping_worker_and_skips_unavailable_level()
+    {
+        await using var fixture = new Fixture();
+        fixture.Worker.HardwareDevice = Device with { FreeBytes = 3962UL << 20 };
+        fixture.Worker.LoadError = n =>
+        {
+            if (n != 32) return null;
+            fixture.Worker.HardwareDevice = Device with { FreeBytes = 2100UL << 20 };
+            return "TRANSLATION_GPU_MEMORY";
+        };
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(new[] { 32, 12 }, fixture.Worker.Loads);
+    }
+
+    [Fact]
+    public async Task Resume_with_missing_device_or_exhausted_budget_goes_to_CPU()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Provider.BeginExecutionAsync("AUTO", new(Layers: 24, GpuRetries: 3), (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(0, fixture.Worker.HardwareCalls);
+        await fixture.Provider.BeginExecutionAsync("AUTO", new(Layers: 24, DeviceId: "missing-device"), (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(new[] { 0, 0 }, fixture.Worker.Loads);
+    }
+
+    [Fact]
+    public async Task Cancellation_after_retry_checkpoint_does_not_resume_failed_high_layers()
+    {
+        await using var fixture = new Fixture();
+        fixture.Worker.HardwareDevice = Device with { FreeBytes = 3962UL << 20 };
+        fixture.Worker.LoadError = n => n == 32 ? "TRANSLATION_GPU_MEMORY" : null;
+        VietsubTranslationExecutionState? checkpoint = null;
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (s, _) =>
+        {
+            checkpoint = s;
+            if (s.GpuRetries == 1) throw new OperationCanceledException();
+            return Task.CompletedTask;
+        }, default);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Provider.TranslateAsync(Request(), default));
+        Assert.Equal(24, checkpoint!.Layers);
+        await fixture.Provider.BeginExecutionAsync("AUTO", checkpoint, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(new[] { 32, 24 }, fixture.Worker.Loads);
     }
 
     [Fact]
@@ -146,6 +324,27 @@ public sealed class VietsubTranslationAccelerationTests
         Assert.Null(saved.FallbackCode);
     }
 
+    [Theory]
+    [InlineData("layers")]
+    [InlineData("driver")]
+    [InlineData("worker")]
+    public async Task Probe_proof_is_invalidated_by_layer_driver_or_worker_change(string change)
+    {
+        await using var fixture = new Fixture();
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(3, fixture.Worker.ProbeCalls);
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(3, fixture.Worker.ProbeCalls); // Matching proof is reusable.
+        if (change == "layers") fixture.Worker.HardwareDevice = Device with { FreeBytes = 3500UL << 20 };
+        if (change == "driver") fixture.Worker.HardwareDevice = Device with { DriverVersion = "new-driver" };
+        if (change == "worker") fixture.Worker.WorkerBinaryFingerprint = "changed-worker";
+        await fixture.Provider.BeginExecutionAsync("AUTO", null, (_, _) => Task.CompletedTask, default);
+        await fixture.Provider.TranslateAsync(Request(), default);
+        Assert.Equal(6, fixture.Worker.ProbeCalls);
+    }
+
     [Fact]
     public async Task Cancellation_never_launches_CPU_retry()
     {
@@ -252,8 +451,9 @@ public sealed class VietsubTranslationAccelerationTests
 
     internal static readonly VietsubTranslationGpuDevice Device = new(
         "GPU-00000000-0000-0000-0000-000000000000", "Fixture NVIDIA", 0, "fixture-driver", 4UL << 30, 3259UL << 20, 8);
-    private static VietsubTranslationSceneRequest Request() => new("fixture", "en", "vi", "", "", "", [], [],
-        [new("C000001", Guid.NewGuid(), 0, 0, 1000, "speaker", "Hello.", true, 40)],
+    private static VietsubTranslationSceneRequest Request(int count = 1) => new("fixture", "en", "vi", "", "", "", [], [],
+        Enumerable.Range(0, count).Select(i => new VietsubTranslationCueInput($"C{i + 1:D6}",
+            Guid.NewGuid(), i, i * 1000, i * 1000 + 1000, "speaker", "Hello.", true, 40)).ToArray(),
         VietsubTranslationPass.Translate, "", new string('a', 64));
 
     private sealed class Fixture : IAsyncDisposable
@@ -293,7 +493,7 @@ public sealed class VietsubTranslationAccelerationTests
 
     private sealed class FakeWorker : IVietsubTranslationWorkerClient
     {
-        public string WorkerBinaryFingerprint => "fixture";
+        public string WorkerBinaryFingerprint { get; set; } = "fixture";
         public List<int> Loads { get; } = [];
         public List<string> Prompts { get; } = [];
         public Func<int, string?>? LoadError { get; set; }
@@ -301,13 +501,16 @@ public sealed class VietsubTranslationAccelerationTests
         public string? ProbeError { get; set; }
         public bool Cancel { get; set; }
         public bool NoDevice { get; set; }
+        public VietsubTranslationGpuDevice HardwareDevice { get; set; } = Device;
         public int HardwareCalls { get; private set; }
+        public int ProbeCalls { get; private set; }
+        public int TargetCount { get; set; } = 1;
         private string? _fingerprint;
         private int _layers;
         public bool IsLoaded(string configFingerprint) => _fingerprint == configFingerprint;
         public Task ResetAsync() { _fingerprint = null; return Task.CompletedTask; }
         public Task<VietsubTranslationHardwareResult> ProbeHardwareAsync(CancellationToken ct)
-        { HardwareCalls++; return Task.FromResult(new VietsubTranslationHardwareResult(NoDevice ? [] : [Device])); }
+        { HardwareCalls++; return Task.FromResult(new VietsubTranslationHardwareResult(NoDevice ? [] : [HardwareDevice])); }
         public Task<VietsubTranslationWorkerLoadResult> LoadAsync(VietsubTranslationWorkerLoadRequest request,
             IProgress<VietsubTranslationWorkerProgress>? progress, CancellationToken ct)
         {
@@ -318,11 +521,12 @@ public sealed class VietsubTranslationAccelerationTests
             if (LoadError?.Invoke(_layers) is { } code) throw new VietsubTranslationException(code, "fixture");
             _fingerprint = VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(request.Config);
             return Task.FromResult(new VietsubTranslationWorkerLoadResult(_layers > 0 ? "cuda12" : "cpu-avx2", "Avx2",
-                "fixture", _fingerprint, new(1, 1, 1, 1, 1, 1), _layers > 0 ? Device : null, _layers));
+                "fixture", _fingerprint, new(1, 1, 1, 1, 1, 1), _layers > 0 ? HardwareDevice : null, _layers));
         }
         public Task<VietsubTranslationWorkerInferResult> InferAsync(VietsubTranslationWorkerInferRequest request,
             IProgress<VietsubTranslationWorkerProgress>? progress, CancellationToken ct)
         {
+            if (request.Stage.StartsWith("PROBING", StringComparison.Ordinal)) ProbeCalls++;
             if (_layers > 0 && request.Stage.StartsWith("PROBING", StringComparison.Ordinal) && ProbeError is { } probeError)
                 throw new VietsubTranslationException(probeError, "fixture");
             if (request.Stage == "TRANSLATING")
@@ -334,6 +538,8 @@ public sealed class VietsubTranslationAccelerationTests
             {
                 "PROBING_EN" => "[{\"cueAlias\":\"C000001\",\"translatedText\":\"Chị nhờ em mở cửa.\"},{\"cueAlias\":\"C000002\",\"translatedText\":\"Em làm ngay.\"}]",
                 "PROBING_ZH" => "[{\"cueAlias\":\"C000001\",\"translatedText\":\"Hôm nay thứ hai.\"},{\"cueAlias\":\"C000002\",\"translatedText\":\"Xin lỗi, kẹt xe.\"}]",
+                "TRANSLATING" => JsonSerializer.Serialize(Enumerable.Range(1, TargetCount)
+                    .Select(i => new { cueAlias = $"C{i:D6}", translatedText = "Xin chào." })),
                 _ => "[{\"cueAlias\":\"C000001\",\"translatedText\":\"Xin chào.\"}]"
             };
             return Task.FromResult(new VietsubTranslationWorkerInferResult(raw, new(1, 1, 1, 1, 1, 1)));

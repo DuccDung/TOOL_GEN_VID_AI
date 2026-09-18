@@ -2,6 +2,8 @@ import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } f
 import { createPortal } from 'react-dom';
 import { LocalVoicePanel } from './features/localVoice/LocalVoicePanel';
 import { NewProjectDialog } from './features/projects/NewProjectDialog';
+import { LicenseInformationDialog } from './features/license/LicenseInformationDialog';
+import { useLicenseInformation } from './features/license/useLicenseInformation';
 import { TextShortVideo } from './features/shortVideo/TextShortVideo';
 import { OutfitShortVideo } from './features/shortVideo/OutfitShortVideo';
 import { createdProjectPage, shortVideoProviderStatus, type PendingProjectCreation } from './features/projects/projectCreation';
@@ -461,6 +463,7 @@ function App() {
   const pendingVoiceCatalogPreviewOperationRef = useRef(new Map<string, PendingVoiceCatalogPreview>());
   const pendingVideoVoiceQuoteRef = useRef(new Map<string, string[]>());
   const systemSetup = useSystemSetup(dashboard.selectedOrganizationId);
+  const licenseInformation = useLicenseInformation(dashboard.profile.userId);
   const vietsubStartupReady = !isHosted || Boolean(
     systemSetup.snapshot
     && (!systemSetup.snapshot.startupRequired || isSystemSetupReady(systemSetup.snapshot))
@@ -522,6 +525,7 @@ function App() {
 
   useEffect(() => {
     const unsubscribe = subscribeToHost((message: HostMessage) => {
+      if (licenseInformation.handleMessage(message)) return;
       if (message.type === 'short-library.created' && message.payload) {
         const created = message.payload as ShortVideoCreatedNotice;
         if (created.organizationId === latestDashboardRef.current.selectedOrganizationId && created.projectId === latestDashboardRef.current.selectedProject?.project.projectId)
@@ -1779,6 +1783,11 @@ function App() {
     tiktok.state.feature.isCredentialVerification &&
     dashboard.profile.roles.some((role) => role.toLowerCase() === 'admin')
   );
+  useEffect(() => {
+    if (licenseLocked || startupSystemSetupVisible || updateNotice || mediaInstallProgress || serviceError) {
+      licenseInformation.close();
+    }
+  }, [licenseLocked, startupSystemSetupVisible, updateNotice, mediaInstallProgress, serviceError]);
   const checkMediaTools = () => {
     if (generationBusy) return;
     setBusy(true);
@@ -1810,7 +1819,7 @@ function App() {
         onCreate={openNewProject}
         busy={pageBusy}
         onLogout={requestLogout}
-        onUnavailable={notify}
+        onShowLicense={() => licenseInformation.open('current')}
         interactionLocked={startupSystemSetupVisible}
       />
 
@@ -1847,6 +1856,7 @@ function App() {
             postToHost('organization.select', { organizationId });
           }}
           onUnavailable={notify}
+          onUpgrade={() => licenseInformation.open('offers')}
         />
 
         {page === 'bilibili' ? (
@@ -2117,6 +2127,19 @@ function App() {
 
       {startupSystemSetupVisible && (
         <StartupSystemSetupModal setup={systemSetup} />
+      )}
+
+      {licenseInformation.view && !licenseLocked && !startupSystemSetupVisible && !updateNotice && !mediaInstallProgress && !serviceError && (
+        <LicenseInformationDialog
+          view={licenseInformation.view}
+          license={dashboard.license}
+          offers={licenseInformation.offers}
+          loading={licenseInformation.loading}
+          error={licenseInformation.error}
+          onClose={licenseInformation.close}
+          onChangeView={licenseInformation.open}
+          onRetry={licenseInformation.loadOffers}
+        />
       )}
 
       {licenseLocked && dashboard.license && !(page === 'tiktok' && tiktokCredentialVerification) && (
@@ -2751,7 +2774,7 @@ function Sidebar({
   onCreate,
   busy,
   onLogout,
-  onUnavailable,
+  onShowLicense,
   interactionLocked = false
 }: {
   dashboard: DashboardState;
@@ -2764,7 +2787,7 @@ function Sidebar({
   onCreate: () => void;
   busy: boolean;
   onLogout: () => void;
-  onUnavailable: (message: string) => void;
+  onShowLicense: () => void;
   interactionLocked?: boolean;
 }) {
   const profile = dashboard.profile;
@@ -2841,7 +2864,7 @@ function Sidebar({
           <p>{dashboard.license?.hasActiveLicense
             ? `Hiệu lực đến ${formatDateOnly(dashboard.license.expiresAtUtc)} · ${dashboard.license.activeDeviceCount}/${dashboard.license.maxActivatedDevices} thiết bị`
             : 'Tài khoản chưa có license đang hoạt động.'}</p>
-          <button onClick={() => onUnavailable('Vui lòng liên hệ quản trị viên để thay đổi gói.')}>Thông tin gói</button>
+          <button type="button" aria-haspopup="dialog" onClick={onShowLicense}>Thông tin gói</button>
         </div>
 
         <div className="profile-card">
@@ -2863,7 +2886,8 @@ function Header({
   onRefresh,
   onSelectProject,
   onSelectOrganization,
-  onUnavailable
+  onUnavailable,
+  onUpgrade
 }: {
   dashboard: DashboardState;
   page: Page;
@@ -2874,6 +2898,7 @@ function Header({
   onSelectProject: (id: string) => void;
   onSelectOrganization: (id: string) => void;
   onUnavailable: (message: string) => void;
+  onUpgrade: () => void;
 }) {
   const pageHeader = pageHeaders[page];
 
@@ -2924,7 +2949,7 @@ function Header({
       <button className="icon-button" onClick={() => onUnavailable('Thông báo đang được phát triển.')} title="Thông báo">
         <Bell size={20} />
       </button>
-      <button className="upgrade-button" onClick={() => onUnavailable('Nâng cấp gói đang được phát triển.')}>
+      <button type="button" className="upgrade-button" aria-haspopup="dialog" onClick={onUpgrade}>
         <Sparkles size={17} /> Nâng cấp gói
       </button>
     </header>

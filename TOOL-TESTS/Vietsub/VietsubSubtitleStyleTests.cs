@@ -137,7 +137,7 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
         Assert.False(migrated.VideoTransformSettings.FlipHorizontal);
         Assert.False(migrated.VideoTransformSettings.FlipVertical);
         using var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
-        Assert.Equal(7, persisted.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(VietsubProjectManifest.CurrentSchemaVersion, persisted.RootElement.GetProperty("schemaVersion").GetInt32());
         var videoTransform = persisted.RootElement.GetProperty("videoTransformSettings");
         Assert.False(videoTransform.GetProperty("flipHorizontal").GetBoolean());
         Assert.False(videoTransform.GetProperty("flipVertical").GetBoolean());
@@ -228,7 +228,8 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
         var videoTransformSettings = new VietsubVideoTransformSettings
         {
             FlipHorizontal = true,
-            FlipVertical = true
+            FlipVertical = true,
+            SubtitleMask = new() { Enabled = true, Mode = "BLUR", X = 0.1, Width = 0.8, BlurPercent = 2 }
         };
         await bridge.TryHandleAsync(JsonSerializer.Serialize(new
         {
@@ -250,6 +251,7 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
         using var transform = JsonDocument.Parse(transformResponse);
         Assert.True(transform.RootElement.GetProperty("payload").GetProperty("flipHorizontal").GetBoolean());
         Assert.True(transform.RootElement.GetProperty("payload").GetProperty("flipVertical").GetBoolean());
+        Assert.True(transform.RootElement.GetProperty("payload").GetProperty("subtitleMask").GetProperty("enabled").GetBoolean());
         Assert.DoesNotContain(responses, response => response.Contains("vietsub.error", StringComparison.Ordinal));
 
         var persisted = await projects.OpenAsync(project.ProjectId, organizationId, owner);
@@ -261,6 +263,24 @@ public sealed class VietsubSubtitleStyleTests : IDisposable
         Assert.False(persisted.AudioMixSettings.AutoDuckOriginal);
         Assert.True(persisted.VideoTransformSettings.FlipHorizontal);
         Assert.True(persisted.VideoTransformSettings.FlipVertical);
+        Assert.Equal("BLUR", persisted.VideoTransformSettings.SubtitleMask.Mode);
+        Assert.Equal(0.1, persisted.VideoTransformSettings.SubtitleMask.X);
+        Assert.Equal(2, persisted.VideoTransformSettings.SubtitleMask.BlurPercent);
+
+        // A malformed mask must reject the complete update without changing the existing design.
+        responses.Clear();
+        videoTransformSettings.SubtitleMask.Color = "#000000;movie=secret";
+        style.FontFamily = "Arial";
+        await bridge.TryHandleAsync(JsonSerializer.Serialize(new
+        {
+            type = "vietsub.subtitle.style.update", requestId = "invalid-mask",
+            payload = new { style, audioMixSettings, videoTransformSettings }
+        }));
+        Assert.Contains(responses, response => response.Contains("vietsub.error", StringComparison.Ordinal));
+        Assert.DoesNotContain(responses, response => response.Contains("vietsub.video.transform.updated", StringComparison.Ordinal));
+        var unchanged = await projects.OpenAsync(project.ProjectId, organizationId, owner);
+        Assert.Equal("Segoe UI", unchanged.SubtitleStyle.FontFamily);
+        Assert.Equal("#000000", unchanged.VideoTransformSettings.SubtitleMask.Color);
 
         responses.Clear();
         currentOrganizationId = Guid.NewGuid();

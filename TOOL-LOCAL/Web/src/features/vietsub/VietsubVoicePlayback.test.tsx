@@ -7,7 +7,7 @@ import { VietsubEditorWorkspace } from './VietsubEditorWorkspace';
 import type { VietsubModuleState, VietsubProjectSummary } from './types';
 import { defaultVietsubAudioMixSettings } from './vietsubAudioMix';
 import { defaultVietsubSubtitleStyle } from './vietsubSubtitleStyle';
-import { defaultVietsubVideoTransformSettings } from './vietsubVideoTransform';
+import { defaultVietsubSubtitleMask, defaultVietsubVideoTransformSettings } from './vietsubVideoTransform';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -145,7 +145,7 @@ describe('Vietsub video flip designer', () => {
       .toContain('Lật trái–phải');
     await click('Lưu thay đổi');
     expect(onSave).toHaveBeenCalledOnce();
-    expect(onSave.mock.calls[0][2]).toEqual({ flipHorizontal: true, flipVertical: true });
+    expect(onSave.mock.calls[0][2]).toEqual({ ...defaultVietsubVideoTransformSettings, flipHorizontal: true, flipVertical: true });
   });
 
   it('lưu trước khi xuất và đưa thiết lập lật về mặc định khi yêu cầu', async () => {
@@ -158,12 +158,171 @@ describe('Vietsub video flip designer', () => {
     expect(video.style.transform).toBe('scale(-1, 1)');
     await click('Lật trên–dưới');
     await click('Xuất MP4');
-    expect(onSave.mock.calls[0][2]).toEqual({ flipHorizontal: true, flipVertical: true });
+    expect(onSave.mock.calls[0][2]).toEqual({ ...defaultVietsubVideoTransformSettings, flipHorizontal: true, flipVertical: true });
     expect(onExportVideo).toHaveBeenCalledOnce();
 
     await click('Mặc định');
     expect(video.style.transform).toBe('scale(1, 1)');
     expect(container.querySelectorAll('.vietsub-subtitle-preview-tools button[aria-pressed="true"]')).toHaveLength(0);
+  });
+});
+
+describe('Vietsub source subtitle mask designer', () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(440);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(640);
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { configurable: true, value: vi.fn() });
+    Object.defineProperty(HTMLElement.prototype, 'hasPointerCapture', { configurable: true, value: () => false });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(HTMLElement.prototype, 'setPointerCapture');
+    Reflect.deleteProperty(HTMLElement.prototype, 'hasPointerCapture');
+  });
+  const maskSettings = () => ({ ...defaultVietsubVideoTransformSettings,
+    subtitleMask: { ...defaultVietsubSubtitleMask, enabled: true, x: .2, y: .2, width: .4, height: .15 } });
+  const effect = () => container.querySelector<HTMLDivElement>('.vietsub-subtitle-mask-effect')!;
+  const selection = () => container.querySelector<HTMLDivElement>('.vietsub-subtitle-mask-selection')!;
+  async function input(label: string, value: string) {
+    const element = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+    expect(element).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value);
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  async function pointer(target: Element, type: string, x: number, y: number) {
+    await act(async () => {
+      const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+      Object.defineProperty(event, 'pointerId', { value: 1 });
+      target.dispatchEvent(event);
+    });
+  }
+
+  it('mặc định làm mờ nền khi bật che, lưu và không thay thiết lập đầu vào', async () => {
+    const onSave = vi.fn(async (..._args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>) => true);
+    await openDesigner(false, onSave);
+    expect(effect()).toBeNull();
+    await click('Che sub gốc');
+    const checkbox = container.querySelector<HTMLInputElement>('.vietsub-subtitle-mask-controls input[type="checkbox"]')!;
+    await act(async () => checkbox.click());
+    expect(effect().style.backgroundColor).toBe('');
+    expect(effect().style.backdropFilter).toBe('blur(9.6px)');
+    expect(selection()).not.toBeNull();
+    expect(container.querySelectorAll('.vietsub-subtitle-mask-handle')).toHaveLength(8);
+    expect(container.querySelector('.vietsub-subtitle-render-text.is-interactive')).toBeNull();
+    await click('Lưu thay đổi');
+    expect(onSave.mock.calls[0][2].subtitleMask).toEqual({ ...defaultVietsubSubtitleMask, enabled: true });
+    expect(defaultVietsubVideoTransformSettings.subtitleMask?.enabled).toBe(false);
+  });
+
+  it('lớp màu nhìn xuyên nền theo thanh độ trong suốt và lưu đúng mức trước xuất', async () => {
+    const onSave = vi.fn(async (..._args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>) => true);
+    const onExport = vi.fn();
+    await openDesigner(false, onSave, onExport, maskSettings());
+    await click('Che sub gốc');
+    const select = container.querySelector<HTMLSelectElement>('.vietsub-subtitle-mask-controls select')!;
+    await act(async () => {
+      select.value = 'SOLID';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(effect().style.opacity).toBe('0.35');
+    await input('Độ trong suốt', '75');
+    expect(effect().style.opacity).toBe('0.25');
+    expect(container.querySelector<HTMLDivElement>('.vietsub-subtitle-render-layer')?.style.opacity).toBe('');
+    await click('Xuất MP4');
+    expect(onSave.mock.calls[0][2].subtitleMask).toMatchObject({ mode: 'SOLID', opacity: 0.25 });
+    expect(onSave.mock.invocationCallOrder[0]).toBeLessThan(onExport.mock.invocationCallOrder[0]);
+  });
+
+  it('đọc vùng phủ màu cũ đúng mức, cho đổi sang nền mờ và bỏ hoàn toàn màu đen', async () => {
+    const onSave = vi.fn(async (..._args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>) => true);
+    const legacy = maskSettings();
+    legacy.subtitleMask.mode = 'SOLID';
+    delete legacy.subtitleMask.opacity;
+    await openDesigner(false, onSave, () => {}, legacy);
+    await click('Che sub gốc');
+    expect(effect().style.opacity).toBe('1');
+    const select = container.querySelector<HTMLSelectElement>('.vietsub-subtitle-mask-controls select')!;
+    await act(async () => {
+      select.value = 'BLUR';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(effect().style.backgroundColor).toBe('');
+    expect(effect().style.opacity).toBe('');
+    expect(effect().style.backdropFilter).toBe('blur(9.6px)');
+    await click('Lưu thay đổi');
+    expect(onSave.mock.calls[0][2].subtitleMask?.mode).toBe('BLUR');
+  });
+
+  it('kéo và đổi kích thước theo zoom; lật hình mang theo vùng che trước khi xuất', async () => {
+    const onSave = vi.fn(async (..._args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>) => true);
+    const onExport = vi.fn();
+    await openDesigner(false, onSave, onExport, maskSettings());
+    await click('Che sub gốc');
+    await input('Thu phóng khung xem trước', '150');
+    const contentWidth = parseFloat(effect().style.width) / .4;
+    const startLeft = parseFloat(effect().style.left);
+    await pointer(selection(), 'pointerdown', 100, 100);
+    await pointer(selection(), 'pointermove', 100 + contentWidth * .1 * 1.5, 100);
+    await pointer(selection(), 'pointerup', 100 + contentWidth * .1 * 1.5, 100);
+    expect(parseFloat(effect().style.left) - startLeft).toBeCloseTo(contentWidth * .1);
+    const handle = container.querySelector('[aria-label="Chỉnh vùng che: cạnh phải"]')!;
+    await pointer(handle, 'pointerdown', 100, 100);
+    await pointer(selection(), 'pointermove', 100 + contentWidth * .1 * 1.5, 100);
+    await pointer(selection(), 'pointercancel', 100, 100);
+    expect(parseFloat(effect().style.width)).toBeCloseTo(contentWidth * .5);
+    await click('Lật trái–phải');
+    await click('Lật trên–dưới');
+    await click('Xuất MP4');
+    const saved = onSave.mock.calls[0][2];
+    expect(saved.subtitleMask?.x).toBeCloseTo(.3);
+    expect(saved.subtitleMask?.width).toBeCloseTo(.5);
+    expect(saved.subtitleMask?.y).toBe(.2);
+    expect(saved.flipHorizontal && saved.flipVertical).toBe(true);
+    expect(onSave.mock.invocationCallOrder[0]).toBeLessThan(onExport.mock.invocationCallOrder[0]);
+  });
+
+  it('đổi kiểu làm mờ, điều chỉnh bằng bàn phím và giữ phụ đề Việt phía trên', async () => {
+    const onSave = vi.fn(async (..._args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>) => true);
+    await openDesigner(false, onSave, () => {}, maskSettings());
+    await click('Che sub gốc');
+    const select = container.querySelector<HTMLSelectElement>('.vietsub-subtitle-mask-controls select')!;
+    await act(async () => {
+      select.value = 'BLUR';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await input('Mức làm mờ', '3');
+    expect(effect().style.backdropFilter).toBe('blur(19.2px)');
+    await act(async () => selection().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true })));
+    expect(container.querySelector('.vietsub-subtitle-render-text')?.textContent).toBe('Fixture');
+    await click('Lưu thay đổi');
+    expect(onSave.mock.calls[0][2].subtitleMask).toMatchObject({ mode: 'BLUR', blurPercent: 3, x: .22 });
+  });
+
+  it('không xuất khi lưu lỗi, giữ bản nháp và cho phép thử lại', async () => {
+    const onSave = vi.fn<(...args: Parameters<ComponentProps<typeof VietsubSubtitleDesignerModal>['onSave']>) => Promise<boolean>>()
+      .mockRejectedValueOnce(new Error('fixture save failed')).mockResolvedValue(true);
+    const onExport = vi.fn();
+    await openDesigner(false, onSave, onExport, maskSettings());
+    await click('Che sub gốc');
+    await input('Chiều cao vùng che', '20');
+    await click('Xuất MP4');
+    expect(onExport).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Chưa lưu được');
+    await click('Xuất MP4');
+    expect(onExport).toHaveBeenCalledOnce();
+    expect(onSave.mock.calls[1][2].subtitleMask?.height).toBe(.2);
+  });
+
+  it('mặc định tắt che; hủy bản nháp không gọi lưu', async () => {
+    const onSave = vi.fn(async () => true);
+    await openDesigner(false, onSave, () => {}, maskSettings());
+    await click('Mặc định');
+    expect(effect()).toBeNull();
+    await click('Hủy');
+    expect(container.querySelector('[role="alertdialog"]')).not.toBeNull();
+    await click('Bỏ thay đổi');
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 

@@ -24,16 +24,38 @@ internal sealed record VietsubTranslationHardwareResult(
 
 internal static class VietsubTranslationGpuPlanner
 {
-    public const string PolicyVersion = "qwen4b-cuda12-v1";
+    public const string PolicyVersion = "qwen4b-cuda12-v3";
+    public const int MaximumGpuFailures = 3;
+    // The new intermediate tiers matched the baseline on 2/6-target fixtures. Twelve-target
+    // fixtures introduced meaning regressions, so production retains the existing tiers there.
+    public const int IntermediateLayerMaximumTargetCues = 6;
+    private static readonly int[] LayerCandidates = [36, 32, 30, 28, 24, 12];
     // Q4 weights + F16 KV at context 4096 + compute buffers + desktop reserve.
     // These are admission estimates; actual allocation and inference must also succeed.
     public const ulong FixedReserveBytes = 1024UL * 1024 * 1024;
     public const ulong PerLayerBytes = 86UL * 1024 * 1024;
-    public static int SelectLayers(VietsubTranslationGpuDevice device) =>
-        device.ComputeMajor < 6 ? 0 : new[] { 36, 24, 12 }
-            .FirstOrDefault(layers => RequiredBytes(layers) <= device.FreeBytes);
-    public static ulong RequiredBytes(int layers) => FixedReserveBytes + (ulong)layers * PerLayerBytes;
-    public static int ReduceLayers(int layers) => layers switch { 36 => 24, 24 => 12, _ => 0 };
+    public static bool IsApprovedLayerCount(int layers) => layers == 0 || LayerCandidates.Contains(layers);
+    public static int SelectLayers(VietsubTranslationGpuDevice device) => SelectLayers(device, 36);
+    public static int SelectLayers(VietsubTranslationGpuDevice device, int maximumLayers) =>
+        device.ComputeMajor < 6 ? 0 : LayerCandidates.FirstOrDefault(layers =>
+            layers <= maximumLayers && RequiredBytes(layers) <= Math.Min(device.FreeBytes, device.TotalBytes));
+    public static bool IsQualifiedForScene(int layers, int targetCueCount) =>
+        IsApprovedLayerCount(layers) && targetCueCount > 0
+        && (layers is not (28 or 30 or 32) || targetCueCount <= IntermediateLayerMaximumTargetCues);
+    public static int SelectLayersForScene(VietsubTranslationGpuDevice device, int maximumLayers, int targetCueCount) =>
+        device.ComputeMajor < 6 ? 0 : LayerCandidates.FirstOrDefault(layers => layers <= maximumLayers
+            && IsQualifiedForScene(layers, targetCueCount)
+            && RequiredBytes(layers) <= Math.Min(device.FreeBytes, device.TotalBytes));
+    public static ulong RequiredBytes(int layers) => IsApprovedLayerCount(layers)
+        ? FixedReserveBytes + (ulong)layers * PerLayerBytes
+        : throw new ArgumentOutOfRangeException(nameof(layers));
+    // Recover promptly on known conservative profiles rather than loading every intermediate level.
+    public static int ReduceLayers(int layers) => layers switch
+    {
+        36 or 32 or 30 or 28 => 24,
+        24 => 12,
+        _ => 0
+    };
     public static bool CanFallback(string code) => code is
         "TRANSLATION_GPU_UNAVAILABLE" or "TRANSLATION_GPU_MEMORY" or
         "TRANSLATION_GPU_DRIVER" or "TRANSLATION_GPU_QUERY_UNAVAILABLE" or

@@ -14,6 +14,7 @@ internal static class TranslationWorkerProgram
 
         await using ITranslationWorkerEngine engine = testMode switch
         {
+            "ignore-infer-cancel" => new EchoTranslationWorkerEngine(ignoreInferenceCancellation: true),
             "echo" or "stderr-large" or "hang-after-hello" or "hang-with-child" =>
                 new EchoTranslationWorkerEngine(),
             "probe-fail-runtime" => new ProbeFailureTranslationWorkerEngine("PROBING_RUNTIME"),

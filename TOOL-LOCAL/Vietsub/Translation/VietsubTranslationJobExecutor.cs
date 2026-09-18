@@ -186,7 +186,8 @@ internal sealed class VietsubTranslationJobExecutor(
             {
                 state = state with { Execution = execution };
                 await context.SaveCheckpointAsync(JsonSerializer.Serialize(state, JsonOptions), ct);
-            }, cancellationToken, jobId: context.Job.Id);
+            }, cancellationToken, jobId: context.Job.Id,
+                maximumPlannedTargetCues: scenes.Count == 0 ? null : scenes.Max(scene => scene.TargetCueIds.Count));
         }
         foreach (var (item, status) in resumeGuards)
         {
