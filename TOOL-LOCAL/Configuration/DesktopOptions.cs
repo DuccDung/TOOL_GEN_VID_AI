@@ -21,9 +21,9 @@ public sealed class DesktopOptions
 
     public DesktopLocalVoiceOptions LocalVoice { get; init; } = new();
 
-    public static DesktopOptions Load() => Load(AppContext.BaseDirectory);
+    public static DesktopOptions Load() => Load(AppContext.BaseDirectory, DesktopUserSettingsStore.PreferencesDirectory);
 
-    internal static DesktopOptions Load(string applicationDirectory)
+    internal static DesktopOptions Load(string applicationDirectory, string? preferencesDirectory = null, bool requireDatabase = true)
     {
         var path = Path.Combine(applicationDirectory, "appsettings.json");
         if (!File.Exists(path))
@@ -41,6 +41,15 @@ public sealed class DesktopOptions
             Merge(root, userRoot);
         }
 
+        if (preferencesDirectory is not null)
+        {
+            var features = root["Features"] as JsonObject ?? new JsonObject();
+            features["SpeechSynchronizationEnabled"] = DesktopUserSettingsStore.ReadSpeechSynchronizationEnabled(
+                applicationDirectory, features["SpeechSynchronizationEnabled"]?.GetValue<bool>() ?? false,
+                preferencesDirectory);
+            root["Features"] = features;
+        }
+
         var options = root.Deserialize<DesktopOptions>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidOperationException("Không thể đọc cấu hình Desktop.");
@@ -51,7 +60,7 @@ public sealed class DesktopOptions
             throw new InvalidOperationException("Server:BaseUrl phải là HTTPS URL hợp lệ.");
         }
 
-        if (string.IsNullOrWhiteSpace(options.Database.ConnectionString))
+        if (requireDatabase && string.IsNullOrWhiteSpace(options.Database.ConnectionString))
         {
             throw new InvalidOperationException("Database:ConnectionString chưa được cấu hình.");
         }

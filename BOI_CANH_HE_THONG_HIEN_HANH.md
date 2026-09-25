@@ -1,5 +1,23 @@
 # Bối cảnh hệ thống hiện hành
 
+## Admin Web vuông, không viền — 2026-09-23
+
+Trên `main`, nền `0a85b569914a9a230425442e9f0b3e1c16072cf1`, working tree chưa commit: đã đồng bộ shell, Tổng quan, người dùng, tổ chức/AI, TikTok, gói, release, đăng nhập và dialog theo thiết kế vuông, không viền trang trí. Header tìm người dùng bằng API hiện có; số liệu Tổng quan lấy từ server, không suy ra thống kê toàn hệ thống từ một trang dữ liệu. Giữ Razor/JavaScript, contract, quyền và luồng nghiệp vụ; có bố cục mobile và chỉ báo focus bàn phím.
+
+Restore/Release build đạt 0 Warning / 0 Error MSBuild; Vite còn cảnh báo chunk >500 kB. Full .NET **1.528 Passed / 0 Failed / 13 Skipped**, frontend **268 Passed / 0 Failed / 0 Skipped**, Admin shell/TikTok state/browser **27 Passed / 0 Failed / 0 Skipped**. Browser dùng source hiện hành với API giả, kiểm năm độ rộng và các tab tổ chức, đã xem ảnh. **Chưa smoke server/database thật hoặc rollout production**; các bài opt-in bị skip không tính là đạt. [Task, ảnh, lệnh và giới hạn](PLAN_TASK_ADMIN_WEB_VUONG_KHONG_VIEN.md).
+
+## Sửa loader WebView2 trong desktop publish — 2026-09-23
+
+Trên `main`, nền `0a85b569914a9a230425442e9f0b3e1c16072cf1`, working tree chưa commit và giữ các thay đổi có sẵn: desktop chỉ định đường loader x64 trong chính gói trước API WebView2 đầu tiên; phân biệt thiếu/hỏng DLL với thiếu Evergreen. Thêm `--check-webview2`, kiểm loader trong MSBuild/script publish và probe với PATH chỉ gồm Windows. Gói cũ tái hiện lỗi với PATH tối giản; gói single-file mới trả READY và ba fixture thiếu/hỏng/x86 bị từ chối đúng.
+
+Release solution build đạt 0 Warning / 0 Error MSBuild; full .NET **1.528 Passed / 0 Failed / 13 Skipped**, frontend **268 Passed / 0 Failed / 0 Skipped**. Gói Development riêng kiểm 42 component/24 web asset đạt; probe local media/OCR/Piper READY, Qwen DISABLED. Config thử đã bỏ mật khẩu SQL; không thay cấu hình gốc. Publish còn hai cảnh báo profile ở project con và Vite chunk >500 kB. **Chưa nghiệm thu login/SQL trên máy đích hoặc rollout production**; giữ nguyên phê duyệt FFmpeg Development. [Task, hash, lệnh và bằng chứng](PLAN_TASK_SUA_LOI_WEBVIEW2_PUBLISH.md).
+
+## Chuẩn hóa TOOL-LOCAL cho máy mới — 2026-09-18, triển khai một phần
+
+Trên nhánh `main`, nền `0a85b569914a9a230425442e9f0b3e1c16072cf1`, working tree chưa commit: đã chuyển tùy chọn UI sang LocalAppData, sửa composition để tắt dịch thì không yêu cầu Qwen, bổ sung `--check-desktop` và kiểm cấu hình/bundle trước phát hành. Lệnh chẩn đoán và app dùng chung factory Qwen/Piper; không cài/chạy inference model để thu báo cáo. **Chưa chuyển workflow SQL sang API, chưa sửa/deploy server, chưa nghiệm thu Windows sạch.** Bản hiện hành vẫn cần SQL; script phát hành từ chối host phát triển/mật khẩu nhúng và không chấp nhận xóa cấu hình SQL để giả định đã hỗ trợ API.
+
+Restore và Release solution build đạt, MSBuild 0 Warning / 0 Error; Vite còn cảnh báo chunk >500 kB. Full .NET sau sửa cuối chạy collection tuần tự **1.493 Passed / 0 Failed / 13 Skipped / 1.506 Total**, 4 phút 04 giây. Frontend **268 Passed / 0 Failed / 0 Skipped**, 43 file. Model/runtime/SQL opt-in bị skip không được tính là đạt. Artifact self-contained Development có 319 file; kiểm 41 mục component/24 web asset đạt, ba fixture package lỗi bị chặn đúng. Chạy EXE publish trên máy hiện tại: media/OCR/Piper READY, Qwen DISABLED đúng cờ, WebView2 có; không suy ra server/workflow hoặc cài model trên máy sạch đã sẵn sàng. Gate release vẫn chặn FFmpeg vì approval scope Development. [Phạm vi, bản đồ SQL, hash và bằng chứng](TRIEN_KHAI_TOOL_LOCAL_TREN_MAY_MOI.md); artifact tại `D:\VideoMakerDiagnostics\desktop-portability-implementation-20260918`. Chưa rollout production.
+
 ## Popup Thông tin gói và Nâng cấp gói — 2026-09-18
 
 Hai nút Sidebar/Header đã mở popup thật. **Thông tin gói** hiển thị gói, trạng thái, ngày bắt đầu/hết hạn, số thiết bị và tổ chức được cấp nếu có. **Nâng cấp gói** tải giá, thời hạn, số thiết bị, quyền lợi và tình trạng chỗ từ server; nhận diện gói hiện tại và hỗ trợ lỗi/rỗng/thử lại. Phạm vi hiện tại là xem thông tin, hướng dẫn liên hệ quản trị viên để nâng cấp/gia hạn; không tạo thanh toán QR hoặc thay đổi license. Giữ nguyên bridge/API/SePay và luồng thanh toán của license gate. Popup đóng bằng nút/Esc, giữ Tab/Shift+Tab bên trong, trả focus; bỏ qua phản hồi cũ sau đóng, timeout hoặc đổi tài khoản.

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using Microsoft.Web.WebView2.Core;
 using TOOL_LOCAL.Authentication;
 
 namespace TOOL_LOCAL.SystemSetup;
@@ -16,12 +15,14 @@ internal static class DesktopPrerequisites
                 "Hệ thống chưa phù hợp", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
         }
-        if (HasWebView()) return true;
+        var status = DesktopWebViewRuntime.Inspect();
+        if (status.IsReady) return true;
         using var form = new Form { Icon = BrandIdentity.WindowIcon, Text = "Chuẩn bị giao diện taphoatool", StartPosition = FormStartPosition.CenterScreen,
             ClientSize = new Size(580, 210), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
         var text = new Label { Left = 24, Top = 22, Width = 530, Height = 100,
-            Text = "Máy này chưa có Microsoft Edge WebView2 Runtime.\n\nMở trang Microsoft, cài Evergreen Runtime x64 rồi bấm Kiểm tra lại. Bước này không cần mở dự án." };
+            Text = status.Message };
         var install = new Button { Text = "Mở trang cài WebView2", Left = 24, Top = 140, Width = 210, Height = 40 };
+        install.Enabled = status.ErrorCode is "webview2_runtime_missing" or "webview2_initialization_failed";
         var check = new Button { Text = "Kiểm tra lại", Left = 248, Top = 140, Width = 140, Height = 40 };
         var close = new Button { Text = "Đóng", Left = 402, Top = 140, Width = 140, Height = 40, DialogResult = DialogResult.Cancel };
         install.Click += (_, _) => {
@@ -29,15 +30,15 @@ internal static class DesktopPrerequisites
             catch { text.Text = "Không mở được trình duyệt. Hãy cài Microsoft Edge WebView2 Runtime từ trang Microsoft rồi kiểm tra lại."; }
         };
         check.Click += (_, _) => {
-            if (HasWebView()) { form.DialogResult = DialogResult.OK; form.Close(); }
-            else text.Text = "Chưa tìm thấy WebView2 Runtime. Hãy hoàn tất bộ cài Microsoft rồi thử lại.";
+            status = DesktopWebViewRuntime.Inspect();
+            if (status.IsReady) { form.DialogResult = DialogResult.OK; form.Close(); }
+            else
+            {
+                text.Text = status.Message;
+                install.Enabled = status.ErrorCode is "webview2_runtime_missing" or "webview2_initialization_failed";
+            }
         };
         form.Controls.AddRange([text, install, check, close]);
         return form.ShowDialog() == DialogResult.OK;
-    }
-    private static bool HasWebView()
-    {
-        try { return !string.IsNullOrWhiteSpace(CoreWebView2Environment.GetAvailableBrowserVersionString()); }
-        catch (WebView2RuntimeNotFoundException) { return false; }
     }
 }

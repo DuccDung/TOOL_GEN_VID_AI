@@ -1271,7 +1271,7 @@ internal sealed partial class DashboardBridge : IDisposable
             PostError(
                 request.RequestId,
                 "desktop_settings_save_failed",
-                "Không thể lưu cài đặt trên máy này. Hãy kiểm tra quyền ghi thư mục ứng dụng.");
+                "Không thể lưu cài đặt trên máy này. Hãy kiểm tra dung lượng và quyền ghi dữ liệu người dùng.");
             return;
         }
 

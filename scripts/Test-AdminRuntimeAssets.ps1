@@ -5,7 +5,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ExpectedMarker = 'admin-setup-center-20260904.1',
+    [string]$ExpectedMarker = 'admin-square-20260923.1',
 
     [Parameter()]
     [switch]$SkipCertificateCheck

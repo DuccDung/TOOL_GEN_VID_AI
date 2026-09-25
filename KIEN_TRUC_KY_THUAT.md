@@ -1,5 +1,11 @@
 # Kiến trúc kỹ thuật VideoMaker
 
+## Chuẩn hóa desktop cho máy mới — 2026-09-18
+
+`DesktopComponentComposition` thống nhất điều kiện Vietsub + dịch local giữa provider và registry; provider null khiến Qwen Setup DISABLED. `DesktopUserSettingsStore` ghi lựa chọn đồng bộ lời nói atomically vào `%LOCALAPPDATA%/ToolGenPostVideo/settings/preferences.json`, đọc fallback legacy nhưng chỉ áp dụng khóa được phép, không chép endpoint/database/đường dẫn riêng. Cấu hình phát hành và override máy phát triển vẫn tách riêng.
+
+`DesktopReadinessCommand` xử lý `--check-desktop` trước WinForms/login, không tạo factory SQL hoặc gọi API. Nó kiểm nền tảng/WebView2, probe fixture media/OCR và đọc bằng chứng runtime Qwen/Piper hiện có; không tải model hay suy ra toàn bộ app đã sẵn sàng từ component readiness. Luồng desktop thông thường vẫn cần SQL; nhóm chuyển workflow qua API chưa triển khai. Script publish kiểm endpoint/config/bundle, yêu cầu lựa chọn SQL chuyển tiếp rõ ràng và không cho xóa connection setting để giả lập bản chỉ dùng API. [Trạng thái và kiểm chứng](TRIEN_KHAI_TOOL_LOCAL_TREN_MAY_MOI.md).
+
 ## Thông tin gói trong desktop — 2026-09-18
 
 Hai nút ở Sidebar/Header mở `LicenseInformationDialog`: thông tin hiện tại lấy từ `dashboard.license`, danh sách gói qua bridge `license.offers.get` → `DashboardBridge.GetLicenseOffersAsync` → API thanh toán hiện hành. `useLicenseInformation` giữ request ID riêng; App định tuyến phản hồi của popup trước handler chung để lỗi đọc dữ liệu không thay busy/payment state. Đóng/đổi tài khoản/timeout bỏ qua phản hồi cũ; license gate, Setup và thông báo hệ thống có ưu tiên. Native dialog khóa nền, bổ sung vòng Tab/Shift+Tab, Esc đóng và trả focus về nút mở. Danh sách rỗng/lỗi có thử lại, timeout đọc 30 giây. Chỉ xem giá/quyền lợi server trả về, không POST tạo thanh toán; không đổi DTO, endpoint, schema hoặc cấu hình SePay.
@@ -206,6 +212,8 @@ Server nhận URL output gốc, xác minh provider/host/scheme/DNS, giới hạn
 ### 6.1 Composition
 
 WinForms là process host. WebView2 tải React production bundle và trao đổi message với C# bridge. C# giữ gateway client, workflow service, workspace/media service, download/verification và command điều phối.
+
+Trước login và trước API WebView2 đầu tiên, `DesktopWebViewRuntime` kiểm PE/x64 của `runtimes/win-x64/native/WebView2Loader.dll`, rồi chỉ định thư mục tuyệt đối bằng `SetLoaderDllFolderPath`. Gate khởi động và hai lệnh `--check-desktop`/`--check-webview2` dùng chung bước này; không tìm loader qua PATH hoặc thư mục làm việc. Thiếu/hỏng loader được phân biệt với thiếu Evergreen Runtime. MSBuild giữ loader ngoài EXE single-file, còn script kiểm publish có probe với PATH chỉ gồm Windows. Chi tiết và giới hạn nghiệm thu: [bản sửa WebView2](PLAN_TASK_SUA_LOI_WEBVIEW2_PUBLISH.md).
 
 Sau đăng nhập/license/chọn organization, `Program.cs` tạo `SystemSetupCoordinator` cho FFmpeg/OCR/Qwen/Piper; `SystemSetupAuthorizer.CanManage` yêu cầu gate cho Owner/OrganizationAdmin/BillingManager/Member, không yêu cầu Viewer. `Form1` tải dashboard trước, sau đó `StartupSystemSetupModal` phủ React; nền dùng `inert`/`aria-hidden`. `StartupSystemSetupGate` ở host từ chối command nghiệp vụ đến khi mọi component không `DISABLED` đều `READY`. Modal và host phải cùng context/operation ID; không dùng trạng thái UI làm quyền bypass runtime.
 

@@ -10,9 +10,12 @@ param(
     [ValidateSet('Stable', 'Beta', 'Development')]
     [string]$Channel = 'Stable',
 
-    [string]$ServerBaseUrl = 'https://localhost:7202/',
+    [Parameter(Mandatory = $true)]
+    [string]$ServerBaseUrl,
 
     [string]$AppSettingsPath = '',
+
+    [switch]$AllowTransitionalSql,
 
     [string]$FfmpegBundlePath = '',
 
@@ -29,6 +32,15 @@ $publishRoot = Join-Path $workRoot 'publish'
 $packageRoot = Join-Path $workRoot 'package'
 $setupPublishRoot = Join-Path $workRoot 'setup'
 $setupRoot = Join-Path $releaseRoot 'setup'
+$resolvedSettings = if ([string]::IsNullOrWhiteSpace($AppSettingsPath)) {
+    Join-Path $solutionRoot 'TOOL-LOCAL\appsettings.json'
+} else {
+    [System.IO.Path]::GetFullPath($AppSettingsPath)
+}
+& (Join-Path $scriptRoot 'Test-DesktopDeploymentSettings.ps1') `
+    -SettingsPath $resolvedSettings -ExpectedServerBaseUrl $ServerBaseUrl `
+    -AllowTransitionalSql:$AllowTransitionalSql -RequireTransitionalSql | Out-Null
+# Remove RequireTransitionalSql only when the desktop composition no longer creates SQL services.
 $resolvedFfmpegBundle = if ([string]::IsNullOrWhiteSpace($FfmpegBundlePath)) {
     [System.IO.Path]::GetFullPath((Join-Path $solutionRoot 'third_party\ffmpeg\win-x64'))
 } else {
@@ -60,11 +72,12 @@ dotnet publish (Join-Path $solutionRoot 'TOOL-LOCAL\TOOL-LOCAL.csproj') `
     -p:DesktopBuildNumber=$BuildNumber `
     -p:PublishSingleFile=true `
     -p:RequireMediaToolBundle=true `
+    ("-p:DesktopDeploymentSettingsPath={0}" -f $resolvedSettings) `
     ("-p:FfmpegBundleDirectory={0}" -f $resolvedFfmpegBundle) `
     $desktopPublishDirectoryArgument
 if ($LASTEXITCODE -ne 0) { throw 'Desktop publish failed.' }
 
-& (Join-Path $scriptRoot 'Test-DesktopSetupPublish.ps1') -PublishRoot $publishRoot | Out-Null
+& (Join-Path $scriptRoot 'Test-DesktopSetupPublish.ps1') -PublishRoot $publishRoot -ProbeWebView2 | Out-Null
 
 $publishedFfmpegProfile = & (Join-Path $scriptRoot 'Test-FfmpegBundle.ps1') `
     -BundlePath (Join-Path $publishRoot 'tools\ffmpeg') `
@@ -85,11 +98,10 @@ foreach ($file in $publishFiles) {
     Copy-Item -LiteralPath $file.FullName -Destination $target -Force
 }
 
-if (-not [string]::IsNullOrWhiteSpace($AppSettingsPath)) {
-    $resolvedSettings = [System.IO.Path]::GetFullPath($AppSettingsPath)
-    if (-not (Test-Path -LiteralPath $resolvedSettings -PathType Leaf)) { throw 'AppSettingsPath does not exist.' }
-    Copy-Item -LiteralPath $resolvedSettings -Destination (Join-Path $packageRoot 'appsettings.json') -Force
-}
+Copy-Item -LiteralPath $resolvedSettings -Destination (Join-Path $packageRoot 'appsettings.json') -Force
+& (Join-Path $scriptRoot 'Test-DesktopDeploymentSettings.ps1') `
+    -SettingsPath (Join-Path $packageRoot 'appsettings.json') -ExpectedServerBaseUrl $ServerBaseUrl `
+    -AllowTransitionalSql:$AllowTransitionalSql -RequireTransitionalSql | Out-Null
 
 $managedFiles = Get-ChildItem -LiteralPath $packageRoot -Recurse -File | ForEach-Object {
     $_.FullName.Substring($packageRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
@@ -147,7 +159,13 @@ Copy-Item -LiteralPath $setupExecutable -Destination (Join-Path $setupRoot 'Vide
 } | Format-List
 }
 finally {
-    if ([System.IO.Directory]::Exists($workRoot)) {
-        [System.IO.Directory]::Delete($workRoot, $true)
+    $expectedWorkParent = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) 'VideoMakerRelease')).TrimEnd('\') + '\'
+    $resolvedWorkRoot = [System.IO.Path]::GetFullPath($workRoot)
+    if (-not $resolvedWorkRoot.StartsWith($expectedWorkParent, [StringComparison]::OrdinalIgnoreCase) -or
+        $resolvedWorkRoot.TrimEnd('\') -eq $expectedWorkParent.TrimEnd('\')) {
+        throw 'Refusing cleanup outside the isolated release workspace.'
+    }
+    if (Test-Path -LiteralPath $resolvedWorkRoot -PathType Container) {
+        Remove-Item -LiteralPath $resolvedWorkRoot -Recurse -Force
     }
 }

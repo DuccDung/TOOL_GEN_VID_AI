@@ -24,7 +24,7 @@
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50">
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" GeneratePathProperty="true">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Sdcb.PaddleOCR" Version="3.3.1" />
@@ -58,9 +58,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="appsettings.json">
+    <None Update="appsettings.json" Condition="'$(DesktopDeploymentSettingsPath)' == ''">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Remove="appsettings.json" Condition="'$(DesktopDeploymentSettingsPath)' != ''" />
+    <Content Include="$(DesktopDeploymentSettingsPath)" Link="appsettings.json"
+             CopyToOutputDirectory="Never" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true"
+             Condition="'$(DesktopDeploymentSettingsPath)' != ''" />
     <None Update="appsettings.user.json" Condition="Exists('appsettings.user.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Never</CopyToPublishDirectory>
@@ -118,6 +122,25 @@
     <Content Include="$(VoiceNoticeDirectory)\checksums.sha256" Link="third_party\voice\checksums.sha256" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(VoiceNoticeDirectory)\LICENSES.md" Link="third_party\voice\LICENSES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- Keep the native loader at the exact path used before login and by diagnostics.
+       It must remain a loose file even in a single-file desktop publish. -->
+  <Target Name="PrepareDesktopWebView2Loader" BeforeTargets="AssignTargetPaths" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(DesktopDeploymentSettingsPath)' != '' And !Exists('$(DesktopDeploymentSettingsPath)')" Text="The selected desktop deployment settings file does not exist." />
+    <PropertyGroup>
+      <DesktopWebView2Loader>$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll</DesktopWebView2Loader>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(DesktopWebView2Loader)')" Text="The pinned WebView2 x64 loader is missing. Restore NuGet packages before building." />
+    <ItemGroup>
+      <Content Remove="@(Content)" Condition="'%(Content.Filename)%(Content.Extension)' == 'WebView2Loader.dll'" />
+      <Content Include="$(DesktopWebView2Loader)" Link="runtimes\win-x64\native\WebView2Loader.dll"
+               CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="ValidatePublishedWebView2Loader" AfterTargets="Publish">
+    <Error Condition="!Exists('$(PublishDir)runtimes\win-x64\native\WebView2Loader.dll')" Text="Desktop publish is missing runtimes/win-x64/native/WebView2Loader.dll." />
+  </Target>
 
   <Target Name="ValidateOcrNotices" BeforeTargets="Publish">
     <Error Condition="!Exists('$(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt')" Text="OCR third-party license is missing: $(OcrNoticeDirectory)\LICENSE-APACHE-2.0.txt" />

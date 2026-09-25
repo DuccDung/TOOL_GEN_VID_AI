@@ -256,7 +256,9 @@ public sealed class AuthService(
         CancellationToken cancellationToken)
     {
         var now = UtcNow();
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
 
         if (request.RevokeAllSessions)
         {
@@ -272,6 +274,8 @@ public sealed class AuthService(
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(x => x.RevokedAtUtc, now)
                     .SetProperty(x => x.RevokedReason, "User requested logout from all devices"), cancellationToken);
+
+            await ReleaseDeviceActivationsAsync(userId, null, now, cancellationToken);
         }
         else
         {
@@ -289,11 +293,53 @@ public sealed class AuthService(
                 }
             }
 
-            await RevokeSessionAsync(sessionId, "User requested logout", now, cancellationToken);
+            var session = await dbContext.UserSessions
+                .AsNoTracking()
+                .Where(x => x.UserId == userId && x.SessionId == sessionId)
+                .Select(x => new { x.DeviceId })
+                .SingleOrDefaultAsync(cancellationToken);
+            if (session is not null)
+            {
+                await RevokeSessionAsync(sessionId, "User requested logout", now, cancellationToken);
+                if (session.DeviceId is { } deviceId)
+                {
+                    await ReleaseDeviceActivationsAsync(userId, deviceId, now, cancellationToken);
+                }
+            }
         }
 
         await WriteAuditAsync(userId, request.RevokeAllSessions ? "LogoutAll" : "Logout", true, client, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private Task ReleaseDeviceActivationsAsync(
+        string userId,
+        Guid? deviceId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        // Keep device/session history without banning the device from a later login.
+        // A delayed logout from an old session must not release a newer session's activation.
+        var licenseIds = dbContext.UserLicenses.Where(x => x.UserId == userId)
+            .Select(x => x.UserLicenseId);
+        var deviceIds = dbContext.RegisteredDevices.Where(x => x.UserId == userId)
+            .Select(x => x.DeviceId);
+        var activeDeviceIds = dbContext.UserSessions
+            .Where(x => x.UserId == userId && x.DeviceId != null &&
+                        x.Status == SessionStatuses.Active && x.AbsoluteExpiresAtUtc > now)
+            .Select(x => x.DeviceId!.Value);
+        var activations = dbContext.LicenseActivations.Where(x =>
+            licenseIds.Contains(x.UserLicenseId) && deviceIds.Contains(x.DeviceId) &&
+            x.Status == "Active" && !activeDeviceIds.Contains(x.DeviceId));
+        if (deviceId is { } currentDeviceId)
+        {
+            activations = activations.Where(x => x.DeviceId == currentDeviceId);
+        }
+
+        return activations.ExecuteUpdateAsync(setters => setters
+            .SetProperty(x => x.Status, "Revoked")
+            .SetProperty(x => x.RevokedAtUtc, now)
+            .SetProperty(x => x.RevokedReason, "Device activation released on logout"), cancellationToken);
     }
 
     public async Task<UserProfileResponse> GetProfileAsync(string userId, CancellationToken cancellationToken)

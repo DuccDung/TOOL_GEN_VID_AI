@@ -142,6 +142,16 @@ public sealed class AccountSessionManager(
             {
                 try
                 {
+                    // Logout is authenticated too. Refresh before sending an expired access
+                    // token, otherwise a 401 would only clear the local session.
+                    if (current.AccessTokenExpiresAtUtc <= DateTime.UtcNow.AddMinutes(1) &&
+                        !string.IsNullOrWhiteSpace(refreshToken))
+                    {
+                        await RefreshCoreWithoutLockAsync(refreshToken, cancellationToken);
+                        current = Current!;
+                        refreshToken = _refreshToken;
+                    }
+
                     await apiClient.LogoutAsync(
                         current.AccessToken,
                         new LogoutRequest(refreshToken, allDevices),

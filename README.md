@@ -20,6 +20,8 @@ Các báo cáo build/test và triển khai ở đây gắn với checkout, thờ
 
 ## Cấu trúc solution
 
+Admin Web tại `/admin` đã có giao diện vuông, không viền trang trí: sidebar, tổng quan, tìm người dùng, tổ chức/AI, TikTok, gói sử dụng và phát hành desktop. Phạm vi source, kế hoạch, ảnh kiểm tra và kết quả theo checkout: [triển khai Admin Web](PLAN_TASK_ADMIN_WEB_VUONG_KHONG_VIEN.md). Bản giao diện trong source không tự cập nhật server đang chạy.
+
 | Thành phần | Trách nhiệm |
 |---|---|
 | `TOOL-SERVER` | ASP.NET Core API/Razor Admin; auth, license, SePay, tổ chức, budget, pricing, credential, AI Gateway, polling và proxy/cache output. |
@@ -77,7 +79,11 @@ Render cuối cần tối thiểu một cảnh đã duyệt, giữ đúng thứ 
 
 ### Setup hệ thống khi mở desktop
 
-Sau đăng nhập, license và organization hợp lệ, desktop tạo dashboard rồi mở modal Setup cho role `Owner`, `OrganizationAdmin`, `BillingManager` hoặc `Member` nếu FFmpeg/OCR/Qwen/Piper đang thiếu hoặc hỏng; `Viewer` không thuộc gate này. Modal khóa nền; host C# đồng thời từ chối command nghiệp vụ cho tới khi mọi thành phần không `DISABLED` đều `READY`. Cờ hiển thị hoặc marker cũ không thay thế kiểm tra checksum/probe trên máy hiện hành. [Báo cáo tích hợp](BAO_CAO_SETUP_HE_THONG.md) ghi kiểm thử source; smoke trên Windows sạch và bundle phát hành là bước riêng.
+Sau đăng nhập, license và organization hợp lệ, desktop tạo dashboard rồi mở modal Setup cho role `Owner`, `OrganizationAdmin`, `BillingManager` hoặc `Member` nếu FFmpeg hoặc các thành phần OCR/Qwen/Piper được bật đang thiếu hoặc hỏng; `Viewer` không thuộc gate này. Qwen chỉ được khởi tạo và yêu cầu trong Setup khi cả Vietsub và dịch local đều bật. Modal khóa nền; host C# đồng thời từ chối command nghiệp vụ cho tới khi mọi thành phần không `DISABLED` đều `READY`. Cờ hiển thị hoặc marker cũ không thay thế kiểm tra checksum/probe trên máy hiện hành. [Báo cáo tích hợp](BAO_CAO_SETUP_HE_THONG.md) ghi kiểm thử source; smoke trên Windows sạch và bundle phát hành là bước riêng.
+
+Lệnh `TOOL-LOCAL.exe --check-desktop` kiểm tra các thành phần local trước đăng nhập, không kết nối SQL hoặc tải model. Tùy chọn người dùng được lưu trong LocalAppData, tách khỏi cấu hình triển khai cạnh EXE. Desktop hiện vẫn còn SQL workflow; xem [biên bản triển khai cho máy mới](TRIEN_KHAI_TOOL_LOCAL_TREN_MAY_MOI.md) để phân biệt phần đã sửa, kết quả kiểm thử và các task chưa hoàn tất.
+
+Lệnh `TOOL-LOCAL.exe --check-webview2` kiểm riêng DLL và Evergreen Runtime, không cần cấu hình triển khai. Desktop nạp loader x64 từ `runtimes/win-x64/native` trong gói, kể cả khi publish single-file; phải sao chép đầy đủ thư mục publish. [Kế hoạch, bản sửa và kiểm chứng lỗi DLL](PLAN_TASK_SUA_LOI_WEBVIEW2_PUBLISH.md).
 
 ### Tải video Bilibili
 

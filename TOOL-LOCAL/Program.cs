@@ -26,6 +26,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (DesktopReadinessCommand.Matches(args))
+        {
+            Environment.ExitCode = DesktopReadinessCommand.RunAsync(webViewOnly: args[0] == "--check-webview2").GetAwaiter().GetResult();
+            return;
+        }
         if (TOOL_LOCAL.LocalVoice.LocalVoiceMaintenance.IsMaintenanceCommand(args))
         {
             Environment.ExitCode = TOOL_LOCAL.LocalVoice.LocalVoiceMaintenance.RunAsync(args[0]).GetAwaiter().GetResult();
@@ -246,12 +251,13 @@ internal static class Program
                     var translationStore = new VietsubTranslationStore(
                         vietsubPaths,
                         vietsubSubtitleStore);
-                    vietsubTranslationProvider = new QwenGgufVietsubTranslationProvider(
+                    vietsubTranslationProvider = DesktopComponentComposition.CreateTranslationProvider(
+                        options.Features, () => new QwenGgufVietsubTranslationProvider(
                         new VietsubTranslationComponentStore(
-                            VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km));
+                            VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km)));
                     var translationProviderRegistry = new VietsubTranslationProviderRegistry(
                         vietsubTranslationProvider is null ? [] : [vietsubTranslationProvider],
-                        featureEnabled: options.Features.VietsubLocalTranslationEnabled);
+                        featureEnabled: DesktopComponentComposition.IsLocalTranslationEnabled(options.Features));
                     var translationExecutor = new VietsubTranslationJobExecutor(
                         vietsubProjectStore,
                         vietsubSubtitleStore,
@@ -261,9 +267,8 @@ internal static class Program
                         vietsubPaths);
                     var voiceStore = new VietsubVoiceStore(vietsubPaths, vietsubSubtitleStore);
                     var voicePlaybackRegistry = new VietsubVoicePlaybackRegistry(voiceStore.IsTrackRevisionCurrent);
-                    vietsubVoiceComponents = new VietsubVoiceComponentStore(
-                        vietsubPaths,
-                        options.Features.VietsubLocalVoiceEnabled, useUserComponentsRoot: true);
+                    vietsubVoiceComponents = DesktopComponentComposition.CreateVoiceComponents(
+                        vietsubPaths, options.Features);
                     vietsubKokoroRuntime = new VietsubKokoroRuntime(vietsubVoiceComponents);
                     var voiceSynthesizer = new VietsubPiperVoiceSynthesizer(vietsubVoiceComponents);
                     var voiceTimelineRenderer = new VietsubVoiceTimelineRenderer(

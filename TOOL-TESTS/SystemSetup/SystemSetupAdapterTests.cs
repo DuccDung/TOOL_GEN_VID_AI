@@ -1,4 +1,5 @@
 using TOOL_LOCAL.Media;
+using TOOL_LOCAL.Configuration;
 using TOOL_LOCAL.SystemSetup;
 using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.Vietsub.Storage;
@@ -9,6 +10,42 @@ namespace TOOL_TESTS.SystemSetup;
 
 public sealed class SystemSetupAdapterTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task DesktopComposition_OnlyCreatesAndRequiresQwenWhenTranslationIsEnabled(bool vietsub, bool translation)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "setup-flags-" + Guid.NewGuid().ToString("N"));
+        using var handler = new RejectHttp();
+        using var http = new HttpClient(handler);
+        var features = new DesktopFeatureOptions { VietsubEnabled = vietsub, VietsubLocalTranslationEnabled = translation };
+        var created = 0;
+        await using var provider = DesktopComponentComposition.CreateTranslationProvider(features, () =>
+        {
+            created++;
+            return new QwenGgufVietsubTranslationProvider(new VietsubTranslationComponentStore(
+                VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km, root, http, approvedLocalModelCandidates: []));
+        });
+        var enabled = vietsub && translation;
+        Assert.Equal(enabled ? 1 : 0, created);
+        Assert.Equal(enabled, DesktopComponentComposition.IsLocalTranslationEnabled(features));
+        var adapter = new QwenSetupAdapter(provider);
+        var inspected = adapter.Inspect();
+        Assert.Equal(enabled ? "NOT_INSTALLED" : "DISABLED", inspected.State);
+        var checkedComponent = await adapter.RunAsync(false, false, (_, _, _, _) => { }, default);
+        Assert.Equal(inspected.State, checkedComponent.State);
+        if (!enabled)
+        {
+            var installed = await adapter.RunAsync(true, false, (_, _, _, _) => { }, default);
+            Assert.Equal("DISABLED", installed.State);
+            Assert.False(installed.CanInstall);
+        }
+        Assert.Equal(0, handler.Calls);
+        Assert.False(Directory.Exists(root));
+    }
+
     [Fact]
     public async Task Qwen_CheckMissingModel_DoesNotSendHttpOrCreateFiles()
     {

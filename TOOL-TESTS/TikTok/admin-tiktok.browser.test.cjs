@@ -30,6 +30,8 @@ async function fixture(t, state = base, width = 1440) {
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('adminShell').classList.remove('hidden');
     document.getElementById('pageTitle').textContent = 'Tích hợp TikTok';
+    document.getElementById('breadcrumbCurrent').textContent = 'Tích hợp TikTok';
+    document.getElementById('manageUsersShortcut').classList.add('hidden');
     document.getElementById('pageEyebrow').textContent = 'SYSTEM INTEGRATION';
     document.getElementById('pageSubtitle').textContent = 'Quản lý TikTok Developer App, kiểm tra OAuth và giới hạn đăng công khai.';
     document.querySelectorAll('[data-view]').forEach(element => element.classList.toggle('active', element.dataset.view === 'tiktok'));

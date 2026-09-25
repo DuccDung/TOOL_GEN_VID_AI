@@ -131,21 +131,48 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
                 StatusCodes.Status403Forbidden,
                 "device_unavailable",
                 "Thiết bị không hợp lệ.");
+        var now = UtcNow();
         var session = await dbContext.UserSessions.SingleOrDefaultAsync(
             x => x.SessionId == currentSessionId &&
                  x.UserId == userId &&
                  x.DeviceId == currentDeviceId &&
-                 x.Status == SessionStatuses.Active,
+                 x.Status == SessionStatuses.Active &&
+                 x.AbsoluteExpiresAtUtc > now,
             cancellationToken)
             ?? throw new AccountApiException(
                 StatusCodes.Status403Forbidden,
                 "session_unavailable",
                 "Phiên hoạt động không hợp lệ.");
 
+        // Recover slots left behind by older logout clients/servers. A quiet device
+        // still keeps its slot while it has an unexpired active session.
+        var activeDeviceIds = dbContext.UserSessions
+            .Where(x => x.UserId == userId && x.DeviceId != null &&
+                        x.Status == SessionStatuses.Active && x.AbsoluteExpiresAtUtc > now)
+            .Select(x => x.DeviceId!.Value);
+        var releasedCount = await dbContext.LicenseActivations
+            .Where(x => x.UserLicenseId == license.UserLicenseId && x.Status == "Active" &&
+                        !activeDeviceIds.Contains(x.DeviceId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, "Revoked")
+                .SetProperty(x => x.RevokedAtUtc, now)
+                .SetProperty(x => x.RevokedReason, "Device activation released because no active session remains"),
+                cancellationToken);
+        if (releasedCount > 0)
+        {
+            dbContext.AccountAuditLogs.Add(new AccountAuditLog
+            {
+                UserId = userId,
+                EventType = "DeviceActivationsReleased",
+                Succeeded = true,
+                DetailsJson = $$"""{"licenseId":"{{license.UserLicenseId:D}}","releasedCount":{{releasedCount}}}""",
+                OccurredAtUtc = now
+            });
+        }
+
         var activation = await dbContext.LicenseActivations.SingleOrDefaultAsync(
             x => x.UserLicenseId == license.UserLicenseId && x.DeviceId == currentDeviceId,
             cancellationToken);
-        var now = UtcNow();
         if (activation is null || activation.Status != "Active")
         {
             var activeCount = await dbContext.LicenseActivations.CountAsync(

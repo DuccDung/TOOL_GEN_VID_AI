@@ -87,7 +87,7 @@ public sealed class OrganizationProvisioningUiTests
         var adminScript = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.js");
         var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
 
-        Assert.Contains("const string AdminUiBuildMarker = \"admin-setup-center-20260904.1\";", page, StringComparison.Ordinal);
+        Assert.Contains("const string AdminUiBuildMarker = \"admin-square-20260923.1\";", page, StringComparison.Ordinal);
         Assert.Contains("name=\"videomaker-admin-ui-build\" content=\"@AdminUiBuildMarker\"", page, StringComparison.Ordinal);
         Assert.Contains("data-admin-ui-build=\"@AdminUiBuildMarker\"", page, StringComparison.Ordinal);
         Assert.Contains("id=\"adminUiBuildMarker\"", page, StringComparison.Ordinal);
@@ -178,7 +178,7 @@ public sealed class OrganizationProvisioningUiTests
     {
         var diagnostic = ReadRepositoryFile("scripts", "Test-AdminRuntimeAssets.ps1");
 
-        Assert.Contains("[string]$ExpectedMarker = 'admin-setup-center-20260904.1'", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("[string]$ExpectedMarker = 'admin-square-20260923.1'", diagnostic, StringComparison.Ordinal);
         Assert.Contains("if (-not $AdminUrl.IsLoopback)", diagnostic, StringComparison.Ordinal);
         Assert.Contains("Method = 'Get'", diagnostic, StringComparison.Ordinal);
         Assert.Contains("'/admin/admin.css'", diagnostic, StringComparison.Ordinal);

@@ -3,6 +3,7 @@ const state = {
   refreshToken: sessionStorage.getItem('vmAdminRefreshToken'),
   user: readJson(sessionStorage.getItem('vmAdminUser')),
   overview: null,
+  overviewUsers: [],
   users: [],
   usersPaging: { page: 1, pageSize: 20, totalCount: 0, totalPages: 0, hasPrevious: false, hasNext: false },
   userSearch: '',
@@ -18,7 +19,7 @@ const loginScreen = document.getElementById('loginScreen');
 const adminShell = document.getElementById('adminShell');
 const panels = [...document.querySelectorAll('[data-panel]')];
 const pageMeta = {
-  overview: ['LICENSE CONTROL', 'Tổng quan hệ thống', 'Theo dõi tài khoản, license và phiên sử dụng từ dữ liệu hiện tại trên server.'],
+  overview: ['LICENSE CONTROL', 'Tổng quan', 'Theo dõi tài khoản, license và quyền truy cập.'],
   users: ['ACCOUNTS & ACCESS', 'Người dùng', 'Cấp, gia hạn hoặc thu hồi quyền sử dụng theo từng tài khoản.'],
   organizations: ['ORGANIZATION & AI', 'Tổ chức & AI', 'Quản lý thành viên, ngân sách, credential, usage và bảng giá AI.'],
   tiktok: ['SYSTEM INTEGRATION', 'Tích hợp TikTok', 'Quản lý TikTok Developer App, kiểm tra OAuth và giới hạn đăng công khai.'],
@@ -254,6 +255,7 @@ async function loadAll() {
     if (result.status === 'fulfilled') {
       if (key === 'users' && result.value && !Array.isArray(result.value)) {
         state.users = result.value.items || [];
+        state.overviewUsers = state.users;
         state.usersPaging = result.value;
       } else if (key === 'releases' && result.value && !Array.isArray(result.value)) {
         state.releases = result.value.items || [];
@@ -290,21 +292,29 @@ function appendReleasePagination() {
 function renderOverview() {
   const data = state.overview || {};
   const metrics = [
-    ['Tổng người dùng', data.totalUsers || 0, 'Tài khoản đã đăng ký', 'metric-blue'],
-    ['License đang hoạt động', data.activeLicenses || 0, 'Có quyền sử dụng app', 'metric-green'],
-    ['Phiên đang online', data.onlineSessions || 0, 'Heartbeat trong 10 phút', 'metric-purple'],
-    ['Sắp hết hạn', data.expiringWithinSevenDays || 0, 'Trong vòng 7 ngày', 'metric-orange']
+    ['Người dùng', data.totalUsers, 'Tài khoản đã đăng ký', 'metric-blue', 'users'],
+    ['License hoạt động', data.activeLicenses, 'Đang có hiệu lực', 'metric-green', 'id-card'],
+    ['Phiên trực tuyến', data.onlineSessions, 'Heartbeat trong 10 phút', 'metric-purple', 'monitor'],
+    ['Sắp hết hạn', data.expiringWithinSevenDays, 'Trong 7 ngày tới', 'metric-orange', 'clock']
   ];
-  document.getElementById('overviewMetrics').innerHTML = metrics.map(([label, value, note, color]) => `
-    <article class="metric-card ${color}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(note)}</span></article>`).join('');
+  document.getElementById('overviewMetrics').innerHTML = metrics.map(([label, value, note, color, symbol]) => `
+    <article class="metric-card ${color}">${icon(symbol)}<small>${escapeHtml(label)}</small><strong>${value == null ? '—' : new Intl.NumberFormat('vi-VN').format(value)}</strong><span>${escapeHtml(note)}</span></article>`).join('');
 
-  const activeUsers = state.users.filter(x => x.currentLicense && licenseState(x.currentLicense).label === 'Active').slice(0, 7);
-  document.getElementById('userOverview').innerHTML = activeUsers.length ? `<div class="compact-list">${activeUsers.map(user => `
-    <button class="compact-user" data-user-id="${escapeHtml(user.userId)}"><span class="user-avatar">${escapeHtml(initials(user))}</span><span><strong>${escapeHtml(user.displayName || user.email)}</strong><small>${escapeHtml(user.currentLicense.planName)} · đến ${escapeHtml(formatDate(user.currentLicense.expiresAtUtc, true))}</small></span><span class="online-count">${user.activeSessionCount} online</span>${icon('arrow-right')}</button>`).join('')}</div>` : '<div class="empty-state">Chưa có license đang hoạt động.</div>';
+  const activeUsers = state.overviewUsers.filter(user => ['Active', 'Trial'].includes(licenseState(user.currentLicense).label)).slice(0, 6);
+  document.getElementById('userOverview').innerHTML = activeUsers.length ? `<div class="table-scroll" tabindex="0" role="region" aria-label="License đang sử dụng"><table class="data-table overview-license-table"><thead><tr><th scope="col">Người dùng</th><th scope="col">Gói sử dụng</th><th scope="col">Thiết bị</th><th scope="col">Hết hạn</th><th scope="col">Trạng thái</th></tr></thead><tbody>${activeUsers.map(user => {
+    const license = user.currentLicense;
+    const days = license.expiresAtUtc ? (new Date(license.expiresAtUtc) - Date.now()) / 86400000 : Infinity;
+    const expiring = days > 0 && days <= 7;
+    const label = expiring ? 'Sắp hết hạn' : license.status === 'Trial' ? 'Dùng thử' : 'Đang hoạt động';
+    return `<tr><td><button type="button" class="overview-user-link" data-user-id="${escapeHtml(user.userId)}"><span class="user-avatar">${escapeHtml(initials(user))}</span><strong>${escapeHtml(user.displayName || user.email)}</strong></button></td><td>${escapeHtml(license.planName)}</td><td>${escapeHtml(user.registeredDeviceCount ?? 0)}</td><td>${escapeHtml(formatDate(license.expiresAtUtc, true))}</td><td><span class="status-pill ${expiring ? 'status-warning' : 'status-healthy'}">${label}</span></td></tr>`;
+  }).join('')}</tbody></table></div>` : '<div class="empty-state">Không có license còn hiệu lực trong trang đang xem. Mở Người dùng để xem đầy đủ.</div>';
 
   const activePlans = state.plans.filter(x => x.isActive);
   document.getElementById('planOverview').innerHTML = activePlans.length ? `<div class="plan-mini-list">${activePlans.slice(0, 6).map(plan => `
-    <div class="plan-mini"><span class="plan-symbol">${icon('id-card')}</span><div><strong>${escapeHtml(plan.name)}</strong><small>${plan.defaultDurationDays ? `${plan.defaultDurationDays} ngày` : 'Tùy thời hạn'} · ${plan.maxActivatedDevices} thiết bị · ${plan.maxConcurrentSessions} phiên</small></div></div>`).join('')}</div>` : '<div class="empty-state">Chưa có gói đang mở.</div>';
+    <div class="plan-mini"><span class="plan-symbol">${icon('id-card')}</span><div><strong>${escapeHtml(plan.name)}</strong><small>${plan.defaultDurationDays ? `${plan.defaultDurationDays} ngày` : 'Tùy thời hạn'} · ${plan.maxActivatedDevices} thiết bị</small><small>${plan.maxConcurrentSessions} phiên đồng thời</small></div></div>`).join('')}</div>` : '<div class="empty-state">Chưa có gói đang mở.</div>';
+  const expiringCount = data.expiringWithinSevenDays;
+  document.getElementById('expiryTitle').textContent = expiringCount == null ? 'License sắp hết hạn' : `${new Intl.NumberFormat('vi-VN').format(expiringCount)} license sắp hết hạn`;
+  document.getElementById('expiryDescription').textContent = expiringCount == null ? 'Chưa tải được thống kê. Hãy thử làm mới.' : expiringCount > 0 ? 'Kiểm tra các tài khoản cần gia hạn trong 7 ngày tới.' : 'Không có license cần gia hạn trong 7 ngày tới.';
 }
 
 function initials(user) {
@@ -401,6 +411,7 @@ function setPageMeta(eyebrow, title, subtitle) {
   document.getElementById('pageEyebrow').textContent = eyebrow;
   document.getElementById('pageTitle').textContent = title;
   document.getElementById('pageSubtitle').textContent = subtitle;
+  document.getElementById('breadcrumbCurrent').textContent = title;
 }
 
 function setSetupReturn(visible) {
@@ -425,7 +436,13 @@ function navigate(view, options = {}) {
   state.currentView = view;
   setTopbarVisible(true);
   if (!options.keepSetupReturn) setSetupReturn(false);
-  document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view));
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.view === view);
+    if (item.dataset.view === view) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
+  document.getElementById('manageUsersShortcut').classList.toggle('hidden', view !== 'overview');
+  if (view !== 'organizations') setNavigationOpen(false);
   panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.panel !== view));
   const [eyebrow, title, subtitle] = pageMeta[view];
   setPageMeta(eyebrow, title, subtitle);
@@ -436,6 +453,19 @@ function navigate(view, options = {}) {
     setOrganizationMenuExpanded(false);
     if (view === 'tiktok') window.videoMakerTikTokAdmin?.activate();
   }
+}
+
+function setNavigationOpen(open) {
+  document.querySelector('.sidebar').classList.toggle('is-navigation-open', open);
+  document.getElementById('adminMenuToggle').setAttribute('aria-expanded', String(open));
+}
+
+async function searchUsers(value) {
+  state.userSearch = value.trim();
+  document.getElementById('userSearch').value = state.userSearch;
+  navigate('users');
+  try { await loadUsersPage(1, state.usersPaging.pageSize); }
+  catch (error) { toast(error.message, true); }
 }
 
 function toLocalDateTime(value) {
@@ -574,6 +604,22 @@ document.querySelectorAll('.nav-item').forEach(button => button.addEventListener
 }));
 document.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => navigate(button.dataset.go)));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
+document.getElementById('adminMenuToggle').addEventListener('click', event => {
+  setNavigationOpen(event.currentTarget.getAttribute('aria-expanded') !== 'true');
+});
+document.querySelector('.sidebar').addEventListener('click', event => {
+  if (event.target.closest('.nav-subitem')) setNavigationOpen(false);
+});
+document.querySelector('.sidebar').addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.getElementById('adminMenuToggle').getAttribute('aria-expanded') === 'true') {
+    setNavigationOpen(false);
+    document.getElementById('adminMenuToggle').focus();
+  }
+});
+document.getElementById('adminSearchForm').addEventListener('submit', event => {
+  event.preventDefault();
+  searchUsers(document.getElementById('adminSearch').value);
+});
 document.getElementById('refreshButton').addEventListener('click', () => {
   if (state.currentView === 'organizations') return window.videoMakerOrganizationAdmin?.refresh();
   if (state.currentView === 'tiktok') return window.videoMakerTikTokAdmin?.refresh();
@@ -594,8 +640,7 @@ document.getElementById('logoutButton').addEventListener('click', async () => {
 
 document.getElementById('userSearchForm').addEventListener('submit', async event => {
   event.preventDefault();
-  state.userSearch = document.getElementById('userSearch').value.trim();
-  loadUsersPage(1, state.usersPaging.pageSize).catch(error => toast(error.message, true));
+  await searchUsers(document.getElementById('userSearch').value);
 });
 
 document.addEventListener('click', event => {

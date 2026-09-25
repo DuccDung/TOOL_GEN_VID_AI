@@ -5,36 +5,47 @@ namespace TOOL_LOCAL.Configuration;
 
 internal static class DesktopUserSettingsStore
 {
-    private const string UserSettingsFileName = "appsettings.user.json";
+    private const string LegacySettingsFileName = "appsettings.user.json";
+    private const string PreferencesFileName = "preferences.json";
+
+    public static string PreferencesDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ToolGenPostVideo", "settings");
 
     public static bool ReadSpeechSynchronizationEnabled(
         string applicationDirectory,
-        bool fallbackValue)
+        bool fallbackValue,
+        string? preferencesDirectory = null)
     {
-        var path = Path.Combine(applicationDirectory, UserSettingsFileName);
+        var path = Path.Combine(preferencesDirectory ?? PreferencesDirectory, PreferencesFileName);
+        if (!File.Exists(path))
+            path = Path.Combine(applicationDirectory, LegacySettingsFileName);
         if (!File.Exists(path))
         {
             return fallbackValue;
         }
 
         var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
-            ?? throw new InvalidOperationException("Không thể đọc cấu hình Desktop dành cho người dùng.");
+            ?? throw new InvalidOperationException("Không thể đọc tùy chọn Desktop dành cho người dùng.");
         return root["Features"]?["SpeechSynchronizationEnabled"]?.GetValue<bool>()
             ?? fallbackValue;
     }
 
     public static void WriteSpeechSynchronizationEnabled(
         string applicationDirectory,
-        bool enabled)
+        bool enabled,
+        string? preferencesDirectory = null)
     {
-        var path = Path.Combine(applicationDirectory, UserSettingsFileName);
-        var root = File.Exists(path)
-            ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject
-                ?? throw new InvalidOperationException("Không thể đọc cấu hình Desktop dành cho người dùng.")
-            : new JsonObject();
-        var features = root["Features"] as JsonObject ?? new JsonObject();
-        features["SpeechSynchronizationEnabled"] = enabled;
-        root["Features"] = features;
+        // Preferences are deliberately separate from deployment settings. Never migrate
+        // a database connection, server endpoint or machine-specific paths from the legacy file.
+        var directory = preferencesDirectory ?? PreferencesDirectory;
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, PreferencesFileName);
+        var root = new JsonObject
+        {
+            ["SchemaVersion"] = 1,
+            ["Features"] = new JsonObject { ["SpeechSynchronizationEnabled"] = enabled }
+        };
 
         var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
         try

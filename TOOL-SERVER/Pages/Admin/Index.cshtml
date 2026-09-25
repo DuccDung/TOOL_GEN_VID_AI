@@ -1,7 +1,7 @@
 @page "/admin"
 @{
     Layout = null;
-    const string AdminUiBuildMarker = "admin-setup-center-20260904.1";
+    const string AdminUiBuildMarker = "admin-square-20260923.1";
 }
 <!doctype html>
 <html lang="vi">
@@ -10,7 +10,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
     <meta name="videomaker-admin-ui-build" content="@AdminUiBuildMarker" />
-    <title>VideoMaker License Admin</title>
+    <title>VideoMaker Admin</title>
+    <link rel="icon" type="image/svg+xml" sizes="any" href="~/admin/favicon.svg" asp-append-version="true" />
     <link rel="stylesheet" href="~/admin/admin.css" asp-append-version="true" />
 </head>
 <body data-admin-ui-build="@AdminUiBuildMarker">
@@ -52,14 +53,17 @@
                 <button class="primary-button login-button" type="submit"><span>Đăng nhập Admin</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button>
                 <p class="form-message" id="loginMessage" role="alert"></p>
             </form>
-            <p class="security-note"><svg class="ui-icon"><use href="#icon-shield-check"></use></svg><span>Server chỉ quản lý tài khoản, license, thiết bị và phiên sử dụng.</span></p>
+            <p class="security-note"><svg class="ui-icon"><use href="#icon-shield-check"></use></svg><span>Dành cho tài khoản có quyền quản trị hệ thống.</span></p>
         </div>
     </section>
 
     <div class="admin-shell hidden" id="adminShell">
+        <a class="skip-link" href="#adminMain">Đến nội dung chính</a>
         <aside class="sidebar">
             <div class="brand-lockup sidebar-brand"><span class="brand-mark">V</span><div><strong>VideoMaker</strong><small>Admin Console</small></div></div>
-            <nav aria-label="Menu quản trị">
+            <button class="sidebar-menu-toggle" id="adminMenuToggle" type="button" aria-expanded="false" aria-controls="adminNavigation"><svg class="ui-icon" aria-hidden="true"><use href="#icon-layout-dashboard"></use></svg><span>Menu quản trị</span><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
+            <span class="sidebar-caption">QUẢN TRỊ</span>
+            <nav id="adminNavigation" aria-label="Menu quản trị">
                 <button class="nav-item active" data-view="overview"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-layout-dashboard"></use></svg></span><span>Tổng quan</span></button>
                 <button class="nav-item" data-view="users"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-users"></use></svg></span><span>Người dùng</span></button>
                 <div class="nav-group" data-organization-menu>
@@ -76,25 +80,35 @@
                 <button class="nav-item" data-view="plans"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-id-card"></use></svg></span><span>Gói sử dụng</span></button>
                 <button class="nav-item" data-view="releases"><span class="nav-icon"><svg class="ui-icon"><use href="#icon-package-up"></use></svg></span><span>Desktop Releases</span></button>
             </nav>
-            <div class="admin-build-marker" id="adminUiBuildMarker" title="Dấu nhận diện giao diện đang được server phục vụ"><span>UI BUILD</span><code>@AdminUiBuildMarker</code></div>
+            <div class="admin-build-marker" id="adminUiBuildMarker" title="Dấu nhận diện giao diện đang được server phục vụ" hidden><span>UI BUILD</span><code>@AdminUiBuildMarker</code></div>
             <div class="sidebar-status"><span class="pulse-dot"></span><div><strong>Dữ liệu quản trị</strong><small id="adminLastRefresh">Chưa làm mới</small></div></div>
             <div class="admin-profile"><div class="avatar" id="adminAvatar">A</div><div><strong id="adminName">Administrator</strong><small id="adminEmail"></small></div><button id="logoutButton" title="Đăng xuất"><svg class="ui-icon"><use href="#icon-log-out"></use></svg></button></div>
         </aside>
 
-        <main class="main-content">
+        <main class="main-content" id="adminMain" tabindex="-1">
+            <div class="utility-bar">
+                <div class="admin-breadcrumb"><span>Quản trị</span><span aria-hidden="true">/</span><strong id="breadcrumbCurrent">Tổng quan</strong></div>
+                <form class="global-search" id="adminSearchForm" role="search" aria-label="Tìm người dùng">
+                    <label class="sr-only" for="adminSearch">Tìm người dùng theo tên hoặc email</label>
+                    <input id="adminSearch" type="search" placeholder="Tìm người dùng theo tên hoặc email…" />
+                    <button type="submit" aria-label="Tìm người dùng"><svg class="ui-icon" aria-hidden="true"><use href="#icon-search"></use></svg></button>
+                </form>
+                <span class="utility-label">Admin Console</span>
+            </div>
             <header class="topbar">
-                <div><span class="eyebrow" id="pageEyebrow">LICENSE CONTROL</span><h1 id="pageTitle">Tổng quan hệ thống</h1><p id="pageSubtitle">Theo dõi tài khoản, license và phiên sử dụng theo thời gian thực.</p></div>
+                <div><span class="eyebrow" id="pageEyebrow">LICENSE CONTROL</span><h1 id="pageTitle">Tổng quan</h1><p id="pageSubtitle">Theo dõi tài khoản, license và quyền truy cập.</p></div>
                 <div class="top-actions">
                     <button class="text-button hidden" id="returnToSetupButton" type="button"><svg class="ui-icon"><use href="#icon-arrow-left"></use></svg><span>Quay lại thiết lập</span></button>
                     <button class="ghost-button" id="refreshButton"><svg class="ui-icon"><use href="#icon-refresh-cw"></use></svg><span>Làm mới</span></button>
+                    <button class="primary-button" id="manageUsersShortcut" type="button" data-go="users"><svg class="ui-icon" aria-hidden="true"><use href="#icon-users"></use></svg><span>Quản lý người dùng</span></button>
                 </div>
             </header>
 
             <section class="view-panel" data-panel="overview">
                 <div class="metric-grid" id="overviewMetrics"></div>
                 <div class="overview-grid license-overview-grid">
-                    <section class="panel license-summary-panel"><div class="section-heading"><div><span class="eyebrow">USER ACCESS</span><h2>License đang sử dụng</h2></div><button class="text-button" data-go="users"><span>Quản lý</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button></div><div id="userOverview"></div></section>
-                    <section class="panel plan-summary-panel"><div class="section-heading"><div><span class="eyebrow">POLICY</span><h2>Gói đang mở</h2></div><button class="text-button" data-go="plans"><span>Xem gói</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button></div><div id="planOverview"></div></section>
+                    <section class="panel license-summary-panel"><div class="section-heading"><div><h2>License đang sử dụng</h2><p>Quản lý quyền truy cập theo từng tài khoản.</p></div><button class="text-button" data-go="users"><span>Xem tất cả</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button></div><div id="userOverview"></div><p class="overview-table-note">Xem nhanh các license còn hiệu lực trong trang người dùng đầu tiên. Mở Người dùng để tìm kiếm và xem đầy đủ.</p></section>
+                    <div class="overview-side"><section class="panel plan-summary-panel"><div class="section-heading"><div><h2>Gói đang mở</h2></div><button class="text-button" data-go="plans"><span>Quản lý</span><svg class="ui-icon"><use href="#icon-arrow-right"></use></svg></button></div><div id="planOverview"></div></section><section class="expiry-notice" aria-labelledby="expiryTitle"><svg class="ui-icon" aria-hidden="true"><use href="#icon-clock"></use></svg><div><h2 id="expiryTitle">License sắp hết hạn</h2><p id="expiryDescription">Đang tải thông tin từ server.</p><button class="text-button" data-go="users">Quản lý license <span aria-hidden="true">→</span></button></div></section></div>
                 </div>
             </section>
 

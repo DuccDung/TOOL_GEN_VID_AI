@@ -333,11 +333,15 @@ node --test TOOL-TESTS/TikTok/admin-tiktok-state.test.cjs
 # Cần Playwright và Chromium tương ứng đã cài trong môi trường kiểm thử.
 # Nếu package ở ngoài repository, đặt VIDEOMAKER_PLAYWRIGHT_MODULE trỏ tới thư mục package playwright.
 node --test TOOL-TESTS/TikTok/admin-tiktok.browser.test.cjs
+# Admin shell: tổng quan, tìm kiếm, phân trang, dialog và các màn hình tổ chức.
+node --test TOOL-TESTS/Admin/admin-shell.browser.test.cjs
 # Cần npm ci tại TOOL-LOCAL/Web; render React hiện hành bằng Rolldown, dữ liệu giả lập.
 node --test TOOL-TESTS/TikTok/desktop-tiktok.browser.test.cjs
 ```
 
 Bộ trình duyệt chặn network, không khởi động server và không chạm database/TikTok. Phạm vi gồm xác nhận trước khi mở phiên xác minh, xóa secret khỏi form, chặn gửi lặp, giữ bản nháp khi làm mới, phát hiện cài đặt server thay đổi, xử lý lỗi, polling/hết hạn/rời trang, đăng xuất, xác nhận công khai và bố cục 375–1440 px. Có thể đặt `VIDEOMAKER_SCREENSHOT_DIR` để lưu ảnh kiểm tra desktop/mobile. Đây là kiểm tra UI với API giả lập; không thay thế nghiệm thu OAuth thật.
+
+Bộ Admin shell kiểm tra thêm Tổng quan dùng số liệu API, hiển thị thiếu dữ liệu khác số 0, escape tên người dùng, tìm kiếm/phân trang/chi tiết, dialog, menu mobile/đăng xuất và focus bàn phím. Bố cục vuông không viền được kiểm tại 390/768/1024/1440/1920 px; các màn hình thiết lập, danh sách, pool, pricing, hướng dẫn chi phí và năm tab chi tiết tổ chức được kiểm ở mobile/desktop. Kết quả theo checkout và ảnh giao diện: [triển khai Admin Web 2026-09-23](PLAN_TASK_ADMIN_WEB_VUONG_KHONG_VIEN.md).
 
 Test tự động không gọi TikTok thật phải phủ chunk boundary, `Content-Range`, 206/201, retry/416 reconciliation, exact HTTPS host/443, file đổi sau init, OAuth state/PKCE/user-device binding, app credential mã hóa/ràng buộc ID, chỉ Admin được quản lý, Pending không dùng chung, activation/audit gate, token encryption theo user, ownership/idempotency và không lộ secret/token/path/signed URL sang React.
 
