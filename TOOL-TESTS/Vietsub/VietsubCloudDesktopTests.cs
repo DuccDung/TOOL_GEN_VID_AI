@@ -223,25 +223,18 @@ public sealed class VietsubCloudDesktopTests
             var jobs = new VietsubJobStore(f.Paths, f.Subtitles); var translations = new VietsubTranslationStore(f.Paths, f.Subtitles);
             var auth = new FakeAuthorizer();
             var results = new VietsubCloudTranslationResults(projects, f.Subtitles, translations, f.Paths, f.Client);
-            f.Manager = new(jobs, new VietsubJobExecutorRegistry([new VietsubCloudTranslationJobExecutor(projects, f.Subtitles, results, f.Paths, auth, f.Client, jobs)]));
+            f.Manager = new(jobs, new VietsubJobExecutorRegistry([new VietsubCloudTranslationJobExecutor(projects, f.Subtitles, results, f.Paths, auth, f.Client, jobs)]),
+                runtimeGate: new(Path.Combine(f.root, "runtime-lease")));
             f.Service = new(auth, f.Client, f.Subtitles, f.Paths, jobs, f.Manager, results);
             f.Session = new(projects, f.Project, TimeSpan.FromMilliseconds(10));
             return f;
         }
         public async Task<VietsubJobSummary> Start() => (await Service.StartAsync(Session, "owner", Project.OrganizationId,
             new("CONTINUE", Track.TrackId, Track.Revision), default))!;
-        public async Task<VietsubJobSummary> Terminal(Guid id)
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            while (true)
-            {
-                var job = (await Manager.GetAsync(Project.ProjectId, id, timeout.Token))!;
-                if (job.Status is "COMPLETED" or "FAILED") return job;
-                await Task.Delay(20, timeout.Token);
-            }
-        }
+        public Task<VietsubJobSummary> Terminal(Guid id) => VietsubJobWaiter.WaitAsync(
+            Manager, Project.ProjectId, id, ["COMPLETED", "FAILED"], TimeSpan.FromSeconds(20));
         public async ValueTask DisposeAsync()
-        { await Manager.DisposeAsync(); await Session.DisposeAsync(); SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        { await Manager.DisposeAsync(); await Session.DisposeAsync(); VietsubTestStorage.ClearPools(root); Directory.Delete(root, true); }
     }
     private sealed class FakeAuthorizer : IVietsubLocalJobAuthorizer
     { public Task AuthorizeAsync(string user, Guid org, VietsubProjectManifest project, CancellationToken ct) => Task.CompletedTask; }

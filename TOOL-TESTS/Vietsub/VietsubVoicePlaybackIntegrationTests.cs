@@ -9,6 +9,7 @@ using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubVoicePlaybackIntegrationTests
 {
     [Theory]

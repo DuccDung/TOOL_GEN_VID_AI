@@ -740,6 +740,13 @@ export type DesktopUpdateNotice = {
   release?: DesktopRelease | null;
 };
 
+export type DesktopRepairFailure = {
+  code: string;
+  message: string;
+  version: string;
+  buildNumber: number;
+};
+
 export type DesktopUpdateProgress = {
   stage: string;
   percent: number;

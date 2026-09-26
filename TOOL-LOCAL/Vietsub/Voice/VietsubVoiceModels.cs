@@ -332,6 +332,10 @@ internal static class VietsubVoiceErrorCodes
     public const string RuntimeNotInstalled = "VOICE_RUNTIME_NOT_INSTALLED";
     public const string RuntimeInvalid = "VOICE_RUNTIME_INVALID";
     public const string RuntimeInstallFailed = "VOICE_RUNTIME_INSTALL_FAILED";
+    public const string BundleMissing = "VOICE_OFFLINE_BUNDLE_MISSING";
+    public const string BundleInvalid = "VOICE_OFFLINE_BUNDLE_INVALID";
+    public const string RuntimeBusy = "VOICE_RUNTIME_BUSY";
+    public const string RuntimeUnsupported = "VOICE_RUNTIME_UNSUPPORTED";
     public const string ModelNotApproved = "VOICE_MODEL_NOT_APPROVED";
     public const string ModelInstallFailed = "VOICE_MODEL_INSTALL_FAILED";
     public const string ModelInvalid = "VOICE_MODEL_INVALID";

@@ -12,6 +12,29 @@ public sealed class VietsubJobTests : IDisposable
         $"videomaker-vietsub-jobs-{Guid.NewGuid():N}");
 
     [Fact]
+    public async Task Manager_UsesProvidedLeaseAndReleasesItAfterShutdown()
+    {
+        var (_, store) = CreateStore();
+        var gate = new TOOL_LOCAL.SystemSetup.RuntimeUseGate(Path.Combine(_root, "runtime-lease"));
+        var executor = new WaitingExecutor();
+        await using (var manager = new VietsubJobManager(store, new VietsubJobExecutorRegistry([executor]), runtimeGate: gate))
+        {
+            var project = Guid.NewGuid();
+            var job = await manager.EnqueueAsync(project, VietsubJobTypes.OcrLocal, ["OCR"], startImmediately: false);
+            using (gate.Acquire(exclusive: true))
+            {
+                var blocked = await Assert.ThrowsAsync<VietsubJobException>(() => manager.StartAsync(project, job.Id));
+                Assert.Equal("system_setup_busy", blocked.Code);
+                Assert.Equal("PENDING", (await manager.GetAsync(project, job.Id))!.Status);
+            }
+            await manager.StartAsync(project, job.Id);
+            await executor.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Throws<TOOL_LOCAL.SystemSetup.SetupException>(() => gate.Acquire(exclusive: true));
+        }
+        using var available = gate.Acquire(exclusive: true);
+    }
+
+    [Fact]
     public async Task Store_InitializesSchema5_AndRejectsSecondActiveJobForProject()
     {
         var (paths, store) = CreateStore();
@@ -117,7 +140,7 @@ public sealed class VietsubJobTests : IDisposable
         var executor = new CompletingExecutor();
         await using var manager = new VietsubJobManager(
             store,
-            new VietsubJobExecutorRegistry([executor]));
+            new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var projectId = Guid.NewGuid();
 
         var queued = await manager.EnqueueAsync(
@@ -147,7 +170,7 @@ public sealed class VietsubJobTests : IDisposable
         var executor = new PausingThenCompletingExecutor();
         await using var manager = new VietsubJobManager(
             store,
-            new VietsubJobExecutorRegistry([executor]));
+            new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var projectId = Guid.NewGuid();
         var queued = await manager.EnqueueAsync(
             projectId,
@@ -178,7 +201,7 @@ public sealed class VietsubJobTests : IDisposable
         var executor = new WaitingExecutor();
         var project = Guid.NewGuid();
         Guid id;
-        await using (var manager = new VietsubJobManager(store, new VietsubJobExecutorRegistry([executor])))
+        await using (var manager = new VietsubJobManager(store, new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease"))))
         {
             id = (await manager.EnqueueAsync(project, VietsubJobTypes.OcrLocal, ["OCR"], maxAttempts: 1)).Id;
             for (var i = 0; i < 5; i++)
@@ -191,7 +214,7 @@ public sealed class VietsubJobTests : IDisposable
             await executor.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         }
         Assert.Equal(VietsubJobStatus.Interrupted, (await store.GetAsync(project, id))!.Status);
-        await using var reopened = new VietsubJobManager(store, new VietsubJobExecutorRegistry([executor]));
+        await using var reopened = new VietsubJobManager(store, new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         await reopened.ResumeAsync(project, id);
         await executor.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, (await reopened.GetAsync(project, id))!.AttemptCount);
@@ -202,7 +225,7 @@ public sealed class VietsubJobTests : IDisposable
     public async Task Manager_RealFailuresStillExhaustRetryBudget()
     {
         var (_, store) = CreateStore();
-        await using var manager = new VietsubJobManager(store, new VietsubJobExecutorRegistry([new FailingExecutor()]));
+        await using var manager = new VietsubJobManager(store, new VietsubJobExecutorRegistry([new FailingExecutor()]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var project = Guid.NewGuid();
         var id = (await manager.EnqueueAsync(project, VietsubJobTypes.OcrLocal, ["OCR"], maxAttempts: 2)).Id;
         Assert.Equal(1, (await WaitForStatusAsync(manager, project, id, "FAILED")).AttemptCount);
@@ -287,22 +310,13 @@ public sealed class VietsubJobTests : IDisposable
         Guid jobId,
         string expectedStatus)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (true)
-        {
-            timeout.Token.ThrowIfCancellationRequested();
-            var job = await manager.GetAsync(projectId, jobId, timeout.Token);
-            if (job?.Status == expectedStatus)
-            {
-                return job;
-            }
-            await Task.Delay(20, timeout.Token);
-        }
+        return await VietsubJobWaiter.WaitAsync(manager, projectId, jobId,
+            [expectedStatus], TimeSpan.FromSeconds(5));
     }
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);

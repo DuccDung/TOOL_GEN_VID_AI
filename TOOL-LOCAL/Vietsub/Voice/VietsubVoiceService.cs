@@ -90,7 +90,7 @@ internal sealed class VietsubVoiceService(
         await AuthorizeAsync(session.Manifest, userId, organizationId, token);
         try
         {
-            using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+            using var runtimeLease = jobManager.RuntimeGate.Acquire(exclusive: true);
             var model = await components.InstallModelAsync(voiceId, progress, token);
             if (model.EngineId == VietsubVoiceEngines.Kokoro)
             {
@@ -130,7 +130,7 @@ internal sealed class VietsubVoiceService(
         }
         try
         {
-            using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+            using var runtimeLease = jobManager.RuntimeGate.Acquire(exclusive: true);
             return await components.InstallAsync(progress, cancellationToken);
         }
         catch (TOOL_LOCAL.SystemSetup.SetupException exception)

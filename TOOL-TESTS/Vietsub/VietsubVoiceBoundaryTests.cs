@@ -11,6 +11,7 @@ using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubVoiceBoundaryTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"vietsub-voice-boundary-{Guid.NewGuid():N}");
@@ -117,7 +118,7 @@ public sealed class VietsubVoiceBoundaryTests : IDisposable
         var synth = new FixtureSynthesizer(speechAtEnd ? 1834 : 1793);
         var renderer = Renderer();
         var executor = new VietsubVoiceJobExecutor(projects, subtitles, voices, synth, renderer, jobs, paths);
-        await using var manager = new VietsubJobManager(jobs, new VietsubJobExecutorRegistry([executor]));
+        await using var manager = new VietsubJobManager(jobs, new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
 
         async Task<VietsubLocalJob> RunJob(bool retryPreviousFailure = false)
         {
@@ -146,12 +147,9 @@ public sealed class VietsubVoiceBoundaryTests : IDisposable
                     steps, parameters.ToJson(), track.TrackId, current.Revision)).Id;
             }
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            while (true)
-            {
-                var job = (await jobs.GetAsync(project.ProjectId, queuedId, timeout.Token))!;
-                if (job.Status is VietsubJobStatus.Completed or VietsubJobStatus.Failed) return job;
-                await Task.Delay(20, timeout.Token);
-            }
+            await VietsubJobWaiter.WaitAsync(manager, project.ProjectId, queuedId,
+                [VietsubJobStatusNames.Completed, VietsubJobStatusNames.Failed], TimeSpan.FromSeconds(30));
+            return (await jobs.GetAsync(project.ProjectId, queuedId, timeout.Token))!;
         }
 
         var initial = await RunJob();
@@ -352,7 +350,7 @@ public sealed class VietsubVoiceBoundaryTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root)) Directory.Delete(_root, true);
     }
 }

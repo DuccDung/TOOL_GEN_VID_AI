@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { postToHost, subscribeToHost } from '../../bridge';
-import type { DesktopUpdateProgress } from '../../types';
+import type { DesktopRepairFailure, DesktopUpdateProgress } from '../../types';
 import { acceptSetupSnapshot, setupRunning, type SetupRequest, type SetupSnapshot } from './types';
 
 export function useSystemSetup(organizationId: string) {
@@ -11,6 +11,10 @@ export function useSystemSetup(organizationId: string) {
   const [repairError, setRepairError] = useState('');
   const requests = useRef(new Map<string, string>());
   const pendingOperation = useRef<string | null>(null);
+  const repairRequest = useRef<string | null>(null);
+  // The controller outlives the startup modal. Remounts and repeated status events
+  // must not restart an automatic preparation that failed or was cancelled.
+  const preparedContexts = useRef(new Set<string>());
   const send = useCallback((type: string, payload?: unknown) => {
     const requestId = postToHost(type, payload);
     requests.current.set(requestId, type);
@@ -21,6 +25,7 @@ export function useSystemSetup(organizationId: string) {
   useEffect(() => {
     requests.current.clear();
     pendingOperation.current = null;
+    repairRequest.current = null;
     setSnapshot(null); setPending(false); setError(''); setRepairProgress(null); setRepairError('');
     const unsubscribe = subscribeToHost(message => {
       const requestType = message.requestId ? requests.current.get(message.requestId) : undefined;
@@ -31,13 +36,16 @@ export function useSystemSetup(organizationId: string) {
         return;
       }
       if (message.type === 'media.tools.install.progress') {
+        if (!repairRequest.current || message.requestId !== repairRequest.current) return;
         setRepairProgress(message.payload as DesktopUpdateProgress);
         setRepairError('');
         return;
       }
       if (message.type === 'media.tools.install.failed') {
+        if (!repairRequest.current || message.requestId !== repairRequest.current) return;
+        repairRequest.current = null;
         setRepairProgress(null);
-        setRepairError(String((message.payload as { message?: string })?.message ?? 'Không thể sửa bộ ứng dụng.'));
+        setRepairError(String((message.payload as Partial<DesktopRepairFailure>)?.message ?? 'Không thể sửa bộ ứng dụng.'));
         return;
       }
       if (!['system.setup.status', 'system.setup.accepted', 'system.setup.progress', 'system.setup.completed'].includes(message.type)) return;
@@ -60,7 +68,7 @@ export function useSystemSetup(organizationId: string) {
     return () => window.clearInterval(timer);
   }, [busy, refresh, organizationId]);
   const run = useCallback((mode: 'check' | 'start' | 'retry', ids: string[], confirmResources = false) => {
-    if (!snapshot || busy || !organizationId || ids.length === 0) return;
+    if (!snapshot || busy || pendingOperation.current || repairRequest.current || !organizationId || ids.length === 0) return;
     const payload: SetupRequest = {
       operationId: crypto.randomUUID(), expectedOrganizationId: organizationId,
       contextGeneration: snapshot.contextGeneration, componentIds: ids,
@@ -71,15 +79,30 @@ export function useSystemSetup(organizationId: string) {
     pendingOperation.current = payload.operationId;
     setPending(true); setError(''); send(`system.setup.${mode}`, payload);
   }, [snapshot, busy, organizationId, send]);
+  useEffect(() => {
+    if (!snapshot || !snapshot.startupRequired || snapshot.organizationId !== organizationId) return;
+    const key = `${organizationId}:${snapshot.contextGeneration}`;
+    const operation = snapshot.operation;
+    if (operation && operation.mode !== 'check' && operation.componentIds.includes('piper')) {
+      preparedContexts.current.add(key);
+      return;
+    }
+    if (busy || pendingOperation.current || repairRequest.current || error || preparedContexts.current.has(key)) return;
+    if (!operation || operation.mode !== 'check' || !['Completed', 'PartiallyCompleted', 'Failed'].includes(operation.state)) return;
+    const piper = snapshot.components.find(component => component.id === 'piper');
+    if (piper?.state !== 'NOT_INSTALLED' || !piper.canInstall || !piper.canPrepareOffline) return;
+    preparedContexts.current.add(key);
+    run('start', ['piper']);
+  }, [snapshot, organizationId, busy, error, run]);
   const cancel = useCallback(() => {
     if (snapshot?.operation && setupRunning(snapshot.operation))
       send('system.setup.cancel', { operationId: snapshot.operation.operationId });
   }, [snapshot, send]);
   const repairApplication = useCallback(() => {
-    if (busy || repairProgress) return;
+    if (busy || repairProgress || repairRequest.current) return;
     setRepairError('');
     setRepairProgress({ stage: 'starting', percent: 0, message: 'Đang chuẩn bị package sửa chữa…' });
-    postToHost('media.tools.install');
+    repairRequest.current = postToHost('media.tools.install');
   }, [busy, repairProgress]);
   const exitApplication = useCallback(() => postToHost('system.setup.exit'), []);
   return { snapshot, busy, error, repairProgress, repairError, run, cancel, refresh, repairApplication, exitApplication };

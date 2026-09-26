@@ -6,6 +6,7 @@ using TOOL_LOCAL.Vietsub.Ocr;
 using TOOL_LOCAL.Vietsub.Storage;
 using TOOL_LOCAL.Vietsub.Translation;
 using TOOL_LOCAL.Vietsub.Voice;
+using TOOL_LOCAL.Updates;
 
 namespace TOOL_LOCAL.SystemSetup;
 
@@ -14,9 +15,9 @@ internal static class DesktopReadinessCommand
 {
     internal sealed record ComponentResult(string Id, string State, string? ErrorCode);
 
-    public static bool Matches(string[] args) => args is ["--check-desktop"] or ["--check-webview2"];
+    public static bool Matches(string[] args) => args is ["--check-desktop"] or ["--check-webview2"] or ["--check-bundled-components"];
 
-    public static async Task<int> RunAsync(bool webViewOnly = false)
+    public static async Task<int> RunAsync(bool webViewOnly = false, bool bundledOnly = false)
     {
         try
         {
@@ -36,6 +37,29 @@ internal static class DesktopReadinessCommand
                     ServerAccessChecked = false
                 }));
                 return webView.IsReady ? 0 : 2;
+            }
+            if (bundledOnly)
+            {
+                // Inspect exactly the files that travel in the ZIP. Do not read deployment
+                // settings, touch installed Piper/Qwen models, or inherit a media path override.
+                var bundledPaths = new MediaToolPathResolver(new MediaToolOptions()).Resolve();
+                var bundledMedia = new MediaToolPreflightService(bundledPaths, new ExternalProcessRunner(), TimeProvider.System);
+                await using var bundledOcr = new PaddleVietsubOcrRecognizer();
+                using var bundleTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+                var bundledComponents = await InspectAsync([
+                    new MediaSetupAdapter(bundledMedia, bundledPaths), new OcrSetupAdapter(bundledOcr, true)
+                ], bundleTimeout.Token);
+                // A developer machine may already have VC++ in System32. Require evidence
+                // that the ZIP's own runtime was loaded in this fresh diagnostic process.
+                var ocrNativeModules = OcrNativeDependencies.InspectLoadedModules();
+                var bundledReady = webView.IsReady && bundledComponents.All(x => x.State == "READY") && ocrNativeModules.All(x => x.AppLocal);
+                Console.WriteLine(JsonSerializer.Serialize(new {
+                    AppVersion = DesktopBuildInfo.Version, DesktopBuildInfo.BuildNumber, WindowsX64 = windowsX64,
+                    WebView2 = webView, BundledComponentsReady = bundledReady, ServerAccessChecked = false,
+                    InstalledVoiceOrTranslationChecked = false, Components = bundledComponents,
+                    OcrNativeRuntimeModules = ocrNativeModules
+                }));
+                return bundledReady ? 0 : 2;
             }
             var options = DesktopOptions.Load(AppContext.BaseDirectory, DesktopUserSettingsStore.PreferencesDirectory, requireDatabase: false);
             var mediaPaths = new MediaToolPathResolver(options.MediaTools).Resolve();
@@ -57,7 +81,8 @@ internal static class DesktopReadinessCommand
             var ready = webView.IsReady && components.All(x => x.State is "READY" or "DISABLED");
             Console.WriteLine(JsonSerializer.Serialize(new
             {
-                AppVersion = typeof(DesktopReadinessCommand).Assembly.GetName().Version?.ToString(),
+                AppVersion = DesktopBuildInfo.Version,
+                DesktopBuildInfo.BuildNumber,
                 WindowsX64 = windowsX64,
                 WebView2Installed = webView.IsReady,
                 WebView2 = webView,
@@ -96,7 +121,9 @@ internal static class DesktopReadinessCommand
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception error) when (error is not OutOfMemoryException and not AccessViolationException)
             {
-                results.Add(new(adapter.Component.Id, "CHECK_FAILED", "component_check_failed"));
+                var code = error is SetupException or VietsubOcrException
+                    ? SetupErrors.Code(error) : "component_check_failed";
+                results.Add(new(adapter.Component.Id, "CHECK_FAILED", code));
             }
         }
         return results;

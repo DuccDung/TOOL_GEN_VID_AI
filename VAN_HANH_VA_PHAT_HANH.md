@@ -238,6 +238,8 @@ Script không được hướng đến remote nếu chưa chủ động cho phé
 - SQL workflow dùng account/role ít quyền; không đóng gói production credential trong `appsettings.json`.
 - FFmpeg/FFprobe phải nằm ở `tools/ffmpeg`, đúng win-x64, provenance và checksum.
 - OCR/model/native runtime phải đúng bundle/fingerprint.
+- OCR desktop cần bốn DLL Visual C++ x64 cạnh `TOOL-LOCAL.exe`, gồm `VCOMP140.dll` mà MKL dùng. Chuẩn bị từ installer Microsoft được ghim trong `third_party/ocr/MSVC_RUNTIME.json` bằng `scripts/Prepare-OcrNativeRuntime.ps1 -InstallerPath <file local đã kiểm checksum>`. Build và publish kiểm hash bắt buộc; có thể truyền `OcrNativeRuntimeDirectory` cho MSBuild hoặc `-OcrNativeRuntimePath` cho script release. Không lấy DLL từ System32/máy dev hoặc chép runtime Piper sang desktop. Giữ notice Microsoft cùng gói.
+- Khi kiểm ZIP OCR, xác minh thêm `OcrNativeRuntimeModules` của lệnh `--check-bundled-components`: bốn DLL đều có `AppLocal=true`. Kiểm file thiếu/hỏng trên bản giải nén thử, kể cả máy kiểm đã cài Visual C++; không thử bằng cách xóa hoặc thay DLL Windows. Windows N/Server thiếu Media Foundation cần chuẩn bị thành phần Windows phù hợp; không phân phối DLL hệ thống thay thế.
 - Profile Low-memory 6 GB chỉ được bật trong bundle đã benchmark; không hạ thêm ngưỡng qua WebView, manifest project hoặc cấu hình người dùng.
 - Giữ `VietsubLocalTranslationEnabled=false` đến khi verify model, benchmark và desktop smoke đạt trên chính bundle định phát hành.
 - `VietsubLocalVoiceEnabled=true` chỉ mở UI/cài đặt. Máy thiếu runtime/model phải trả `NOT_INSTALLED`; chỉ rollout sau verify checksum/probe, kiểm kê license/dependency Python, benchmark CPU, nghe nghiệm thu và smoke timeline/playback.
@@ -264,6 +266,47 @@ Publish tạo artifact mới và từ chối release directory đã có file:
 ```
 
 Nếu dùng appsettings đóng gói riêng, truyền `-AppSettingsPath` đến file đã rà soát không chứa secret. `artifacts` là đầu ra tái tạo, không phải source of truth.
+
+`Update.Channel` trong cấu hình desktop phải khớp `-Channel`; `Update.Platform` phải là `win-x64`. Script giải nén ZIP vừa tạo, kiểm đủ thành phần và chạy fixture OCR Anh/Trung, FFmpeg cùng kiểm WebView2. Probe không đạt thì chưa bàn giao ZIP. Có thể chạy lại trên thư mục đã giải nén:
+
+```powershell
+.\scripts\Test-DesktopSetupPublish.ps1 -PublishRoot 'D:\ThuMucDaGiaiNen' -ProbeWebView2 -ProbeBundledComponents -ProbePiperOffline
+```
+
+Máy mới tự chuẩn bị Piper từ payload offline đã xác minh sau bước kiểm tra startup; vẫn có **Cài giọng Việt** để thử lại. ZIP phải chứa `components/piper/piper-1.6.0-python-3.11.15-offline-v3/{manifest.json,piper-offline.zip}`. Không đưa marker READY hoặc venv của máy build vào ZIP. Kiểm cả đường dẫn có dấu/khoảng trắng. Để repair toàn bộ ứng dụng qua server hoạt động, server phải có package Active, đã tới lịch phát hành, khớp version/build/channel/platform; gửi ZIP riêng cho khách không tự tạo release trên server. [Bản sửa Setup ZIP và cách lấy báo cáo chẩn đoán](TRIEN_KHAI_SUA_LOI_SETUP_BAN_ZIP.md).
+
+### Chuẩn bị payload Piper trước publish
+
+Chỉ máy build cần Python và mạng để lấy input. Script kiểm các hash đã pin, cài thử bằng wheel local và tạo WAV trước khi xuất bundle:
+
+```powershell
+.\scripts\Prepare-PiperOfflineBundle.ps1 -BuilderPython 'C:\BuildTools\Python311\python.exe' `
+  -InputDirectory 'D:\PiperBuildInputs' -OutputDirectory 'D:\PiperBuildCandidate' -Download
+```
+
+Rà soát `sources.json`, license, kết quả proof và `approved-definition.json`; định nghĩa đã duyệt trong source phải khớp candidate. Khi đổi pin/worker/payload đã phát hành, tăng bundle version và cập nhật định nghĩa trong cùng thay đổi. Chỉ copy `manifest.json` và `piper-offline.zip` vào `artifacts/piper-offline/<bundle-version>` hoặc truyền `-PiperBundlePath` cho `Publish-DesktopRelease.ps1`. Không copy thư mục `proof`, cache hoặc venv. Script publish bắt buộc kiểm hash và cài thử từ ZIP vừa giải nén; thiếu/hỏng gói phải dừng.
+
+Kiểm runtime offline độc lập, không đọc cấu hình triển khai hoặc đăng nhập/SQL:
+
+```powershell
+.\scripts\Test-PiperOfflineBundle.ps1 -PublishRoot 'D:\ThuMucDaGiaiNen' -Workspace 'D:\PiperProbeMoi'
+.\scripts\Test-PiperOfflineBundle.ps1 -PublishRoot 'D:\ThuMucDaGiaiNen' -Workspace 'D:\PiperProbeMoi' -VerifyOnly
+```
+
+Workspace đầu tiên phải rỗng. Script dùng PATH tối thiểu và proxy không kết nối được trong tiến trình con; không thay DNS/proxy của máy. Cờ offline của uv chặn tải dependency. Các lệnh `--check-desktop` và `--check-bundled-components` vẫn không cài model. Lưu báo cáo rồi dọn đúng thư mục probe do mình tạo. Cần Windows sạch và nghiệm thu nghe/xuất video trước phát hành cho khách; login, license và Cloud vẫn cần kết nối theo kiến trúc hiện hành.
+
+### Xử lý lỗi Piper trong ZIP
+
+| Mã lỗi | Hướng xử lý |
+|---|---|
+| `VOICE_OFFLINE_BUNDLE_MISSING` | Cấp lại bản ZIP đầy đủ đúng phiên bản có cả manifest và payload Piper. |
+| `VOICE_OFFLINE_BUNDLE_INVALID` | Kiểm hash bằng `-ArtifactOnly`; thay nguyên bộ ZIP đúng phiên bản nếu file thiếu/hỏng hoặc worker không khớp. Không sửa hash để chấp nhận file đang lỗi. |
+| `VOICE_RUNTIME_INVALID` | Kiểm tra/cài lại giọng Việt từ payload local trong Setup; không copy marker READY từ máy khác. |
+| `VOICE_RUNTIME_BUSY` | Đợi thao tác Piper ở cửa sổ khác kết thúc rồi thử lại. Không xóa khóa hoặc runtime khi còn job sử dụng. |
+| `VOICE_RUNTIME_INSTALL_FAILED` | Kiểm dung lượng trên ổ chứa component, quyền ghi và tính đầy đủ của ZIP, rồi thử lại. Bundle hiện yêu cầu tối thiểu 727.344.098 byte trống trước khi cài. |
+| `VOICE_RUNTIME_UNSUPPORTED` | Dùng Windows x64 theo nền tảng của gói. |
+
+Sửa riêng runtime Piper không cần package sửa ứng dụng trên server. Nếu payload trong chính ZIP thiếu/hỏng, người vận hành phải cấp lại ZIP hoặc dùng kênh cập nhật/sửa ứng dụng đã cấu hình. Bằng chứng và các môi trường còn cần nghiệm thu được ghi tại [báo cáo Piper offline](TRIEN_KHAI_PIPER_OFFLINE_TRONG_ZIP.md).
 
 ## 11. Smoke sau triển khai
 

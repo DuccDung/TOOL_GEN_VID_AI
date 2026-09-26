@@ -3,3 +3,11 @@
 /third_party/ffmpeg/win-x64/LICENSE.txt -text
 /third_party/ffmpeg/win-x64/checksums.sha256 text eol=lf
 /third_party/ffmpeg/win-x64/PROVENANCE.md text eol=lf
+
+# These exact source bytes are hashed into the approved Piper offline bundle.
+/TOOL-LOCAL/Vietsub/Voice/Workers/piper_worker.py text eol=lf
+/TOOL-LOCAL/SystemSetup/piper-requirements.lock text eol=lf
+/third_party/voice/PROVENANCE.md text eol=lf
+/third_party/voice/LICENSES.md text eol=lf
+/third_party/voice/MSVC-NOTICE.md text eol=lf
+/third_party/voice/PIPER_OFFLINE_APPROVED.json text eol=lf

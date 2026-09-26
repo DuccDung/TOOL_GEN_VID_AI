@@ -9,6 +9,7 @@ public sealed class LoginForm : Form
 {
     private readonly AccountSessionManager _sessionManager;
     private readonly string _webRoot;
+    private readonly string? _userDataFolder;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly WebView2 _webView;
     private readonly Panel _loadingPanel;
@@ -22,10 +23,11 @@ public sealed class LoginForm : Form
     {
     }
 
-    internal LoginForm(AccountSessionManager sessionManager, string? webRoot)
+    internal LoginForm(AccountSessionManager sessionManager, string? webRoot, string? userDataFolder = null)
     {
         _sessionManager = sessionManager;
         _webRoot = webRoot ?? Path.Combine(AppContext.BaseDirectory, "wwwroot");
+        _userDataFolder = userDataFolder;
         Icon = BrandIdentity.WindowIcon;
         Text = "taphoatool - Đăng nhập";
         StartPosition = FormStartPosition.CenterScreen;
@@ -68,7 +70,7 @@ public sealed class LoginForm : Form
             if (!File.Exists(loginPath))
                 throw new InvalidOperationException("Không tìm thấy giao diện đăng nhập đã build.");
 
-            var userDataFolder = Path.Combine(
+            var userDataFolder = _userDataFolder ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ToolGenPostVideo", "LoginWebView2");
             Directory.CreateDirectory(userDataFolder);

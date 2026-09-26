@@ -12,6 +12,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
 {
     private readonly VietsubJobStore _store;
     private readonly VietsubJobExecutorRegistry _executors;
+    private readonly TOOL_LOCAL.SystemSetup.RuntimeUseGate? _runtimeGate;
     private readonly SemaphoreSlim _executionSlots;
     private readonly ConcurrentDictionary<Guid, ActiveExecution> _active = new();
     private readonly ConcurrentDictionary<string, byte> _recordedDiagnostics = new(StringComparer.Ordinal);
@@ -21,7 +22,8 @@ internal sealed class VietsubJobManager : IAsyncDisposable
     public VietsubJobManager(
         VietsubJobStore store,
         VietsubJobExecutorRegistry executors,
-        int maximumConcurrentJobs = 1)
+        int maximumConcurrentJobs = 1,
+        TOOL_LOCAL.SystemSetup.RuntimeUseGate? runtimeGate = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(executors);
@@ -32,10 +34,15 @@ internal sealed class VietsubJobManager : IAsyncDisposable
 
         _store = store;
         _executors = executors;
+        _runtimeGate = runtimeGate;
         _executionSlots = new SemaphoreSlim(maximumConcurrentJobs, maximumConcurrentJobs);
     }
 
     public event EventHandler<VietsubJobChangedEventArgs>? JobChanged;
+
+    // Desktop configures Shared after composition; resolve the default at use time.
+    internal TOOL_LOCAL.SystemSetup.RuntimeUseGate RuntimeGate =>
+        _runtimeGate ?? TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared;
 
     public async Task<VietsubJobSummary> EnqueueAsync(
         Guid projectId,
@@ -86,7 +93,7 @@ internal sealed class VietsubJobManager : IAsyncDisposable
         }
 
         IDisposable runtimeLease;
-        try { runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: false); }
+        try { runtimeLease = RuntimeGate.Acquire(exclusive: false); }
         catch (TOOL_LOCAL.SystemSetup.SetupException e) { throw new VietsubJobException(e.Code, e.Message); }
         var execution = new ActiveExecution(
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token), runtimeLease);

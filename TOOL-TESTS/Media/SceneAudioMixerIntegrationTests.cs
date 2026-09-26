@@ -2,6 +2,7 @@ using TOOL_LOCAL.Media;
 
 namespace TOOL_TESTS.Media;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class SceneAudioMixerIntegrationTests
 {
     [Fact]

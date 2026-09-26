@@ -15,6 +15,7 @@ using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubVoiceCoreTests : IDisposable
 {
     private readonly string _root = Path.Combine(
@@ -194,7 +195,7 @@ public sealed class VietsubVoiceCoreTests : IDisposable
     {
         var paths = new VietsubAppPaths(_root);
         var handler = new RedirectHandler(new Uri("http://127.0.0.1/runtime.zip"));
-        using var store = new VietsubVoiceComponentStore(paths, featureEnabled: true, handler);
+        using var store = new VietsubVoiceComponentStore(paths, featureEnabled: true, handler, allowOnlineInstall: true);
 
         var exception = await Assert.ThrowsAsync<VietsubVoiceException>(
             () => store.InstallAsync(null, CancellationToken.None));
@@ -208,7 +209,7 @@ public sealed class VietsubVoiceCoreTests : IDisposable
     {
         var paths = new VietsubAppPaths(_root);
         var handler = new RedirectThenErrorHandler(new Uri("https://us.aws.cdn.hf.co/model.onnx"));
-        using var store = new VietsubVoiceComponentStore(paths, featureEnabled: true, handler);
+        using var store = new VietsubVoiceComponentStore(paths, featureEnabled: true, handler, allowOnlineInstall: true);
 
         var exception = await Assert.ThrowsAsync<VietsubVoiceException>(
             () => store.InstallAsync(null, CancellationToken.None));
@@ -908,7 +909,7 @@ public sealed class VietsubVoiceCoreTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         var fullRoot = Path.GetFullPath(_root);
         var fullTemp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
         if (!fullRoot.StartsWith(fullTemp + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)

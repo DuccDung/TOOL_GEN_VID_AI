@@ -129,6 +129,27 @@ public sealed class StartupSystemSetupWorkflowTests
         Assert.Equal(0, model.Calls);
     }
 
+    [Fact]
+    public async Task InstallingOnlyPiperDoesNotRepairOcrOrOpenTheBusinessGate()
+    {
+        var ocr = new FakeAdapter("ocr", "REPAIR_REQUIRED", canInstall: false);
+        var piper = new FakeAdapter("piper", "NOT_INSTALLED");
+        await using var fixture = new Fixture(ocr, piper);
+        var gate = new StartupSystemSetupGate(fixture.Coordinator, required: true);
+        var snapshot = fixture.Coordinator.GetSnapshot();
+        var completed = new TaskCompletionSource<SetupSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Coordinator.Changed += (type, value) => { if (type == "system.setup.completed") completed.TrySetResult(value); };
+        await fixture.Coordinator.StartAsync(new(Guid.NewGuid(), snapshot.OrganizationId!.Value,
+            snapshot.ContextGeneration, ["piper"]), "start", _ => { }, default);
+        var result = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("READY", result.Components.Single(x => x.Id == "piper").State);
+        Assert.Equal("REPAIR_REQUIRED", result.Components.Single(x => x.Id == "ocr").State);
+        Assert.Equal(0, ocr.Calls);
+        Assert.True(result.Operation!.AllSelectedReady);
+        Assert.False(result.Operation.AllRequiredReady);
+        Assert.True(gate.IsBlocking);
+    }
+
     private static SetupComponent Component(
         string id,
         string state,

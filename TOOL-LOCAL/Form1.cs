@@ -877,7 +877,7 @@ public partial class Form1 : Form
                 await PrepareMediaToolRepairAsync();
                 return true;
             case "media.tools.install":
-                await RepairMediaToolsAsync();
+                await RepairMediaToolsAsync(request.RequestId);
                 return true;
             case "update.dismiss":
                 if (_availableUpdate is { IsMandatory: false, Release: not null })
@@ -915,7 +915,7 @@ public partial class Form1 : Form
         catch (Exception exception)
         {
             _mediaRepairRelease = null;
-            PostHostMessage("media.tools.install.failed", new { message = exception.Message });
+            PostHostMessage("media.tools.install.failed", DesktopRepairErrors.FromException(exception));
         }
         finally
         {
@@ -923,10 +923,12 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task RepairMediaToolsAsync()
+    private async Task RepairMediaToolsAsync(string? requestId)
     {
         if (_applyingUpdate || _updateApiClient is null || _packageUpdateService is null)
         {
+            PostHostMessage("media.tools.install.failed", DesktopRepairErrors.FromException(
+                new SetupException("system_setup_busy", "Repair unavailable.")), requestId);
             return;
         }
 
@@ -934,12 +936,12 @@ public partial class Form1 : Form
         _updateTimer.Stop();
         try
         {
+            using var runtimeLease = RuntimeUseGate.Shared.Acquire(exclusive: true);
             var release = _mediaRepairRelease
                 ?? await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token);
             _mediaRepairRelease = null;
-            using var runtimeLease = RuntimeUseGate.Shared.Acquire(exclusive: true);
             var progress = new Progress<DesktopUpdateProgress>(update =>
-                PostHostMessage("media.tools.install.progress", update));
+                PostHostMessage("media.tools.install.progress", update, requestId));
             await _packageUpdateService.StartAsync(release, progress, _shutdown.Token);
             Close();
         }
@@ -953,7 +955,7 @@ public partial class Form1 : Form
             {
                 _updateTimer.Start();
             }
-            PostHostMessage("media.tools.install.failed", new { message = exception.Message });
+            PostHostMessage("media.tools.install.failed", DesktopRepairErrors.FromException(exception), requestId);
         }
     }
 
@@ -984,9 +986,9 @@ public partial class Form1 : Form
         }
     }
 
-    private void PostHostMessage(string type, object? payload = null) =>
+    private void PostHostMessage(string type, object? payload = null, string? requestId = null) =>
         PostJsonToWebView(JsonSerializer.Serialize(
-            new WebMessageResponse(type, null, payload),
+            new WebMessageResponse(type, requestId, payload),
             new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 
     private async void RefreshTimerOnTick(object? sender, EventArgs eventArgs)

@@ -260,4 +260,34 @@
     </ItemGroup>
   </Target>
 
+  <PropertyGroup>
+    <OcrNativeRuntimeDirectory Condition="'$(OcrNativeRuntimeDirectory)' == ''">$(MSBuildProjectDirectory)\..\artifacts\ocr-native-runtime\msvc-14.50.35719.0-win-x64</OcrNativeRuntimeDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\third_party\ocr\MSVC_RUNTIME.json" LogicalName="Ocr.MsvcRuntime" />
+    <Content Include="$(OcrNativeRuntimeDirectory)\msvcp140.dll;$(OcrNativeRuntimeDirectory)\vcruntime140.dll;$(OcrNativeRuntimeDirectory)\vcruntime140_1.dll;$(OcrNativeRuntimeDirectory)\vcomp140.dll"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <Content Include="..\third_party\ocr\MSVC_RUNTIME.json;..\third_party\ocr\MSVC-NOTICE.md"
+             Link="third_party\ocr\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="ValidateOcrNativeRuntime" BeforeTargets="PrepareForBuild;PrepareForPublish" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Test-OcrNativeRuntime.ps1&quot; -BundleDirectory &quot;$(OcrNativeRuntimeDirectory)&quot;" />
+  </Target>
+
+  <PropertyGroup>
+    <PiperOfflineBundleVersion>piper-1.6.0-python-3.11.15-offline-v3</PiperOfflineBundleVersion>
+    <PiperOfflineBundleDirectory Condition="'$(PiperOfflineBundleDirectory)' == ''">$(MSBuildProjectDirectory)\..\artifacts\piper-offline\$(PiperOfflineBundleVersion)</PiperOfflineBundleDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\third_party\voice\PIPER_OFFLINE_APPROVED.json" LogicalName="PiperOffline.ApprovedDefinition" />
+    <Content Include="..\third_party\voice\PIPER_OFFLINE_APPROVED.json" Link="third_party\voice\PIPER_OFFLINE_APPROVED.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\third_party\voice\MSVC-NOTICE.md" Link="third_party\voice\MSVC-NOTICE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(PiperOfflineBundleDirectory)\manifest.json;$(PiperOfflineBundleDirectory)\piper-offline.zip"
+             Link="components\piper\$(PiperOfflineBundleVersion)\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true"
+             Condition="Exists('$(PiperOfflineBundleDirectory)\manifest.json') And Exists('$(PiperOfflineBundleDirectory)\piper-offline.zip')" />
+  </ItemGroup>
+  <Target Name="ValidatePiperOfflineBundle" BeforeTargets="PrepareForPublish" Condition="'$(RequirePiperOfflineBundle)' == 'true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Test-PiperOfflineBundle.ps1&quot; -BundleDirectory &quot;$(PiperOfflineBundleDirectory)&quot; -ArtifactOnly" />
+  </Target>
 </Project>

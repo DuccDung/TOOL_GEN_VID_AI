@@ -1,5 +1,16 @@
 namespace TOOL_SHARED.Contracts.Updates;
 
+public static class DesktopRepairErrorCodes
+{
+    public const string PackageNotFound = "desktop_repair_package_not_found";
+    public const string Unavailable = "desktop_repair_unavailable";
+    public const string NetworkFailed = "desktop_repair_network_failed";
+    public const string AccessDenied = "desktop_repair_access_denied";
+    public const string Failed = "desktop_repair_failed";
+}
+
+public sealed record DesktopRepairFailure(string Code, string Message, string Version, int BuildNumber);
+
 public sealed record DesktopUpdateCheckResponse(
     bool IsUpdateAvailable,
     bool IsMandatory,

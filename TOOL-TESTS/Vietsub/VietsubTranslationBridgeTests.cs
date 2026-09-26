@@ -215,8 +215,36 @@ public sealed class VietsubTranslationBridgeTests : IDisposable
         await bridge.TryHandleAsync(
             """{"type":"vietsub.translation.runtime.install","requestId":"install-confirmed","payload":{"confirmResourceWarning":true}}""");
 
+        Assert.Empty(responses.Where(response => HasMessageType(response, "vietsub.error")).Select(response =>
+        {
+            using var error = JsonDocument.Parse(response);
+            return error.RootElement.GetProperty("error").GetProperty("code").GetString();
+        }));
         Assert.Equal(1, provider.InstallCallCount);
         Assert.True(provider.LastInstallResourceWarningAccepted);
+    }
+
+    [Fact]
+    public async Task Bridge_install_respects_its_runtime_lease_and_is_independent_of_another_workspace()
+    {
+        var provider = new WarningBridgeTranslationProvider();
+        await using var fixture = await CreateFixtureAsync("PADDLE_OCR_LOCAL", 1, true, provider);
+        var responses = new ConcurrentQueue<string>();
+        using var bridge = fixture.CreateBridge(responses.Enqueue);
+        await OpenProjectAsync(bridge, fixture.Project.ProjectId);
+        responses.Clear();
+        using (fixture.Manager.RuntimeGate.Acquire(exclusive: false))
+        {
+            await bridge.TryHandleAsync("""{"type":"vietsub.translation.runtime.install","requestId":"busy-runtime","payload":{"confirmResourceWarning":true}}""");
+            using var error = ParseSingleMessage(responses, "vietsub.error");
+            Assert.Equal("system_setup_busy", error.RootElement.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal(0, provider.InstallCallCount);
+        }
+        responses.Clear();
+        using var unrelated = new TOOL_LOCAL.SystemSetup.RuntimeUseGate(Path.Combine(_root, "other-runtime")).Acquire(exclusive: true);
+        await bridge.TryHandleAsync("""{"type":"vietsub.translation.runtime.install","requestId":"free-runtime","payload":{"confirmResourceWarning":true}}""");
+        Assert.DoesNotContain(responses, response => HasMessageType(response, "vietsub.error"));
+        Assert.Equal(1, provider.InstallCallCount);
     }
 
     [Fact]
@@ -304,7 +332,7 @@ public sealed class VietsubTranslationBridgeTests : IDisposable
             paths);
         var manager = new VietsubJobManager(
             jobs,
-            new VietsubJobExecutorRegistry([executor]));
+            new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var service = new VietsubTranslationService(
             new AllowLocalJobAuthorizer(),
             subtitles,
@@ -352,32 +380,26 @@ public sealed class VietsubTranslationBridgeTests : IDisposable
         Guid projectId,
         Guid jobId)
     {
-        await WaitUntilAsync(async () =>
-        {
-            var job = await manager.GetAsync(projectId, jobId);
-            return job?.Status is VietsubJobStatusNames.Completed or VietsubJobStatusNames.Failed;
-        });
+        await VietsubJobWaiter.WaitAsync(manager, projectId, jobId,
+            [VietsubJobStatusNames.Completed, VietsubJobStatusNames.Failed], TimeSpan.FromSeconds(8));
         Assert.Equal(
             VietsubJobStatusNames.Completed,
             (await manager.GetAsync(projectId, jobId))?.Status);
     }
 
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!await condition())
-        {
-            await Task.Delay(20, timeout.Token);
-        }
-    }
-
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);
         }
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        while (!await condition()) await Task.Delay(20, timeout.Token);
     }
 
     private sealed record BridgeFixture(

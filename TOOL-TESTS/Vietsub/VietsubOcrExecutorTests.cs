@@ -55,7 +55,7 @@ public sealed class VietsubOcrExecutorTests : IDisposable
             paths);
         await using var manager = new VietsubJobManager(
             jobStore,
-            new VietsubJobExecutorRegistry([executor]));
+            new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var observedProgress = new ConcurrentQueue<double>();
         manager.JobChanged += (_, eventArgs) => observedProgress.Enqueue(eventArgs.Job.ProgressPercent);
         var parameters = VietsubOcrJobParameters.Create(
@@ -132,7 +132,7 @@ public sealed class VietsubOcrExecutorTests : IDisposable
             paths);
         await using var manager = new VietsubJobManager(
             jobStore,
-            new VietsubJobExecutorRegistry([executor]));
+            new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var parameters = VietsubOcrJobParameters.Create(
             project.SourceVideo.MediaId,
             project.SourceVideo.Sha256,
@@ -170,25 +170,15 @@ public sealed class VietsubOcrExecutorTests : IDisposable
         Guid projectId,
         Guid jobId)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (true)
-        {
-            var job = await manager.GetAsync(projectId, jobId, timeout.Token);
-            if (job?.Status == VietsubJobStatusNames.Completed)
-            {
-                return job;
-            }
-            if (job?.Status == VietsubJobStatusNames.Failed)
-            {
-                throw new Xunit.Sdk.XunitException($"OCR fake failed: {job.ErrorCode} - {job.ErrorMessage}");
-            }
-            await Task.Delay(20, timeout.Token);
-        }
+        var job = await VietsubJobWaiter.WaitAsync(manager, projectId, jobId,
+            [VietsubJobStatusNames.Completed, VietsubJobStatusNames.Failed], TimeSpan.FromSeconds(5));
+        Assert.True(job.Status == VietsubJobStatusNames.Completed, $"OCR fake failed: {job.ErrorCode}");
+        return job;
     }
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);

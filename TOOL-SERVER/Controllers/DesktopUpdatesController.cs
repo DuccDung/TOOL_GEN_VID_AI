@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TOOL_SERVER.Updates;
 using TOOL_SHARED.Contracts.Updates;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_SERVER.Controllers;
 
@@ -48,7 +49,10 @@ public sealed class DesktopUpdatesController(IDesktopReleaseService releaseServi
         var package = packages.FirstOrDefault(candidate =>
             candidate.Release.BuildNumber == buildNumber &&
             string.Equals(candidate.Release.Version, version.Trim(), StringComparison.OrdinalIgnoreCase));
-        return package is null ? NotFound() : Ok(Map(package));
+        return package is null
+            ? NotFound(new ApiErrorResponse(DesktopRepairErrorCodes.PackageNotFound,
+                "Chưa có package sửa chữa đang phát hành cho đúng phiên bản desktop này."))
+            : Ok(Map(package));
     }
 
     private static DesktopReleaseResponse Map(DesktopReleasePackage package) =>

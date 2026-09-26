@@ -20,7 +20,7 @@ public sealed class VietsubOcrLifecycleTests : IDisposable
         var responses = new List<string>();
         await using var manager = new VietsubJobManager(
             fixture.Jobs,
-            new VietsubJobExecutorRegistry());
+            new VietsubJobExecutorRegistry(), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         using var bridge = new VietsubWebBridge(
             true,
             responses.Add,
@@ -45,7 +45,7 @@ public sealed class VietsubOcrLifecycleTests : IDisposable
         var responses = new List<string>();
         await using var manager = new VietsubJobManager(
             fixture.Jobs,
-            new VietsubJobExecutorRegistry());
+            new VietsubJobExecutorRegistry(), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         using var bridge = new VietsubWebBridge(
             true,
             responses.Add,
@@ -102,7 +102,7 @@ public sealed class VietsubOcrLifecycleTests : IDisposable
 
         await using var manager = new VietsubJobManager(
             jobs,
-            new VietsubJobExecutorRegistry([new CompletingOcrExecutor()]));
+            new VietsubJobExecutorRegistry([new CompletingOcrExecutor()]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var responses = new List<string>();
         using var bridge = new VietsubWebBridge(
             true,
@@ -234,7 +234,7 @@ public sealed class VietsubOcrLifecycleTests : IDisposable
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);

@@ -8,7 +8,7 @@
 - Upstream project: `https://github.com/OHF-Voice/piper1-gpl`
 - License declared by the approved source integration: GPL-3.0.
 
-`piper-tts` is installed only after the user explicitly requests the optional local voice component. It is not loaded into the WinForms process. The packaged Python worker communicates through bounded JSONL and has no Cloud client, credential or workflow database access.
+The offline-v3 desktop bundle includes the pinned Python distribution, uv, seven Windows wheels, and the VAIS-1000 model/config. With local voice enabled, startup prepares this component from verified local files after the existing authentication/setup checks. Settings also allows explicit preparation/repair. Piper is not loaded into the WinForms process. The packaged Python worker communicates through bounded JSONL and has no Cloud client, credential or workflow database access.
 
 ## Vietnamese voice model
 
@@ -20,7 +20,17 @@
 - Voice dataset: VAIS-1000.
 - License declared by the upstream voice metadata: CC BY 4.0.
 
-The model and config are downloaded through an HTTPS host allowlist with each redirect checked, written to `.partial`, checked for exact size and SHA-256, and atomically published. A `READY` marker is accepted only when protocol, runtime, worker, model and config fingerprints match and an x64 worker probe has loaded the pinned model and produced a valid Vietnamese PCM WAV.
+The builder verifies the pinned source hashes before producing the offline archive. The application embeds the approved archive/manifest hashes from `PIPER_OFFLINE_APPROVED.json`. Customer preparation uses no package index or Python/model download. A `READY` marker is accepted only when machine, bundle, runtime, worker, requirements and installed file fingerprints match and an x64 worker probe has produced a Vietnamese PCM WAV. The previous online installer remains an explicit compatibility/test option; production does not silently fall back to it.
+
+### Offline build inputs
+
+- CPython 3.11.15, python-build-standalone release 20260807, `x86_64-pc-windows-msvc-install_only_stripped.tar.gz`.
+- Python SHA-256: `ebfd13f290b79fc0cd874304e80944d81a368edc2c7cd94994a7d5104cc0c6b3`. Source pin verified against uv 0.12.3 `crates/uv-python/download-metadata.json`.
+- Official release mirror used by the builder: `https://releases.astral.sh/github/`. Exact pinned URLs are in `scripts/prepare_piper_bundle.py`; build output `sources.json` records all selected wheels and upstream archives.
+- Wheels and their SHA-256 pins: `TOOL-LOCAL/SystemSetup/piper-requirements.lock`. Wheels are selected for CPython 3.11 / Windows x64; no source distribution is executed.
+- Microsoft Visual C++ runtime: four x64 DLLs from the signed 14.50.35719.0 redistributable, extracted without executing the installer. See `MSVC-NOTICE.md`. This also replaces Python's two C runtime DLLs with the matching version. The worker verifies that all four DLLs load from the local Python directory; a system installation cannot stand in for the bundled files.
+- The payload preserves Python's license files and all license/notice files inside the wheels, plus complete uv Apache-2.0/MIT texts from its pinned release source. The proof environment is not redistributed; each target creates its own venv at its final path.
+- Bundling does not waive the release review for GPL source provision, notices, and model/data attribution. Public distribution approval is separate from local runtime acceptance.
 
 ## Kokoro Vietnamese optional synthesis
 

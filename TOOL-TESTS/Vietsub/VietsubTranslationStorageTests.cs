@@ -376,7 +376,7 @@ public sealed class VietsubTranslationStorageTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);

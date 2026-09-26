@@ -1,8 +1,26 @@
 # Kiểm thử và nghiệm thu VideoMaker
 
+## Sửa runtime OCR của ZIP trên máy khách — 2026-09-26
+
+Nhánh `main`, commit nền `bc1c6aec3c731bdb0edcebbde17ae13640245e52` cùng working tree. Bộ Visual C++ x64 cho OCR được ghim hash và đi cạnh EXE; kiểm startup từ chối file thiếu/hỏng, CLI kiểm vị trí module thực nạp. Chi tiết artifact và giới hạn: [báo cáo sửa OCR](TRIEN_KHAI_SUA_OCR_MAY_KHACH.md).
+
+- Restore/build Release đạt, 0 warning/error. Frontend ci/build đạt; **280 Passed / 0 Failed / 0 Skipped**.
+- Regression OCR **14 Passed / 0 Failed / 0 Skipped**; Full C# **1.576 Passed / 0 Failed / 13 Skipped**, source/binary manifest ổn định, 0 tiến trình con còn lại.
+- ZIP build 2: 56 thành phần, 24 web asset, OCR Anh/Trung/FFmpeg/WebView2 READY; cả bốn DLL Visual C++ nạp từ thư mục ứng dụng. Bỏ hoặc sửa một byte `vcomp140.dll` trong bản thử trả đúng lỗi, kể cả máy đã có runtime hệ thống.
+- Piper từ ZIP cài mới offline và kiểm lại ba lần READY. ZIP vá nhỏ áp lên EXE build 1 cũ đạt OCR và xác minh cả bốn DLL nạp tại chỗ, cấu hình kết nối giữ nguyên.
+- Chưa kiểm trực tiếp trên máy khách hoặc Windows sạch riêng, chưa đăng nhập/workflow SQL hoặc đổi package repair trên server. Những bài Skipped không được coi là đạt; hồ sơ phê duyệt phân phối giữ trạng thái trước đó.
+
 > Ma trận áp dụng cho source hiện hành; rà soát dependency tại commit `8f10cc9` ngày 2026-09-15. Những mục có ngày/commit và số test bên dưới là **biên bản lịch sử**, không phải kết quả chạy mới trên checkout hoặc môi trường đang dùng.
 
 Để kết luận một tính năng sẵn sàng, báo riêng: source/contract/migration có mặt; build/test tự động trên commit đích với Passed/Failed/Skipped; clone/schema/quyền trên database đích; smoke runtime/model/provider/UI trên máy/bundle đích; quyết định rollout production. Không cộng test model/SQL opt-in bị `Skipped` vào Passed và không thay smoke thật bằng fake HTTP/model.
+
+### Ổn định kiểm thử — triển khai 2026-09-26
+
+Nhánh `main`, commit nền `bc1c6aec3c731bdb0edcebbde17ae13640245e52` và working tree đã sửa. Có fixture cô lập runtime gate/pool SQLite, chờ job bằng event, collection native riêng, profile WebView2 riêng và runner lặp lưu đầy đủ lỗi. Hai regression bridge/Cloud đạt **100/100 lượt mỗi bài**. C# toàn bộ đạt **10/10 lượt**, mỗi lượt **1551 Passed / 0 Failed / 13 Skipped**; frontend đạt **10/10 lượt**, mỗi lượt **277 Passed / 0 Failed / 0 Skipped**. Trong mỗi lượt C# có 14 ca native trực tiếp đạt trên tiến trình mới với TEMP Unicode; không còn tiến trình con sau cleanup, source/binary manifest ổn định. Các bài model/SQL bị skip chưa được nghiệm thu. Piper thật đã thử và thất bại khi .NET HTTP không phân giải được `github.com:443`, chưa đạt cài mới. Windows thứ hai, ZIP/máy khách và production chưa xác minh. [Lệnh, artifact, lỗi trước/sau và giới hạn](TRIEN_KHAI_ON_DINH_KIEM_THU.md).
+
+### Setup cho bản ZIP — biên bản trước đợt ổn định, 2026-09-26
+
+Nhánh `main`, commit nền `bc1c6aec3c731bdb0edcebbde17ae13640245e52` cùng working tree của bản sửa. Restore/build Release và frontend build đạt; frontend **272 Passed / 0 Failed / 0 Skipped**. C# lượt cuối chạy collection tuần tự **1542 Passed / 0 Failed / 13 Skipped**; lượt mặc định **1541 Passed / 1 Failed / 13 Skipped** do một test Cloud Vietsub hết thời gian chờ. Không coi lượt mặc định là đạt. ZIP chẩn đoán sau giải nén trong đường dẫn có dấu đã qua OCR Anh/Trung, FFmpeg và WebView2; regression chứng minh lỗi marshal đường dẫn trước sửa. Bài cài mới Piper opt-in **Failed** do tiến trình không phân giải được `github.com`, chưa nghiệm thu cài mới. Chưa kiểm máy khách/server/SQL đích hoặc rollout. [Artifact, hash, lệnh và giới hạn](TRIEN_KHAI_SUA_LOI_SETUP_BAN_ZIP.md).
 
 ### Hợp nhất chọn lọc `main` vào `local-2` — xác minh 2026-09-15
 
@@ -600,3 +618,20 @@ Checkout hợp nhất từ commit local `1333ab2` và remote `dc6cdc3` trên nh�
 - `git diff origin/local-2 --check`: **Passed** cho phần nội dung được bổ sung/hợp nhất. `git diff --cached --check` trên toàn merge vẫn báo whitespace đã có trong các file `.codex/skills/ui-ux-pro-max` từ remote; không sửa các asset đó chỉ để làm sạch kết quả. Kiểm tra phần ngoài `.codex` không báo lỗi whitespace.
 
 Chưa chạy UI automation/WebView2 trực tiếp, đăng TikTok, provider có phí, migration trên database thật hoặc publish release. Build và test trên checkout hợp nhất không tự chứng minh cấu hình/runtime/schema của máy đích đã sẵn sàng.
+
+## 27. Piper offline trong ZIP — 2026-09-26
+
+Rà soát nhánh `main`, commit nền `bc1c6aec3c731bdb0edcebbde17ae13640245e52` cùng working tree chưa commit. Kết quả dưới đây gắn với source/binary manifest của chuỗi kiểm thử, không gán cho commit nền. Chi tiết, hash artifact và lịch sử điều tra: [báo cáo Piper offline](TRIEN_KHAI_PIPER_OFFLINE_TRONG_ZIP.md).
+
+- Restore và build solution Release: **Passed**, MSBuild 0 warning / 0 error. `npm ci --no-audit --no-fund`, `npm run build`: **Passed**; Vite còn cảnh báo chunk >500 kB.
+- Full C# chạy riêng ba lượt liên tiếp: **1.570 Passed / 0 Failed / 13 Skipped mỗi lượt**. Chuỗi `D:\vmpip\20260926-202444-Full-0e131a`, thời gian 241,01 / 237,21 / 235,96 giây, không còn tiến trình con.
+- Frontend đầy đủ, đổi seed qua ba lượt: **280 Passed / 0 Failed / 0 Skipped mỗi lượt**, 44 file. Chuỗi `D:\vmpip\20260926-201907-Frontend-370653`.
+- Kiểm bundle/Startup/gate C#: **58 Passed / 0 Failed / 0 Skipped mỗi lượt trong 20 lượt**, chuỗi `D:\vmpip\20260926-203647-SetupOffline-15dc5c`. Ba file Startup/Settings frontend: **23 Passed / 0 Failed / 0 Skipped mỗi lượt trong 20 lượt**, chuỗi `D:\vmpip\20260926-201955-Frontend-05621a`.
+- Piper offline thật: **1 Passed / 0 Failed / 0 Skipped mỗi lượt trong ba lượt**, chuỗi `D:\vmpip\20260926-201421-Piper-fcbc8f`. Mỗi lượt có root/cache mới, đường dẫn có dấu, hủy/thử lại, cài sửa sau khi module bị sửa, giữ runtime v2, WAV có tín hiệu và năm lần mở lại. Không còn tiến trình con; không dùng cache cũ để chứng minh cài mới.
+- ZIP chẩn đoán 624.595.757 byte được publish với cấu hình rỗng, giải nén và kiểm inventory: 50 thành phần bắt buộc, 24 web asset, 0 thiếu/sai hash; OCR, FFmpeg, WebView2 đạt. Piper cài và kiểm lại năm lần khi thư mục ứng dụng chỉ đọc, runtime ở ổ khác. WAV proof ghép vào MP4 H.264/AAC đạt qua FFmpeg/FFprobe đi kèm.
+- Đo riêng bằng CLI sau các suite: cài mới **42,38 giây**, kiểm lại **4,12 giây**, runtime/cache/venv sau cài **493.310.074 byte**. Đây là số đo trên máy hiện tại, không gồm startup có đăng nhập; báo cáo có giới hạn phép đo.
+- Kiểm tra cuối: source/binary manifest của năm chuỗi giống nhau và vẫn khớp checkout/output; hash payload, worker, lockfile đạt; `git diff --check` đạt. Bằng chứng tổng hợp `D:\vmtest\piper-offline-20260926\acceptance-final.json`.
+
+Lượt Full đầu chạy đồng thời với frontend có **1.569 Passed / 1 Failed / 13 Skipped**: bài `Cpu_backend_dry_run_reports_selected_avx_and_native_hash` vượt load timeout 5 giây. Bài này chạy riêng năm lượt đều đạt; ba lượt Full chạy sau khi frontend kết thúc cũng đạt. Giữ TRX/log của lượt lỗi; không tăng timeout, bỏ assertion hoặc sửa runtime Qwen. Chưa đủ bằng chứng để khẳng định nguyên nhân timeout.
+
+13 bài Skipped trong Full là các bài opt-in SQL/model/GPU/benchmark/voice; không tính là model hoặc database đã nghiệm thu. Piper offline có chuỗi thật riêng như trên. Chưa xác minh Windows sạch/máy hoặc tài khoản thứ hai, startup bằng auth/license thật, nghe và xuất video qua UI, hoặc packet capture cho toàn cây tiến trình. Không publish/upload release, chạy migration, gọi provider có phí hay sửa dữ liệu project người dùng; `TOOL-LOCAL/appsettings.json` được giữ nguyên. Hồ sơ phân phối dependency còn các mục cần rà soát trong báo cáo trước public release.

@@ -26,9 +26,15 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (PiperOfflineCommand.Matches(args))
+        {
+            Environment.ExitCode = PiperOfflineCommand.RunAsync(args).GetAwaiter().GetResult();
+            return;
+        }
         if (DesktopReadinessCommand.Matches(args))
         {
-            Environment.ExitCode = DesktopReadinessCommand.RunAsync(webViewOnly: args[0] == "--check-webview2").GetAwaiter().GetResult();
+            Environment.ExitCode = DesktopReadinessCommand.RunAsync(webViewOnly: args[0] == "--check-webview2",
+                bundledOnly: args[0] == "--check-bundled-components").GetAwaiter().GetResult();
             return;
         }
         if (TOOL_LOCAL.LocalVoice.LocalVoiceMaintenance.IsMaintenanceCommand(args))

@@ -10,7 +10,7 @@ internal sealed record SystemSetupRequest(Guid OperationId, Guid ExpectedOrganiz
 internal sealed record SystemSetupCancelRequest(Guid OperationId);
 internal sealed record SetupComponent(string Id, string Name, string Version, string State, string Message,
     bool CanInstall, bool CanVerify, bool CanRepair, long? DownloadBytes = null, long? MinimumFreeDiskBytes = null,
-    string? ErrorCode = null, DateTime? CheckedAtUtc = null, string? ResourceProfileId = null);
+    string? ErrorCode = null, DateTime? CheckedAtUtc = null, string? ResourceProfileId = null, bool CanPrepareOffline = false);
 internal sealed record SetupOperation(Guid OperationId, string Mode, string State, string[] ComponentIds,
     long Sequence, string? CurrentComponent = null, string? Stage = null, double? Percent = null,
     long? BytesProcessed = null, long? TotalBytes = null, bool AllSelectedReady = false, bool AllRequiredReady = false);

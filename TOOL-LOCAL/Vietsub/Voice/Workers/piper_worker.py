@@ -5,6 +5,7 @@ import sys
 import wave
 import importlib.metadata
 import re
+import os
 
 PROTOCOL_VERSION = 1
 sys.stdout.reconfigure(encoding="utf-8")
@@ -44,11 +45,39 @@ def main() -> None:
     emit(request_id, "started", total=len(items))
 
     with contextlib.redirect_stdout(sys.stderr):
+        # The offline bundle supplies the C++ runtime needed by ONNX Runtime.
+        # Load absolute local paths and verify Windows did not reuse a system DLL.
+        msvc_libraries = []
+        if os.name == "nt" and (pathlib.Path(sys.base_prefix) / "msvcp140.dll").is_file():
+            import ctypes
+            get_module_path = ctypes.windll.kernel32.GetModuleFileNameW
+            get_module_path.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint]
+            get_module_path.restype = ctypes.c_uint
+            for name in ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll"):
+                expected_path = (pathlib.Path(sys.base_prefix) / name).resolve(strict=True)
+                library = ctypes.WinDLL(str(expected_path))
+                loaded_path = ctypes.create_unicode_buffer(32768)
+                if not get_module_path(library._handle, loaded_path, len(loaded_path)):
+                    raise ValueError("Cannot verify the local C++ runtime.")
+                if pathlib.Path(loaded_path.value).resolve() != expected_path:
+                    raise ValueError("C++ runtime did not load from the approved local bundle.")
+                msvc_libraries.append(library)
         from piper import PiperVoice, SynthesisConfig
 
         model_path = pathlib.Path(request["modelPath"]).resolve(strict=True)
         config_path = pathlib.Path(request["configPath"]).resolve(strict=True)
-        voice = PiperVoice.load(str(model_path), config_path=str(config_path), use_cuda=False)
+        # eSpeak's Windows C file API cannot open a UTF-8 absolute data path.
+        # Windows resolves an ASCII relative path against its Unicode working directory.
+        # Resolve request paths first; this worker owns its process and working directory.
+        for item in items:
+            item["outputPath"] = str(pathlib.Path(item["outputPath"]).resolve())
+        from piper.phonemize_espeak import ESPEAK_DATA_DIR
+        espeak_data_dir = ESPEAK_DATA_DIR
+        if os.name == "nt":
+            os.chdir(ESPEAK_DATA_DIR.parent)
+            espeak_data_dir = pathlib.Path("espeak-ng-data")
+        voice = PiperVoice.load(str(model_path), config_path=str(config_path),
+                                use_cuda=False, espeak_data_dir=espeak_data_dir)
         synthesis_config = SynthesisConfig(
             volume=float(request.get("volume", 1.0)),
             length_scale=float(request.get("lengthScale", 1.0)),

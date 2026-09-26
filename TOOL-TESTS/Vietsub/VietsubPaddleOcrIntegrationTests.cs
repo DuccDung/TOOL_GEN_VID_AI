@@ -8,6 +8,7 @@ using TOOL_LOCAL.Vietsub.Ocr;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubPaddleOcrIntegrationTests
 {
     [Fact]
@@ -120,7 +121,7 @@ public sealed class VietsubPaddleOcrIntegrationTests
             "win-x64",
             "ffmpeg.exe");
         Assert.True(File.Exists(ffmpegPath), $"FFmpeg test bundle was not found: {ffmpegPath}");
-        var tempRoot = Path.Combine(Path.GetTempPath(), "VIDEOMAKER_OCR_PIPELINE_TEST", Guid.NewGuid().ToString("N"));
+        var tempRoot = Path.Combine(Path.GetTempPath(), "OCR có dấu", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
         try
         {
@@ -138,7 +139,8 @@ public sealed class VietsubPaddleOcrIntegrationTests
                     Scalar.White,
                     5,
                     LineTypes.AntiAlias);
-                Assert.True(Cv2.ImWrite(imagePath, image));
+                Assert.True(Cv2.ImEncode(".png", image, out var encoded));
+                await File.WriteAllBytesAsync(imagePath, encoded);
             }
 
             var videoPath = Path.Combine(tempRoot, "hard-subtitle.mp4");

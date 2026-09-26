@@ -531,19 +531,24 @@ internal sealed class VietsubJobStore(
         Guid projectId,
         CancellationToken cancellationToken)
     {
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = paths.GetProjectPath(projectId, "project.db"),
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
-            DefaultTimeout = 5
-        };
-        var connection = new SqliteConnection(builder.ToString());
+        var connection = CreateConnection(paths.GetProjectPath(projectId, "project.db"));
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
         await command.ExecuteNonQueryAsync(cancellationToken);
         return connection;
+    }
+
+    internal static SqliteConnection CreateConnection(string databasePath)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+            DefaultTimeout = 5
+        };
+        return new SqliteConnection(builder.ToString());
     }
 
     private static async Task InsertJobAsync(

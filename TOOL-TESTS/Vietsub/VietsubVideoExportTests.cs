@@ -11,6 +11,7 @@ using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubVideoExportTests : IAsyncDisposable
 {
     private readonly string _root = Path.Combine(
@@ -268,7 +269,7 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
             preflight,
             mediaProbe,
             "ffmpeg-test",
-            runner);
+            runner, runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var destination = Path.Combine(_root, "out", "result.mp4");
 
         var result = await service.ExportAsync(
@@ -386,7 +387,8 @@ public sealed class VietsubVideoExportTests : IAsyncDisposable
         var mediaImport = new VietsubMediaImportService(paths, preflight, probe);
         var service = new VietsubVideoExportService(
             new AllowLocalJobAuthorizer(), projects, mediaImport, subtitles,
-            new VietsubVoiceStore(paths, subtitles), paths, preflight, probe, "ffmpeg-test", runner);
+            new VietsubVoiceStore(paths, subtitles), paths, preflight, probe, "ffmpeg-test", runner,
+            runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var destination = Path.Combine(_root, "out", "finished.mp4");
         var cancel = outcome == "cancel";
         var responses = new List<string>();

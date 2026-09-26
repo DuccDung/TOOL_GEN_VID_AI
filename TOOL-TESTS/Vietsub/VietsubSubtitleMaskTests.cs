@@ -8,6 +8,7 @@ using TOOL_LOCAL.Vietsub.Subtitles;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubSubtitleMaskTests : IAsyncDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "vm-mask-" + Guid.NewGuid().ToString("N"));

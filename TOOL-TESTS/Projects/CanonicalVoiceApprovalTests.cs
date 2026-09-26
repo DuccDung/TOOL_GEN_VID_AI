@@ -11,6 +11,7 @@ using TOOL_SHARED.Contracts.Generation;
 
 namespace TOOL_TESTS.Projects;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed partial class CanonicalVoiceApprovalTests
 {
     [Fact]

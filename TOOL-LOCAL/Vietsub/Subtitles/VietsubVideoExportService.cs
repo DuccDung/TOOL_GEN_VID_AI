@@ -46,7 +46,8 @@ internal sealed class VietsubVideoExportService(
     IMediaToolPreflightService mediaToolPreflight,
     FfprobeService mediaProbe,
     string ffmpegPath,
-    IExternalProcessRunner processRunner)
+    IExternalProcessRunner processRunner,
+    TOOL_LOCAL.SystemSetup.RuntimeUseGate? runtimeGate = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -70,7 +71,7 @@ internal sealed class VietsubVideoExportService(
             throw new VietsubVideoExportException(exception.Code, exception.Message, exception);
         }
 
-        using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: false);
+        using var runtimeLease = (runtimeGate ?? TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared).Acquire(exclusive: false);
         var media = project.SourceVideo
             ?? throw new VietsubVideoExportException(
                 VietsubVideoExportErrorCodes.VideoRequired,

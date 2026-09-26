@@ -51,15 +51,84 @@ async function showQwenResourceWarning() {
   return operationId;
 }
 beforeEach(async () => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   bridge.posts = []; bridge.sequence = 0;
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<Harness />));
   await emit('system.setup.status', initial(), last('system.setup.get').requestId);
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+afterEach(async () => {
+  await act(async () => root.unmount());
+  container.remove();
+  expect(bridge.listener).toBeNull();
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('Setup application workflow', () => {
+  it('prepares bundled Piper once at startup and does not restart after cancellation or navigation', async () => {
+    const checked: SetupSnapshot = { ...initial(), revision: 2, startupRequired: true,
+      components: initial().components.map(c => c.id === 'piper'
+        ? { ...c, state: 'NOT_INSTALLED', canPrepareOffline: true } : { ...c, state: 'READY' }),
+      operation: { operationId: 'check-offline', mode: 'check', state: 'PartiallyCompleted', componentIds: ['piper'],
+        sequence: 2, allSelectedReady: false, allRequiredReady: false } };
+    await act(async () => vi.advanceTimersByTime(6000));
+    await emit('system.setup.status', checked, last('system.setup.get').requestId);
+    const start = last('system.setup.start');
+    expect(start.payload).toMatchObject({ componentIds: ['piper'], expectedOrganizationId: 'org' });
+    const operationId = (start.payload as { operationId: string }).operationId;
+    const running: SetupSnapshot = { ...checked, revision: 3,
+      operation: { ...checked.operation!, operationId, mode: 'start', state: 'Running', sequence: 1 } };
+    await emit('system.setup.accepted', running, start.requestId);
+    await emit('system.setup.completed', { ...running, revision: 4,
+      operation: { ...running.operation!, state: 'Cancelled', sequence: 2 } });
+    await act(async () => root.render(<Harness visible={false} />));
+    await act(async () => root.render(<Harness />));
+    await act(async () => vi.advanceTimersByTime(6000));
+    await emit('system.setup.status', { ...checked, revision: 5 }, last('system.setup.get').requestId);
+    expect(bridge.posts.filter(p => p.type === 'system.setup.start')).toHaveLength(1);
+  });
+
+  it.each([['settings', false, true], ['missing bundle', true, false]] as const)(
+    'does not automatically prepare Piper for %s', async (_name, startupRequired, canPrepareOffline) => {
+      const checked: SetupSnapshot = { ...initial(), startupRequired,
+        components: initial().components.map(c => ({ ...c, state: 'NOT_INSTALLED', canPrepareOffline })),
+        operation: { operationId: 'check', mode: 'check', state: 'Failed', componentIds: ['piper'],
+          sequence: 2, allSelectedReady: false, allRequiredReady: false } };
+      await act(async () => vi.advanceTimersByTime(6000));
+      await emit('system.setup.status', checked, last('system.setup.get').requestId);
+      expect(bridge.posts.filter(p => p.type === 'system.setup.start')).toHaveLength(0);
+    });
+
+  it('changes polling while busy and removes the poller and listener on unmount', async () => {
+    const count = () => bridge.posts.filter(post => post.type === 'system.setup.get').length;
+    const initialCount = count();
+    await act(async () => vi.advanceTimersByTime(6000));
+    expect(count()).toBe(initialCount + 1);
+    await act(async () => button('Cài thành phần cần thiết').click());
+    await act(async () => vi.advanceTimersByTime(2500));
+    expect(count()).toBe(initialCount + 2);
+    await act(async () => root.render(null));
+    expect(bridge.listener).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => vi.advanceTimersByTime(18000));
+    expect(count()).toBe(initialCount + 2);
+  });
+
+  it('ignores a late native rejection from the previous organization', async () => {
+    await act(async () => button('Cài thành phần cần thiết').click());
+    const previous = last('system.setup.start');
+    await act(async () => root.render(<Harness organization="other-org" />));
+    await act(async () => bridge.listener!({ type: 'operation.error', requestId: previous.requestId,
+      error: { code: 'system_setup_busy', message: 'Lỗi từ tổ chức cũ' } }));
+    expect(container.textContent).not.toContain('Lỗi từ tổ chức cũ');
+    await emit('system.setup.status', { ...initial(), organizationId: 'other-org', contextGeneration: 'new' },
+      last('system.setup.get').requestId);
+    expect(button('Cài thành phần cần thiết').disabled).toBe(false);
+  });
+
   it('starts without project and allows Piper to be omitted', async () => {
     await act(async () => container.querySelector<HTMLInputElement>('input')!.click());
     await act(async () => button('Cài thành phần cần thiết').click());

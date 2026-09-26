@@ -2,10 +2,12 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Xunit.Abstractions;
 
 namespace TOOL_TESTS.Vietsub;
 
-public sealed class VietsubTimelineLayoutIntegrationTests
+[Collection(NativeWindowsCollection.Name)]
+public sealed class VietsubTimelineLayoutIntegrationTests(ITestOutputHelper diagnostics)
 {
     [Fact]
     public async Task WebView2_keeps_label_descenders_and_waveforms_visible_at_multiple_zoom_levels()
@@ -62,12 +64,15 @@ public sealed class VietsubTimelineLayoutIntegrationTests
                             try
                             {
                                 Assert.True(args.IsSuccess);
+                                var baselinePixelRatio = double.Parse(await core.ExecuteScriptAsync("devicePixelRatio"),
+                                    System.Globalization.CultureInfo.InvariantCulture);
                                 var results = new List<string>();
                                 foreach (var zoom in new[] { 1d, 1.25, 1.5, 2d })
                                 {
                                     webView.ZoomFactor = zoom;
                                     var evaluation = await core.CallDevToolsProtocolMethodAsync("Runtime.evaluate",
-                                        JsonSerializer.Serialize(new { expression = "window.run()", awaitPromise = true, returnByValue = true }));
+                                        JsonSerializer.Serialize(new { expression = $"window.run({JsonSerializer.Serialize(baselinePixelRatio * zoom)})",
+                                            awaitPromise = true, returnByValue = true }));
                                     using var parsed = JsonDocument.Parse(evaluation);
                                     results.Add(parsed.RootElement.GetProperty("result").GetProperty("value").GetRawText());
                                     if (!string.IsNullOrWhiteSpace(screenshots))
@@ -94,6 +99,7 @@ public sealed class VietsubTimelineLayoutIntegrationTests
             Assert.True(thread.Join(TimeSpan.FromSeconds(5)));
             Assert.All(results, json =>
             {
+                diagnostics.WriteLine(json);
                 using var result = JsonDocument.Parse(json);
                 Assert.True(result.RootElement.GetProperty("errors").GetArrayLength() == 0, json);
             });

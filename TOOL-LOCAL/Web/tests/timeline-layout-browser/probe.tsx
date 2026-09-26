@@ -1,7 +1,9 @@
 import { createRoot } from 'react-dom/client';
+import { useLayoutEffect, type ReactNode } from 'react';
 import { VietsubTimeline } from '../../src/features/vietsub/VietsubTimeline';
 import type { VietsubMediaSummary, VietsubTimelineWindow, VietsubVoiceWorkspace } from '../../src/features/vietsub/types';
 import { defaultVietsubAudioMixSettings } from '../../src/features/vietsub/vietsubAudioMix';
+import { waitForTimelineLayout } from './layoutReady';
 import '../../src/styles.css';
 
 const media: VietsubMediaSummary = {
@@ -30,7 +32,21 @@ const voice: VietsubVoiceWorkspace = {
   timelinePlaybackUrl: 'https://app.local/unused.wav', timingDiagnostics: []
 };
 
-createRoot(document.getElementById('root')!).render(
+let initialLayout: { clipWidth: number; textWidth: number; horizontalOffset: number } | null = null;
+function InitialLayoutObserver({ children }: { children: ReactNode }) {
+  useLayoutEffect(() => {
+    const clip = document.querySelector<HTMLElement>('[data-vietsub-voice-cue-id="cue-0"]')!;
+    const range = document.createRange();
+    range.selectNodeContents(clip.querySelector('span')!);
+    const card = clip.getBoundingClientRect();
+    const text = range.getBoundingClientRect();
+    initialLayout = { clipWidth: card.width, textWidth: text.width,
+      horizontalOffset: (text.left + text.right - card.left - card.right) / 2 };
+  }, []);
+  return children;
+}
+
+createRoot(document.getElementById('root')!).render(<InitialLayoutObserver>
   <main style={{ padding: 16, width: '100%', maxWidth: 1160 }}>
     <VietsubTimeline media={media} trackId="track" window={timeline} playheadMilliseconds={6000}
       playing={false} voiceWorkspace={voice} voiceEnabled busy={false} audioMixSettings={defaultVietsubAudioMixSettings}
@@ -38,12 +54,18 @@ createRoot(document.getElementById('root')!).render(
       onSeek={() => {}} onSelectCue={() => {}} onLoadWindow={() => {}}
       onRequestThumbnails={() => {}} onRequestWaveform={() => {}} onUpdateCue={async () => true}
       onToggleVoice={() => {}} onPreviewAudioMix={() => {}} onUpdateAudioMix={async () => true} />
-  </main>
+  </main></InitialLayoutObserver>
 );
 
-window.run = async () => {
+window.run = async (expectedPixelRatio: number) => {
   await document.fonts.ready;
-  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const settle = () => waitForTimelineLayout(() => {
+    const viewport = document.querySelector<HTMLElement>('.vietsub-timeline-viewport');
+    const content = document.querySelector<HTMLElement>('.vietsub-timeline-content');
+    return viewport && content ? { viewportWidth: viewport.clientWidth,
+      contentWidth: Number.parseFloat(content.style.width), pixelRatio: window.devicePixelRatio } : null;
+  }, expectedPixelRatio, media.durationSeconds * 40);
+  const measuredLayout = await settle();
   const errors: string[] = [];
   const check = (ok: boolean, message: string) => { if (!ok) errors.push(message); };
   const clip = document.querySelector<HTMLElement>('[data-vietsub-voice-cue-id="cue-0"]')!;
@@ -55,7 +77,8 @@ window.run = async () => {
   const text = range.getBoundingClientRect();
   check(text.bottom <= box.bottom - 1 && text.top >= box.top + 1,
     `Text clipped: glyph y=${text.top}..${text.bottom}, label y=${box.top}..${box.bottom}`);
-  check(Math.abs((text.left + text.right - card.left - card.right) / 2) < 1, 'Text is not horizontally centered');
+  const horizontalOffset = (text.left + text.right - card.left - card.right) / 2;
+  check(Math.abs(horizontalOffset) < 1, `Text is not horizontally centered: offset=${horizontalOffset}, clip=${card.width}, glyph=${text.width}`);
   check(Math.abs((text.top + text.bottom - card.top - card.bottom) / 2) < 2, 'Text is not vertically centered');
   const waveforms = Array.from(document.querySelectorAll<HTMLElement>('[data-vietsub-voice-waveform]'));
   check(waveforms.length === 3, 'Generated clips lost waveforms');
@@ -74,7 +97,7 @@ window.run = async () => {
   const main = document.querySelector('main')!;
   for (const width of [1160, 820, 640, 420]) {
     main.style.width = `${Math.min(width, window.innerWidth)}px`;
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await settle();
     const toolbar = document.querySelector('.vietsub-timeline-toolbar')!.getBoundingClientRect();
     const exportButton = document.querySelector<HTMLButtonElement>('.vietsub-timeline-export-trigger')!;
     const button = exportButton.getBoundingClientRect();
@@ -88,9 +111,10 @@ window.run = async () => {
       `${width}: timeline tools overlap the audio mixer`);
   }
   main.style.width = '100%';
-  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await settle();
   return { errors, waveformCount: waveforms.length, textTop: text.top, textBottom: text.bottom,
-    labelTop: box.top, labelBottom: box.bottom };
+    labelTop: box.top, labelBottom: box.bottom, clipWidth: card.width, textWidth: text.width, horizontalOffset,
+    measuredLayout, initialLayout };
 };
 
-declare global { interface Window { run: () => Promise<unknown>; } }
+declare global { interface Window { run: (expectedPixelRatio: number) => Promise<unknown>; } }

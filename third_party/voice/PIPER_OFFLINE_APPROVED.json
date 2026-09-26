@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "bundleVersion": "piper-1.6.0-python-3.11.15-offline-v3",
+  "platform": "win-x64",
+  "protocolVersion": 1,
+  "archiveSize": 159970075,
+  "archiveSha256": "e2d1b5f212d2cc6a3b547f9280e380416c57c5c151d639595009624caf4f6e1d",
+  "manifestSize": 977507,
+  "manifestSha256": "69bfe70e9ef038f2c157db035cf6f59ae8310028359d93b1dc16de73c691f1b5",
+  "expandedBytes": 231194288,
+  "minimumFreeDiskBytes": 727344098,
+  "workerSha256": "cb29927de979aab52141ff0c466599689d1a6d2c03cd3b1a8c38475c266bb174",
+  "requirementsSha256": "a992bbcc6d0efd668420d1c7fe8743a2165df36fcb5c81d1ed414402bbc3f70f"
+}

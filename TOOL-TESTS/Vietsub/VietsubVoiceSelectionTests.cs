@@ -11,6 +11,7 @@ using TOOL_LOCAL.Vietsub.Voice;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubVoiceSelectionTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"vietsub-selection-{Guid.NewGuid():N}");
@@ -104,7 +105,7 @@ public sealed class VietsubVoiceSelectionTests : IDisposable
         var project = await projects.CreateAsync(Guid.NewGuid(), "owner", "Voice choice");
         var voiceStore = new VietsubVoiceStore(paths, subtitles);
         var jobs = new VietsubJobStore(paths, subtitles);
-        await using var manager = new VietsubJobManager(jobs, new VietsubJobExecutorRegistry());
+        await using var manager = new VietsubJobManager(jobs, new VietsubJobExecutorRegistry(), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         using var components = new VietsubVoiceComponentStore(paths, featureEnabled: true);
         var service = new VietsubVoiceService(new AllowVoiceAuthorizer(), subtitles,
             voiceStore, paths, components,
@@ -158,7 +159,8 @@ public sealed class VietsubVoiceSelectionTests : IDisposable
         cue.OriginalLocked = true;
         var track = new VietsubSubtitleTrack { DisplayName = "Fixture", Cues = [cue] };
         await store.SaveTrackAsync(projectId, track);
-        await using (var connection = new SqliteConnection($"Data Source={paths.GetProjectPath(projectId, "project.db")}"))
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder {
+            DataSource = paths.GetProjectPath(projectId, "project.db"), Pooling = false }.ToString()))
         {
             await connection.OpenAsync();
             using var command = connection.CreateCommand();
@@ -284,7 +286,7 @@ public sealed class VietsubVoiceSelectionTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 }

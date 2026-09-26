@@ -12,6 +12,7 @@ using Xunit.Abstractions;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubLongVideoTests(ITestOutputHelper output) : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "vs-long-" + Guid.NewGuid().ToString("N"));
@@ -92,7 +93,7 @@ public sealed class VietsubLongVideoTests(ITestOutputHelper output) : IDisposabl
         await using var session = new VietsubProjectSession(projects, project, TimeSpan.FromHours(1));
         await session.StartAsync();
         var exporter = new VietsubVideoExportService(new AllowAuthorizer(), projects, import, subtitles, voiceStore,
-            paths, preflight, probe, ffmpeg, runner);
+            paths, preflight, probe, ffmpeg, runner, runtimeGate: new(Path.Combine(root, "runtime-lease")));
         var destination = Path.Combine(root, "two-hour-result.mp4");
         var progress = new ExportProgress(); var timer = Stopwatch.StartNew();
         var result = await exporter.ExportAsync(session, "owner", project.OrganizationId, destination, default, progress);

@@ -56,15 +56,8 @@ internal sealed class DesktopUpdateApiClient(
                 AccountSessionManager.SessionExpiredMessage,
                 (int)HttpStatusCode.Unauthorized);
         }
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            throw new AccountClientException(
-                "media_tool_repair_package_not_found",
-                "Không tìm thấy package taphoatool cùng phiên bản để sửa chữa. Hãy cài lại bản taphoatool đầy đủ hoặc liên hệ quản trị viên.",
-                (int)HttpStatusCode.NotFound);
-        }
-
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+            throw await DesktopRepairErrors.FromResponseAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<DesktopReleaseResponse>(cancellationToken)
             ?? throw new InvalidDataException("Server trả về package sửa chữa không hợp lệ.");
     }

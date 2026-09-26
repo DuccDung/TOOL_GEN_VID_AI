@@ -18,6 +18,8 @@ param(
     [switch]$AllowTransitionalSql,
 
     [string]$FfmpegBundlePath = '',
+    [string]$PiperBundlePath = '',
+    [string]$OcrNativeRuntimePath = '',
 
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release'
@@ -40,6 +42,10 @@ $resolvedSettings = if ([string]::IsNullOrWhiteSpace($AppSettingsPath)) {
 & (Join-Path $scriptRoot 'Test-DesktopDeploymentSettings.ps1') `
     -SettingsPath $resolvedSettings -ExpectedServerBaseUrl $ServerBaseUrl `
     -AllowTransitionalSql:$AllowTransitionalSql -RequireTransitionalSql | Out-Null
+$releaseSettings = Get-Content -LiteralPath $resolvedSettings -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($releaseSettings.Update.Channel -ne $Channel -or $releaseSettings.Update.Platform -ne 'win-x64') {
+    throw 'Desktop Update.Channel/Platform must match the release Channel and win-x64 platform for repair.'
+}
 # Remove RequireTransitionalSql only when the desktop composition no longer creates SQL services.
 $resolvedFfmpegBundle = if ([string]::IsNullOrWhiteSpace($FfmpegBundlePath)) {
     [System.IO.Path]::GetFullPath((Join-Path $solutionRoot 'third_party\ffmpeg\win-x64'))
@@ -50,6 +56,18 @@ $resolvedFfmpegBundle = if ([string]::IsNullOrWhiteSpace($FfmpegBundlePath)) {
 $ffmpegProfile = & (Join-Path $scriptRoot 'Test-FfmpegBundle.ps1') `
     -BundlePath $resolvedFfmpegBundle `
     -RequireReleaseApproval
+
+$piperDefinition = Get-Content -LiteralPath (Join-Path $solutionRoot 'third_party/voice/PIPER_OFFLINE_APPROVED.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not $PiperBundlePath) {
+    $PiperBundlePath = Join-Path $solutionRoot ('artifacts/piper-offline/' + $piperDefinition.bundleVersion)
+}
+$PiperBundlePath = [IO.Path]::GetFullPath($PiperBundlePath)
+& (Join-Path $scriptRoot 'Test-PiperOfflineBundle.ps1') -BundleDirectory $PiperBundlePath -ArtifactOnly | Out-Null
+if (-not $OcrNativeRuntimePath) {
+    $OcrNativeRuntimePath = Join-Path $solutionRoot 'artifacts/ocr-native-runtime/msvc-14.50.35719.0-win-x64'
+}
+$OcrNativeRuntimePath = [IO.Path]::GetFullPath($OcrNativeRuntimePath)
+& (Join-Path $scriptRoot 'Test-OcrNativeRuntime.ps1') -BundleDirectory $OcrNativeRuntimePath | Out-Null
 
 if (Test-Path -LiteralPath $releaseRoot) {
     $existingFiles = Get-ChildItem -LiteralPath $releaseRoot -Recurse -File
@@ -72,6 +90,9 @@ dotnet publish (Join-Path $solutionRoot 'TOOL-LOCAL\TOOL-LOCAL.csproj') `
     -p:DesktopBuildNumber=$BuildNumber `
     -p:PublishSingleFile=true `
     -p:RequireMediaToolBundle=true `
+    -p:RequirePiperOfflineBundle=true `
+    "-p:PiperOfflineBundleDirectory=$PiperBundlePath" `
+    "-p:OcrNativeRuntimeDirectory=$OcrNativeRuntimePath" `
     ("-p:DesktopDeploymentSettingsPath={0}" -f $resolvedSettings) `
     ("-p:FfmpegBundleDirectory={0}" -f $resolvedFfmpegBundle) `
     $desktopPublishDirectoryArgument
@@ -108,11 +129,15 @@ $managedFiles = Get-ChildItem -LiteralPath $packageRoot -Recurse -File | ForEach
 } | Sort-Object
 $managedFiles += 'update-manifest.json'
 $requiredMediaFiles = @(
+    'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'vcomp140.dll',
+    'third_party/ocr/MSVC_RUNTIME.json', 'third_party/ocr/MSVC-NOTICE.md',
     'tools/ffmpeg/ffmpeg.exe',
     'tools/ffmpeg/ffprobe.exe',
     'tools/ffmpeg/LICENSE.txt',
     'tools/ffmpeg/PROVENANCE.md',
-    'tools/ffmpeg/checksums.sha256'
+    'tools/ffmpeg/checksums.sha256',
+    ('components/piper/' + $piperDefinition.bundleVersion + '/manifest.json'),
+    ('components/piper/' + $piperDefinition.bundleVersion + '/piper-offline.zip')
 )
 foreach ($requiredMediaFile in $requiredMediaFiles) {
     if ($requiredMediaFile -notin $managedFiles) {
@@ -131,6 +156,11 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $packa
 $packagePath = Join-Path $releaseRoot ("VideoMaker-{0}-{1}-win-x64.zip" -f $Version, $BuildNumber)
 Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $packagePath -CompressionLevel Optimal -Force
 $packageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+# Validate what recipients actually extract, including OCR native dependencies and fixture inference.
+$extractedRoot = Join-Path $workRoot 'extracted-zip'
+Expand-Archive -LiteralPath $packagePath -DestinationPath $extractedRoot
+& (Join-Path $scriptRoot 'Test-DesktopSetupPublish.ps1') -PublishRoot $extractedRoot -ProbeWebView2 -ProbeBundledComponents -ProbePiperOffline | Out-Null
 
 dotnet publish (Join-Path $solutionRoot 'TOOL-SETUP\TOOL-SETUP.csproj') `
     -c $Configuration `

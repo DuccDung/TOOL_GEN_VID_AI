@@ -159,7 +159,7 @@ internal sealed class VietsubTranslationService(
         {
             try
             {
-                using var lease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+                using var lease = jobManager.RuntimeGate.Acquire(exclusive: true);
                 var accepted = ResolveResourceWarningAcceptance(GetRuntimeStatus(), input.ConfirmResourceWarning);
                 await providerRegistry.InstallAccelerationAsync(progress, cancellationToken, accepted);
                 return GetRuntimeStatus();
@@ -183,7 +183,7 @@ internal sealed class VietsubTranslationService(
             input.ConfirmResourceWarning);
         try
         {
-            using var runtimeLease = TOOL_LOCAL.SystemSetup.RuntimeUseGate.Shared.Acquire(exclusive: true);
+            using var runtimeLease = jobManager.RuntimeGate.Acquire(exclusive: true);
             status = GetRuntimeStatus();
             resourceWarningAccepted = ResolveResourceWarningAcceptance(
                 status,

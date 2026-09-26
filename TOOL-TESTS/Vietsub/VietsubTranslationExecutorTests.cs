@@ -912,7 +912,7 @@ public sealed class VietsubTranslationExecutorTests : IDisposable
             paths);
         var manager = new VietsubJobManager(
             jobs,
-            new VietsubJobExecutorRegistry([executor]));
+            new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(_root, "runtime-lease")));
         var service = new VietsubTranslationService(
             authorizer ?? new FakeAuthorizer(),
             subtitles,
@@ -959,22 +959,13 @@ public sealed class VietsubTranslationExecutorTests : IDisposable
         Guid projectId,
         Guid jobId)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (true)
-        {
-            var job = await manager.GetAsync(projectId, jobId, timeout.Token)
-                ?? throw new Xunit.Sdk.XunitException("Translation job biến mất.");
-            if (job.Status is VietsubJobStatusNames.Completed or VietsubJobStatusNames.Failed)
-            {
-                return job;
-            }
-            await Task.Delay(20, timeout.Token);
-        }
+        return await VietsubJobWaiter.WaitAsync(manager, projectId, jobId,
+            [VietsubJobStatusNames.Completed, VietsubJobStatusNames.Failed], TimeSpan.FromSeconds(8));
     }
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(_root);
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);

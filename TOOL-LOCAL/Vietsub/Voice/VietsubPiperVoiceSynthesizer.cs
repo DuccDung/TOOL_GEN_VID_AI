@@ -63,6 +63,7 @@ internal sealed class VietsubPiperVoiceSynthesizer(VietsubVoiceComponentStore co
             startInfo.ArgumentList.Add("-X");
             startInfo.ArgumentList.Add("utf8");
             startInfo.ArgumentList.Add("-I");
+            startInfo.ArgumentList.Add("-B");
             startInfo.ArgumentList.Add(paths.WorkerPath);
             startInfo.ArgumentList.Add(requestPath);
             startInfo.Environment["PYTHONUTF8"] = "1";
@@ -74,6 +75,7 @@ internal sealed class VietsubPiperVoiceSynthesizer(VietsubVoiceComponentStore co
                 throw new VietsubVoiceException(VietsubVoiceErrorCodes.WorkerFailed, "Không thể khởi động Piper worker.", true);
             }
 
+            using var processTree = new PiperProcessTree(process);
             using var inactivity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             inactivity.CancelAfter(TimeSpan.FromMinutes(10));
             var stderrTask = ReadLimitedAsync(process.StandardError, MaximumErrorCharacters, CancellationToken.None);

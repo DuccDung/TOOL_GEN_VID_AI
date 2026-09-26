@@ -6,7 +6,7 @@ using Sdcb.PaddleOCR.Models.Local;
 
 namespace TOOL_LOCAL.Vietsub.Ocr;
 
-internal sealed partial class PaddleVietsubOcrRecognizer : IVietsubOcrRecognizer
+internal sealed partial class PaddleVietsubOcrRecognizer(string? applicationDirectory = null) : IVietsubOcrRecognizer
 {
     private static readonly string[] SupportedLanguages =
         [VietsubOcrLanguageCodes.English, VietsubOcrLanguageCodes.Chinese];
@@ -145,13 +145,17 @@ internal sealed partial class PaddleVietsubOcrRecognizer : IVietsubOcrRecognizer
         {
             return new VietsubOcrRuntimeStatus(
                 false,
-                VietsubOcrErrorCodes.RuntimeInvalid,
+                VietsubOcrRuntimeDiagnostics.PlatformUnsupported,
                 "PaddleOCR local yêu cầu Windows 64-bit.",
                 []);
         }
 
         try
         {
+            var dependencyError = OcrNativeDependencies.CheckFiles(applicationDirectory ?? AppContext.BaseDirectory)
+                ?? OcrNativeDependencies.CheckWindowsMedia();
+            if (dependencyError is not null)
+                return new(false, dependencyError, VietsubOcrRuntimeDiagnostics.Message(dependencyError), []);
             _ = Cv2.GetVersionString();
             _ = LocalFullModels.EnglishV5;
             _ = LocalFullModels.ChineseV5;
@@ -165,10 +169,11 @@ internal sealed partial class PaddleVietsubOcrRecognizer : IVietsubOcrRecognizer
         }
         catch (Exception exception) when (IsNativeOrModelFailure(exception))
         {
+            var code = VietsubOcrRuntimeDiagnostics.Classify(exception);
             return new VietsubOcrRuntimeStatus(
                 false,
-                VietsubOcrErrorCodes.RuntimeInvalid,
-                $"Không thể khởi tạo PaddleOCR local: {NormalizeDiagnostic(exception.Message)}",
+                code,
+                VietsubOcrRuntimeDiagnostics.Message(code),
                 []);
         }
     }
@@ -197,14 +202,6 @@ internal sealed partial class PaddleVietsubOcrRecognizer : IVietsubOcrRecognizer
         TypeInitializationException or
         InvalidOperationException or
         OpenCVException;
-
-    private static string NormalizeDiagnostic(string? message)
-    {
-        var normalized = string.IsNullOrWhiteSpace(message)
-            ? "runtime hoặc model không hợp lệ"
-            : WhitespaceRegex().Replace(message, " ").Trim();
-        return normalized.Length <= 300 ? normalized : normalized[..300];
-    }
 
     private sealed class RecognizerSlot : IDisposable
     {

@@ -7,12 +7,15 @@ using TOOL_SHARED.Contracts.Authentication;
 
 namespace TOOL_TESTS.Authentication;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class LoginWebViewIntegrationTests
 {
     [Fact]
     public async Task LoginForm_LoadsWebViewAndAuthenticatesThroughTheHost()
     {
         var webRoot = FindBuiltWebRoot();
+        var profile = Path.Combine(Path.GetTempPath(), $"vm-login-{Guid.NewGuid():N}");
+        System.Diagnostics.Process? browser = null;
         var completion = new TaskCompletionSource<(bool Authenticated, string? Email, int Saves)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         Form? activeForm = null;
@@ -21,7 +24,7 @@ public sealed class LoginWebViewIntegrationTests
             var tokenStore = new FakeTokenStore();
             var api = new FakeAccountApiClient();
             using var manager = new AccountSessionManager(api, tokenStore, new DeviceIdentityService());
-            using var form = new LoginForm(manager, webRoot)
+            using var form = new LoginForm(manager, webRoot, profile)
             {
                 StartPosition = FormStartPosition.Manual,
                 Location = new Point(-2000, -2000),
@@ -39,6 +42,7 @@ public sealed class LoginWebViewIntegrationTests
                         await Task.Delay(100);
                     var core = webView.CoreWebView2
                         ?? throw new InvalidOperationException("WebView2 không khởi tạo.");
+                    browser = System.Diagnostics.Process.GetProcessById((int)core.BrowserProcessId);
                     for (var attempt = 0; attempt < 150; attempt++)
                     {
                         var ready = await core.ExecuteScriptAsync(
@@ -100,6 +104,15 @@ public sealed class LoginWebViewIntegrationTests
         {
             if (activeForm is { IsDisposed: false, IsHandleCreated: true } form)
                 form.BeginInvoke(new Action(form.Close));
+            Assert.True(thread.Join(TimeSpan.FromSeconds(5)), "Login UI thread did not stop.");
+            if (browser is not null)
+            {
+                // BrowserProcessExited is dispatched on the STA loop, which has ended here.
+                // Wait for the owned OS process instead of an event that can no longer dispatch.
+                try { await browser.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+                finally { browser.Dispose(); }
+            }
+            if (Directory.Exists(profile)) Directory.Delete(profile, recursive: true);
         }
     }
 

@@ -27,7 +27,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
   const cardRef = useRef<HTMLElement>(null);
   const checkedContextRef = useRef<string | null>(null);
   const [resourceConfirmed, setResourceConfirmed] = useState(false);
-  const { snapshot, busy, error, repairProgress, repairError, run, repairApplication, exitApplication } = setup;
+  const { snapshot, busy, error, repairProgress, repairError, run, cancel, repairApplication, exitApplication } = setup;
   const components = useMemo(() => requiredSetupComponents(snapshot), [snapshot]);
   const missing = useMemo(() => components.filter(component => component.state !== 'READY'), [components]);
   const ready = isSystemSetupReady(snapshot);
@@ -58,7 +58,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
       const currentCard = cardRef.current;
       if (!currentCard) return;
       const focusable = Array.from(currentCard.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
+        'button:not(:disabled), input:not(:disabled), summary, [href], [tabindex]:not([tabindex="-1"])'
       ));
       const target = preferLast ? focusable.at(-1) : focusable[0];
       (target ?? currentCard).focus();
@@ -72,7 +72,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
       }
       if (event.key !== 'Tab' || !cardRef.current) return;
       const focusable = Array.from(cardRef.current.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
+        'button:not(:disabled), input:not(:disabled), summary, [href], [tabindex]:not([tabindex="-1"])'
       ));
       if (focusable.length === 0) {
         event.preventDefault();
@@ -196,6 +196,19 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
                     : component.message}</span>
                     {component.state === 'NOT_INSTALLED' && (component.downloadBytes ?? 0) > 0
                       && <small>Dung lượng model: {formatBytes(component.downloadBytes!)}</small>}
+                    {component.errorCode && <details className="startup-setup-diagnostic">
+                      <summary>Thông tin hỗ trợ</summary><small>Mã lỗi: {component.errorCode}</small>
+                    </details>}
+                    {component.id === 'piper' && component.canInstall && component.state !== 'READY' && (
+                      <div className="startup-setup-component-action">
+                        <small>{component.canPrepareOffline
+                          ? 'Chuẩn bị từ bộ ứng dụng; không cần tải giọng Việt qua mạng.'
+                          : 'Cần gói giọng Việt đầy đủ đúng phiên bản ứng dụng.'}</small>
+                        <button type="button" disabled={active} onClick={() => run('start', ['piper'])}>
+                          <Download size={13} aria-hidden="true" /> Cài giọng Việt
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -226,6 +239,13 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
             <button type="button" className="startup-setup-exit" onClick={exitApplication}>
               <LogOut size={16} /> Hủy và thoát
             </button>
+            {busy && operation && <button type="button" className="startup-setup-exit" onClick={cancel}>
+              Hủy tác vụ
+            </button>}
+            {repairRequired && <button type="button" className="startup-setup-exit" disabled={active}
+              onClick={() => run('check', missing.map(component => component.id))}>
+              <RefreshCw size={15} aria-hidden="true" /> Kiểm tra lại
+            </button>}
             {requiresResourceConfirmation && <button type="button" className="startup-setup-continue"
               disabled={!resourceConfirmed || active} onClick={() => start(true)}>
               Vẫn thử dùng Qwen

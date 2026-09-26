@@ -134,7 +134,7 @@ public sealed class VietsubLongSubtitleTests(ITestOutputHelper output) : IDispos
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        VietsubTestStorage.ClearPools(root);
         if (Directory.Exists(root)) Directory.Delete(root, true);
     }
 }

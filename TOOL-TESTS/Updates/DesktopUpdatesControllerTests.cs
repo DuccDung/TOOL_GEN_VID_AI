@@ -3,6 +3,7 @@ using TOOL_SERVER.Controllers;
 using TOOL_SERVER.Domain.Updates;
 using TOOL_SERVER.Updates;
 using TOOL_SHARED.Contracts.Updates;
+using TOOL_SHARED.Contracts.Common;
 
 namespace TOOL_TESTS.Updates;
 
@@ -32,7 +33,8 @@ public sealed class DesktopUpdatesControllerTests
 
         var action = await controller.Repair("1.4.2", 17, cancellationToken: CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(action.Result);
+        var missing = Assert.IsType<NotFoundObjectResult>(action.Result);
+        Assert.Equal(DesktopRepairErrorCodes.PackageNotFound, Assert.IsType<ApiErrorResponse>(missing.Value).Code);
     }
 
     private static DesktopReleasePackage CreatePackage(string version, int buildNumber)

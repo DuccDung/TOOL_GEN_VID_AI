@@ -12,6 +12,7 @@ using TOOL_LOCAL.Vietsub.Storage;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class VietsubWebView2MediaIntegrationTests
 {
     [Theory]

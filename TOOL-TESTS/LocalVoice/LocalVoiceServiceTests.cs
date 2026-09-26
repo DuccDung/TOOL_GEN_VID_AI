@@ -10,6 +10,7 @@ using TOOL_SHARED.Contracts.Generation;
 
 namespace TOOL_TESTS.LocalVoice;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class LocalVoiceServiceTests
 {
     [Fact]

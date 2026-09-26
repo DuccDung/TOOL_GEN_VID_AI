@@ -1,12 +1,34 @@
 param(
     [Parameter(Mandatory = $true)][string]$PublishRoot,
     [string]$SourceWebRoot = (Join-Path $PSScriptRoot '..\TOOL-LOCAL\Web\dist'),
-    [switch]$ProbeWebView2
+    [switch]$ProbeWebView2,
+    [switch]$ProbeBundledComponents,
+    [switch]$ProbePiperOffline
 )
 
 $ErrorActionPreference = 'Stop'
 $candidateRoot = [System.IO.Path]::GetFullPath($PublishRoot)
+& (Join-Path $PSScriptRoot 'Test-OcrNativeRuntime.ps1') -BundleDirectory $candidateRoot | Out-Null
 $sourceRoot = [System.IO.Path]::GetFullPath($SourceWebRoot)
+& (Join-Path $PSScriptRoot 'Test-PiperOfflineBundle.ps1') -PublishRoot $candidateRoot -ArtifactOnly | Out-Null
+if ($ProbePiperOffline) {
+    $piperWorkspace = Join-Path ([IO.Path]::GetTempPath()) ('vm-piper-offline-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        & (Join-Path $PSScriptRoot 'Test-PiperOfflineBundle.ps1') -PublishRoot $candidateRoot -Workspace $piperWorkspace | Out-Null
+    } finally {
+        if (Test-Path -LiteralPath $piperWorkspace) {
+            $owned = [IO.Path]::GetFullPath($piperWorkspace)
+            $parent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+            $nativeOwned = if ($owned.StartsWith('\\')) { '\\?\UNC\' + $owned.Substring(2) } else { '\\?\' + $owned }
+            if (-not $owned.StartsWith($parent, [StringComparison]::OrdinalIgnoreCase) -or
+                ((Get-Item -LiteralPath $nativeOwned).Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                @(Get-ChildItem -LiteralPath $nativeOwned -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -gt 0) {
+                throw 'Refusing cleanup of an unsafe Piper probe workspace.'
+            }
+            Remove-Item -LiteralPath $nativeOwned -Recurse -Force
+        }
+    }
+}
 $required = @(
     'TOOL-LOCAL.exe', 'appsettings.json', 'workers\piper_worker.py', 'workers\piper-requirements.lock',
     'workers\kokoro_worker.py', 'workers\kokoro-requirements.lock',
@@ -14,6 +36,10 @@ $required = @(
     'setup-fixtures\en.png', 'setup-fixtures\zh.png',
     'runtimes\win-x64\native\WebView2Loader.dll',
     'Sdcb.PaddleOCR.Models.LocalV5.dll', 'paddle_inference_c.dll', 'OpenCvSharpExtern.dll',
+    'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'vcomp140.dll',
+    'third_party\ocr\MSVC_RUNTIME.json', 'third_party\ocr\MSVC-NOTICE.md',
+    'common.dll', 'libiomp5md.dll', 'mkldnn.dll', 'mklml.dll', 'onnxruntime.dll',
+    'onnxruntime_providers_shared.dll', 'paddle2onnx.dll', 'phi.dll',
     'tools\ffmpeg\ffmpeg.exe', 'tools\ffmpeg\ffprobe.exe', 'tools\ffmpeg\checksums.sha256',
     'tools\ffmpeg\LICENSE.txt', 'tools\ffmpeg\PROVENANCE.md',
     '_updater\VideoMaker.Updater.exe',
@@ -132,4 +158,10 @@ if ($ProbeWebView2) {
         $probeProcess.Dispose()
     }
 }
-[pscustomobject]@{ RequiredComponents = $required.Count; WebAssets = $sourceFiles.Count; MissingOrMismatched = 0; WebView2State = $webView2State }
+$bundledState = 'NOT_CHECKED'
+if ($ProbeBundledComponents) {
+    & (Join-Path $PSScriptRoot 'Test-DesktopBundleRuntime.ps1') -PublishRoot $candidateRoot | Out-Null
+    $bundledState = 'READY'
+}
+[pscustomobject]@{ RequiredComponents = $required.Count; WebAssets = $sourceFiles.Count; MissingOrMismatched = 0;
+    WebView2State = $webView2State; BundledComponentsState = $bundledState }

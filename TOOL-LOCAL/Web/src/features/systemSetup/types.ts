@@ -2,6 +2,7 @@ export type SetupComponentState = 'UNKNOWN' | 'NOT_INSTALLED' | 'NEEDS_VERIFICAT
 export interface SetupComponent {
   id: string; name: string; version: string; state: SetupComponentState; message: string;
   canInstall: boolean; canVerify: boolean; canRepair: boolean;
+  canPrepareOffline?: boolean;
   downloadBytes?: number | null; minimumFreeDiskBytes?: number | null; errorCode?: string | null;
   checkedAtUtc?: string | null;
   resourceProfileId?: string | null;

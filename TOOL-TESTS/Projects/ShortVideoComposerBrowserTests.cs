@@ -5,6 +5,7 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace TOOL_TESTS.Projects;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed class ShortVideoComposerBrowserTests
 {
     [Fact]

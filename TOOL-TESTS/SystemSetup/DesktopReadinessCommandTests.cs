@@ -52,6 +52,15 @@ public sealed class DesktopReadinessCommandTests
     }
 
     [Fact]
+    public async Task CheckPreservesFixtureFailureCodeWithoutPrivateErrorText()
+    {
+        var probe = new ProbeOnly(new SetupException("system_setup_ocr_fixture_invalid", "private-value"));
+        var result = Assert.Single(await DesktopReadinessCommand.InspectAsync([probe], default));
+        Assert.Equal("system_setup_ocr_fixture_invalid", result.ErrorCode);
+        Assert.DoesNotContain("private-value", JsonSerializer.Serialize(result));
+    }
+
+    [Fact]
     public async Task CheckHonorsCancellationBeforeNativeProbe()
     {
         using var cancel = new CancellationTokenSource();
@@ -66,6 +75,8 @@ public sealed class DesktopReadinessCommandTests
     {
         Assert.True(DesktopReadinessCommand.Matches(["--check-desktop"]));
         Assert.True(DesktopReadinessCommand.Matches(["--check-webview2"]));
+        Assert.True(DesktopReadinessCommand.Matches(["--check-bundled-components"]));
+        Assert.False(DesktopReadinessCommand.Matches(["--check-bundled-components", "--install"]));
         Assert.False(DesktopReadinessCommand.Matches(["--check-webview2", "--install"]));
         Assert.False(DesktopReadinessCommand.Matches(["--check-desktop", "--install"]));
         Assert.False(DesktopReadinessCommand.Matches([]));
@@ -84,14 +95,14 @@ public sealed class DesktopReadinessCommandTests
         }
     }
 
-    private sealed class ProbeOnly : ISetupComponentAdapter
+    private sealed class ProbeOnly(Exception? error = null) : ISetupComponentAdapter
     {
         public bool InstallRequested;
         public SetupComponent Component => new("media", "media", "1", "UNKNOWN", "", false, true, true, 0);
         public Task<SetupComponent> RunAsync(bool install, bool accepted, Action<string, double?, long?, long?> progress, CancellationToken token)
         {
             InstallRequested = install;
-            throw new IOException("private-value");
+            throw error ?? new IOException("private-value");
         }
     }
 }

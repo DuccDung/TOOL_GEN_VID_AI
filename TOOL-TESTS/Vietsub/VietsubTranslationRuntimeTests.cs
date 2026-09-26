@@ -13,6 +13,7 @@ using Xunit.Abstractions;
 
 namespace TOOL_TESTS.Vietsub;
 
+[Collection(NativeWindowsCollection.Name)]
 public sealed partial class VietsubTranslationRuntimeTests(ITestOutputHelper output)
 {
     [Fact]
@@ -747,7 +748,7 @@ public sealed partial class VietsubTranslationRuntimeTests(ITestOutputHelper out
             paths);
         await using var manager = new VietsubJobManager(
             jobs,
-            new VietsubJobExecutorRegistry([executor]));
+            new VietsubJobExecutorRegistry([executor]), runtimeGate: new(Path.Combine(paths.RootDirectory, "runtime-lease")));
         var service = new VietsubTranslationService(
             new AllowLocalJobAuthorizer(),
             subtitles,

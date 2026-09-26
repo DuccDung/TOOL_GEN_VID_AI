@@ -37,13 +37,18 @@ internal sealed class PiperSetupAdapter(VietsubVoiceComponentStore? store, bool 
     : ISetupComponentAdapter, ISetupComponentStatusInspector
 {
     public SetupComponent Component => new("piper", "Giọng Việt · Piper", VietsubVoiceComponentStore.RuntimeVersion,
-        enabled && store is not null ? "UNKNOWN" : "DISABLED", "Giọng Việt cần Python riêng và model khoảng 63 MB.",
-        enabled, enabled, enabled, null, 768L * 1024 * 1024);
+        enabled && store is not null ? "UNKNOWN" : "DISABLED", "Giọng Việt được chuẩn bị từ gói đi kèm bộ ứng dụng.",
+        enabled, enabled, enabled, 0, store?.OfflineDiskBytes ?? 768L * 1024 * 1024,
+        CanPrepareOffline: enabled && store is not null && store.HasOfflineBundle(out _));
     public SetupComponent Inspect()
     {
         if (!enabled || store is null) return Component;
         var status = store.GetStatus();
-        return Component with {
+        var component = Component;
+        if (!status.Ready && store.UsesOfflineBundle && !store.HasOfflineBundle(out var bundleError))
+            return component with { State = "REPAIR_REQUIRED", CanInstall = false,
+                ErrorCode = bundleError, Message = SetupErrors.Message(bundleError!), CheckedAtUtc = DateTime.UtcNow };
+        return component with {
             State = status.Ready ? "READY" : status.Status == "NOT_INSTALLED" ? "NOT_INSTALLED" : "REPAIR_REQUIRED",
             Message = status.Ready ? "Piper local đã có bằng chứng sẵn sàng trên máy này." : status.Message,
             ErrorCode = status.ErrorCode, CheckedAtUtc = DateTime.UtcNow };
@@ -56,13 +61,14 @@ internal sealed class PiperSetupAdapter(VietsubVoiceComponentStore? store, bool 
             ? await store.InstallAsync(new SetupProgress<VietsubVoiceRuntimeInstallProgress>(p =>
                 progress(p.Stage, p.Percent, p.BytesProcessed, p.TotalBytes)), token)
             : await store.VerifyAsync(token);
-        return Component with { State = status.Ready ? "READY" : status.Status == "NOT_INSTALLED" ? "NOT_INSTALLED" : "REPAIR_REQUIRED",
-            Message = status.Ready ? "Đã tạo và kiểm tra WAV tiếng Việt mẫu." : "Giọng Việt chưa được cài đầy đủ hoặc cần sửa runtime.",
+        var inspected = Inspect();
+        if (!status.Ready) return inspected;
+        return inspected with { State = "READY", Message = "Đã tạo và kiểm tra WAV tiếng Việt mẫu.",
             ErrorCode = status.ErrorCode, CheckedAtUtc = DateTime.UtcNow };
     }
 }
 
-internal sealed class OcrSetupAdapter(IVietsubOcrRecognizer? recognizer, bool enabled) : ISetupComponentAdapter
+internal sealed class OcrSetupAdapter(IVietsubOcrRecognizer? recognizer, bool enabled, string? fixtureDirectory = null) : ISetupComponentAdapter
 {
     public SetupComponent Component => new("ocr", "Nhận dạng phụ đề · PaddleOCR", "LocalV5 3.3.1",
         enabled ? "UNKNOWN" : "DISABLED", "Model Anh/Trung đi cùng bộ ứng dụng.", false, enabled, true, 0);
@@ -77,8 +83,18 @@ internal sealed class OcrSetupAdapter(IVietsubOcrRecognizer? recognizer, bool en
             foreach (var language in new[] { "en", "zh" })
             {
                 token.ThrowIfCancellationRequested();
-                var path = Path.Combine(AppContext.BaseDirectory, "setup-fixtures", language + ".png");
-                using var frame = OpenCvSharp.Cv2.ImRead(path, OpenCvSharp.ImreadModes.Color);
+                var path = Path.Combine(fixtureDirectory ?? Path.Combine(AppContext.BaseDirectory, "setup-fixtures"), language + ".png");
+                byte[] fixture;
+                try { fixture = await File.ReadAllBytesAsync(path, token); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    throw new SetupException("system_setup_ocr_fixture_invalid", "Không đọc được ảnh kiểm tra OCR trong bộ ứng dụng.");
+                }
+                if (fixture.Length == 0)
+                    throw new SetupException("system_setup_ocr_fixture_invalid", "Ảnh kiểm tra OCR trống.");
+                // OpenCV's Windows filename marshaling rejects Vietnamese path characters.
+                // Read through .NET and give OpenCV image bytes, so extracted ZIP paths work.
+                using var frame = OpenCvSharp.Cv2.ImDecode(fixture, OpenCvSharp.ImreadModes.Color);
                 if (frame.Empty() || frame.Width != 1000 || frame.Height != 200)
                     throw new SetupException("system_setup_ocr_fixture_invalid", "Thiếu ảnh kiểm tra OCR trong bộ ứng dụng.");
                 var pixels = new byte[frame.Width * frame.Height * 3];
@@ -90,7 +106,7 @@ internal sealed class OcrSetupAdapter(IVietsubOcrRecognizer? recognizer, bool en
             }
         }
         return Component with { State = status.Ready ? "READY" : "REPAIR_REQUIRED",
-            Message = status.Ready ? "Đã nhận dạng đạt ảnh kiểm tra OCR Anh/Trung." : "Không nạp được OCR. Hãy sửa bộ ứng dụng.",
+            Message = status.Ready ? "Đã nhận dạng đạt ảnh kiểm tra OCR Anh/Trung." : VietsubOcrRuntimeDiagnostics.Message(status.ErrorCode),
             ErrorCode = status.ErrorCode, CheckedAtUtc = DateTime.UtcNow };
     }
 }
