@@ -26,6 +26,26 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (InstalledStaticModelCommand.Matches(args))
+        {
+            Environment.ExitCode = InstalledStaticModelCommand.RunAsync(args).GetAwaiter().GetResult();
+            return;
+        }
+        if (StaticModelBootstrapCommand.Matches(args))
+        {
+            Environment.ExitCode = StaticModelBootstrapCommand.RunAsync(args).GetAwaiter().GetResult();
+            return;
+        }
+        if (args is ["--check-model-distribution-config"])
+        {
+            Environment.ExitCode = TOOL_LOCAL.ModelDistribution.ModelDistributionReadinessCommand.Run();
+            return;
+        }
+        if (QwenOfflineCommand.Matches(args))
+        {
+            Environment.ExitCode = QwenOfflineCommand.RunAsync(args).GetAwaiter().GetResult();
+            return;
+        }
         if (PiperOfflineCommand.Matches(args))
         {
             Environment.ExitCode = PiperOfflineCommand.RunAsync(args).GetAwaiter().GetResult();
@@ -48,6 +68,21 @@ internal static class Program
         {
             if (!DesktopPrerequisites.EnsureAvailable()) return;
             var options = DesktopOptions.Load();
+            var staticModels = TOOL_LOCAL.ModelDistribution.StaticModelRuntimePolicy.IsStaticMode(options);
+            using var modelUsageLease = staticModels
+                ? TOOL_LOCAL.ModelDistribution.StaticModelRuntimePolicy.AcquireUsageLease(installing: false) : null;
+            if (staticModels) TOOL_LOCAL.ModelDistribution.StaticModelRuntimePolicy.EnsureNotRevoked();
+            var staticModelReceipt = staticModels ? TOOL_LOCAL.ModelDistribution.StaticModelRuntimePolicy.ReadReadyReceipt() : null;
+            if (staticModels && (staticModelReceipt is null
+                || !options.Features.VietsubEnabled || !options.Features.VietsubOcrEnabled
+                || !options.Features.VietsubLocalTranslationEnabled || !options.Features.VietsubLocalVoiceEnabled))
+            {
+                MessageBox.Show("Bộ model của bản cài chưa hoàn tất hoặc cần kiểm tra lại. Hãy chạy Setup để tiếp tục hoặc sửa cài đặt.",
+                    "Cần hoàn tất cài đặt model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            var staticCacheRoot = staticModels
+                ? staticModelReceipt!.CacheRoot : null;
             LegacyProviderCredentialCleaner.Remove();
             using var httpClient = new HttpClient
             {
@@ -127,6 +162,14 @@ internal static class Program
                 }
 
                 var dbContextFactory = new VideoFactoryDbContextFactory(options.Database.ConnectionString);
+                using var modelDistribution = new TOOL_LOCAL.ModelDistribution.DesktopModelDistributionClient(
+                    new Uri(options.ModelDistribution.Enabled && !staticModels
+                        ? options.ModelDistribution.BaseUrl ?? options.Server.BaseUrl
+                        : "https://disabled-model-distribution.invalid/"),
+                    TOOL_LOCAL.ModelDistribution.EmbeddedModelTrustRoot.Load(options.Update.Channel,
+                        requirePublicKeys: options.ModelDistribution.Enabled && !staticModels),
+                    options.ModelDistribution.CacheRoot ?? Path.Combine(SystemSetupPaths.ComponentsRoot, "model-downloads"),
+                    downloadsEnabled: options.ModelDistribution.Enabled && !staticModels);
                 var workspaceService = new ProjectWorkspaceService(options.Storage.WorkspaceRoot);
                 var mediaProcessRunner = new ExternalProcessRunner();
                 var mediaToolPaths = new MediaToolPathResolver(options.MediaTools).Resolve();
@@ -205,7 +248,8 @@ internal static class Program
                 var tiktokPreviewService = new TikTokMediaPreviewService(tiktokMediaService);
                 var tiktokUploadService = new TikTokUploadService(tiktokUploadHttpClient);
                 var updateApiClient = new DesktopUpdateApiClient(updateHttpClient, sessionManager, options.Update);
-                var packageUpdateService = new DesktopPackageUpdateService(updateHttpClient);
+                var packageUpdateService = new DesktopPackageUpdateService(updateHttpClient,
+                    TOOL_LOCAL.ModelDistribution.StaticModelRuntimePolicy.IsStaticMode(options));
                 VietsubProjectStore? vietsubProjectStore = null;
                 IVietsubProjectRegistryClient? vietsubProjectRegistryClient = null;
                 VietsubMediaImportService? vietsubMediaImportService = null;
@@ -259,8 +303,7 @@ internal static class Program
                         vietsubSubtitleStore);
                     vietsubTranslationProvider = DesktopComponentComposition.CreateTranslationProvider(
                         options.Features, () => new QwenGgufVietsubTranslationProvider(
-                        new VietsubTranslationComponentStore(
-                            VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km)));
+                        DesktopComponentComposition.CreateTranslationStore(staticCacheRoot, modelDistribution)));
                     var translationProviderRegistry = new VietsubTranslationProviderRegistry(
                         vietsubTranslationProvider is null ? [] : [vietsubTranslationProvider],
                         featureEnabled: DesktopComponentComposition.IsLocalTranslationEnabled(options.Features));
@@ -274,7 +317,7 @@ internal static class Program
                     var voiceStore = new VietsubVoiceStore(vietsubPaths, vietsubSubtitleStore);
                     var voicePlaybackRegistry = new VietsubVoicePlaybackRegistry(voiceStore.IsTrackRevisionCurrent);
                     vietsubVoiceComponents = DesktopComponentComposition.CreateVoiceComponents(
-                        vietsubPaths, options.Features);
+                        vietsubPaths, options.Features, modelDistribution, staticCacheRoot);
                     vietsubKokoroRuntime = new VietsubKokoroRuntime(vietsubVoiceComponents);
                     var voiceSynthesizer = new VietsubPiperVoiceSynthesizer(vietsubVoiceComponents);
                     var voiceTimelineRenderer = new VietsubVoiceTimelineRenderer(
@@ -363,7 +406,7 @@ internal static class Program
                 if (vietsubTranslationService is not null) vietsubTranslationService.SetupCoordinator = setupCoordinator;
                 if (vietsubVoiceService is not null) vietsubVoiceService.SetupCoordinator = setupCoordinator;
                 var returnToLogin = false;
-                var startupSystemSetupRequired = false;
+                var startupSystemSetupRequired = staticModels;
                 var bilibiliRuntime = new Bilibili.BilibiliRuntime();
                 var bilibiliDownloader = new Bilibili.BilibiliDownloader(bilibiliRuntime,
                     new Bilibili.BilibiliProcessRunner(), new Bilibili.BilibiliMediaVerifier(mediaToolPreflight, mediaProbe), mediaToolPaths.FfmpegPath);
@@ -371,7 +414,11 @@ internal static class Program
                     async token => { await licenseManager.EnsureAccessAsync(token); });
                 try
                 {
-                    if (licenseManager.HasValidLease)
+                    if (licenseManager.HasValidLease && TOOL_SHARED.Contracts.Accounts.LicenseProductPolicy.IsLocalOnly(licenseManager.Current?.FeatureFlagsJson))
+                    {
+                        startupSystemSetupRequired = true;
+                    }
+                    else if (licenseManager.HasValidLease)
                     {
                         var memberships = generationClient.GetOrganizationsAsync(CancellationToken.None)
                             .GetAwaiter().GetResult();
@@ -386,7 +433,7 @@ internal static class Program
                             generationClient.SelectOrganizationAsync(
                                 selectedMembership.OrganizationId,
                                 CancellationToken.None).GetAwaiter().GetResult();
-                            startupSystemSetupRequired = SystemSetupAuthorizer.CanManage(selectedMembership.Role);
+                            startupSystemSetupRequired = staticModels || SystemSetupAuthorizer.CanManage(selectedMembership.Role);
                         }
                     }
 

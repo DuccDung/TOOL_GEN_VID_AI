@@ -1,5 +1,45 @@
 # VideoMaker
 
+## Phát hành hiện hành: hosting lưu link, Setup cài từ VPS
+
+Source đã chuyển sang `StandaloneCatalog` (catalog 5), dùng Setup **1.3.0 trở lên**. Admin lưu một link EXE cho nút tải website; tạo release bằng phiên bản và link ZIP rồi phát hành, không cần upload hoặc kích hoạt Setup trên hosting. Setup tải/kiểm ZIP ứng dụng và model trên máy cài; hash, probe, transaction và gate READY được giữ. Một Setup dùng cho nhiều ZIP tương thích. SQL **4.1.21 đã áp và hậu kiểm trên hosting** theo [biên bản SQL](TRIEN_KHAI_SQL_4_1_21_HOSTING.md). Người dùng đã xác nhận luồng tải Setup hoạt động; xác nhận này không thay nghiệm thu toàn bộ model trên Windows sạch. [Nghiệp vụ và thao tác Admin/Setup](NGHIEP_VU_SETUP_VA_PHAT_HANH_DESKTOP.md), [đóng gói và bằng chứng kỹ thuật](TRIEN_KHAI_PHAT_HANH_DON_GIAN_VPS.md).
+
+## Lịch sử triển khai
+
+Các mô tả DirectCatalog/Setup Active bên dưới là phạm vi các lượt trước, không phải điều kiện của StandaloneCatalog hiện hành.
+
+Nút **Tải cho Windows** có cấu hình link EXE riêng tại **Admin → Phát hành desktop → Link tải Setup cho Windows**. Hosting lưu URL trong `auth.ServerSettings` và chuyển hướng `302` để trình duyệt tải trực tiếp từ VPS; không nhận/lưu EXE cho luồng này. Cấu hình link không thay điều kiện Setup Active khi phát hành release. [Source, kiểm chứng và hướng dẫn](TRIEN_KHAI_LINK_TAI_SETUP_TREN_VPS.md).
+
+Luồng hiện hành là **DirectCatalog**: Admin nhập **phiên bản + link ZIP trên VPS**, lưu nháp hoặc phát hành; hosting lưu catalog, không tải ZIP hoặc tạo job kiểm ZIP. `TOOL-LOCAL → Publish → FolderProfile` tự tạo ZIP có checksum trong tên `VideoMaker-<version>-<build>-win-x64-<SHA256>.zip`. Giữ nguyên tên khi upload. Setup dùng chung **1.2.0 trở lên**, capability `3,4`, lấy catalog từ server rồi tải và kiểm ZIP trực tiếp trên máy cài, chuẩn bị/probe model và commit transaction. Không cần nhập checksum hoặc tạo ba JSON phát hành thủ công. [Bằng chứng và runbook hiện hành](TRIEN_KHAI_PHAT_HANH_TRUC_TIEP_TU_VPS.md), [hướng dẫn Publish](scripts/VisualStudioPublish.README.vi.md).
+
+FFmpeg 9.0.1 vẫn tự chuẩn bị offline theo pin; bản Publish phải đầy đủ runtime/worker/license và cấu hình phát hành hợp lệ. Setup vẫn cài, kiểm model và chỉ mở khóa sau transaction commit; chạy EXE trực tiếp không thay bước Setup. Scope FFmpeg `Release/TechnicalPackaging` chưa xác nhận corresponding source/GPL hoặc production; [hồ sơ FFmpeg](third_party/ffmpeg/RELEASE_REVIEW.md) giữ các qualification chưa đạt. Source hiện tại chưa đồng nghĩa server/Setup mới đã rollout hoặc đã cài đạt trên Windows sạch.
+
+Source `DesktopReleases` đã chọn `PublicationMode=DirectCatalog`, `SharedBootstrapperEnabled=true`, API `https://taphoatool.com/`, profile `Production`, nguồn `https://103.179.190.182:8443/models/`. Sau lỗi quyền của bản 4.1.19, theo yêu cầu người dùng đã áp exact [SQL **4.1.20 Simple**](database/VideoFactory.4.1.20.DirectDesktopCatalogSimple.sql) lên `MB2D70\MSSQLSERVER2019 / tap51004_tool` ngày 2026-10-17; kết nối mới xác minh đủ schema/marker và giữ dữ liệu, quyền nhìn thấy. Script không thao tác phân quyền; giữ nguyên migration cũ. Cần deploy server mới và đăng ký Setup Active trước khi phát hành; lượt SQL này không xác nhận hai bước đó hoặc nghiệm thu model. Catalog dùng protocol 4; binary ứng dụng/model và Setup vẫn dùng distribution protocol 3. Protocol 2/3 cũ được giữ tương thích. [Kết quả SQL Simple và giới hạn backup/restore](TRIEN_KHAI_SQL_4_1_20_DON_GIAN.md); các biên bản [kiểm ZIP trên hosting](TRIEN_KHAI_ZIP_PUBLISH_DON_GIAN.md) và [form cũ](TRIEN_KHAI_FORM_RELEASE_TOI_GIAN_VA_SETUP_DUNG_CHUNG.md) là bằng chứng lịch sử.
+
+Phát hành ứng dụng qua VPS đã có source cho ZIP external, JSON đăng ký Admin, Setup protocol 2 và update/repair bằng đúng Setup từng release. Cờ external mặc định tắt; chưa có candidate khách hoặc rollout. Xem [biên bản, kiểm thử và runbook](TRIEN_KHAI_PHAT_HANH_TOOL_LOCAL_QUA_VPS_VA_SETUP.md).
+
+Kế hoạch nền cho release bằng URL ZIP ứng dụng trên VPS và Setup tải trực tiếp: [32 task, ma trận nghiệm thu, thứ tự triển khai và điều kiện bàn giao](PLAN_TASK_PHAT_HANH_TOOL_LOCAL_QUA_VPS_VA_SETUP.md). Trạng thái source triển khai và giới hạn nghiệm thu được cập nhật ở các biên bản phía trên.
+
+Đã bổ sung công cụ nghiệm thu runtime StaticArchive đã cài, sửa kiểm kê nguồn/cache, preflight dung lượng QA và dependency Pkcs; thêm full App/native bridge cùng bài parent chết. [Biên bản khắc phục và giới hạn nghiệm thu](TRIEN_KHAI_KHAC_PHUC_VA_NGHIEM_THU_SETUP_MODEL.md) ghi riêng bằng chứng source/tự động/HTTP và phần Setup khách, Windows sạch, model thật còn thiếu. Chưa phát hành hoặc đổi VPS.
+
+Đã bổ sung regression và sửa lỗi ổn định Setup/model: bố cục WinForms, snapshot/ACK/repair React, receipt gắn giao dịch ứng dụng, metadata đường dài và phục hồi temp sau crash. [Kết quả kiểm thử, ảnh native/WebView2 và các bài còn thiếu](TRIEN_KHAI_TEST_ON_DINH_SETUP_MODEL_UI_UX_VA_LOGIC.md) ghi riêng phạm vi tự động và nghiệm thu Windows sạch/model thật; chưa thay trạng thái phát hành production.
+
+Setup có chế độ **StaticArchive** để tải ZIP model từ VPS HTTPS:8443 đã pin, cài/probe Qwen/Piper cùng OCR/media/WebView2 trước khi báo hoàn tất. Có resume, journal/backup và gate cài dở; giữ các mode Bundled/Server. [Biên bản triển khai, kiểm thử, cách publish và giới hạn](TRIEN_KHAI_SETUP_CAI_MODEL_TU_VPS.md). Chưa nghiệm thu Setup trọn bộ trên Windows sạch hoặc phát hành production trong lượt này.
+
+Đã đóng gói server IIS x64 kèm Qwen 4B, Piper offline và bộ đầu vào OCR thành ZIP khoảng 2,91 GB, giải nén kiểm checksum đạt. [Biên bản đóng gói và đường dẫn bàn giao](TRIEN_KHAI_DONG_GOI_SERVER_KEM_MODEL.md) ghi hash, cấu trúc và cách triển khai; chưa upload hoặc chạy server, kho model vẫn tắt và chưa có catalog ký.
+
+Kho model Qwen 4B/Piper và bộ đầu vào OCR đã có công cụ gom bàn giao, catalog ký, API chỉ đọc, tải tiếp/kiểm hash và mode đóng gói Server/Bundled. Mặc định chưa bật tải server và chưa có khóa production. Xem [triển khai, bằng chứng và các gate còn lại](TRIEN_KHAI_KHO_MODEL_SERVER_VA_CAI_DAT_AN_TOAN.md) cùng [thiết kế tin cậy](ADR_MODEL_DISTRIBUTION_TRUST.md); chưa upload hoặc rollout môi trường thật.
+
+Bài thử cài mới từ server đã bổ sung retry theo `Retry-After`, pipeline Authenticode và công cụ kiểm kê chỉ đọc. [Biên bản triển khai bài thử](TRIEN_KHAI_TEST_SETUP_MODEL_TU_SERVER.md) ghi bằng chứng mới, giới hạn dung lượng và các đầu vào còn thiếu; chưa dọn model hoặc phát hành Setup lên server đích.
+
+Gói **Chỉ tool dịch / Vietsub**, tắt Cloud: admin nhập thông tin gói và mở bán khi SePay sẵn sàng. Không chọn nhóm nhận khách, không giữ chỗ hoặc thêm khách vào tổ chức. Thanh toán cấp license theo thời hạn/thiết bị; khách dùng không gian Local cá nhân và vẫn phải cài, probe runtime/model. Gói có Cloud và toàn bộ công cụ tiếp tục dùng tổ chức cùng kiểm tra credential/rate/budget hiện hành. SePay giữ trang riêng.
+
+Desktop gói Local mở thẳng **Dịch phụ đề**. Các menu khác vẫn hiển thị với biểu tượng khóa, gồm Cài đặt và Tạo video mới; bấm chuột hoặc bàn phím không chuyển trang hay gửi lệnh công cụ. Thông tin gói, đăng xuất vẫn khả dụng; Setup nằm trong mục thu gọn **Thiết lập công cụ dịch** ngay tại trang Dịch. Tính năng Dịch đang tắt/chưa sẵn sàng hiển thị thông báo tại phần Dịch, không chuyển sang menu khác.
+
+Source trên `main`, nền `f0651c918f28ca477f28875818148e9e86240b7b`, working tree chưa commit. Registry cá nhân cần [migration 4.1.16](database/VideoFactory.4.1.16.VietsubPersonalProjects.sql), triển khai đồng bộ server/Admin/desktop. Chưa áp SQL hoặc rollout hosting trong lượt sửa này. Xem [nghiệp vụ](NGHIEP_VU_HE_THONG_VIDEOMAKER.md), [vận hành](VAN_HANH_VA_PHAT_HANH.md) và [bối cảnh kiểm thử](BOI_CANH_HE_THONG_HIEN_HANH.md).
+
+Admin thiết lập mở bán có luồng 3 bước, SePay ở trang riêng. Xem [source, kiểm thử và hướng dẫn triển khai](TRIEN_KHAI_ADMIN_SETUP_3_BUOC.md); chọn [migration tạo bảng đơn giản 4.1.15](database/VideoFactory.4.1.15.AdminSetupWizardSimple.sql) trước khi dùng wizard trên môi trường đích. File ghi version nền `4.1.14-admin-setup-wizard` cùng `4.1.15-admin-setup-wizard-simple`, không thay đổi quyền database.
+
 > Điểm vào repository. Rà soát context theo source ngày 2026-09-15.
 
 VideoMaker là hệ thống desktop/server hỗ trợ tạo video bằng AI và xử lý media cục bộ. OpenAI tạo nội dung có cấu trúc và giọng Canonical; Kling, BytePlus hoặc Fal/Veo tạo clip theo policy của tổ chức; desktop tải output qua server, yêu cầu người dùng duyệt và dựng video bằng FFmpeg. Module Vietsub cung cấp editor/OCR, dịch ngữ cảnh Qwen và tạo giọng Việt local theo giọng đã chọn (Piper hoặc Kokoro) khi runtime tương ứng đã được kiểm tra.
@@ -20,7 +60,11 @@ Các báo cáo build/test và triển khai ở đây gắn với checkout, thờ
 
 ## Cấu trúc solution
 
-Admin Web tại `/admin` đã có giao diện vuông, không viền trang trí: sidebar, tổng quan, tìm người dùng, tổ chức/AI, TikTok, gói sử dụng và phát hành desktop. Phạm vi source, kế hoạch, ảnh kiểm tra và kết quả theo checkout: [triển khai Admin Web](PLAN_TASK_ADMIN_WEB_VUONG_KHONG_VIEN.md). Bản giao diện trong source không tự cập nhật server đang chạy.
+Admin Web tại `/admin` chỉ dùng UI mới: đăng nhập thông thường mở Tổng quan mới với nút Tạo gói & mở bán, thống kê và các bước chuẩn bị. Người dùng, gói, tổ chức/AI, phân bổ, SePay, TikTok, phát hành và popup dùng cùng component sáng. Markup/renderer/theme cũ và cơ chế nạp UI cho Razor cũ đã gỡ; tạo, sửa và nhân bản dùng cùng form. [Plan triển khai và bằng chứng](PLAN_TASK_HOP_NHAT_UI_ADMIN.md). Bản giao diện trong source không tự cập nhật server đang chạy.
+
+Form **Tạo gói & mở bán** dùng cùng layout Admin theo mockup. Khi chạy `TOOL-SERVER` profile `https`, mở `https://localhost:7202/admin?view=create-plan` rồi đăng nhập Global Admin; hoặc chọn **Gói sử dụng → Tạo gói & mở bán**. Nút Chỉnh sửa và Nhân bản dùng cùng form này. Đây là Web Admin, không phải màn hình mua gói trong desktop. [Hướng dẫn local, ảnh thực tế và phạm vi kiểm thử](PLAN_TASK_HOP_NHAT_UI_ADMIN.md).
+
+Đợt thay toàn bộ trình bày ngày 2026-10-13 dùng font Roboto tiếng Việt đi kèm server, sidebar và component mới, form/preview theo ảnh mẫu và giá hiển thị `70.000`. Header chung đã thu gọn: bỏ nhãn lặp, tiêu đề desktop 28–30 px, nội dung trang lên cao hơn. Marker mới **`admin-only-new-20261013.2`**. Để nạp source mới trong Visual Studio, Stop Debugging rồi Build `TOOL-SERVER`/F5; tải lại browser riêng lẻ không cập nhật process server. Mở `/admin` thông thường để kiểm Tổng quan sau login. [Header sau thu gọn](artifacts/admin-compact-header-20261013/screenshots/pricing-header-after-1440.png) được render từ source với văn bản mô phỏng; [ảnh login của lượt trước](artifacts/admin-only-new-20261013/screenshots/after-login-default-1440.png) và [form cùng kích thước mẫu](artifacts/admin-only-new-20261013/screenshots/plan-composer-reference-1672.png) dùng dữ liệu giả để kiểm hình thức.
 
 | Thành phần | Trách nhiệm |
 |---|---|
@@ -29,6 +73,7 @@ Admin Web tại `/admin` đã có giao diện vuông, không viền trang trí: 
 | `TOOL-VIETSUB-TRANSLATION-WORKER` | Worker x64 cô lập LLamaSharp/Qwen, CPU và gói NVIDIA CUDA tùy chọn; không có Cloud client hoặc database workflow. |
 | `TOOL-SHARED.Contracts` | DTO public giữa server và desktop. |
 | `TOOL-DISTRIBUTION` | Kiểm tra manifest, provenance và SHA-256 của bundle phân phối. |
+| `TOOL-MODEL-PUBLISHER` | Công cụ offline chuẩn bị/ký kho model staging và metadata thu hồi; không tự upload hoặc publish. |
 | `TOOL-TESTS` | xUnit cho nghiệp vụ, bảo mật, migration, worker, updater và media. |
 | `TOOL-UPDATER` | Cập nhật desktop có backup/rollback. |
 | `TOOL-SETUP` | Bộ cài launcher/desktop. |

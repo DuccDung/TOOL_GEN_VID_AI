@@ -9,6 +9,7 @@
     <AssemblyName>VideoMaker Setup</AssemblyName>
     <RootNamespace>TOOL_SETUP</RootNamespace>
     <Product>VideoMaker Setup</Product>
+    <ApplicationIcon>..\TOOL-LOCAL\Brand\taphoatool.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
@@ -17,13 +18,61 @@
     <SetupServerBaseUrl Condition="'$(SetupServerBaseUrl)' == ''">https://localhost:7202/</SetupServerBaseUrl>
     <SetupChannel Condition="'$(SetupChannel)' == ''">Stable</SetupChannel>
     <SetupPlatform Condition="'$(SetupPlatform)' == ''">win-x64</SetupPlatform>
+    <SetupModelDeliveryMode Condition="'$(SetupModelDeliveryMode)' == ''">Bundled</SetupModelDeliveryMode>
+    <SetupMode Condition="'$(SetupMode)' == ''">ExactRelease</SetupMode>
+    <SetupProfile Condition="'$(SetupProfile)' == ''">Production</SetupProfile>
+    <SetupBootstrapperVersion Condition="'$(SetupBootstrapperVersion)' == ''">1.3.0</SetupBootstrapperVersion>
+    <Version Condition="'$(SetupMode)' == 'SharedBootstrapper'">$(SetupBootstrapperVersion)</Version>
+    <SetupModelBundleId>models-20261016-03</SetupModelBundleId>
+    <Description Condition="'$(SetupMode)' == 'SharedBootstrapper' and '$(SetupBindingMetadata)' != ''">VideoMaker.SharedBootstrapper.v1:$(SetupBindingMetadata)</Description>
+    <SetupDesktopVersion Condition="'$(SetupDesktopVersion)' == ''"></SetupDesktopVersion>
+    <SetupDesktopBuildNumber Condition="'$(SetupDesktopBuildNumber)' == ''">0</SetupDesktopBuildNumber>
+    <SetupDesktopSha256 Condition="'$(SetupDesktopSha256)' == ''"></SetupDesktopSha256>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\TOOL-SHARED.Contracts\TOOL-SHARED.Contracts.csproj" />
     <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
     <EmbeddedResource Include="setupsettings.json" LogicalName="TOOL_SETUP.setupsettings.json" />
+    <Compile Include="..\TOOL-LOCAL\Authentication\BrandIdentity.cs" Link="Brand\BrandIdentity.cs" />
+    <EmbeddedResource Include="..\TOOL-LOCAL\Brand\taphoatool.ico" LogicalName="TapHoaTool.WindowIcon" />
+    <EmbeddedResource Include="..\TOOL-LOCAL\Web\public\brand\taphoatool-logo.png" LogicalName="TapHoaTool.Logo" />
+    <EmbeddedResource Include="$(SetupWebView2InstallerPath)" LogicalName="VideoMaker.ApprovedWebView2Installer"
+                      Condition="'$(SetupMode)' == 'SharedBootstrapper' and '$(SetupWebView2InstallerPath)' != '' and Exists('$(SetupWebView2InstallerPath)')" />
   </ItemGroup>
   <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupModelBundleId</_Parameter1><_Parameter2>$(SetupModelBundleId)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupMode</_Parameter1><_Parameter2>$(SetupMode)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupProfile</_Parameter1><_Parameter2>$(SetupProfile)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupBootstrapperVersion</_Parameter1><_Parameter2>$(SetupBootstrapperVersion)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupModelDeliveryMode</_Parameter1><_Parameter2>$(SetupModelDeliveryMode)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupDesktopVersion</_Parameter1><_Parameter2>$(SetupDesktopVersion)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupDesktopBuildNumber</_Parameter1><_Parameter2>$(SetupDesktopBuildNumber)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupDesktopSha256</_Parameter1><_Parameter2>$(SetupDesktopSha256)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupWebView2InstallerSizeBytes</_Parameter1><_Parameter2>$(SetupWebView2InstallerSizeBytes)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupWebView2InstallerSha256</_Parameter1><_Parameter2>$(SetupWebView2InstallerSha256)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SetupWebView2InstallerPublisherThumbprint</_Parameter1><_Parameter2>$(SetupWebView2InstallerPublisherThumbprint)</_Parameter2>
+    </AssemblyAttribute>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>SetupServerBaseUrl</_Parameter1>
       <_Parameter2>$(SetupServerBaseUrl)</_Parameter2>

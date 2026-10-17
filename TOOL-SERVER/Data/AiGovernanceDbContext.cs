@@ -19,6 +19,9 @@ public sealed class AiGovernanceDbContext(DbContextOptions<AiGovernanceDbContext
     public DbSet<OrganizationSeatAssignment> OrganizationSeatAssignments => Set<OrganizationSeatAssignment>();
 
     protected override void OnModelCreating(ModelBuilder builder)
+        => ConfigureModel(builder);
+
+    internal static void ConfigureModel(ModelBuilder builder)
     {
         builder.Entity<Organization>(entity =>
         {

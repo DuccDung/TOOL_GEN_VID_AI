@@ -441,6 +441,18 @@ public sealed class SystemSetupTests
             return Action?.Invoke(install, warning, progress, token) ?? Task.FromResult(Component with { State = "READY" });
         }
     }
+    [Fact]
+    public async Task PersonalSetupRequiresSessionAndLicenseAndRejectsChangedUser()
+    {
+        var context = new FakeContext { SelectedOrganizationId = Guid.Empty, Role = "Viewer", Status = "Inactive" };
+        var auth = new SystemSetupAuthorizer(context);
+        await auth.AuthorizeAsync(context.CurrentUserId!, Guid.Empty, default);
+        Assert.Equal(1, context.Checks);
+        await Assert.ThrowsAsync<SetupException>(() => auth.AuthorizeAsync("other", Guid.Empty, default));
+        context.Valid = false;
+        await Assert.ThrowsAsync<SetupException>(() => auth.AuthorizeAsync(context.CurrentUserId!, Guid.Empty, default));
+    }
+
     private sealed class FakeContext : IVietsubLocalAccessContext
     {
         public string? CurrentUserId { get; set; } = "user";

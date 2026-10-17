@@ -6,7 +6,8 @@ using TOOL_SERVER.Generation;
 
 namespace TOOL_SERVER.Organizations;
 
-public sealed record OrganizationProvisioningReadiness(bool Ready, string Message);
+public sealed record OrganizationProvisioningReadiness(bool Ready, string Message,
+    string? BlockingCode = null, string? Target = null, Guid? ModelId = null);
 
 public interface IOrganizationProvisioningReadinessEvaluator
 {

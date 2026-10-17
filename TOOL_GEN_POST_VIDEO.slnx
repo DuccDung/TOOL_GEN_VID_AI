@@ -1,9 +1,13 @@
 <Solution>
   <Project Path="TOOL-SHARED.Contracts/TOOL-SHARED.Contracts.csproj" />
   <Project Path="TOOL-DISTRIBUTION/TOOL-DISTRIBUTION.csproj" />
+  <Project Path="TOOL-MODEL-PUBLISHER/TOOL-MODEL-PUBLISHER.csproj" />
   <Project Path="TOOL-LOCAL/TOOL-LOCAL.csproj" />
   <Project Path="TOOL-SERVER/TOOL-SERVER.csproj" />
   <Project Path="TOOL-TESTS/TOOL-TESTS.csproj" />
+  <Project Path="TOOL-TESTS/Fixtures/SetupJobOwnerHost/SetupJobOwnerHost.csproj" />
+  <Project Path="TOOL-TESTS/Fixtures/DistributionResourcesA/DistributionResourcesA.csproj" />
+  <Project Path="TOOL-TESTS/Fixtures/DistributionResourcesB/DistributionResourcesB.csproj" />
   <Project Path="TOOL-UPDATER/TOOL-UPDATER.csproj" />
   <Project Path="TOOL-VIETSUB-TRANSLATION-WORKER/TOOL-VIETSUB-TRANSLATION-WORKER.csproj" />
   <Project Path="TOOL-SETUP/TOOL-SETUP.csproj" />

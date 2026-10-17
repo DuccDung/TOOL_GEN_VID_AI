@@ -104,6 +104,15 @@ internal sealed class TranslationWorkerHost : IAsyncDisposable
                 Environment.Exit(197);
             }
 
+            if (_testMode == "crash-with-stage")
+            {
+                await _error.WriteAsync("qwen_stage:MODEL_");
+                await _error.FlushAsync();
+                await _error.WriteLineAsync("LOAD");
+                await _error.FlushAsync();
+                Environment.Exit(unchecked((int)0xc0000005));
+            }
+
             if (_testMode == "malformed-after-hello")
             {
                 await _output.WriteAsync(new byte[] { 1, 0, 0, 0, 0xff }, cancellationToken);

@@ -7,7 +7,17 @@
     <RootNamespace>TOOL_SERVER</RootNamespace>
     <UserSecretsId>tool-gen-post-video-server-4e532ba1-d7be-487c-9a66-028baf210dc7</UserSecretsId>
 	<UseAppHost>false</UseAppHost>
+    <!-- Workstation output and mutable server data must never become Web SDK publish content. -->
+    <ServerPrivateContent>artifacts/**;output/**;.tmp/**;.vs/**;App_Data/**;App_Releases/**;App_Releases_Inspection/**;App_ModelDistribution/**;logs/**;model-store/**;DataProtection-Keys/**</ServerPrivateContent>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(ServerPrivateContent)</DefaultItemExcludes>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Remove="$(ServerPrivateContent)" />
+    <None Remove="$(ServerPrivateContent)" />
+    <Compile Remove="$(ServerPrivateContent)" />
+    <EmbeddedResource Remove="$(ServerPrivateContent)" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
@@ -19,6 +29,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
+    <!-- SqlClient 6.1.x still allows vulnerable Pkcs. Use the net10.0 servicing fix for
+         GHSA-2fmv-rv2c-59x7 / GHSA-846f-f764-76mx; a 9.x pin can lose to the ASP.NET 10 shared assembly. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.11">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

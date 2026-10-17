@@ -1,0 +1,94 @@
+<Project>
+  <PropertyGroup>
+    <DesktopVisualStudioPowerShell Condition="'$(DesktopVisualStudioPowerShell)' == ''">powershell.exe</DesktopVisualStudioPowerShell>
+    <DesktopVisualStudioPreflightScript Condition="'$(DesktopVisualStudioPreflightScript)' == ''">$(MSBuildThisFileDirectory)..\..\scripts\Test-VisualStudioDesktopPublish.ps1</DesktopVisualStudioPreflightScript>
+    <DesktopVisualStudioPackageScript Condition="'$(DesktopVisualStudioPackageScript)' == ''">$(MSBuildThisFileDirectory)..\..\scripts\New-DesktopPublishedPackage.ps1</DesktopVisualStudioPackageScript>
+    <DesktopVisualStudioFfmpegScript Condition="'$(DesktopVisualStudioFfmpegScript)' == ''">$(MSBuildThisFileDirectory)..\..\scripts\Prepare-ReleaseFfmpegBundle.ps1</DesktopVisualStudioFfmpegScript>
+    <DesktopVisualStudioCanonicalPackageScript Condition="'$(DesktopVisualStudioCanonicalPackageScript)' == ''">$(MSBuildThisFileDirectory)..\..\scripts\New-DesktopCanonicalPackage.ps1</DesktopVisualStudioCanonicalPackageScript>
+  </PropertyGroup>
+
+  <Target Name="PrepareVisualStudioFfmpegBundle" BeforeTargets="ValidateVisualStudioDesktopRelease"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and '$(DesktopPrepareApprovedFfmpegBundle)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(DesktopVisualStudioFfmpegScript)')" Text="The pinned FFmpeg release preparation script is missing." />
+    <Exec Command="&quot;$(DesktopVisualStudioPowerShell)&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(DesktopVisualStudioFfmpegScript)&quot; -DestinationDirectory &quot;$(FfmpegBundleDirectory)\.&quot;" />
+    <!-- Add after preparation, including on the first Publish when this directory
+         did not exist during evaluation. Every file was checked against the pin. -->
+    <ItemGroup>
+      <Content Remove="$(FfmpegBundleDirectory)\**\*" />
+      <_VideoMakerPreparedFfmpegFile Include="$(FfmpegBundleDirectory)\**\*" />
+      <Content Include="@(_VideoMakerPreparedFfmpegFile)"
+               Link="tools\ffmpeg\%(_VideoMakerPreparedFfmpegFile.RecursiveDir)%(_VideoMakerPreparedFfmpegFile.Filename)%(_VideoMakerPreparedFfmpegFile.Extension)"
+               CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    </ItemGroup>
+    <Message Importance="High" Text="FFmpeg 9.0.1 is pinned and prepared for technical packaging. Source availability and redistribution review are included in tools/ffmpeg/SOURCE-AVAILABILITY.md; this does not qualify a production release." />
+  </Target>
+
+  <Target Name="ValidateVisualStudioDesktopRelease" BeforeTargets="PrepareForBuild;PrepareForPublish"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(Configuration)' != 'Release' or '$(RuntimeIdentifier)' != 'win-x64' or '$(SelfContained)' != 'true'" Text="VideoMaker FolderProfile requires Release, win-x64 and self-contained publishing." />
+    <Error Condition="'$(DesktopDistributionProtocol)' != '3' or '$(StaticModelSetupRequired)' != 'true' or '$(StaticModelReleaseChannel)' != 'Stable' or '$(IncludePiperOfflinePayload)' != 'false'" Text="VideoMaker FolderProfile must compile shared protocol 3 and the required StaticArchive policy; bundled model payloads are not allowed." />
+    <Error Condition="'$(DesktopDeploymentSettingsPath)' == '' or !Exists('$(DesktopDeploymentSettingsPath)')" Text="VideoMaker Publish needs a release configuration without shared SQL passwords. Set DesktopDeploymentSettingsPath in Properties/PublishProfiles/FolderProfile.local.props; see scripts/VisualStudioPublish.README.vi.md. Development appsettings.json is never packaged automatically." />
+    <Error Condition="!Exists('$(DesktopVisualStudioPreflightScript)') or !Exists('$(DesktopVisualStudioPackageScript)')" Text="The VideoMaker publish packaging scripts are missing." />
+    <PropertyGroup>
+      <_VideoMakerTransitionalSqlArgument Condition="'$(DesktopAllowTransitionalSql)' == 'true'">-AllowTransitionalSql</_VideoMakerTransitionalSqlArgument>
+    </PropertyGroup>
+    <Exec Command="&quot;$(DesktopVisualStudioPowerShell)&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(DesktopVisualStudioPreflightScript)&quot; -AppSettingsPath &quot;$(DesktopDeploymentSettingsPath)&quot; -Version &quot;$(Version)&quot; -BuildNumber &quot;$(DesktopBuildNumber)&quot; -ReleaseProfile &quot;$(DesktopReleaseProfile)&quot; -MinimumBootstrapperVersion &quot;$(DesktopMinimumBootstrapperVersion)&quot; -FfmpegBundlePath &quot;$(FfmpegBundleDirectory)\.&quot; -OcrNativeRuntimePath &quot;$(OcrNativeRuntimeDirectory)\.&quot; -WebView2InstallerPath &quot;$(DesktopWebView2InstallerPath)&quot; $(_VideoMakerTransitionalSqlArgument)" />
+  </Target>
+
+  <!-- AssignTargetPaths has already cloned Content into ContentWithTargetPath
+       when this SDK hook runs. Update both before the SDK copies their metadata
+       into ResolvedFileToPublish and selects single-file bundle inputs.
+       Managed package/reference assemblies are not Content and remain bundled. -->
+  <Target Name="KeepVisualStudioRuntimeContentLoose" BeforeTargets="GetCopyToPublishDirectoryItems"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and '$(PublishSingleFile)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <Content Condition="'%(Content.CopyToPublishDirectory)' == 'Always' or '%(Content.CopyToPublishDirectory)' == 'PreserveNewest' or '%(Content.CopyToPublishDirectory)' == 'IfDifferent'">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </Content>
+      <ContentWithTargetPath Condition="'%(ContentWithTargetPath.CopyToPublishDirectory)' == 'Always' or '%(ContentWithTargetPath.CopyToPublishDirectory)' == 'PreserveNewest' or '%(ContentWithTargetPath.CopyToPublishDirectory)' == 'IfDifferent'">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ContentWithTargetPath>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CollectVisualStudioDesktopPublishFiles"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_VideoMakerPublishedFileList>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'videomaker-vs-publish-files.txt'))</_VideoMakerPublishedFileList>
+    </PropertyGroup>
+    <ItemGroup>
+      <_VideoMakerPublishedFile Include="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.CopyToPublishDirectory)' != 'Never' and '%(ResolvedFileToPublish.RelativePath)' != ''">
+        <PackagePath>$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Replace('\', '/'))</PackagePath>
+      </_VideoMakerPublishedFile>
+      <!-- The SDK writes the single-file apphost directly to PublishDir and deliberately
+           omits it from ResolvedFileToPublish. It still belongs in the application ZIP. -->
+      <_VideoMakerPublishedFile Include="$(PublishedSingleFilePath)" Condition="'$(PublishSingleFile)' == 'true' and '$(PublishedSingleFileName)' != ''">
+        <PackagePath>$(PublishedSingleFileName)</PackagePath>
+      </_VideoMakerPublishedFile>
+    </ItemGroup>
+    <Error Condition="'@(_VideoMakerPublishedFile)' == ''" Text="VideoMaker Publish did not provide a file list. Publish the project again with FolderProfile; a stale folder cannot be packaged." />
+    <RemoveDuplicates Inputs="@(_VideoMakerPublishedFile->'%(PackagePath)')">
+      <Output TaskParameter="Filtered" ItemName="_VideoMakerPublishedPath" />
+    </RemoveDuplicates>
+    <WriteLinesToFile File="$(_VideoMakerPublishedFileList)" Lines="@(_VideoMakerPublishedPath)" Overwrite="true" Encoding="UTF-8" />
+  </Target>
+
+  <Target Name="PackageVisualStudioDesktopRelease" AfterTargets="Publish"
+          DependsOnTargets="ValidateVisualStudioDesktopRelease;CollectVisualStudioDesktopPublishFiles"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and '$(DesktopCreateVerifiedReleaseZip)' != 'false' and '$(DesignTimeBuild)' != 'true'">
+    <Exec Command="&quot;$(DesktopVisualStudioPowerShell)&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(DesktopVisualStudioPackageScript)&quot; -PublishRoot &quot;$(PublishDir)\.&quot; -Version &quot;$(Version)&quot; -BuildNumber &quot;$(DesktopBuildNumber)&quot; -Channel &quot;$(StaticModelReleaseChannel)&quot; -ReleaseProfile &quot;$(DesktopReleaseProfile)&quot; -MinimumBootstrapperVersion &quot;$(DesktopMinimumBootstrapperVersion)&quot; -AppSettingsPath &quot;$(DesktopDeploymentSettingsPath)&quot; -OutputRoot &quot;$(DesktopPackageOutputRoot)\.&quot; -WebView2InstallerPath &quot;$(DesktopWebView2InstallerPath)&quot; -PublishFileListPath &quot;$(_VideoMakerPublishedFileList)&quot; $(_VideoMakerTransitionalSqlArgument)" />
+    <Message Importance="High" Text="VideoMaker ZIP: $(DesktopPackageOutputRoot)\$(Version)-$(DesktopBuildNumber)\VideoMaker-$(Version)-$(DesktopBuildNumber)-win-x64.zip. Upload this ZIP to the application VPS; the shared Setup is unchanged." />
+  </Target>
+
+  <Target Name="PackageVisualStudioCanonicalDesktopRelease" AfterTargets="Publish"
+          DependsOnTargets="ValidateVisualStudioDesktopRelease;CollectVisualStudioDesktopPublishFiles"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and '$(DesktopCreateVerifiedReleaseZip)' == 'false' and '$(DesktopCreateCanonicalReleaseZip)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(DesktopVisualStudioCanonicalPackageScript)')" Text="The canonical desktop ZIP packaging script is missing." />
+    <Exec Command="&quot;$(DesktopVisualStudioPowerShell)&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(DesktopVisualStudioCanonicalPackageScript)&quot; -PublishRoot &quot;$(PublishDir)\.&quot; -Version &quot;$(Version)&quot; -BuildNumber &quot;$(DesktopBuildNumber)&quot; -OutputRoot &quot;$(DesktopCanonicalPackageOutputRoot)\.&quot; -PublishFileListPath &quot;$(_VideoMakerPublishedFileList)&quot; $(_VideoMakerTransitionalSqlArgument)" />
+  </Target>
+
+  <Target Name="ReportVisualStudioPlainPublish" AfterTargets="Publish"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and '$(DesktopCreateVerifiedReleaseZip)' == 'false' and '$(DesktopCreateCanonicalReleaseZip)' != 'true' and '$(DesignTimeBuild)' != 'true'">
+    <Message Importance="High" Text="VideoMaker Publish folder: $(PublishDir). Automatic canonical ZIP packaging is disabled. Enable DesktopCreateCanonicalReleaseZip before publishing a DirectCatalog release." />
+  </Target>
+</Project>

@@ -88,6 +88,55 @@ public sealed class GenerationAccessLicenseTests
         Assert.Equal("license_unavailable", exception.Code);
     }
 
+    [Fact]
+    public async Task LocalLicenseCanAccessOnlyItsVietsubOrganizationAndCannotUseVideoReadEndpoints()
+    {
+        var now = DateTime.UtcNow; var device = Guid.NewGuid(); var org = Guid.NewGuid();
+        await using var accounts = new AccountDbContext(new DbContextOptionsBuilder<AccountDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        await using var governance = new AiGovernanceDbContext(new DbContextOptionsBuilder<AiGovernanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        await using var video = new VideoFactoryDbContext(new DbContextOptionsBuilder<VideoFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        accounts.LicenseActivations.Add(new() { LicenseActivationId = Guid.NewGuid(), DeviceId = device, Status = "Active", LastVerifiedAtUtc = now,
+            UserLicense = new() { UserLicenseId = Guid.NewGuid(), UserId = "owner", Status = "Active", StartsAtUtc = now.AddDays(-1),
+                ExpiresAtUtc = now.AddDays(1), EntitlementSnapshotJson = """{"productScope":"vietsub"}""",
+                LicensePlan = new() { LicensePlanId = Guid.NewGuid(), Name = "Local", PlanCode = "local" } } });
+        governance.OrganizationMembers.Add(new() { UserId = "owner", Role = "Member", Status = "Active", Organization = new() {
+            OrganizationId = org, Name = "Local", Code = "local", CreatedByUserId = "owner", Status = "Active", MonthlyBudgetLimit = 0 } });
+        await accounts.SaveChangesAsync(); await governance.SaveChangesAsync();
+        var service = new GenerationAccessService(accounts, governance, video, new FixedTimeProvider(now));
+        Assert.Equal(org, (await service.RequireVietsubAccessAsync("owner", device, org, default)).OrganizationId);
+        Assert.Equal("organization_access_denied", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            service.RequireVietsubAccessAsync("owner", device, Guid.NewGuid(), default))).Code);
+        Assert.Equal("license_feature_unavailable", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            service.RequireProjectAccessAsync("owner", device, org, null, default))).Code);
+        Assert.Empty(await video.Projects.ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task PersonalLocalAccessNeedsCurrentDeviceLicenseWithoutAnyMembership()
+    {
+        var now = DateTime.UtcNow; var device = Guid.NewGuid();
+        await using var accounts = new AccountDbContext(new DbContextOptionsBuilder<AccountDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        await using var governance = new AiGovernanceDbContext(new DbContextOptionsBuilder<AiGovernanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        await using var video = new VideoFactoryDbContext(new DbContextOptionsBuilder<VideoFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        accounts.LicenseActivations.Add(new() { LicenseActivationId = Guid.NewGuid(), DeviceId = device, Status = "Active", LastVerifiedAtUtc = now,
+            UserLicense = new() { UserLicenseId = Guid.NewGuid(), UserId = "owner", Status = "Active", StartsAtUtc = now.AddDays(-1),
+                ExpiresAtUtc = now.AddDays(1), EntitlementSnapshotJson = """{"productScope":"vietsub"}""",
+                LicensePlan = new() { LicensePlanId = Guid.NewGuid(), Name = "Local", PlanCode = "local" } } });
+        await accounts.SaveChangesAsync();
+        var service = new GenerationAccessService(accounts, governance, video, new FixedTimeProvider(now));
+        await service.RequirePersonalVietsubAccessAsync("owner", device, default);
+        foreach (var who in new[] { ("other", device), ("owner", Guid.NewGuid()) })
+            Assert.Equal("license_unavailable", (await Assert.ThrowsAsync<AccountApiException>(() =>
+                service.RequirePersonalVietsubAccessAsync(who.Item1, who.Item2, default))).Code);
+        Assert.Equal("license_feature_unavailable", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            service.RequireAsync("owner", device, Guid.Empty, null, default))).Code);
+        var activation = await accounts.LicenseActivations.SingleAsync(); activation.RevokedAtUtc = now;
+        await accounts.SaveChangesAsync();
+        Assert.Equal("license_unavailable", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            service.RequirePersonalVietsubAccessAsync("owner", device, default))).Code);
+        Assert.Empty(await governance.OrganizationMembers.ToArrayAsync());
+    }
+
     private sealed class FixedTimeProvider(DateTime now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(now);

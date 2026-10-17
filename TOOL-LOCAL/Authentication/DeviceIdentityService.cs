@@ -8,13 +8,13 @@ public sealed class DeviceIdentityService
     private static readonly byte[] OptionalEntropy = Encoding.UTF8.GetBytes("TOOL_GEN_POST_VIDEO/Device/v1");
     private readonly string _identityPath;
 
-    public DeviceIdentityService()
+    public DeviceIdentityService() : this(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ToolGenPostVideo", "device-id.bin"))
     {
-        var folder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ToolGenPostVideo");
-        _identityPath = Path.Combine(folder, "device-id.bin");
     }
+
+    internal DeviceIdentityService(string identityPath) => _identityPath = identityPath;
 
     public string GetOrCreateFingerprint()
     {

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TOOL_SERVER.Domain.Organizations;
+using TOOL_SERVER.Domain.Accounts;
 using TOOL_SERVER.Vietsub.Domain;
 
 namespace TOOL_SERVER.Vietsub.Data;
@@ -13,9 +14,23 @@ public sealed class VietsubDbContext(DbContextOptions<VietsubDbContext> options)
 
     public DbSet<OrganizationAuditLog> OrganizationAuditLogs => Set<OrganizationAuditLog>();
 
+    public DbSet<AccountAuditLog> AccountAuditLogs => Set<AccountAuditLog>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         Translation.VietsubCloudModelConfiguration.Configure(builder);
+        builder.Entity<AccountAuditLog>(entity =>
+        {
+            entity.ToTable("AccountAuditLogs", "auth");
+            entity.HasKey(x => x.AccountAuditLogId);
+            entity.Property(x => x.AccountAuditLogId).ValueGeneratedOnAdd();
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.EventType).HasMaxLength(100).IsUnicode(false);
+            entity.Property(x => x.IpAddress).HasMaxLength(45).IsUnicode(false);
+            entity.Property(x => x.UserAgent).HasMaxLength(1000);
+            entity.Property(x => x.CorrelationId).HasMaxLength(100).IsUnicode(false);
+            entity.Property(x => x.OccurredAtUtc).HasColumnType("datetime2(3)");
+        });
         builder.Entity<VietsubProject>(entity =>
         {
             entity.ToTable("Projects", "vs");

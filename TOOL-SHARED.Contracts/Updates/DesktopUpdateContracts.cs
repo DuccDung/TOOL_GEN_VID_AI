@@ -14,7 +14,9 @@ public sealed record DesktopRepairFailure(string Code, string Message, string Ve
 public sealed record DesktopUpdateCheckResponse(
     bool IsUpdateAvailable,
     bool IsMandatory,
-    DesktopReleaseResponse? Release);
+    DesktopReleaseResponse? Release,
+    DesktopDirectReleaseResponse? DirectRelease = null,
+    DesktopStandaloneReleaseResponse? StandaloneRelease = null);
 
 public sealed record DesktopReleaseResponse(
     Guid ReleaseId,
@@ -29,7 +31,16 @@ public sealed record DesktopReleaseResponse(
     string FileName,
     string DownloadUrl,
     long SizeBytes,
-    string Sha256);
+    string Sha256,
+    string SourceKind = DesktopArtifactSourceKinds.Internal,
+    string InstallMode = DesktopInstallModes.Legacy,
+    int DistributionProtocol = DesktopDistributionProtocol.Legacy,
+    DesktopSetupArtifactResponse? SetupArtifact = null,
+    string? ModelBundleId = null,
+    DesktopSharedBootstrapperResponse? SharedBootstrapper = null,
+    string? Profile = null,
+    string? MinimumBootstrapperVersion = null,
+    DesktopPackageMetadataArtifactResponse? PackageMetadata = null);
 
 public sealed record DesktopReleaseListResponse(
     IReadOnlyList<DesktopReleaseResponse> Releases);

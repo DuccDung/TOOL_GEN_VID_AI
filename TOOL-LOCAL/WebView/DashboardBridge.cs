@@ -122,6 +122,11 @@ internal sealed partial class DashboardBridge : IDisposable
 
         try
         {
+            if (!LicenseProductCommands.Allows(_licenseManager.Current?.FeatureFlagsJson, request.Type))
+            {
+                PostError(request.RequestId, "license_feature_unavailable", "Chức năng này không nằm trong gói sử dụng hiện tại.");
+                return;
+            }
             if (request.Type.StartsWith("short-library.", StringComparison.Ordinal))
             {
                 await HandleShortVideoLibraryAsync(request, cancellationToken);
@@ -427,7 +432,7 @@ internal sealed partial class DashboardBridge : IDisposable
 
         var status = await _licensePaymentClient.GetStatusAsync(payload.OrderCode.Trim(), cancellationToken);
         Post(new WebMessageResponse("license.payment.status", request.RequestId, status));
-        if (!status.IsFulfilled)
+        if (!status.IsFulfilled || status.IsScheduled)
         {
             return;
         }
@@ -442,7 +447,7 @@ internal sealed partial class DashboardBridge : IDisposable
             return;
         }
 
-        if (license.AssignedOrganizationId is { } assignedOrganizationId)
+        if (!TOOL_SHARED.Contracts.Accounts.LicenseProductPolicy.IsLocalOnly(license.FeatureFlagsJson) && license.AssignedOrganizationId is { } assignedOrganizationId)
         {
             await _generationClient.SelectOrganizationAsync(assignedOrganizationId, cancellationToken);
         }
@@ -1785,6 +1790,16 @@ internal sealed partial class DashboardBridge : IDisposable
                         [])));
                 return;
             }
+            if (TOOL_SHARED.Contracts.Accounts.LicenseProductPolicy.IsLocalOnly(_licenseManager.Current?.FeatureFlagsJson))
+            {
+                _selectedProjectId = null;
+                Post(new WebMessageResponse("dashboard.state", requestId, new DashboardStateResponse(
+                    current.User, [], Guid.Empty, [], null, null, [],
+                    new GenerationProviderStatusResponse(false, null, false, null),
+                    await _mediaToolPreflight.GetStatusAsync(force: false, cancellationToken),
+                    _licenseManager.Current, false, new DashboardFeatureFlagsResponse(_vietsubEnabled, false, false, false), [])));
+                return;
+            }
             var organizations = await _generationClient.GetOrganizationsAsync(cancellationToken);
             if (organizations.Count == 0)
             {
@@ -1800,6 +1815,16 @@ internal sealed partial class DashboardBridge : IDisposable
                 await _generationClient.SelectOrganizationAsync(selectedOrganizationId.Value, cancellationToken);
             }
 
+            if (!TOOL_SHARED.Contracts.Accounts.LicenseProductPolicy.VideoAllowed(_licenseManager.Current?.FeatureFlagsJson))
+            {
+                _selectedProjectId = null;
+                Post(new WebMessageResponse("dashboard.state", requestId, new DashboardStateResponse(
+                    current.User, organizations, selectedOrganizationId.Value, [], null, null, [],
+                    new GenerationProviderStatusResponse(false, null, false, null),
+                    await _mediaToolPreflight.GetStatusAsync(force: false, cancellationToken),
+                    _licenseManager.Current, false, new DashboardFeatureFlagsResponse(_vietsubEnabled, false, false, false), [])));
+                return;
+            }
             var allProjects = await _projectService.ListAsync(current.User.UserId, cancellationToken);
             var projects = allProjects
                 .Where(x => x.OrganizationId == selectedOrganizationId.Value)

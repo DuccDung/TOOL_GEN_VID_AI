@@ -1,9 +1,12 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using TOOL_SERVER.Accounts;
 using TOOL_SERVER.Authentication;
 using TOOL_SERVER.Data;
 using TOOL_SERVER.Domain.Accounts;
 using TOOL_SERVER.Domain.Organizations;
+using TOOL_SERVER.Vietsub.Translation;
+using TOOL_SHARED.Contracts.Accounts;
 
 namespace TOOL_SERVER.Organizations;
 
@@ -54,7 +57,9 @@ public interface IOrganizationSeatProvisioningService
 public sealed class OrganizationSeatProvisioningService(
     AccountDbContext dbContext,
     ILogger<OrganizationSeatProvisioningService> logger,
-    IOrganizationProvisioningReadinessEvaluator? readinessEvaluator = null) : IOrganizationSeatProvisioningService
+    IOrganizationProvisioningReadinessEvaluator? readinessEvaluator = null,
+    TimeProvider? timeProvider = null,
+    IOptions<VietsubCloudTranslationOptions>? cloudOptions = null) : IOrganizationSeatProvisioningService
 {
     private static readonly string[] OpenAssignmentStatuses =
     [
@@ -74,6 +79,7 @@ public sealed class OrganizationSeatProvisioningService(
 
         var mappings = await (
                 from mapping in dbContext.LicensePlanOrganizationPools.AsNoTracking()
+                join plan in dbContext.LicensePlans.AsNoTracking() on mapping.LicensePlanId equals plan.LicensePlanId
                 join pool in dbContext.OrganizationPools.AsNoTracking()
                     on mapping.OrganizationPoolId equals pool.OrganizationPoolId
                 where licensePlanIds.Contains(mapping.LicensePlanId) &&
@@ -83,7 +89,9 @@ public sealed class OrganizationSeatProvisioningService(
                 {
                     mapping.LicensePlanId,
                     pool.OrganizationPoolId,
-                    pool.Name
+                    pool.Name,
+                    plan.FeatureFlagsJson,
+                    mapping.DefaultMemberMonthlyBudgetLimit
                 })
             .ToListAsync(cancellationToken);
 
@@ -96,31 +104,17 @@ public sealed class OrganizationSeatProvisioningService(
                         on configured.OrganizationId equals organization.OrganizationId
                     where poolIds.Contains(configured.OrganizationPoolId) &&
                           configured.IsAutoAssignmentEnabled &&
-                          configured.IsReady &&
                           organization.Status == OrganizationStatuses.Active
                     select new
                     {
                         configured.OrganizationPoolId,
                         configured.OrganizationId,
+                        configured.IsReady,
                         Available = configured.SeatCapacity - configured.ActiveSeatCount - configured.ReservedSeatCount
                     })
                 .ToListAsync(cancellationToken);
 
-        if (readinessEvaluator is not null)
-        {
-            var readiness = new Dictionary<Guid, bool>();
-            foreach (var organizationId in capacities.Select(x => x.OrganizationId).Distinct())
-            {
-                readiness[organizationId] = (await readinessEvaluator.EvaluateAsync(
-                    organizationId,
-                    cancellationToken)).Ready;
-            }
-            capacities = capacities.Where(x => readiness.GetValueOrDefault(x.OrganizationId)).ToList();
-        }
-
-        var availableByPool = capacities
-            .GroupBy(x => x.OrganizationPoolId)
-            .ToDictionary(x => x.Key, x => Math.Max(0, x.Sum(y => Math.Max(0, y.Available))));
+        var legacyReadiness = new Dictionary<Guid, bool>();
         var result = new Dictionary<Guid, OrganizationSeatAvailability>();
         foreach (var planId in licensePlanIds)
         {
@@ -131,7 +125,30 @@ public sealed class OrganizationSeatProvisioningService(
                 continue;
             }
 
-            var available = availableByPool.GetValueOrDefault(mapping.OrganizationPoolId);
+            var available = 0;
+            foreach (var row in capacities.Where(x => x.OrganizationPoolId == mapping.OrganizationPoolId && x.Available > 0))
+            {
+                var now = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime;
+                if (LicenseProductPolicy.Scope(mapping.FeatureFlagsJson) == LicenseProductPolicy.Vietsub)
+                {
+                    if (!(await VietsubPlanReadiness.EvaluateAsync(dbContext, row.OrganizationId,
+                        LicenseProductPolicy.CloudAllowed(mapping.FeatureFlagsJson), mapping.DefaultMemberMonthlyBudgetLimit,
+                        now, cloudOptions?.Value, cancellationToken)).Ready) continue;
+                }
+                else
+                {
+                    if (!row.IsReady) continue;
+                    if (readinessEvaluator is not null)
+                    {
+                        if (!legacyReadiness.TryGetValue(row.OrganizationId, out var ready))
+                            legacyReadiness[row.OrganizationId] = ready = (await readinessEvaluator.EvaluateAsync(row.OrganizationId, cancellationToken)).Ready;
+                        if (!ready) continue;
+                    }
+                    if (AdminSetupCapabilityReadiness.Required(mapping.FeatureFlagsJson) &&
+                        !await AdminSetupCapabilityReadiness.ReadyAsync(dbContext, row.OrganizationId, mapping.DefaultMemberMonthlyBudgetLimit, now, cancellationToken)) continue;
+                }
+                available = (int)Math.Min(int.MaxValue, (long)available + row.Available);
+            }
             result[planId] = new(planId, true, available > 0, mapping.Name, available);
         }
 
@@ -148,6 +165,18 @@ public sealed class OrganizationSeatProvisioningService(
             cancellationToken);
         if (existing is not null && OpenAssignmentStatuses.Contains(existing.Status))
         {
+            if (existing.Status == OrganizationSeatAssignmentStatuses.Reserved && payment.Status == LicensePaymentStatuses.Paid)
+            {
+                var flags = payment.EntitlementSnapshotJson ?? await dbContext.LicensePlans.AsNoTracking()
+                    .Where(x => x.LicensePlanId == payment.LicensePlanId).Select(x => x.FeatureFlagsJson).SingleAsync(cancellationToken);
+                var quota = await dbContext.LicensePlanOrganizationPools.AsNoTracking().Where(x => x.LicensePlanId == payment.LicensePlanId)
+                    .Select(x => x.DefaultMemberMonthlyBudgetLimit).SingleOrDefaultAsync(cancellationToken);
+                var check = LicenseProductPolicy.Scope(flags) == LicenseProductPolicy.Vietsub
+                    ? await VietsubPlanReadiness.EvaluateAsync(dbContext, existing.OrganizationId, LicenseProductPolicy.CloudAllowed(flags),
+                        quota, now, cloudOptions?.Value, cancellationToken)
+                    : readinessEvaluator is null ? null : await readinessEvaluator.EvaluateAsync(existing.OrganizationId, cancellationToken);
+                if (check is { Ready: false }) throw Conflict("organization_not_ready", check.Message);
+            }
             return existing;
         }
 
@@ -168,25 +197,30 @@ public sealed class OrganizationSeatProvisioningService(
                 "license_plan_pool_not_configured",
                 "Gói chưa được liên kết với cụm tổ chức đang hoạt động.");
 
+        var planFlags = payment.EntitlementSnapshotJson ?? await dbContext.LicensePlans.AsNoTracking()
+            .Where(x => x.LicensePlanId == payment.LicensePlanId).Select(x => x.FeatureFlagsJson).SingleOrDefaultAsync(cancellationToken);
+        var vietsubOnly = LicenseProductPolicy.Scope(planFlags) == LicenseProductPolicy.Vietsub;
         var configuredOrganizations = await (
                 from configured in dbContext.OrganizationPoolOrganizations
                 join organization in dbContext.Organizations
                     on configured.OrganizationId equals organization.OrganizationId
                 where configured.OrganizationPoolId == mapping.Pool.OrganizationPoolId &&
                       configured.IsAutoAssignmentEnabled &&
-                      configured.IsReady &&
+                      (vietsubOnly || configured.IsReady) &&
                       organization.Status == OrganizationStatuses.Active
                 select new Candidate(configured, organization))
             .ToListAsync(cancellationToken);
 
-        if (readinessEvaluator is not null)
+        if (readinessEvaluator is not null || vietsubOnly)
         {
             var readyCandidates = new List<Candidate>(configuredOrganizations.Count);
             foreach (var candidate in configuredOrganizations)
             {
-                var readiness = await readinessEvaluator.EvaluateAsync(
-                    candidate.Configuration.OrganizationId,
-                    cancellationToken);
+                var readiness = vietsubOnly
+                    ? await VietsubPlanReadiness.EvaluateAsync(dbContext, candidate.Configuration.OrganizationId,
+                        LicenseProductPolicy.CloudAllowed(planFlags), mapping.Mapping.DefaultMemberMonthlyBudgetLimit,
+                        now, cloudOptions?.Value, cancellationToken)
+                    : await readinessEvaluator!.EvaluateAsync(candidate.Configuration.OrganizationId, cancellationToken);
                 if (readiness.Ready)
                 {
                     readyCandidates.Add(candidate);
@@ -204,6 +238,15 @@ public sealed class OrganizationSeatProvisioningService(
         }
 
         var configuredIds = configuredOrganizations.Select(x => x.Configuration.OrganizationId).ToArray();
+        if (AdminSetupCapabilityReadiness.Required(planFlags))
+        {
+            var ready = new List<Candidate>();
+            foreach (var candidate in configuredOrganizations)
+                if (await AdminSetupCapabilityReadiness.ReadyAsync(dbContext, candidate.Configuration.OrganizationId,
+                    mapping.Mapping.DefaultMemberMonthlyBudgetLimit, now, cancellationToken)) ready.Add(candidate);
+            configuredOrganizations = ready;
+            configuredIds = configuredOrganizations.Select(x => x.Configuration.OrganizationId).ToArray();
+        }
         var existingMemberships = configuredIds.Length == 0
             ? []
             : await dbContext.OrganizationMembers
@@ -519,10 +562,23 @@ public sealed class OrganizationSeatProvisioningService(
         }
 
         var scheduled = await dbContext.OrganizationSeatAssignments
-            .Where(x => x.Status == OrganizationSeatAssignmentStatuses.Scheduled && x.StartsAtUtc <= now)
+            .Where(x => x.Status == OrganizationSeatAssignmentStatuses.Scheduled)
             .ToListAsync(cancellationToken);
         foreach (var assignment in scheduled)
         {
+            var license = await dbContext.UserLicenses.AsNoTracking().Include(x => x.LicensePlan)
+                .SingleOrDefaultAsync(x => x.UserLicenseId == assignment.UserLicenseId, cancellationToken);
+            if (license is not null && LicenseProductPolicy.IsLocalOnly(license.EntitlementSnapshotJson ?? license.LicensePlan.FeatureFlagsJson))
+            {
+                await ReleaseAsync(assignment, "local_license_only", now, cancellationToken);
+                continue;
+            }
+            if (assignment.StartsAtUtc > now) continue;
+            if (license is null || license.RevokedAtUtc != null || license.Status is not ("Active" or "Trial") || license.ExpiresAtUtc <= now)
+            {
+                await ReleaseAsync(assignment, "scheduled_license_inactive", now, cancellationToken);
+                continue;
+            }
             var configuration = await FindConfigurationAsync(assignment, cancellationToken);
             if (assignment.ConsumesSeat)
             {
@@ -547,7 +603,7 @@ public sealed class OrganizationSeatProvisioningService(
                       (assignment.EndsAtUtc <= now ||
                        license.Status == "Suspended" ||
                        license.Status == "Revoked" ||
-                       license.Status == "Expired")
+                       license.Status == "Expired" || license.RevokedAtUtc != null)
                 select assignment)
             .ToListAsync(cancellationToken);
         foreach (var assignment in ended)

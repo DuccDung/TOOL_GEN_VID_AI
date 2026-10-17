@@ -3,9 +3,75 @@ param(
     [switch]$ArtifactOnly,
     [string]$PublishRoot = '',
     [string]$Workspace = '',
-    [switch]$VerifyOnly
+    [switch]$VerifyOnly,
+    [string]$FailureReportPath = ''
 )
 $ErrorActionPreference = 'Stop'
+function Resolve-PiperFailureReportPath([string]$Path) {
+    if (-not $Path) { return '' }
+    # Windows PowerShell 5.1 lacks Path.IsPathFullyQualified. Reject C:relative and
+    # root-relative paths explicitly rather than resolving them against a hidden CWD.
+    if ($Path -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])') {
+        throw 'FailureReportPath must be a new fully qualified diagnostic file.'
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    if (Test-Path -LiteralPath $full) { throw 'FailureReportPath must not overwrite an existing file.' }
+    $parent = [IO.Path]::GetDirectoryName($full)
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) { throw 'FailureReportPath requires an existing diagnostic directory.' }
+    for ($item = New-Object IO.DirectoryInfo $parent; $null -ne $item; $item = $item.Parent) {
+        if ($item.Exists -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'FailureReportPath cannot traverse a reparse point.'
+        }
+    }
+    return $full
+}
+function Read-PiperProbeReport([string]$JsonText) {
+    # Native crashes can terminate before the managed CLI emits a report. Never
+    # echo a parser exception containing arbitrary stdout into diagnostics.
+    try {
+        if ([string]::IsNullOrWhiteSpace($JsonText) -or $JsonText.Length -gt 65536) { throw 'Invalid report size.' }
+        $parsed = $JsonText | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $parsed -or $parsed.GetType() -ne [System.Management.Automation.PSCustomObject]) { throw 'Invalid report shape.' }
+        if ($parsed.PiperOfflineReady -isnot [bool] -or
+            ($parsed.PiperOfflineReady -and ($parsed.NetworkDownloadsAllowed -isnot [bool] -or $parsed.NetworkDownloadsAllowed))) {
+            throw 'Invalid report status types.'
+        }
+        return $parsed
+    } catch { return [pscustomobject]@{ PiperOfflineReady = $false; ErrorCode = 'piper_offline_invalid_report'; Diagnostic = $null } }
+}
+function ConvertTo-PiperSafeFailureReport {
+    param([object]$Report, [int]$ProcessExitCode)
+    $safeCode = if ($Report.ErrorCode -is [string] -and $Report.ErrorCode -cmatch '^[A-Za-z0-9_]{1,80}$') { $Report.ErrorCode } else { 'invalid_report' }
+    $safe = [ordered]@{ PiperOfflineReady = $false; ErrorCode = $safeCode; ProcessExitCode = $ProcessExitCode; Diagnostic = $null }
+    $details = $Report.Diagnostic
+    if ($null -eq $details) { return [pscustomobject]$safe }
+    $fields = @('SchemaVersion','Phase','FailureKind','ExitCode','NativeErrorCode','HResult',
+        'RuntimeRootCharacters','EmbeddedPythonPathCharacters','EnvironmentPathCharacters')
+    if (@($details.PSObject.Properties).Count -ne $fields.Count -or
+        @($details.PSObject.Properties | Where-Object { $_.Name -cnotin $fields }).Count -gt 0 -or
+        ($details.SchemaVersion -isnot [int] -and $details.SchemaVersion -isnot [long]) -or $details.SchemaVersion -ne 1 -or
+        $details.Phase -isnot [string] -or $details.FailureKind -isnot [string] -or
+        $details.Phase -cnotin @('UNKNOWN','VALIDATE','EXTRACT','PROMOTE','PYTHON','PACKAGES','PROBE','READY') -or
+        $details.FailureKind -cnotin @('PROCESS_EXIT','PATH_TOO_LONG','PROCESS_START_FAILED','ACCESS_DENIED','FILE_IO_FAILED','COMPONENT_REJECTED')) {
+        return [pscustomobject]$safe
+    }
+    foreach ($field in @('ExitCode','NativeErrorCode','HResult')) {
+        $value = $details.$field
+        if ($null -ne $value -and (($value -isnot [int] -and $value -isnot [long]) -or
+            $value -lt [int]::MinValue -or $value -gt [int]::MaxValue)) { return [pscustomobject]$safe }
+    }
+    foreach ($field in @('RuntimeRootCharacters','EmbeddedPythonPathCharacters','EnvironmentPathCharacters')) {
+        $value = $details.$field
+        if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 100000) {
+            return [pscustomobject]$safe
+        }
+    }
+    $approvedDetails = [ordered]@{}
+    foreach ($field in $fields) { $approvedDetails[$field] = $details.$field }
+    $safe.Diagnostic = [pscustomobject]$approvedDetails
+    return [pscustomobject]$safe
+}
+$FailureReportPath = Resolve-PiperFailureReportPath $FailureReportPath
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $approved = Get-Content -LiteralPath (Join-Path $repoRoot 'third_party/voice/PIPER_OFFLINE_APPROVED.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $BundleDirectory) {
@@ -62,10 +128,20 @@ try {
     $stderr = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit(600000)) { throw 'Piper offline probe timed out.' }
     $null = $stderr.GetAwaiter().GetResult()
-    $report = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json
+    $report = Read-PiperProbeReport ($stdout.GetAwaiter().GetResult())
     if ($process.ExitCode -ne 0 -or $report.PiperOfflineReady -ne $true -or $report.NetworkDownloadsAllowed -ne $false) {
-        $code = if ($report.ErrorCode -match '^[A-Za-z0-9_]{1,80}$') { $report.ErrorCode } else { 'invalid_report' }
-        throw "Piper offline probe failed: $code"
+        $failure = ConvertTo-PiperSafeFailureReport -Report $report -ProcessExitCode $process.ExitCode
+        $failureJson = $failure | ConvertTo-Json -Depth 4 -Compress
+        if ($FailureReportPath) {
+            $reportStream = [IO.File]::Open([IO.Path]::GetFullPath($FailureReportPath), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+                $reportBytes = [Text.Encoding]::UTF8.GetBytes($failureJson)
+                $reportStream.Write($reportBytes, 0, $reportBytes.Length)
+                $reportStream.Flush($true)
+            } finally { $reportStream.Dispose() }
+        }
+        Write-Output $failureJson
+        throw ('Piper offline probe failed: ' + $failure.ErrorCode)
     }
     $report
 }

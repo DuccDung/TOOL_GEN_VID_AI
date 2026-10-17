@@ -370,7 +370,8 @@ internal sealed class VietsubProjectStore
 
     private static void ValidateOwner(Guid organizationId, string ownerUserId)
     {
-        if (organizationId == Guid.Empty || string.IsNullOrWhiteSpace(ownerUserId))
+        // Guid.Empty explicitly selects personal scope; ownership is still mandatory and checked on every open/list.
+        if (string.IsNullOrWhiteSpace(ownerUserId))
         {
             throw new ArgumentException("Tổ chức hoặc tài khoản Vietsub không hợp lệ.");
         }
@@ -390,7 +391,6 @@ internal sealed class VietsubProjectStore
     {
         if (manifest.SchemaVersion != VietsubProjectManifest.CurrentSchemaVersion
             || manifest.ProjectId == Guid.Empty
-            || manifest.OrganizationId == Guid.Empty
             || string.IsNullOrWhiteSpace(manifest.OwnerUserId)
             || !string.Equals(manifest.TargetLanguageCode, "vi", StringComparison.OrdinalIgnoreCase))
         {

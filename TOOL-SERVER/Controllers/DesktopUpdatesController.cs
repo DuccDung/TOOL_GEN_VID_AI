@@ -17,11 +17,16 @@ public sealed class DesktopUpdatesController(IDesktopReleaseService releaseServi
         [FromQuery] int buildNumber,
         [FromQuery] string channel = "Stable",
         [FromQuery] string platform = "win-x64",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        [FromQuery] int distributionProtocol = DesktopDistributionProtocol.Legacy,
+        [FromQuery] string profile = "Production")
     {
-        var package = await releaseService.GetLatestPackageAsync(platform, channel, cancellationToken);
+        if (distributionProtocol == DesktopDistributionProtocol.Shared && !releaseService.SupportsSharedProfile(profile)) return new(false, false, null);
+        var package = await releaseService.GetLatestPackageAsync(platform, channel, distributionProtocol, cancellationToken);
         if (package is null ||
-            !DesktopVersionComparer.IsReleaseNewer(package.Release.Version, package.Release.BuildNumber, version, buildNumber))
+            !(distributionProtocol == DesktopDistributionProtocol.Shared
+                ? DesktopReleaseVersionPolicy.IsReleaseNewerVersionFirst(package.Release.Version, package.Release.BuildNumber, version, buildNumber)
+                : DesktopVersionComparer.IsReleaseNewer(package.Release.Version, package.Release.BuildNumber, version, buildNumber)))
         {
             return new DesktopUpdateCheckResponse(false, false, null);
         }
@@ -38,14 +43,17 @@ public sealed class DesktopUpdatesController(IDesktopReleaseService releaseServi
         [FromQuery] int buildNumber,
         [FromQuery] string channel = "Stable",
         [FromQuery] string platform = "win-x64",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        [FromQuery] int distributionProtocol = DesktopDistributionProtocol.Legacy,
+        [FromQuery] string profile = "Production")
     {
+        if (distributionProtocol == DesktopDistributionProtocol.Shared && !releaseService.SupportsSharedProfile(profile)) return NotFound();
         if (string.IsNullOrWhiteSpace(version) || buildNumber <= 0)
         {
             return BadRequest();
         }
 
-        var packages = await releaseService.GetVisiblePackagesAsync(platform, channel, cancellationToken);
+        var packages = await releaseService.GetVisiblePackagesAsync(platform, channel, distributionProtocol, cancellationToken);
         var package = packages.FirstOrDefault(candidate =>
             candidate.Release.BuildNumber == buildNumber &&
             string.Equals(candidate.Release.Version, version.Trim(), StringComparison.OrdinalIgnoreCase));

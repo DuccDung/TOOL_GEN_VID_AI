@@ -5,7 +5,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ExpectedMarker = 'admin-square-20260923.1',
+    [string]$ExpectedMarker = 'admin-only-new-20261014.1',
 
     [Parameter()]
     [switch]$SkipCertificateCheck
@@ -56,9 +56,16 @@ function Get-AssetUri {
     foreach ($match in [regex]::Matches($Html, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
         $reference = [System.Net.WebUtility]::HtmlDecode($match.Groups['value'].Value)
         $candidate = [uri]::new($AdminUrl, $reference)
-        if ($candidate.AbsolutePath.Equals($ExpectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-            if ($candidate.Query -notmatch '(^\?|&)v=[^&]+') {
-                Throw-RuntimeMismatch "Asset '$ExpectedPath' does not have a cache-busting 'v' query."
+        $extension = [System.IO.Path]::GetExtension($ExpectedPath)
+        $stem = $ExpectedPath.Substring(0, $ExpectedPath.Length - $extension.Length)
+        $fingerprintPattern = '^' + [regex]::Escape($stem) + '\.[a-z0-9_-]{8,}' + [regex]::Escape($extension) + '$'
+        $isFingerprint = $candidate.AbsolutePath -match $fingerprintPattern
+        if ($candidate.AbsolutePath.Equals($ExpectedPath, [System.StringComparison]::OrdinalIgnoreCase) -or $isFingerprint) {
+            if (-not $candidate.IsLoopback -or $candidate.Authority -ne $AdminUrl.Authority) {
+                Throw-RuntimeMismatch "Asset '$ExpectedPath' must be served by the same local origin."
+            }
+            if (-not $isFingerprint -and $candidate.Query -notmatch '(^\?|&)v=[^&]+') {
+                Throw-RuntimeMismatch "Asset '$ExpectedPath' must have a fingerprint or cache-busting 'v' query."
             }
             return $candidate
         }
@@ -107,10 +114,34 @@ if ($cacheControl -notmatch 'no-store') {
 $cssUri = Get-AssetUri -Html $html -Attribute href -ExpectedPath '/admin/admin.css'
 $adminScriptUri = Get-AssetUri -Html $html -Attribute src -ExpectedPath '/admin/admin.js'
 $organizationScriptUri = Get-AssetUri -Html $html -Attribute src -ExpectedPath '/admin/admin-organizations.js'
+$composerCssUri = Get-AssetUri -Html $html -Attribute href -ExpectedPath '/admin/admin-plan-composer.css'
+$composerScriptUri = Get-AssetUri -Html $html -Attribute src -ExpectedPath '/admin/admin-plan-composer.js'
+$pagesScriptUri = Get-AssetUri -Html $html -Attribute src -ExpectedPath '/admin/admin-pages.js'
+$dialogsScriptUri = Get-AssetUri -Html $html -Attribute src -ExpectedPath '/admin/admin-dialogs.js'
+$modulesCssUri = Get-AssetUri -Html $html -Attribute href -ExpectedPath '/admin/admin-modules.css'
+$setupCssUri = Get-AssetUri -Html $html -Attribute href -ExpectedPath '/admin/admin-setup-wizard.css'
+$setupScriptUri = Get-AssetUri -Html $html -Attribute src -ExpectedPath '/admin/admin-setup-wizard.js'
 
 $css = [string](Invoke-ReadOnlyRequest -Uri $cssUri).Content
 $adminScript = [string](Invoke-ReadOnlyRequest -Uri $adminScriptUri).Content
 $organizationScript = [string](Invoke-ReadOnlyRequest -Uri $organizationScriptUri).Content
+$composerCss = [string](Invoke-ReadOnlyRequest -Uri $composerCssUri).Content
+$composerScript = [string](Invoke-ReadOnlyRequest -Uri $composerScriptUri).Content
+$pagesScript = [string](Invoke-ReadOnlyRequest -Uri $pagesScriptUri).Content
+$dialogsScript = [string](Invoke-ReadOnlyRequest -Uri $dialogsScriptUri).Content
+$css += [string](Invoke-ReadOnlyRequest -Uri $modulesCssUri).Content
+$setupCss = [string](Invoke-ReadOnlyRequest -Uri $setupCssUri).Content
+$setupScript = [string](Invoke-ReadOnlyRequest -Uri $setupScriptUri).Content
+foreach ($token in @('admin-setup-20261014.1', '/api/admin/setup', 'data-sepay', 'data-reconcile', 'configuration')) {
+    if ($setupScript.IndexOf($token, [System.StringComparison]::Ordinal) -lt 0) {
+        Throw-RuntimeMismatch "Served setup wizard is missing '$token'."
+    }
+}
+foreach ($selector in @('.setup-columns', '.setup-steps', '.setup-footer', '.setup-summary')) {
+    if ($setupCss.IndexOf($selector, [System.StringComparison]::Ordinal) -lt 0) {
+        Throw-RuntimeMismatch "Served setup CSS is missing '$selector'."
+    }
+}
 
 $requiredCssSelectors = @(
     '.admin-build-marker',
@@ -129,7 +160,7 @@ $requiredCssSelectors = @(
     '.pool-list-summary',
     '.pool-detail-panel.standalone',
     '.pool-back-button',
-    '.pool-setup-checklist',
+    '.pool-members',
     '.readiness-explanation'
 )
 foreach ($selector in $requiredCssSelectors) {
@@ -149,8 +180,32 @@ foreach ($token in @('returnToSetupButton', 'videoMakerAdminShell')) {
     }
 }
 foreach ($token in @('setup-center-hero', 'role="progressbar"', 'data-setup-next', 'pool-list-summary', 'pool-detail-panel standalone')) {
-    if ($organizationScript.IndexOf($token, [System.StringComparison]::Ordinal) -lt 0) {
+    if (($organizationScript + $pagesScript).IndexOf($token, [System.StringComparison]::Ordinal) -lt 0) {
         Throw-RuntimeMismatch "Served admin-organizations.js is missing token '$token'."
+    }
+}
+if ($html -notmatch 'data-admin-ui-generation="2"' -or $html -notmatch 'id="homeLaunch"' -or $html -match 'id="userOverview"|id="planOverview"|license-overview-grid') {
+    Throw-RuntimeMismatch 'HTML must contain only the new default Admin layout.'
+}
+if ($pagesScript -notmatch 'function overview' -or $dialogsScript -notmatch 'videoMakerAdminDialogs') {
+    Throw-RuntimeMismatch 'New page and shared dialog modules were not served.'
+}
+
+foreach ($token in @('function priceValue', 'function formatPrice', 'status-check')) {
+    if ($composerScript.IndexOf($token, [System.StringComparison]::Ordinal) -lt 0) {
+        Throw-RuntimeMismatch "Served composer script is missing '$token'."
+    }
+}
+if ($composerCss -notmatch '\.plan-composer\s*\{\s*width:\s*100%') {
+    Throw-RuntimeMismatch 'Served composer CSS still has the previous constrained alignment.'
+}
+foreach ($fontPath in @('/admin/fonts/roboto-latin.woff2', '/admin/fonts/roboto-vietnamese.woff2')) {
+    if ($css.IndexOf($fontPath, [System.StringComparison]::Ordinal) -lt 0) {
+        Throw-RuntimeMismatch "Served CSS does not reference local font '$fontPath'."
+    }
+    $fontResponse = Invoke-ReadOnlyRequest -Uri ([uri]::new($AdminUrl, $fontPath))
+    if ([string]$fontResponse.Headers['Content-Type'] -notmatch 'font/woff2|application/font-woff') {
+        Throw-RuntimeMismatch "Local font '$fontPath' was not served as WOFF2."
     }
 }
 
@@ -160,5 +215,8 @@ foreach ($token in @('setup-center-hero', 'role="progressbar"', 'data-setup-next
     Marker = $actualMarker
     HtmlCacheControl = $cacheControl
     CssUrl = $cssUri.AbsoluteUri
-    JavaScriptUrls = @($adminScriptUri.AbsoluteUri, $organizationScriptUri.AbsoluteUri)
+    ComposerCssUrl = $composerCssUri.AbsoluteUri
+    SetupCssUrl = $setupCssUri.AbsoluteUri
+    JavaScriptUrls = @($adminScriptUri.AbsoluteUri, $organizationScriptUri.AbsoluteUri, $composerScriptUri.AbsoluteUri, $pagesScriptUri.AbsoluteUri, $dialogsScriptUri.AbsoluteUri, $setupScriptUri.AbsoluteUri)
+    LocalFonts = 'Roboto Latin + Vietnamese'
 }

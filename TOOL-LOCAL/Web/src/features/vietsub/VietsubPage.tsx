@@ -72,6 +72,13 @@ export type VietsubPageProps = {
 export function VietsubPage(props: VietsubPageProps) {
   const { state, onRefresh } = props;
 
+  if (!state.enabled) {
+    return <div className="page-shell vietsub-page"><article className="card" role="status">
+      <h2>Dịch phụ đề chưa sẵn sàng</h2>
+      <p>Tính năng chưa được bật hoặc hệ thống chưa hoàn tất kiểm tra. Hãy hoàn tất Setup hệ thống; nếu tính năng đang tắt, liên hệ quản trị viên.</p>
+    </article></div>;
+  }
+
   return (
     <div className={`page-shell vietsub-page ${state.selectedProject ? 'vietsub-page--editor' : 'vietsub-page--library'}`}>
       {state.errorMessage && (

@@ -22,6 +22,7 @@ internal sealed class VietsubProjectManifest
 
     public Guid ProjectId { get; set; }
 
+    // Guid.Empty represents a personal Local project. Existing organization projects retain their scope.
     public Guid OrganizationId { get; set; }
 
     public string OwnerUserId { get; set; } = string.Empty;

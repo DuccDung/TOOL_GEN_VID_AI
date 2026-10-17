@@ -159,6 +159,17 @@ public sealed class VietsubTranslationWorkerClientTests
             result.AvxLevel.ToLowerInvariant());
     }
 
+    [Theory]
+    [InlineData("backend-preflight-log-failure")]
+    [InlineData("backend-preflight-log-oom")]
+    public async Task Diagnostic_writer_failure_does_not_escape_the_native_log_callback(string mode)
+    {
+        await using var client = CreateClient(mode);
+        var result = await client.LoadAsync(CreateLoadRequest(), null, CancellationToken.None);
+        Assert.StartsWith("cpu-", result.BackendIdentity, StringComparison.Ordinal);
+        Assert.True(client.IsLoaded(result.ConfigFingerprint));
+    }
+
     [Fact]
     public async Task Missing_native_backend_is_reported_without_crashing_client()
     {

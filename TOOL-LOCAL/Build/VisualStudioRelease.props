@@ -1,0 +1,42 @@
+<Project>
+  <PropertyGroup>
+    <_VideoMakerPublishProfileName Condition="'$(PublishProfile)' != ''">$([System.IO.Path]::GetFileNameWithoutExtension('$(PublishProfile)'))</_VideoMakerPublishProfileName>
+    <_VideoMakerPublishProfileName Condition="'$(_VideoMakerPublishProfileName)' == '' and '$(WebPublishProfileFile)' != ''">$([System.IO.Path]::GetFileNameWithoutExtension('$(WebPublishProfileFile)'))</_VideoMakerPublishProfileName>
+    <_VideoMakerPublishProfileName Condition="'$(_VideoMakerPublishProfileName)' == '' and '$(PublishProfileFullPath)' != ''">$([System.IO.Path]::GetFileNameWithoutExtension('$(PublishProfileFullPath)'))</_VideoMakerPublishProfileName>
+    <DesktopVisualStudioPackageEnabled Condition="'$(DesktopVisualStudioPackageEnabled)' == '' and '$(_VideoMakerPublishProfileName)' == 'FolderProfile'">true</DesktopVisualStudioPackageEnabled>
+  </PropertyGroup>
+
+  <!-- This file contains paths/identities only, never SQL/provider credentials. -->
+  <Import Project="$(MSBuildProjectDirectory)\Properties\PublishProfiles\FolderProfile.local.props"
+          Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true' and Exists('$(MSBuildProjectDirectory)\Properties\PublishProfiles\FolderProfile.local.props')" />
+
+  <PropertyGroup Condition="'$(DesktopVisualStudioPackageEnabled)' == 'true'">
+    <Version Condition="'$(DesktopPublishVersion)' != ''">$(DesktopPublishVersion)</Version>
+    <DesktopBuildNumber Condition="'$(DesktopPublishBuildNumber)' != ''">$(DesktopPublishBuildNumber)</DesktopBuildNumber>
+    <DesktopDistributionProtocol>3</DesktopDistributionProtocol>
+    <DesktopReleaseProfile Condition="'$(DesktopReleaseProfile)' == ''">Production</DesktopReleaseProfile>
+    <StaticModelSetupRequired>true</StaticModelSetupRequired>
+    <StaticModelReleaseChannel>Stable</StaticModelReleaseChannel>
+    <IncludePiperOfflinePayload>false</IncludePiperOfflinePayload>
+    <RequirePiperOfflineBundle>false</RequirePiperOfflineBundle>
+    <RequireMediaToolBundle>true</RequireMediaToolBundle>
+    <InformationalVersion>$(Version)+desktopbuild.$(DesktopBuildNumber)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
+    <DesktopMinimumBootstrapperVersion Condition="'$(DesktopMinimumBootstrapperVersion)' == ''">1.0.0</DesktopMinimumBootstrapperVersion>
+    <DesktopDeploymentSettingsPath Condition="'$(DesktopDeploymentSettingsPath)' == ''">$(MSBuildProjectDirectory)\appsettings.release.json</DesktopDeploymentSettingsPath>
+    <DesktopWebView2InstallerPath Condition="'$(DesktopWebView2InstallerPath)' == ''">$(MSBuildProjectDirectory)\..\artifacts\prerequisites\webview2-runtime-x64.exe</DesktopWebView2InstallerPath>
+    <DesktopPackageOutputRoot Condition="'$(DesktopPackageOutputRoot)' == ''">$(MSBuildProjectDirectory)\..\artifacts\releases</DesktopPackageOutputRoot>
+    <!-- DirectCatalog uses a plain ZIP with its SHA-256 in the filename.
+         Setup creates local metadata only after verifying the archive.
+         The older metadata-rich packager remains an explicit option. -->
+    <DesktopCreateVerifiedReleaseZip Condition="'$(DesktopCreateVerifiedReleaseZip)' == ''">false</DesktopCreateVerifiedReleaseZip>
+    <DesktopCreateCanonicalReleaseZip Condition="'$(DesktopCreateCanonicalReleaseZip)' == ''">true</DesktopCreateCanonicalReleaseZip>
+    <DesktopCanonicalPackageOutputRoot Condition="'$(DesktopCanonicalPackageOutputRoot)' == ''">$(DesktopPackageOutputRoot)\direct</DesktopCanonicalPackageOutputRoot>
+    <DesktopAllowTransitionalSql Condition="'$(DesktopAllowTransitionalSql)' == ''">true</DesktopAllowTransitionalSql>
+    <!-- The ordinary Folder Publish prepares this pinned technical bundle offline.
+         A caller supplying a different bundle keeps its explicit release input. -->
+    <DesktopPrepareApprovedFfmpegBundle Condition="'$(DesktopPrepareApprovedFfmpegBundle)' == '' and '$(FfmpegBundleDirectory)' == ''">true</DesktopPrepareApprovedFfmpegBundle>
+    <FfmpegBundleDirectory Condition="'$(FfmpegBundleDirectory)' == ''">$(MSBuildProjectDirectory)\..\artifacts\ffmpeg-release\gyan-9.0.1-essentials-win-x64</FfmpegBundleDirectory>
+  </PropertyGroup>
+</Project>

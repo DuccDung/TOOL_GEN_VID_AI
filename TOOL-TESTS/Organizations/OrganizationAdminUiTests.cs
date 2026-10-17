@@ -42,7 +42,7 @@ public sealed class OrganizationAdminUiTests
         Assert.Contains("provider.isEnabled", script);
         Assert.Contains("data-provider-unavailable=", script);
         Assert.Contains("openProviderUnavailableDialog", script);
-        Assert.Contains("navigateToReadinessSetup('pricing', providerCode)", script);
+        Assert.Contains("navigateToReadinessSetup('provider', providerCode)", script);
     }
 
     [Fact]
@@ -75,9 +75,9 @@ public sealed class OrganizationAdminUiTests
         Assert.Contains("label: 'Thiết lập bảng giá'", script);
         Assert.Contains("label: 'Cấu hình credential'", script);
         Assert.Contains("data-readiness-action=", script);
-        Assert.Contains("await selectTab('usage')", script);
-        Assert.Contains("await selectTab('providers')", script);
-        Assert.Contains("await showScope('pricing')", script);
+        Assert.Contains("await selectTab('usage', true)", script);
+        Assert.Contains("await selectTab('providers', true)", script);
+        Assert.Contains("organizationScope: 'pricing'", script);
         Assert.Contains("data-pricing-provider=", script);
     }
 
@@ -86,7 +86,7 @@ public sealed class OrganizationAdminUiTests
     {
         var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
 
-        Assert.Contains("<th>Video dài</th>", script);
+        Assert.Contains("<span>Video dài ${renderLongFormReadinessPill(item)}</span>", script);
         Assert.Contains("function longFormReadiness(organization)", script);
         Assert.Contains("video_policy_missing: 'Chưa chọn provider cho Policy Video dài.'", script);
         Assert.Contains("organizationState.longFormVideoPolicy?.providerId === provider.providerId", script);
@@ -162,15 +162,16 @@ public sealed class OrganizationAdminUiTests
     {
         var page = ReadRepositoryFile("TOOL-SERVER", "Pages", "Admin", "Index.cshtml");
         var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-organizations.js");
-        var css = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.css");
+        var css = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.css")
+            + ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-modules.css");
 
         Assert.Contains("role=\"region\" aria-labelledby=\"pageTitle\"", page);
         Assert.Contains("class=\"text-button organization-back-button\"", page);
         Assert.DoesNotContain("id=\"organizationDetailHeading\"", page, StringComparison.Ordinal);
         Assert.DoesNotContain("byId('organizationDetailHeading')", script, StringComparison.Ordinal);
         Assert.Contains("shell.setPageMeta('ORGANIZATION SETUP'", script);
-        Assert.Contains(".organization-back-button { min-height: 28px;", css);
-        Assert.Contains(".organization-tab-content { min-height: 180px;", css);
+        Assert.Contains(".organization-back-button", css);
+        Assert.Contains(".organization-tab-content", css);
         Assert.Contains("id=\"organizationDetailRefreshButton\"", page);
         Assert.Contains("function setTopbarVisible(visible)", ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.js"));
         Assert.Contains("setTopbarVisible(false);", script);

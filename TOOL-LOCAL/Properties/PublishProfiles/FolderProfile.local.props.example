@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <!-- Copy to FolderProfile.local.props and replace these paths with approved release inputs. -->
+    <DesktopPublishVersion>1.2.2</DesktopPublishVersion>
+    <DesktopPublishBuildNumber>37</DesktopPublishBuildNumber>
+    <DesktopDeploymentSettingsPath>D:\release-inputs\desktop.production.json</DesktopDeploymentSettingsPath>
+    <!-- FFmpeg 9.0.1 is prepared offline from the reviewed pins automatically.
+         No FfmpegBundleDirectory override is needed for ordinary Publish. -->
+    <!-- OCR uses artifacts/ocr-native-runtime/msvc-14.50.35719.0-win-x64 by default.
+         WebView2 uses artifacts/prerequisites/webview2-runtime-x64.exe by default.
+         Set OcrNativeRuntimeDirectory/DesktopWebView2InstallerPath only to override these inputs. -->
+    <DesktopReleaseProfile>Production</DesktopReleaseProfile>
+    <DesktopMinimumBootstrapperVersion>1.0.0</DesktopMinimumBootstrapperVersion>
+    <DesktopAllowTransitionalSql>true</DesktopAllowTransitionalSql>
+  </PropertyGroup>
+</Project>

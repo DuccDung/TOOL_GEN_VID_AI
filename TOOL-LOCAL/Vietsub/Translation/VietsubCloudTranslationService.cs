@@ -18,12 +18,16 @@ internal sealed class VietsubCloudTranslationService(IVietsubLocalJobAuthorizer 
     VietsubJobStore jobs, VietsubJobManager manager, VietsubCloudTranslationResults results)
 {
     public Task<VietsubCloudAvailability> AvailabilityAsync(VietsubProjectSession session, CancellationToken ct) =>
-        client.AvailabilityAsync(session.Manifest.ProjectId, session.Manifest.OrganizationId, ct);
+        session.Manifest.OrganizationId == Guid.Empty
+            ? Task.FromResult(new VietsubCloudAvailability(false, "CLOUD_ORGANIZATION_REQUIRED", "Dự án cá nhân dùng Local. Dịch Cloud cần dự án trong tổ chức."))
+            : client.AvailabilityAsync(session.Manifest.ProjectId, session.Manifest.OrganizationId, ct);
 
     public async Task<VietsubJobSummary?> StartAsync(VietsubProjectSession session, string userId, Guid org,
         VietsubStartTranslationInput input, CancellationToken ct)
     {
         await authorizer.AuthorizeAsync(userId, org, session.Manifest, ct);
+        if (org == Guid.Empty)
+            throw new VietsubTranslationException("CLOUD_ORGANIZATION_REQUIRED", "Dịch Cloud cần dự án trong tổ chức.");
         var project = session.Manifest;
         var track = (await subtitles.LoadTracksAsync(project.ProjectId, ct)).SingleOrDefault(x => x.TrackId == input.ExpectedTrackId);
         if (track is null || project.ActiveSubtitleTrackId != track.TrackId || track.Source != "PADDLE_OCR_LOCAL"

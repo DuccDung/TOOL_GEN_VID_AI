@@ -27,7 +27,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
   const cardRef = useRef<HTMLElement>(null);
   const checkedContextRef = useRef<string | null>(null);
   const [resourceConfirmed, setResourceConfirmed] = useState(false);
-  const { snapshot, busy, error, repairProgress, repairError, run, cancel, repairApplication, exitApplication } = setup;
+  const { snapshot, busy, error, connectionLost, repairProgress, repairError, run, cancel, refresh, reconcile, repairApplication, exitApplication } = setup;
   const components = useMemo(() => requiredSetupComponents(snapshot), [snapshot]);
   const missing = useMemo(() => components.filter(component => component.state !== 'READY'), [components]);
   const ready = isSystemSetupReady(snapshot);
@@ -40,6 +40,8 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
   const canRetry = Boolean(operation && !['Accepted', 'Running'].includes(operation.state)
     && missing.every(component => operation.componentIds.includes(component.id)));
   const requiresResourceConfirmation = resourceWarning && canRetry && !repairRequired;
+  const resourceProfile = components.find(component => component.id === 'qwen')?.resourceProfileId;
+  useEffect(() => setResourceConfirmed(false), [snapshot?.contextGeneration, resourceProfile]);
 
   useEffect(() => {
     if (!snapshot || ready || busy || repairing || missing.length === 0) return;
@@ -50,6 +52,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     document.body.style.overflow = 'hidden';
     const card = cardRef.current;
     card?.focus();
@@ -107,6 +110,9 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', trapFocus, true);
       window.removeEventListener('focusin', containFocus, true);
+      const fallback = document.querySelector<HTMLElement>('.app-main button:not(:disabled), .sidebar button:not([aria-disabled="true"])');
+      const target = previousFocus?.isConnected && previousFocus !== document.body ? previousFocus : fallback;
+      if (target && !target.closest('[inert], [aria-hidden="true"]')) target.focus();
     };
   }, []);
 
@@ -179,7 +185,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
             <thead><tr><th>Thành phần</th><th>Trạng thái</th><th>Chi tiết</th></tr></thead>
             <tbody>
               {!snapshot && <tr><td colSpan={3} className="startup-setup-loading">
-                <LoaderCircle className="spin" size={18} /> Đang kiểm tra cấu hình máy…
+                <LoaderCircle className={connectionLost ? '' : 'spin'} size={18} /> {connectionLost ? 'Đang chờ kết nối với ứng dụng.' : 'Đang kiểm tra cấu hình máy…'}
               </td></tr>}
               {components.map(component => (
                 <tr key={component.id} className={`startup-setup-row state-${component.state.toLowerCase()}`}>
@@ -218,7 +224,7 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
 
         <div className="startup-setup-progress" role="status" aria-live="polite">
           <div><span>{progressMessage}</span>{progressPercent != null && <strong>{Math.round(progressPercent)}%</strong>}</div>
-          {active && <progress aria-label="Tiến độ chuẩn bị taphoatool" max={100} value={progressPercent ?? undefined} />}
+          {active && !connectionLost && <progress aria-label="Tiến độ chuẩn bị taphoatool" max={100} value={progressPercent ?? undefined} />}
         </div>
 
         {requiresResourceConfirmation && !active && (
@@ -242,6 +248,10 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
             {busy && operation && <button type="button" className="startup-setup-exit" onClick={cancel}>
               Hủy tác vụ
             </button>}
+            {(!snapshot || error || connectionLost) && <button type="button" className="startup-setup-exit"
+              onClick={connectionLost ? reconcile : refresh}>
+              <RefreshCw size={15} aria-hidden="true" /> {snapshot && connectionLost ? 'Đối soát trạng thái' : 'Tải lại trạng thái'}
+            </button>}
             {repairRequired && <button type="button" className="startup-setup-exit" disabled={active}
               onClick={() => run('check', missing.map(component => component.id))}>
               <RefreshCw size={15} aria-hidden="true" /> Kiểm tra lại
@@ -252,9 +262,9 @@ export function StartupSystemSetupModal({ setup }: { setup: SystemSetupControlle
             </button>}
             <button type="button" className="startup-setup-primary" disabled={!snapshot || active || missing.length === 0}
               onClick={() => start()}>
-              {active ? <LoaderCircle className="spin" size={17} />
+              {active && !connectionLost ? <LoaderCircle className="spin" size={17} />
                 : primaryLabel === 'Kiểm tra lại' ? <RefreshCw size={17} /> : <Download size={17} />}
-              {active ? 'Đang xử lý…' : primaryLabel}
+              {connectionLost && busy ? 'Chờ đối soát' : active ? 'Đang xử lý…' : primaryLabel}
             </button>
           </div>
         </footer>

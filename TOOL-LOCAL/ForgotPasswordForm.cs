@@ -28,7 +28,7 @@ public sealed class ForgotPasswordForm : Form
     private void InitializeUi(string? initialEmail)
     {
         SuspendLayout();
-        Icon = BrandIdentity.WindowIcon;
+        BrandIdentity.ApplyWindowIcon(this);
         Text = "taphoatool - Quên mật khẩu";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;

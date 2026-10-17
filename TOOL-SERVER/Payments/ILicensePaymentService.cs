@@ -5,6 +5,8 @@ namespace TOOL_SERVER.Payments;
 public interface ILicensePaymentService
 {
     Task<IReadOnlyList<LicenseOfferResponse>> GetOffersAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<LicenseOfferResponse>> GetOffersForUserAsync(string userId, CancellationToken cancellationToken) =>
+        GetOffersAsync(cancellationToken);
 
     Task<LicensePaymentCheckoutResponse> CreateOrReuseAsync(
         string userId,

@@ -16,6 +16,8 @@ internal sealed class SystemSetupAuthorizer(IVietsubLocalAccessContext context)
     {
         EnsureContext(userId, organizationId);
         await context.EnsureSessionAndLicenseAsync(token);
+        EnsureContext(userId, organizationId);
+        if (organizationId == Guid.Empty) return;
         var memberships = await context.GetOrganizationsAsync(token);
         EnsureContext(userId, organizationId);
         var member = memberships.SingleOrDefault(x => x.OrganizationId == organizationId);
@@ -25,7 +27,7 @@ internal sealed class SystemSetupAuthorizer(IVietsubLocalAccessContext context)
     }
     private void EnsureContext(string userId, Guid organizationId)
     {
-        if (string.IsNullOrWhiteSpace(userId) || organizationId == Guid.Empty || UserId != userId || OrganizationId != organizationId)
+        if (string.IsNullOrWhiteSpace(userId) || UserId != userId || OrganizationId != organizationId)
             throw new SetupException("system_setup_context_changed", "Tài khoản hoặc tổ chức đã thay đổi. Hãy mở lại Setup.");
     }
 }

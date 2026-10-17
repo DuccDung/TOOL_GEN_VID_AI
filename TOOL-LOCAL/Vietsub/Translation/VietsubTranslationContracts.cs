@@ -145,6 +145,7 @@ internal sealed class VietsubTranslationException(
     public string Code { get; } = code;
 
     public bool Retryable { get; } = retryable;
+    public string? DiagnosticId { get; internal set; }
 }
 
 internal static class VietsubTranslationErrorCodes

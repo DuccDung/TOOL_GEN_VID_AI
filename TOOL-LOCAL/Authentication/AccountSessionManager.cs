@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using TOOL_SHARED.Contracts.Authentication;
 
 namespace TOOL_LOCAL.Authentication;
@@ -68,7 +69,15 @@ public sealed class AccountSessionManager(
         var response = await apiClient.RegisterAsync(
             new RegisterRequest(email.Trim(), password, displayName?.Trim(), CreateDeviceRequest()),
             cancellationToken);
-        await SetCurrentAsync(response, true, cancellationToken);
+        try
+        {
+            await SetCurrentAsync(response, true, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            throw new AccountClientException("session_storage_failed",
+                "Tài khoản đã được tạo nhưng không thể lưu phiên đăng nhập trên máy. Vui lòng quay lại đăng nhập.", 0);
+        }
     }
 
     public Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken = default) =>
@@ -208,10 +217,7 @@ public sealed class AccountSessionManager(
         bool persistSession,
         CancellationToken cancellationToken)
     {
-        Current = response;
-        _refreshToken = response.RefreshToken;
-        _persistSession = persistSession;
-        Interlocked.Exchange(ref _sessionInvalidated, 0);
+        cancellationToken.ThrowIfCancellationRequested();
         if (persistSession)
         {
             await tokenStore.SaveAsync(
@@ -222,6 +228,12 @@ public sealed class AccountSessionManager(
         {
             await tokenStore.ClearAsync(cancellationToken);
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        Current = response;
+        _refreshToken = response.RefreshToken;
+        _persistSession = persistSession;
+        Interlocked.Exchange(ref _sessionInvalidated, 0);
     }
 
     private async Task InvalidateSessionWithoutLockAsync()

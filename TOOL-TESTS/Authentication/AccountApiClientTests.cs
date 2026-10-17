@@ -8,6 +8,52 @@ namespace TOOL_TESTS.Authentication;
 
 public sealed class AccountApiClientTests
 {
+    [Theory]
+    [InlineData("<html>Unexpected proxy response</html>")]
+    [InlineData("{")]
+    [InlineData("")]
+    [InlineData("null")]
+    [InlineData("{}")]
+    public async Task RegisterAsync_InvalidSuccessBody_ReturnsSafeAccountError(string body)
+    {
+        using var httpClient = new HttpClient(new StubHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) }))
+        {
+            BaseAddress = new Uri("https://localhost/")
+        };
+        var client = new AccountApiClient(httpClient);
+        var request = new RegisterRequest("user@example.test", "StrongPass1!", null,
+            new DeviceRegistrationRequest("fingerprint", "device", "Windows", "1.0"));
+
+        var exception = await Assert.ThrowsAsync<AccountClientException>(() => client.RegisterAsync(request));
+
+        Assert.Equal("invalid_server_response", exception.Code);
+        Assert.Equal(200, exception.StatusCode);
+        Assert.DoesNotContain("Unexpected proxy response", exception.Message);
+    }
+
+    [Fact]
+    public async Task RegisterAsync_ValidResponse_PreservesSession()
+    {
+        var expected = new AuthTokenResponse("test-access", DateTime.UtcNow.AddHours(1),
+            "test-refresh", DateTime.UtcNow.AddDays(1), Guid.NewGuid(), Guid.NewGuid(),
+            new UserProfileResponse("user-test", "user@example.test", null, "Active", ["User"]));
+        using var httpClient = new HttpClient(new StubHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(expected) }))
+        {
+            BaseAddress = new Uri("https://localhost/")
+        };
+        var client = new AccountApiClient(httpClient);
+
+        var actual = await client.RegisterAsync(new RegisterRequest("user@example.test", "StrongPass1!", null,
+            new DeviceRegistrationRequest("fingerprint", "device", "Windows", "1.0")));
+
+        Assert.Equal(expected.SessionId, actual.SessionId);
+        Assert.Equal(expected.AccessToken, actual.AccessToken);
+        Assert.Equal(expected.RefreshToken, actual.RefreshToken);
+        Assert.Equal(expected.User.UserId, actual.User.UserId);
+    }
+
     [Fact]
     public async Task RegisterAsync_PreservesServerErrorsAndTraceId()
     {

@@ -47,6 +47,7 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
     private ulong _peakDeviceUsedBytes;
     private static bool _loadingModel;
     private static string? _diagnosticComponentRoot;
+    private static Action<string> _nativeDiagnosticSink = Console.Error.WriteLine;
 
     public async Task<VietsubTranslationWorkerLoadResult> LoadAsync(
         VietsubTranslationWorkerLoadRequest request,
@@ -103,8 +104,10 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
             _executorMode = request.Config.ExecutorMode;
             _diagnosticComponentRoot = request.ComponentRoot;
             _loadingModel = true;
+            Console.Error.WriteLine("qwen_stage:MODEL_LOAD");
             try { _weights = await LLamaWeights.LoadFromFileAsync(_modelParameters, cancellationToken); }
             finally { _loadingModel = false; }
+            Console.Error.WriteLine("qwen_stage:MODEL_READY");
             if (_device is not null && _offloadedLayers != request.Config.GpuLayerCount)
                 throw new TranslationWorkerException("TRANSLATION_GPU_UNAVAILABLE",
                     "Backend chưa xác nhận số layer thực tế trên GPU.", false);
@@ -135,7 +138,8 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
             Console.Error.WriteLine($"model_load_failed:type={exception.GetType().Name}:inner={exception.InnerException?.GetType().Name}:allocation={_nativeAllocationFailed}");
             DisposeModel();
             throw new TranslationWorkerException(
-                _nativeAllocationFailed ? "TRANSLATION_GPU_MEMORY" : VietsubTranslationErrorCodes.BackendLoadFailed,
+                _nativeAllocationFailed ? (_device is null ? VietsubTranslationErrorCodes.RuntimeOutOfMemory
+                    : "TRANSLATION_GPU_MEMORY") : VietsubTranslationErrorCodes.BackendLoadFailed,
                 "Native backend không thể nạp model Qwen3 đã kiểm chứng.",
                 retryable: false,
                 exception);
@@ -208,6 +212,7 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
                 var executor = _executor;
                 if (executor is null || _executorMode == VietsubTranslationExecutorModes.Legacy)
                 {
+                    Console.Error.WriteLine("qwen_stage:CONTEXT_CREATE");
                     executor = new StatelessExecutor(_weights, _modelParameters)
                     {
                         ApplyTemplate = true,
@@ -219,6 +224,7 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
                 fragments = executor.InferAsync(request.Prompt, inference, cancellationToken);
             }
             initializationMilliseconds = initialization.Elapsed.TotalMilliseconds;
+            Console.Error.WriteLine("qwen_stage:INFER");
             await foreach (var fragment in fragments)
             {
                 if (fragment.Length > 0) firstOutputMilliseconds ??= stopwatch.Elapsed.TotalMilliseconds;
@@ -350,6 +356,8 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
 
     private static bool IsApprovedComponentRoot(string root)
     {
+        if (VietsubTranslationDiagnosticWorkspace.IsApprovedComponentRoot(root,
+            Environment.GetEnvironmentVariable(VietsubTranslationDiagnosticWorkspace.EnvironmentVariable))) return true;
         var localRoot = Path.GetFullPath(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ToolGenPostVideo",
@@ -422,8 +430,10 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
         out string avxLevel,
         out string nativeLibraryHash,
         bool forceMissing = false,
-        string? cudaRoot = null)
+        string? cudaRoot = null,
+        Action<string>? diagnosticSink = null)
     {
+        TranslationNativeRuntime.Verify();
         if (NativeLibraryConfig.LLama.LibraryHasLoaded)
         {
             throw new TranslationWorkerException(
@@ -438,26 +448,42 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
             "avx" => AvxLevel.Avx,
             _ => AvxLevel.None
         };
+        TranslationNativeRuntime.LoadPinnedDependencies();
         _offloadedLayers = 0;
         _nativeAllocationFailed = false;
+        _nativeDiagnosticSink = diagnosticSink ?? Console.Error.WriteLine;
         _nativeLogCallback = static (level, message) =>
         {
-            // Do not forward raw native logs: they can contain source text or paths.
-            var match = Regex.Match(message, @"offloaded (\d+)/\d+ layers to GPU");
-            if (match.Success && int.TryParse(match.Groups[1].Value, out var layers))
-                _offloadedLayers = layers;
-            if (message.Contains("out of memory", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("alloc", StringComparison.OrdinalIgnoreCase)
-                    && message.Contains("failed", StringComparison.OrdinalIgnoreCase))
-                _nativeAllocationFailed = true;
-            if (_loadingModel && level == LLamaLogLevel.Error && _diagnosticComponentRoot is { } root)
+            // No managed exception may unwind through llama.cpp's native callback.
+            // Diagnostic I/O and allocations can fail precisely when memory is low.
+            try
             {
-                // Only errors while loading the pinned public model; never inference/prompt logs.
-                var safe = message.Replace(root, "[component]", StringComparison.OrdinalIgnoreCase)
-                    .Replace(root.Replace('\\', '/'), "[component]", StringComparison.OrdinalIgnoreCase)
-                    .Replace('\r', ' ').Replace('\n', ' ');
-                Console.Error.WriteLine("native_load_error:" + safe[..Math.Min(safe.Length, 500)]);
+                // Do not forward raw native logs: they can contain source text or paths.
+                const string prefix = "offloaded ";
+                var offload = message.IndexOf(prefix, StringComparison.Ordinal);
+                if (offload >= 0 && message.Contains(" layers to GPU", StringComparison.Ordinal))
+                {
+                    var remainder = message.AsSpan(offload + prefix.Length);
+                    var slash = remainder.IndexOf('/');
+                    if (slash is > 0 and <= 3 && int.TryParse(remainder[..slash],
+                        System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var layers))
+                        _offloadedLayers = layers;
+                }
+                if (message.Contains("out of memory", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("alloc", StringComparison.OrdinalIgnoreCase)
+                        && message.Contains("failed", StringComparison.OrdinalIgnoreCase))
+                    _nativeAllocationFailed = true;
+                if (_loadingModel && level == LLamaLogLevel.Error && _diagnosticComponentRoot is { } root)
+                {
+                    // Only errors while loading the pinned public model; never inference/prompt logs.
+                    var safe = message.Replace(root, "[component]", StringComparison.OrdinalIgnoreCase)
+                        .Replace(root.Replace('\\', '/'), "[component]", StringComparison.OrdinalIgnoreCase)
+                        .Replace('\r', ' ').Replace('\n', ' ');
+                    _nativeDiagnosticSink("native_load_error:" + safe[..Math.Min(safe.Length, 500)]);
+                }
             }
+            catch (OutOfMemoryException) { _nativeAllocationFailed = true; }
+            catch (Exception) { /* Failure to write a diagnostic must not terminate native inference. */ }
         };
         var nativeConfig = NativeLibraryConfig.LLama;
         if (cudaRoot is not null)
@@ -485,6 +511,7 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
                     "Không thể nạp backend CUDA đã kiểm chứng.", false);
             backendIdentity = "cuda12";
             avxLevel = selectedAvx.ToString();
+            TranslationNativeRuntime.VerifyLoadedModules();
             return;
         }
         if (forceMissing)
@@ -509,6 +536,7 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
                 retryable: false);
         }
 
+        TranslationNativeRuntime.VerifyLoadedModules();
         avxLevel = library!.Metadata!.AvxLevel.ToString();
         backendIdentity = $"cpu-{avxLevel.ToLowerInvariant()}";
         var nativePath = Path.Combine(
@@ -532,6 +560,14 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
         if (LoadLibraryExW(path, IntPtr.Zero, 0x00000100 | 0x00001000) == IntPtr.Zero)
             throw new TranslationWorkerException(VietsubTranslationErrorCodes.BackendLoadFailed,
                 "Không thể nạp dependency CUDA; hãy kiểm tra driver hoặc sửa gói tăng tốc.", false);
+    }
+
+    internal static void VerifyDiagnosticCallbackFailureIsContained()
+    {
+        _loadingModel = true;
+        _diagnosticComponentRoot = "public-model-fixture";
+        try { _nativeLogCallback!(LLamaLogLevel.Error, "fixture diagnostic"); }
+        finally { _loadingModel = false; _diagnosticComponentRoot = null; }
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -586,19 +622,25 @@ internal sealed class QwenTranslationWorkerEngine : ITranslationWorkerEngine
         """;
 }
 
-internal sealed class BackendPreflightTranslationWorkerEngine(bool forceMissing, bool cuda = false)
+internal sealed class BackendPreflightTranslationWorkerEngine(bool forceMissing, bool cuda = false,
+    bool failDiagnosticSink = false, bool diagnosticOutOfMemory = false)
     : ITranslationWorkerEngine
 {
     public Task<VietsubTranslationWorkerLoadResult> LoadAsync(
         VietsubTranslationWorkerLoadRequest request,
         CancellationToken cancellationToken)
     {
+        Action<string>? sink = failDiagnosticSink
+            ? diagnosticOutOfMemory ? static _ => throw new OutOfMemoryException()
+                : static _ => throw new IOException("fixture-diagnostic-failure") : null;
         QwenTranslationWorkerEngine.ConfigureAndPreflightBackend(
             out var backendIdentity,
             out var avxLevel,
             out var nativeLibraryHash,
             forceMissing,
-            cuda ? VietsubTranslationCudaPack.DirectoryPath(request.ComponentRoot) : null);
+            cuda ? VietsubTranslationCudaPack.DirectoryPath(request.ComponentRoot) : null,
+            sink);
+        if (failDiagnosticSink) QwenTranslationWorkerEngine.VerifyDiagnosticCallbackFailureIsContained();
         if (cuda && !NativeApi.llama_supports_gpu_offload())
             throw new TranslationWorkerException("TRANSLATION_GPU_UNAVAILABLE", "Native backend chưa hỗ trợ offload.", false);
         return Task.FromResult(new VietsubTranslationWorkerLoadResult(

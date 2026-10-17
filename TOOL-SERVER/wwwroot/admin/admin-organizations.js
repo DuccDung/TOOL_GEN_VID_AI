@@ -10,6 +10,7 @@
     directoryLoaded: false,
     organizationsPaging: { page: 1, pageSize: 20, totalCount: 0, totalPages: 0, hasPrevious: false, hasNext: false },
     selectedOrganizationId: null,
+    selectedOrganizationSnapshot: null,
     selectedTab: 'overview',
     scope: 'setup',
     members: null,
@@ -39,6 +40,9 @@
   };
 
   const byId = id => document.getElementById(id);
+  let setupSequence = 0, setupController, setupInFlight = '', setupReturn = null;
+  const adminIdentity = () => shell.state.user?.userId || shell.state.user?.email || '';
+  const globalAdmin = () => shell.state.user?.roles?.some(role => role.toLowerCase() === 'admin') === true;
   const roleCapabilities = {
     Owner: { members: true, billing: true, credentials: true, audit: true },
     OrganizationAdmin: { members: true, billing: true, credentials: true, audit: true },
@@ -63,6 +67,7 @@
   };
   const readinessMessages = {
     budget_disabled: 'Budget đang bằng 0 nên AI bị khóa.',
+    budget_exhausted: 'Ngân sách khả dụng của kỳ hiện tại đã hết.',
     provider_disabled: 'Provider đang bị tắt.',
     model_disabled: 'Model mặc định đang thiếu hoặc bị tắt.',
     credential_missing: 'Chưa có credential Active.',
@@ -78,7 +83,7 @@
     OrganizationProviderCredentialRotated: 'Thay credential'
   };
   const scopeMeta = {
-    setup: ['ADMIN SETUP CENTER', 'Thiết lập vận hành', 'Hoàn tất lần lượt hạ tầng AI, tổ chức, gói và phân bổ khách hàng.'],
+    setup: ['TỔ CHỨC & AI', 'Thiết lập mở bán', 'Cấu hình một lần, dùng cho nhiều gói.'],
     directory: ['ORGANIZATION', 'Tổ chức', 'Quản lý cấu hình, thành viên và khả năng chạy Video dài của từng tổ chức.'],
     pools: ['CUSTOMER ALLOCATION', 'Gói và phân bổ khách hàng', 'Kết nối gói bán với các tổ chức đã sẵn sàng và còn sức chứa.'],
     pricing: ['GLOBAL AI PRICING', 'Bảng giá AI', 'Bật đúng provider, model và đơn giá lấy từ tài khoản provider đang sử dụng.'],
@@ -86,7 +91,8 @@
   };
 
   function selectedOrganization() {
-    return organizationState.organizations?.find(item => item.organizationId === organizationState.selectedOrganizationId) || null;
+    return (organizationState.selectedOrganizationSnapshot?.organizationId === organizationState.selectedOrganizationId ? organizationState.selectedOrganizationSnapshot : null) ||
+      organizationState.organizations?.find(item => item.organizationId === organizationState.selectedOrganizationId) || null;
   }
 
   function capabilities() {
@@ -131,9 +137,195 @@
     return `<span class="status-pill ${css}">${escapeHtml(label)}</span>`;
   }
 
-  function renderReadinessAction(reason, providerCode = '') {
+  function setupActionMarkup(target, label, context = {}) {
+    const values = { organization: context.organizationId ?? organizationState.selectedOrganizationId,
+      provider: context.providerCode, model: context.modelId, 'model-code': context.modelCode,
+      usage: context.usageTypes?.join(','), pool: context.poolId, plan: context.planId };
+    const attributes = Object.entries(values).filter(([, value]) => value != null && value !== '')
+      .map(([key, value]) => `data-readiness-${key}="${escapeHtml(value)}"`).join(' ');
+    return `<button type="button" class="readiness-setup-link" data-readiness-action="${escapeHtml(target)}" ${attributes}>${escapeHtml(label)} <span aria-hidden="true">→</span></button>`;
+  }
+
+  function focusSetupTarget(element) {
+    if (!element) throw new Error('Chưa tải được vị trí cần cấu hình. Hãy tải lại trạng thái.');
+    for (let parent = element.parentElement; parent; parent = parent.parentElement)
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    element.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'center' });
+    const focus = element.matches('input, select, button, textarea') ? element : element.querySelector('input, select, button, textarea');
+    (focus || element).focus({ preventScroll: true });
+    element.classList.add('setup-target-highlight');
+    setTimeout(() => element.classList.remove('setup-target-highlight'), 2500);
+  }
+
+  function renderSetupReturn() {
+    let banner = byId('setupCorrectionReturn');
+    if (!banner) {
+      byId('adminMain').insertAdjacentHTML('afterbegin', '<div id="setupCorrectionReturn" class="setup-correction-return" hidden><button type="button" class="ghost-button" data-setup-correction-return>← Quay lại phần cần hoàn tất</button><span role="status"></span></div>');
+      banner = byId('setupCorrectionReturn');
+    }
+    banner.hidden = !setupReturn;
+    banner.querySelector('span').textContent = setupReturn?.label || '';
+  }
+
+  function invalidateSetupNavigation() {
+    setupSequence++; setupController?.abort(); setupInFlight = '';
+  }
+
+  function resetSetupNavigation() {
+    invalidateSetupNavigation(); cancelRequests(); setupReturn = null;
+    organizationState.selectedOrganizationId = organizationState.selectedOrganizationSnapshot = null;
+    organizationState.organizations = organizationState.setupOrganizations = organizationState.providers = null;
+    organizationState.pricing = organizationState.pools = organizationState.setupPools = null;
+    organizationState.usage = organizationState.members = organizationState.memberDirectory = null;
+    organizationState.videoPolicy = organizationState.longFormVideoPolicy = null;
+    organizationState.selectedPoolId = organizationState.poolDetail = null;
+    organizationState.directoryLoaded = false;
+    if (byId('organizationCredentialDialog').open) byId('organizationCredentialDialog').close();
+    byId('setupCorrectionReturn')?.setAttribute('hidden', '');
+  }
+
+  async function refreshSetupOrganization(organizationId) {
+    const actor = adminIdentity();
+    const organizations = await request('setup-refresh-organizations', '/api/organizations');
+    if (actor !== adminIdentity() || !shell.state.adminReady) return;
+    const organization = organizations.find(item => item.organizationId === organizationId);
+    organizationState.setupOrganizations = organizations;
+    if (organizationState.selectedOrganizationId !== organizationId) return;
+    if (!organization) {
+      organizationState.selectedOrganizationSnapshot = null;
+      organizationState.organizations = organizationState.organizations?.filter(item => item.organizationId !== organizationId) || [];
+      throw new Error('Tổ chức không còn khả dụng hoặc quyền truy cập đã thay đổi. Hãy tải lại danh sách tổ chức.');
+    }
+    organizationState.selectedOrganizationSnapshot = organization || null;
+    const index = organizationState.organizations?.findIndex(item => item.organizationId === organizationId) ?? -1;
+    if (index >= 0) organizationState.organizations[index] = organization;
+  }
+
+  async function openSetupTarget(context, options = {}) {
+    const target = context.target === 'provider-disabled' ? 'provider' : context.target;
+    const allowed = ['credential', 'policy', 'pricing', 'catalog', 'provider', 'model', 'budget', 'capacity', 'mapping', 'allocation', 'payments', 'organization', 'reload'];
+    if (!allowed.includes(target) || !shell.state.adminReady) return false;
+    const signature = JSON.stringify([target, context.organizationId, context.providerCode, context.modelId, context.modelCode, context.poolId, context.planId]);
+    if (setupInFlight === signature) return false;
+    invalidateSetupNavigation(); setupInFlight = signature;
+    const sequence = setupSequence, actor = adminIdentity();
+    setupController = new AbortController();
+    const navigationController = setupController;
+    const timeout = setTimeout(() => navigationController.abort(), 20000);
+    const alive = () => sequence === setupSequence && actor === adminIdentity() && shell.state.adminReady && !navigationController.signal.aborted;
+    const source = options.returnTo || (!setupReturn && organizationState.selectedOrganizationId ? {
+      label: selectedOrganization()?.name || 'Cấu hình tổ chức',
+      restore: () => openSetupTarget({ target: 'organization', organizationId: organizationState.selectedOrganizationId, tab: organizationState.selectedTab }, { rememberReturn: false })
+    } : null);
+    // Freeze the source before navigation changes the selected organization/tab.
+    const sourceId = organizationState.selectedOrganizationId, sourceTab = organizationState.selectedTab;
+    if (source && !options.returnTo) source.restore = () => openSetupTarget({ target: 'organization', organizationId: sourceId, tab: sourceTab }, { rememberReturn: false });
+    try {
+      if (options.rememberReturn === false) setupReturn = null;
+      if (options.rememberReturn !== false && source) setupReturn = { ...source, actor };
+      renderSetupReturn();
+      if (['pricing', 'catalog', 'provider', 'model', 'capacity', 'mapping', 'allocation', 'payments'].includes(target) && !globalAdmin())
+        throw new Error('Chỉ Global Admin có quyền cấu hình mục này.');
+      if (target === 'payments') { await shell.navigate('payments', { keepSetupReturn: true }); return alive(); }
+      if (['capacity', 'mapping', 'allocation'].includes(target)) {
+        await shell.navigate('organizations', { organizationScope: 'pools', keepSetupReturn: true });
+        if (!alive()) return false;
+        if (!context.poolId) { focusSetupTarget(byId('addOrganizationPoolButton')); return true; }
+        await openPool(context.poolId, target === 'allocation');
+        if (!alive() || organizationState.poolDetail?.pool.organizationPoolId !== context.poolId) return false;
+        if (target === 'capacity') {
+          if (!organizationState.poolDetail.organizations.some(item => item.organizationId === context.organizationId)) throw new Error('Tổ chức không còn thuộc nhóm này. Hãy tải lại trạng thái.');
+          await openPoolOrganizationDialog(context.organizationId); if (alive()) focusSetupTarget(byId('poolOrganizationCapacity'));
+        } else if (target === 'mapping') { await openPoolPlanDialog(context.planId); if (alive()) focusSetupTarget(byId('poolPlanId')); }
+        else {
+          if (context.organizationId && !organizationState.poolDetail.organizations.some(item => item.organizationId === context.organizationId)) throw new Error('Tổ chức không còn thuộc nhóm này. Hãy tải lại trạng thái.');
+          window.videoMakerAllocationSetup?.goTo(3, context.organizationId);
+        }
+        return alive();
+      }
+      const organizationId = context.organizationId;
+      if (organizationId) {
+        const organizations = await api('/api/organizations', { signal: navigationController.signal });
+        if (!alive()) return false;
+        const organization = organizations.find(item => item.organizationId === organizationId);
+        if (!organization) throw new Error('Không còn tìm thấy tổ chức hoặc bạn không có quyền truy cập.');
+        organizationState.selectedOrganizationSnapshot = organization;
+        if (target === 'credential' || target === 'policy') {
+          if (!roleCapabilities[organization.role]?.credentials) throw new Error('Chỉ Owner hoặc quản trị viên tổ chức có quyền cấu hình key và policy.');
+        }
+        if (target === 'budget' && !roleCapabilities[organization.role]?.billing) throw new Error('Vai trò hiện tại không có quyền thay đổi ngân sách tổ chức.');
+        await shell.navigate('organizations', { organizationScope: 'directory', keepSetupReturn: true });
+        if (!alive()) return false;
+        await openOrganization(organizationId);
+        if (!alive() || organizationState.selectedOrganizationId !== organizationId) return false;
+      } else if (['credential', 'policy', 'budget', 'organization', 'reload'].includes(target)) {
+        throw new Error('Chọn hoặc tạo tổ chức trước khi cấu hình mục này.');
+      }
+      if (target === 'organization' || target === 'reload') {
+        await selectTab(context.tab || 'overview', true); return alive();
+      }
+      if (target === 'budget') {
+        await selectTab('usage', true); if (alive()) focusSetupTarget(byId('organizationBudgetLimit')); return alive();
+      }
+      if (target === 'credential' || target === 'policy') {
+        await selectTab('providers', true);
+        if (!alive()) return false;
+        if (!Array.isArray(organizationState.providers) || !Array.isArray(organizationState.pricing)) throw new Error('Chưa tải được trạng thái key và policy. Hãy thử tải lại trước khi cấu hình.');
+        const provider = organizationState.pricing?.find(item => item.providerCode === context.providerCode);
+        if (target === 'credential') {
+          if (!provider?.isEnabled) throw new Error('Provider chưa được bật. Mở cấu hình provider trước khi nhập key.');
+          const trigger = [...document.querySelectorAll('[data-configure-provider]')].find(node => node.dataset.configureProvider === provider.providerCode);
+          trigger?.focus({ preventScroll: true });
+          openCredentialDialog(provider.providerCode, provider.displayName); focusSetupTarget(byId('organizationCredentialKey'));
+        } else {
+          const select = document.querySelector('[data-policy-scope="LongForm"] .organization-video-policy-model');
+          if (context.providerCode) {
+            if (!provider?.isEnabled) throw new Error('Provider chưa được bật. Mở cấu hình provider trước khi chọn policy.');
+            const models = (provider.models || []).filter(model => model.isEnabled && model.modality === 'Video' && [...(select?.options || [])].some(option => option.value === model.providerModelId));
+            const model = context.modelId ? models.find(item => item.providerModelId === context.modelId) : models.length === 1 ? models[0] : null;
+            if (context.modelId && !model) throw new Error('Model không còn khả dụng. Hãy tải lại catalog và chọn model hợp lệ.');
+            if (model) select.value = model.providerModelId;
+          }
+          focusSetupTarget(select);
+        }
+        return true;
+      }
+      organizationState.pricingExpandedProviders.add(context.providerCode);
+      await shell.navigate('organizations', { organizationScope: 'pricing', keepSetupReturn: true });
+      await loadPricing(true);
+      if (!alive()) return false;
+      if (target === 'catalog') { focusSetupTarget(byId('aiPricingCatalog')); return true; }
+      const provider = organizationState.pricing?.find(item => item.providerCode === context.providerCode);
+      if (!provider) throw new Error('Không còn tìm thấy provider. Hãy tải lại catalog.');
+      const section = [...document.querySelectorAll('[data-pricing-provider]')].find(node => node.dataset.pricingProvider === provider.providerCode);
+      if (target === 'provider') { focusSetupTarget(section?.querySelector('[data-toggle-ai-provider]')); return true; }
+      const models = provider.models || [];
+      const model = context.modelId ? models.find(item => item.providerModelId === context.modelId)
+        : context.modelCode ? models.find(item => item.modelCode === context.modelCode)
+        : models.length === 1 ? models[0] : null;
+      if (!model) { focusSetupTarget(section); throw new Error('Chưa xác định được model cần sửa. Hãy chọn đúng model trong provider đang mở.'); }
+      const modelSection = [...section.querySelectorAll('[data-pricing-model]')].find(node => node.dataset.pricingModel === model.providerModelId);
+      if (target === 'model') { focusSetupTarget(modelSection?.querySelector('[data-toggle-ai-model]')); return true; }
+      focusSetupTarget(modelSection);
+      if (context.usageTypes?.[0] && !allowedRateUsageTypes(provider.providerCode).includes(context.usageTypes[0])) throw new Error('Loại đơn giá cần sửa chưa được hỗ trợ trong form này. Hãy kiểm tra lại catalog.');
+      openRateDialog(model.providerModelId, model.displayName, provider.providerCode, context.usageTypes?.[0]);
+      focusSetupTarget(byId('aiRatePrice')); return true;
+    } catch (error) {
+      if (sequence === setupSequence && actor === adminIdentity()) toast(friendlyError(error, 'Chưa mở được vị trí cần cấu hình. Hãy thử lại.'), true);
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      if (sequence === setupSequence) setupInFlight = '';
+    }
+  }
+
+  function renderReadinessAction(reason, providerCode = '', context = {}) {
     const action = reason === 'budget_disabled' && capabilities().billing
       ? { target: 'budget', label: 'Thiết lập ngân sách' }
+      : reason === 'budget_exhausted' && capabilities().billing
+        ? { target: 'budget', label: 'Xem ngân sách và sử dụng' }
+      : reason === 'model_disabled'
+        ? { target: 'model', label: 'Mở cấu hình model' }
       : reason === 'provider_disabled'
         ? { target: 'provider-disabled', label: 'Xem cách kích hoạt' }
         : reason === 'video_policy_missing' || reason === 'video_policy_invalid'
@@ -143,8 +335,11 @@
           : reason === 'credential_missing' && capabilities().credentials
             ? { target: 'credential', label: 'Cấu hình credential' }
             : null;
-    if (!action) return '';
-    return `<button type="button" class="readiness-setup-link" data-readiness-action="${escapeHtml(action.target)}" data-readiness-provider="${escapeHtml(providerCode)}">${escapeHtml(action.label)} <span aria-hidden="true">→</span></button>`;
+    if (!action) {
+      const known = ['budget_disabled', 'budget_exhausted', 'provider_disabled', 'model_disabled', 'video_policy_missing', 'video_policy_invalid', 'pricing_not_configured', 'credential_missing'];
+      return known.includes(reason) ? '' : setupActionMarkup('reload', 'Tải lại trạng thái', { ...context, providerCode });
+    }
+    return setupActionMarkup(action.target, context.label || action.label, { ...context, providerCode });
   }
 
   function readinessFor(organization, providerCode) {
@@ -241,6 +436,8 @@
         const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
         const data = await request('organizations', `/api/organizations/page?${query.toString()}`);
         organizationState.organizations = data.items || [];
+        const selected = organizationState.organizations.find(item => item.organizationId === organizationState.selectedOrganizationId);
+        if (selected) organizationState.selectedOrganizationSnapshot = selected;
         organizationState.organizationsPaging = data;
         organizationState.directoryLoaded = true;
         renderOrganizationList();
@@ -259,11 +456,11 @@
       root.innerHTML = '<div class="empty-state"><strong>Chưa có tổ chức</strong><p>Tạo tổ chức đầu tiên để cấu hình thành viên, budget và AI Gateway.</p></div>';
       return;
     }
-    root.innerHTML = `<div class="table-scroll"><table class="data-table organization-table"><thead><tr><th>Tổ chức</th><th>Vai trò</th><th>Thành viên</th><th>Budget kỳ hiện tại</th><th>OpenAI</th><th>Video dài</th><th></th></tr></thead><tbody>${organizations.map(item => `
-      <tr><td><strong>${escapeHtml(item.name)}</strong><br><small>${escapeHtml(item.code)} · ${escapeHtml(item.status)}</small></td><td>${escapeHtml(item.role)}</td><td><strong>${escapeHtml(item.activeMemberCount ?? 0)} Active</strong><br><small>${escapeHtml(item.memberCount ?? 0)} tổng cộng</small></td><td><strong>${escapeHtml(formatMoney(item.monthlyBudgetLimit, item.currencyCode))}</strong><br><small>Đã dùng ${escapeHtml(formatMoney(item.actualCost, item.currencyCode))} · giữ ${escapeHtml(formatMoney(item.reservedCost, item.currencyCode))}</small></td><td>${renderReadinessPill(readinessFor(item, 'openai'))}</td><td>${renderLongFormReadinessPill(item)}</td><td><button type="button" class="ghost-button" data-open-organization="${escapeHtml(item.organizationId)}">Xem chi tiết</button></td></tr>`).join('')}</tbody></table></div>${paginationMarkup(organizationState.organizationsPaging, 'organizations', 'tổ chức')}`;
+    root.innerHTML = `<div class="org-directory">${organizations.map(item => `<article class="org-card"><header><span class="org-symbol">${icon('building')}</span><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.code)} · ${escapeHtml(item.status)}</p></div><span class="status-pill">${escapeHtml(item.role)}</span></header><div class="org-card-facts"><div><small>Thành viên đang hoạt động</small><strong>${escapeHtml(item.activeMemberCount ?? 0)} / ${escapeHtml(item.memberCount ?? 0)}</strong></div><div><small>Hạn mức kỳ hiện tại</small><strong>${escapeHtml(formatMoney(item.monthlyBudgetLimit, item.currencyCode))}</strong></div></div><p class="org-budget-note">Đã dùng ${escapeHtml(formatMoney(item.actualCost, item.currencyCode))} · Đang giữ ${escapeHtml(formatMoney(item.reservedCost, item.currencyCode))}</p><div class="org-readiness"><span>OpenAI ${renderReadinessPill(readinessFor(item, 'openai'))}</span><span>Video dài ${renderLongFormReadinessPill(item)}</span></div><button type="button" class="primary-button" data-open-organization="${escapeHtml(item.organizationId)}">Quản lý tổ chức ${icon('arrow-right')}</button></article>`).join('')}</div>${paginationMarkup(organizationState.organizationsPaging, 'organizations', 'tổ chức')}`;
   }
 
   function showScope(scope) {
+    if (scope === 'management') scope = 'directory';
     return preservePagePosition(async () => {
     organizationState.scope = scope;
     const detailVisible = scope === 'directory' && Boolean(organizationState.selectedOrganizationId);
@@ -272,7 +469,7 @@
     const meta = scopeMeta[scope] || scopeMeta.setup;
     shell.setPageMeta(...meta);
     document.querySelectorAll('[data-organization-scope]').forEach(button => {
-      const active = button.dataset.organizationScope === scope;
+      const active = button.dataset.organizationScope === scope || button.dataset.organizationScope === 'management' && scope !== 'setup';
       button.classList.toggle('active', active);
       if (active) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
@@ -283,7 +480,13 @@
     byId('organizationSetup').classList.toggle('hidden', scope !== 'setup');
     byId('organizationDirectory').classList.toggle('hidden', scope !== 'directory' || Boolean(organizationState.selectedOrganizationId));
     byId('organizationDetail').classList.toggle('hidden', scope !== 'directory' || !organizationState.selectedOrganizationId);
-    if (scope === 'setup') return loadSetup().catch(() => {});
+    byId('organizationManagementTabs')?.classList.toggle('hidden', scope === 'setup');
+    if (scope === 'setup') {
+      if (window.videoMakerAdminSetup) return window.videoMakerAdminSetup.activate();
+      byId('adminSetupCenter').innerHTML = '<p class="form-message" role="alert">Thiết lập mở bán chưa tải đầy đủ. Hãy tải lại trang hoặc cập nhật đủ các asset Admin của server.</p>';
+      return;
+    }
+    window.videoMakerAdminSetup?.deactivate();
     if (scope === 'pricing') return loadPricing().catch(() => {});
     if (scope === 'cost-guide') return loadCostGuide().catch(() => {});
     if (scope === 'pools') return loadPools().catch(() => {});
@@ -454,38 +657,39 @@
     });
   }
 
+  function enhancePoolSetup(root, detail, pools) {
+    window.videoMakerAllocationSetup.enhance(root, detail, pools, {
+      refresh: () => loadPools(true),
+      returnToPool: async () => { await showScope('pools'); await openPool(detail.pool.organizationPoolId, true); },
+      configure: async (organizationId, target, readiness) => {
+        if (target === 'translation') return openSetupTarget({ target: readiness?.target || 'credential',
+          organizationId, providerCode: 'openai', modelId: readiness?.modelId }, { rememberReturn: false });
+        const destination = { target, organizationId, poolId: detail?.pool.organizationPoolId };
+        if (target === 'directory') destination.target = 'organization';
+        if (target === 'pricing') destination.target = 'catalog';
+        if (target === 'capacity') destination.target = 'capacity';
+        if (target === 'openai' || target === 'video') {
+          const organizations = await request('allocation-configure', '/api/organizations');
+          const organization = organizations.find(item => item.organizationId === organizationId);
+          const readiness = target === 'openai' ? readinessFor(organization || {}, 'openai') : longFormReadiness(organization || {});
+          const reason = ['provider_disabled', 'model_disabled', 'credential_missing', 'pricing_not_configured', 'budget_disabled', 'video_policy_missing', 'video_policy_invalid'].find(code => readiness?.blockingReasons?.includes(code));
+          destination.providerCode = readiness?.providerCode === 'video-long-form' ? '' : readiness?.providerCode || (target === 'openai' ? 'openai' : 'fal');
+          destination.modelCode = readiness?.modelCode; destination.usageTypes = readiness?.missingUsageTypes;
+          destination.target = reason === 'provider_disabled' ? 'provider' : reason === 'model_disabled' ? 'model'
+            : reason === 'pricing_not_configured' ? 'pricing' : reason === 'budget_disabled' ? 'budget'
+            : reason === 'credential_missing' || target === 'openai' ? 'credential' : 'policy';
+        }
+        return openSetupTarget(destination, { rememberReturn: false });
+      }
+    });
+  }
+
   function renderPools() {
     const root = byId('organizationPoolConsole');
-    const pools = organizationState.pools || [];
-    const detail = organizationState.poolDetail;
-    const list = pools.length
-      ? `<div class="pool-list-summary"><strong>${pools.length} nhóm phân bổ</strong><span>${pools.filter(pool => pool.status === 'Active').length} đang hoạt động · ${pools.reduce((total, pool) => total + Number(pool.allocatableAvailableSeats || 0), 0)} chỗ có thể phân bổ</span></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Nhóm phân bổ</th><th>Tổ chức / gói hoạt động</th><th>Sức chứa tổng</th><th>Đang dùng / giữ</th><th>Có thể phân bổ</th><th></th></tr></thead><tbody>${pools.map(pool => { const incomplete = !pool.allocatableOrganizationCount || !pool.activeLicensePlanCount || pool.status !== 'Active'; return `<tr><td><strong>${escapeHtml(pool.name)}</strong><br><small>${escapeHtml(pool.code)}</small></td><td>${escapeHtml(pool.allocatableOrganizationCount)} / ${escapeHtml(pool.organizationCount)} tổ chức · ${escapeHtml(pool.activeLicensePlanCount)} / ${escapeHtml(pool.licensePlanCount)} gói</td><td>${escapeHtml(pool.seatCapacity)}</td><td>${escapeHtml(pool.activeSeats)} / ${escapeHtml(pool.reservedSeats)}</td><td><strong>${escapeHtml(pool.allocatableAvailableSeats)}</strong><br><small>${pool.status !== 'Active' ? 'Nhóm đang ở bản nháp' : pool.allocatableAvailableSeats > 0 ? 'Sẵn sàng nhận thêm khách' : 'Không có tổ chức sẵn sàng còn chỗ'}</small></td><td><button type="button" class="${incomplete ? 'primary-button' : 'ghost-button'}" ${incomplete ? 'data-open-pool-setup' : 'data-open-pool'}="${escapeHtml(pool.organizationPoolId)}">${incomplete ? 'Tiếp tục thiết lập' : 'Quản lý'}</button></td></tr>`; }).join('')}</tbody></table></div>`
-      : '<div class="empty-state"><strong>Chưa có nhóm phân bổ</strong><p>Tạo nhóm nháp, thêm tổ chức đã cấu hình AI, kiểm tra sẵn sàng rồi gắn gói license.</p></div>';
-    if (!detail) {
-      root.innerHTML = list;
-      if (pools.length) root.insertAdjacentHTML('beforeend', paginationMarkup(organizationState.poolsPaging, 'pools', 'nhóm phân bổ'));
-      return;
-    }
-
-    const pool = detail.pool;
-    const organizations = detail.organizations || [];
-    const plans = detail.licensePlans || [];
-    const assignments = detail.recentAssignments || [];
-    const hasReadyOrganization = organizations.some(item => item.isAutoAssignmentEnabled && item.isReady);
-    const hasActivePlan = plans.some(item => item.isActive && item.isSellable);
-    const setupComplete = pool.status === 'Active' && hasReadyOrganization && hasActivePlan;
-    const organizationToCheck = organizations.find(item => item.isAutoAssignmentEnabled && !item.isReady);
-    const organizationToEnable = organizations.find(item => !item.isAutoAssignmentEnabled);
-    const setupPanel = !setupComplete && organizationState.poolSetupVisible ? `<section class="pool-setup-panel"><div class="pool-setup-heading"><div><span class="eyebrow">THIẾT LẬP NHÓM</span><h3>Hoàn tất để bắt đầu nhận khách</h3><p>Các bước được kiểm tra theo dữ liệu thật; trạng thái sẵn sàng không do Admin tự khai báo.</p></div>${statusPill('Cần hoàn tất', 'warning')}</div><div class="pool-setup-checklist"><article class="${organizations.length ? 'complete' : 'pending'}"><span>1</span><div><strong>Thêm tổ chức và sức chứa</strong><small>${organizations.length ? `Đã có ${organizations.length} tổ chức trong nhóm.` : 'Chưa có tổ chức nào để nhận khách.'}</small></div>${organizations.length ? '' : '<button type="button" class="primary-button" data-add-pool-organization>Thêm tổ chức</button>'}</article><article class="${hasReadyOrganization ? 'complete' : 'pending'}"><span>2</span><div><strong>Kiểm tra tổ chức sẵn sàng</strong><small>${hasReadyOrganization ? 'Đã có tổ chức vượt qua kiểm tra và đang bật phân bổ tự động.' : 'Server cần kiểm tra budget, OpenAI, policy, credential và đơn giá.'}</small></div>${hasReadyOrganization ? '' : organizationToCheck ? `<button type="button" class="primary-button" data-check-pool-organization="${escapeHtml(organizationToCheck.organizationId)}">Kiểm tra ngay</button>` : organizationToEnable ? `<button type="button" class="ghost-button" data-edit-pool-organization="${escapeHtml(organizationToEnable.organizationId)}">Bật phân bổ</button>` : ''}</article><article class="${hasActivePlan ? 'complete' : 'pending'}"><span>3</span><div><strong>Gắn gói license</strong><small>${hasActivePlan ? 'Đã có gói license hoạt động.' : 'Chưa có gói nào được phân bổ vào nhóm.'}</small></div>${hasActivePlan ? '' : '<button type="button" class="primary-button" data-add-pool-plan>Gắn gói</button>'}</article><article class="${pool.status === 'Active' ? 'complete' : 'pending'}"><span>4</span><div><strong>Kích hoạt nhận khách</strong><small>${pool.status === 'Active' ? 'Nhóm đang hoạt động.' : 'Chỉ kích hoạt sau khi tổ chức và gói đã sẵn sàng.'}</small></div>${pool.status === 'Active' ? '' : `<button type="button" class="ghost-button" data-edit-pool="${escapeHtml(pool.organizationPoolId)}">Đổi trạng thái</button>`}</article></div></section>` : '';
-    root.innerHTML = `<section class="pool-detail-panel standalone">
-      <button type="button" class="text-button pool-back-button" data-close-pool>${icon('arrow-left')}<span>Danh sách nhóm phân bổ</span></button>
-      <div class="section-heading"><div><span class="eyebrow">${escapeHtml(pool.code)}</span><h2>${escapeHtml(pool.name)}</h2><p>${pool.status === 'Active' ? 'Đang hoạt động' : 'Bản nháp'} · Cân bằng theo ưu tiên</p></div><div class="inline-actions">${!setupComplete ? '<button type="button" class="ghost-button" data-show-pool-setup>Hướng dẫn thiết lập</button>' : ''}<button type="button" class="ghost-button" data-edit-pool="${escapeHtml(pool.organizationPoolId)}">Sửa nhóm</button><button type="button" class="primary-button" data-add-pool-organization>Thêm tổ chức</button><button type="button" class="ghost-button" data-add-pool-plan>Gắn gói</button></div></div>
-      ${setupPanel}
-      <div class="organization-metrics pool-metrics"><article><span>Sức chứa cấu hình</span><strong>${escapeHtml(pool.seatCapacity)}</strong><small>Tổng giới hạn của mọi tổ chức</small></article><article><span>Đang dùng</span><strong>${escapeHtml(pool.activeSeats)}</strong><small>Khách đang hoạt động</small></article><article><span>Đang giữ</span><strong>${escapeHtml(pool.reservedSeats)}</strong><small>Chỗ đang chờ thanh toán</small></article><article><span>Có thể phân bổ</span><strong>${escapeHtml(pool.allocatableAvailableSeats)}</strong><small>${escapeHtml(pool.allocatableOrganizationCount)} tổ chức đang sẵn sàng</small></article></div>
-      <h3>Tổ chức nhận khách</h3>${organizations.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Tổ chức</th><th>Sức chứa</th><th>Dùng / giữ</th><th>Có thể phân bổ</th><th>Ưu tiên</th><th>Kiểm tra sẵn sàng</th><th></th></tr></thead><tbody>${organizations.map(item => `<tr><td><strong>${escapeHtml(item.organizationName)}</strong><br><small>${escapeHtml(item.organizationCode)} · ${escapeHtml(item.organizationStatus)}</small></td><td>${escapeHtml(item.seatCapacity)}</td><td>${escapeHtml(item.activeSeats)} / ${escapeHtml(item.reservedSeats)}</td><td><strong>${escapeHtml(item.allocatableAvailableSeats)}</strong><br><small>${item.canReceiveCustomers ? 'Đang mở nhận khách' : `Còn ${escapeHtml(item.availableSeats)} chỗ cấu hình nhưng chưa thể bán`}</small></td><td>${escapeHtml(item.priority)}</td><td>${item.canReceiveCustomers ? statusPill('Đang nhận khách', 'ready') : item.isAutoAssignmentEnabled && item.isReady ? statusPill('Tổ chức đã sẵn sàng · chờ nhóm/gói', 'warning') : item.isReady ? statusPill('Đã kiểm tra · tự động đang tắt', 'warning') : item.isAutoAssignmentEnabled ? `${statusPill('Chưa sẵn sàng', 'blocked')}<br><button type="button" class="readiness-setup-link" data-check-pool-organization="${escapeHtml(item.organizationId)}">Kiểm tra sẵn sàng →</button>` : `${statusPill('Tự động đang tắt', 'warning')}<br><small>Bật phân bổ trước khi kiểm tra.</small>`}<br><small>${escapeHtml(item.readinessMessage || '')}</small></td><td><div class="inline-actions"><button type="button" class="ghost-button" data-edit-pool-organization="${escapeHtml(item.organizationId)}">Sửa</button><button type="button" class="ghost-button danger" data-remove-pool-organization="${escapeHtml(item.organizationId)}">Gỡ</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Chưa thêm tổ chức vào nhóm phân bổ.</div>'}
-      <h3>Gói được phân bổ</h3>${plans.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Gói</th><th>Hạn mức AI thành viên</th><th>Trạng thái</th><th></th></tr></thead><tbody>${plans.map(item => { const sellable = item.isActive && item.isSellable; const label = !item.isActive ? 'Mapping đã tắt' : item.isSellable ? 'Đang mở bán' : 'Gói chưa đủ điều kiện mở bán'; return `<tr><td><strong>${escapeHtml(item.planName)}</strong><br><small>${escapeHtml(item.planCode)}</small></td><td>${item.defaultMemberMonthlyBudgetLimit === null ? 'Theo tổ chức' : escapeHtml(formatMoney(item.defaultMemberMonthlyBudgetLimit))}</td><td>${statusPill(label, sellable ? 'ready' : 'warning')}</td><td><div class="inline-actions"><button type="button" class="ghost-button" data-edit-pool-plan="${escapeHtml(item.licensePlanId)}">Sửa</button><button type="button" class="ghost-button danger" data-remove-pool-plan="${escapeHtml(item.licensePlanId)}">Gỡ</button></div></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="empty-state">Chưa gắn gói license vào nhóm này.</div>'}
-      <h3>Phân bổ gần đây</h3>${assignments.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Người dùng</th><th>Gói / đơn</th><th>Tổ chức</th><th>Trạng thái nghiệp vụ</th><th>Hiệu lực</th><th></th></tr></thead><tbody>${assignments.map(item => { const presentation = assignmentPresentation(item); return `<tr><td>${escapeHtml(item.userEmail)}<br><small>${item.membershipManaged ? 'Thành viên tự động' : 'Thành viên thủ công'}</small></td><td><strong>${escapeHtml(item.planCode)}</strong><br><small>${escapeHtml(item.orderCode)}</small></td><td>${escapeHtml(item.organizationName)}</td><td>${statusPill(presentation.label, presentation.tone)}<br><small>${escapeHtml(presentation.detail)}</small></td><td><small>${escapeHtml(formatDate(item.startsAtUtc || item.reservedAtUtc))}<br>${escapeHtml(formatDate(item.endsAtUtc || item.reservationExpiresAtUtc))}</small></td><td>${presentation.canRetry ? `<button type="button" class="primary-button" data-retry-assignment="${escapeHtml(item.organizationSeatAssignmentId)}">Thử phân bổ lại</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div><p class="form-hint">Hiển thị tối đa 100 lượt phân bổ được cập nhật gần nhất.</p>` : '<div class="empty-state">Chưa có lượt phân bổ nào.</div>'}
-    </section>`;
+    if (!window.videoMakerAllocationSetup) { root.innerHTML = '<div class="error-state" role="alert">Chưa tải được giao diện phân bổ. Hãy tải lại trang quản trị.</div>'; return; }
+    const pools = organizationState.pools || [], detail = organizationState.poolDetail;
+    window.videoMakerAdminPages.pools(root, organizationState, { escapeHtml, icon, statusPill, formatMoney, formatDate, paginationMarkup, assignmentPresentation });
+    enhancePoolSetup(root, detail, pools);
   }
 
   function openPoolDialog(pool = null) {
@@ -602,8 +806,8 @@
     const id = byId('organizationPoolId').value;
     const nextStatus = byId('organizationPoolStatus').value;
     const current = organizationState.pools?.find(pool => pool.organizationPoolId === id);
-    if (nextStatus === 'Active' && current?.status !== 'Active' && !confirm('Kích hoạt nhóm phân bổ? Gói đang ánh xạ sẽ bắt đầu bán theo số chỗ thực sự sẵn sàng.')) return;
-    if (nextStatus === 'Inactive' && current?.status === 'Active' && !confirm('Chuyển nhóm về Nháp? Hệ thống sẽ ngừng giữ chỗ mới cho các gói thuộc nhóm này.')) return;
+    if (nextStatus === 'Active' && current?.status !== 'Active' && !await window.videoMakerAdminDialogs.confirm('Kích hoạt nhóm phân bổ? Gói đang ánh xạ sẽ bắt đầu bán theo số chỗ thực sự sẵn sàng.')) return;
+    if (nextStatus === 'Inactive' && current?.status === 'Active' && !await window.videoMakerAdminDialogs.confirm('Chuyển nhóm về Nháp? Hệ thống sẽ ngừng giữ chỗ mới cho các gói thuộc nhóm này.')) return;
     setBusy(button, true, 'Đang lưu...');
     try {
       const saved = await api(id ? `/api/admin/organization-pools/${id}` : '/api/admin/organization-pools', {
@@ -632,7 +836,7 @@
     const organizationId = byId('poolOrganizationId').value;
     const current = organizationState.poolDetail?.organizations?.find(item => item.organizationId === organizationId);
     const autoAssignmentEnabled = byId('poolOrganizationAuto').checked;
-    if (current?.isAutoAssignmentEnabled && !autoAssignmentEnabled && !confirm('Tắt phân bổ tự động cho tổ chức này? Số chỗ trống của tổ chức sẽ lập tức không còn được bán.')) return;
+    if (current?.isAutoAssignmentEnabled && !autoAssignmentEnabled && !await window.videoMakerAdminDialogs.confirm('Tắt phân bổ tự động cho tổ chức này? Số chỗ trống của tổ chức sẽ lập tức không còn được bán.')) return;
     setBusy(button, true, 'Đang kiểm tra...');
     try {
       await api(`/api/admin/organization-pools/${poolId}/organizations/${organizationId}`, {
@@ -685,7 +889,7 @@
     const budgetText = byId('poolPlanMemberBudget').value;
     const existingMapping = organizationState.planPoolMappings.get(planId);
     if (existingMapping && existingMapping.poolId !== poolId &&
-        !confirm(`Gói này đang thuộc nhóm “${existingMapping.poolName}”. Chuyển gói sang nhóm hiện tại?`)) return;
+        !await window.videoMakerAdminDialogs.confirm(`Gói này đang thuộc nhóm “${existingMapping.poolName}”. Chuyển gói sang nhóm hiện tại?`)) return;
     setBusy(button, true, 'Đang lưu...');
     try {
       await api(`/api/admin/organization-pools/license-plans/${planId}`, {
@@ -704,49 +908,18 @@
     }
   }
 
-  async function navigateToReadinessSetup(target, providerCode) {
-    if (target === 'budget') {
-      await showScope('directory');
-      await selectTab('usage');
-      const budgetInput = byId('organizationBudgetLimit');
-      budgetInput?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      budgetInput?.focus({ preventScroll: true });
-      return;
-    }
-    if (target === 'pricing') {
-      organizationState.pricingExpandedProviders.add(providerCode);
-      shell.setSetupReturn(true);
-      await showScope('pricing');
-      const providerSection = [...document.querySelectorAll('[data-pricing-provider]')]
-        .find(section => section.dataset.pricingProvider === providerCode);
-      providerSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      providerSection?.querySelector('[data-add-ai-rate]')?.focus({ preventScroll: true });
-      return;
-    }
-    if (target === 'provider-disabled') {
-      const provider = organizationState.pricing?.find(item => item.providerCode === providerCode);
-      openProviderUnavailableDialog(providerCode, provider?.displayName || providerCode);
-      return;
-    }
-    if (target === 'policy') {
-      await showScope('directory');
-      await selectTab('providers');
-      document.querySelector('[data-policy-scope="LongForm"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      document.querySelector('[data-policy-scope="LongForm"] select')?.focus({ preventScroll: true });
-      return;
-    }
-    if (target === 'credential') {
-      await showScope('directory');
-      await selectTab('providers');
-      const providerButton = [...document.querySelectorAll('[data-configure-provider]')]
-        .find(button => button.dataset.configureProvider === providerCode);
-      if (providerButton) openCredentialDialog(providerCode, providerButton.dataset.providerName || providerCode);
-    }
+  function navigateToReadinessSetup(target, providerCode, context = {}) {
+    const readiness = readinessFor(selectedOrganization() || {}, providerCode);
+    const supplied = Object.fromEntries(Object.entries(context).filter(([, value]) => value !== undefined));
+    return openSetupTarget({ organizationId: organizationState.selectedOrganizationId,
+      modelCode: readiness?.modelCode, usageTypes: readiness?.missingUsageTypes, ...supplied, target,
+      providerCode: target === 'policy' && !['openai', 'fal', 'kling', 'byteplus'].includes(providerCode) ? '' : providerCode });
   }
 
   async function openOrganization(organizationId) {
     return preservePagePosition(async () => {
       cancelRequests();
+      if (byId('organizationCredentialDialog').open) byId('organizationCredentialDialog').close();
       organizationState.selectedOrganizationId = organizationId;
       organizationState.selectedTab = 'overview';
       organizationState.members = null;
@@ -776,6 +949,7 @@
     return preservePagePosition(() => {
       cancelRequests();
       organizationState.selectedOrganizationId = null;
+      organizationState.selectedOrganizationSnapshot = null;
       organizationState.members = null;
       organizationState.memberDirectory = null;
       organizationState.memberSearch = '';
@@ -826,7 +1000,8 @@
     const organization = selectedOrganization();
     if (!organization) return;
     const readiness = organization.aiReadiness || [];
-    const warnings = readiness.flatMap(item => (item.blockingReasons || []).map(reason => ({ provider: item.providerCode, reason, missing: item.missingUsageTypes || [] })));
+    const warnings = readiness.flatMap(item => (item.blockingReasons || []).map(reason => ({ provider: item.providerCode, modelCode: item.modelCode, reason, missing: item.missingUsageTypes || [] })));
+    if (organization.monthlyBudgetLimit > 0 && organization.remainingBudget <= 0) warnings.push({ provider: '', reason: 'budget_exhausted', missing: [] });
     const veoSetup = organizationVeoSetupState(organization);
     const setupSteps = [
       ['Budget', veoSetup.budgetReady],
@@ -842,7 +1017,7 @@
     root.innerHTML = `
       <section class="organization-setup-hero ${veoSetup.ready ? 'complete' : ''}">
         <div class="organization-setup-copy"><span class="eyebrow">VIDEO DÀI · OPENAI + FAL/VEO</span><h3>${veoSetup.ready ? 'Tổ chức đã sẵn sàng' : `${completedSteps}/${setupSteps.length} điều kiện đã hoàn tất`}</h3><p>${veoSetup.ready ? 'Dự án Video dài mới có thể dùng OpenAI để sinh nội dung và Fal/Veo để tạo clip theo policy hiện tại.' : 'Hoàn tất điều kiện còn thiếu theo thứ tự; provider không được chọn sẽ không chặn tổ chức.'}</p></div>
-        <div class="organization-setup-actions">${statusPill(veoSetup.ready ? 'Sẵn sàng' : 'Cần thiết lập', veoSetup.ready ? 'ready' : 'warning')}${nextWarning ? renderReadinessAction(nextWarning.reason, nextWarning.provider) : ''}</div>
+        <div class="organization-setup-actions">${statusPill(veoSetup.ready ? 'Sẵn sàng' : 'Cần thiết lập', veoSetup.ready ? 'ready' : 'warning')}${nextWarning ? renderReadinessAction(nextWarning.reason, nextWarning.provider, { modelCode: nextWarning.modelCode, usageTypes: nextWarning.missing }) : ''}</div>
         <div class="organization-setup-steps">${setupSteps.map(([label, ready]) => `<span class="${ready ? 'complete' : ''}">${ready ? icon('circle-check') : '<i></i>'}${escapeHtml(label)}</span>`).join('')}</div>
       </section>
       <div class="organization-metrics">
@@ -852,7 +1027,7 @@
         <article><span>Còn lại</span><strong>${escapeHtml(formatMoney(organization.remainingBudget, organization.currencyCode))}</strong><small>Không phải số dư đã nạp</small></article>
       </div>
       ${Number(organization.monthlyBudgetLimit) === 0 ? `<div class="organization-alert danger"><strong>AI đang bị khóa</strong><span>Budget tổ chức bằng 0. Hãy đặt hạn mức lớn hơn 0 trước khi phát sinh request AI.</span>${renderReadinessAction('budget_disabled')}</div>` : ''}
-      <div class="organization-overview-grid"><section><div class="section-heading"><div><span class="eyebrow">AI READINESS</span><h3>Luồng Video dài</h3></div></div><div class="organization-provider-list">${readiness.length ? readiness.map(renderOverviewProvider).join('') : '<div class="empty-state">Chưa có dữ liệu để đánh giá OpenAI và Policy Video dài.</div>'}</div></section><section><div class="section-heading"><div><span class="eyebrow">CONFIGURATION</span><h3>Điều kiện cần xử lý</h3></div></div>${warnings.length ? `<ul class="warning-list">${warnings.map(item => `<li><strong>${escapeHtml(readinessProviderLabel(item.provider))}</strong><span>${escapeHtml(readinessMessages[item.reason] || item.reason)}${item.reason === 'pricing_not_configured' && item.missing.length ? ` Thiếu: ${escapeHtml(item.missing.join(', '))}.` : ''}</span>${renderReadinessAction(item.reason, item.provider)}</li>`).join('')}</ul>` : '<div class="empty-state success-state">OpenAI và provider Video dài đã sẵn sàng.</div>'}</section></div>`;
+      <div class="organization-overview-grid"><section><div class="section-heading"><div><span class="eyebrow">AI READINESS</span><h3>Luồng Video dài</h3></div></div><div class="organization-provider-list">${readiness.length ? readiness.map(renderOverviewProvider).join('') : '<div class="empty-state">Chưa có dữ liệu để đánh giá OpenAI và Policy Video dài.</div>'}</div></section><section><div class="section-heading"><div><span class="eyebrow">CONFIGURATION</span><h3>Điều kiện cần xử lý</h3></div></div>${warnings.length ? `<ul class="warning-list">${warnings.map(item => `<li><strong>${escapeHtml(readinessProviderLabel(item.provider))}</strong><span>${escapeHtml(readinessMessages[item.reason] || item.reason)}${item.reason === 'pricing_not_configured' && item.missing.length ? ` Thiếu: ${escapeHtml(item.missing.join(', '))}.` : ''}</span>${renderReadinessAction(item.reason, item.provider, { modelCode: item.modelCode, usageTypes: item.missing })}</li>`).join('')}</ul>` : '<div class="empty-state success-state">OpenAI và provider Video dài đã sẵn sàng.</div>'}</section></div>`;
   }
 
   function readinessProviderLabel(providerCode) {
@@ -952,7 +1127,7 @@
       <div class="organization-metrics usage-metrics"><article><span>Budget tháng</span><strong>${escapeHtml(formatMoney(data.budgetLimit, data.currencyCode))}</strong><small>${escapeHtml(formatDate(data.periodStartsAtUtc))} → ${escapeHtml(formatDate(data.periodEndsAtUtc))}</small></article><article><span>Actual cost</span><strong>${escapeHtml(formatMoney(data.actualCost, data.currencyCode))}</strong><small>Đã quyết toán</small></article><article><span>Reserved cost</span><strong>${escapeHtml(formatMoney(data.reservedCost, data.currencyCode))}</strong><small>Đang giữ</small></article><article><span>Remaining</span><strong>${escapeHtml(formatMoney(data.remainingBudget, data.currencyCode))}</strong><small>Còn có thể reserve</small></article><article><span>Input token</span><strong>${escapeHtml(formatMetric(data.inputTokens))}</strong><small>Actual trong kỳ</small></article><article><span>Output token</span><strong>${escapeHtml(formatMetric(data.outputTokens))}</strong><small>Actual trong kỳ</small></article><article><span>Video</span><strong>${escapeHtml(formatMetric(data.videoSeconds, ' giây'))}</strong><small>Actual trong kỳ</small></article></div>
       <div class="budget-progress"><div><span>Đã dùng + đang giữ</span><strong>${escapeHtml(percent.toFixed(1))}%</strong></div><span class="budget-progress-track"><span class="${escapeHtml(progressStatus)}" style="width:${escapeHtml(percent)}%"></span></span></div>
       ${limit === 0 ? '<div class="organization-alert danger"><strong>AI đang bị khóa</strong><span>Budget 0 là trạng thái khóa, không phải không giới hạn.</span></div>' : ''}
-      ${capabilities().billing ? `<form id="organizationBudgetForm" class="inline-budget-form"><label>Budget tháng mới (USD)<input id="organizationBudgetLimit" type="number" min="0" max="100000000" step="0.000001" value="${escapeHtml(data.budgetLimit)}" required /></label><button type="submit" class="primary-button">Cập nhật budget</button><small>Budget là hạn mức nội bộ; 0 sẽ khóa AI.</small><p class="form-message"></p></form>` : ''}
+      ${capabilities().billing ? `<form id="organizationBudgetForm" data-organization-id="${escapeHtml(organizationState.selectedOrganizationId)}" class="inline-budget-form"><label>Budget tháng mới (USD)<input id="organizationBudgetLimit" type="number" min="0" max="100000000" step="0.000001" value="${escapeHtml(data.budgetLimit)}" required /></label><button type="submit" class="primary-button">Cập nhật budget</button><small>Budget là hạn mức nội bộ; 0 sẽ khóa AI.</small><p class="form-message"></p></form>` : ''}
       <section class="usage-groups"><div class="section-heading"><div><span class="eyebrow">USAGE BREAKDOWN</span><h3>Theo provider, model và thành viên</h3></div></div>${data.groups?.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Provider / model</th><th>Thành viên</th><th>Chi phí</th><th>Input</th><th>Output</th><th>Video</th></tr></thead><tbody>${data.groups.map(group => `<tr><td><strong>${escapeHtml(group.providerCode)}</strong><br><small>${escapeHtml(group.modelCode)}</small></td><td>${escapeHtml(memberMap.get(group.userId) || group.userId)}</td><td>${escapeHtml(formatMoney(group.actualCost, data.currencyCode))}</td><td>${escapeHtml(formatMetric(group.inputTokens))}</td><td>${escapeHtml(formatMetric(group.outputTokens))}</td><td>${escapeHtml(formatMetric(group.videoSeconds, ' giây'))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Chưa có usage Actual trong kỳ.</div>'}</section>
       <section class="usage-ledger"><div class="section-heading log-heading"><div><span class="eyebrow">LEDGER</span><h3>Đối soát reservation và actual</h3></div><div class="filters"><select data-usage-filter="provider"><option value="">Mọi provider</option>${providers.map(value => `<option ${value === organizationState.usageFilters.provider ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('')}</select><select data-usage-filter="model"><option value="">Mọi model</option>${models.map(value => `<option ${value === organizationState.usageFilters.model ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('')}</select><select data-usage-filter="kind"><option value="">Mọi loại</option>${kinds.map(value => `<option ${value === organizationState.usageFilters.kind ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('')}</select></div></div>${filtered.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Thời gian</th><th>Loại</th><th>Provider / model</th><th>Project</th><th>Thành viên</th><th>Số tiền</th></tr></thead><tbody>${filtered.map(item => `<tr><td>${escapeHtml(formatDate(item.occurredAtUtc))}</td><td>${statusPill(item.entryKind, item.entryKind === 'Actual' ? 'ready' : item.entryKind === 'Reservation' ? 'warning' : 'blocked')}</td><td><strong>${escapeHtml(item.providerCode)}</strong><br><small>${escapeHtml(item.modelCode)}</small></td><td><small>${item.projectKind === "Vietsub" ? "Vietsub" : "Video"}</small><br><code>${escapeHtml(item.projectId)}</code></td><td>${escapeHtml(memberMap.get(item.userId) || item.userId)}</td><td>${escapeHtml(formatMoney(item.amount, item.currencyCode))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Không có ledger phù hợp bộ lọc.</div>'}</section>`;
     document.querySelectorAll('[data-usage-filter]').forEach(select => select.addEventListener('change', event => {
@@ -1038,8 +1213,10 @@
       : null;
     const eligibleModels = (catalogProvider.models || []).filter(model =>
       catalogProvider.providerCode === 'openai' ? model.modality === 'Text' : model.modality === 'Video');
-    const model = eligibleModels.find(item => item.providerModelId === policyModelId) ||
-      [...eligibleModels].sort((a, b) => Number(b.isEnabled && b.isDefault) - Number(a.isEnabled && a.isDefault) || Number(b.isEnabled) - Number(a.isEnabled))[0];
+    const evaluatedModelCode = readinessFor(selectedOrganization() || {}, catalogProvider.providerCode)?.modelCode;
+    const model = policyModelId ? eligibleModels.find(item => item.providerModelId === policyModelId)
+      : evaluatedModelCode ? eligibleModels.find(item => item.modelCode === evaluatedModelCode)
+      : [...eligibleModels].sort((a, b) => Number(b.isEnabled && b.isDefault) - Number(a.isEnabled && a.isDefault) || Number(b.isEnabled) - Number(a.isEnabled))[0];
     const required = !requiredForLongForm
       ? []
       : catalogProvider.providerCode === 'openai'
@@ -1056,6 +1233,7 @@
     const reasons = [];
     if (!requiredForLongForm) return { model, required, missing, reasons, ready: false, requiredForLongForm };
     if (Number(selectedOrganization()?.monthlyBudgetLimit) <= 0) reasons.push('budget_disabled');
+    else if (Number(selectedOrganization()?.remainingBudget) <= 0) reasons.push('budget_exhausted');
     if (!catalogProvider.isEnabled) {
       reasons.push('provider_disabled');
       return { model, required, missing, reasons, ready: false, requiredForLongForm };
@@ -1074,7 +1252,7 @@
       ? (provider.models || []).filter(model => model.isEnabled && model.modality === 'Video').map(model => ({ provider, model }))
       : []);
     const renderPolicyPanel = (scope, title, currentPolicy, models) =>
-      `<section class="provider-admin-card video-policy-card"><div class="provider-admin-heading"><span class="provider-logo">V</span><div><h3>${escapeHtml(title)}</h3><p>${scope === 'LongForm' ? 'Chọn provider tạo clip cho dự án Video dài. Fal/Veo chỉ được dùng tại đây.' : 'Áp dụng cho Video ngắn và workflow không phải Video dài.'}</p></div>${currentPolicy?.isActive ? statusPill(`Đang dùng · v${currentPolicy.policyVersion}`, 'ready') : statusPill('Chưa cấu hình', 'blocked')}</div>${currentPolicy ? `<dl><div><dt>Nhà cung cấp</dt><dd>${escapeHtml(currentPolicy.providerName)}</dd></div><div><dt>Model</dt><dd>${escapeHtml(currentPolicy.modelCode)}</dd></div><div><dt>Biến thể</dt><dd>${escapeHtml(currentPolicy.resolution)} · ${currentPolicy.nativeAudio ? 'Âm thanh trực tiếp' : 'Không có âm thanh trực tiếp'}</dd></div><div><dt>Phạm vi</dt><dd>${scope === 'LongForm' ? 'Video dài' : 'Mặc định / Video ngắn'}</dd></div><div><dt>Cập nhật</dt><dd>${escapeHtml(formatDate(currentPolicy.updatedAtUtc))}</dd></div></dl>` : '<p class="provider-ready-note">Chọn model đã được bật và có khóa API đang hoạt động.</p>'}${capabilities().credentials ? `<form class="inline-budget-form organization-video-policy-form" data-policy-scope="${scope}"><label>Provider và model video<select class="organization-video-policy-model" required ${models.length ? '' : 'disabled'}><option value="">Chọn provider / model</option>${models.map(({ provider, model }) => `<option value="${escapeHtml(model.providerModelId)}" ${currentPolicy?.providerModelId === model.providerModelId ? 'selected' : ''}>${escapeHtml(provider.displayName)} · ${escapeHtml(model.displayName)}</option>`).join('')}</select></label><button type="submit" class="primary-button" ${models.length ? '' : 'disabled'}>Áp dụng</button><small>${scope === 'LongForm' ? 'Veo: 720p · âm thanh trực tiếp · 4/6/8 giây · 16:9/9:16. ' : ''}Dự án cũ giữ nguyên model đã chọn trước đó.</small><p class="form-message"></p></form>` : '<p class="form-hint">Chỉ Owner hoặc Quản trị viên tổ chức được đổi policy video.</p>'}</section>`;
+      `<section class="provider-admin-card video-policy-card"><div class="provider-admin-heading"><span class="provider-logo">V</span><div><h3>${escapeHtml(title)}</h3><p>${scope === 'LongForm' ? 'Chọn provider tạo clip cho dự án Video dài. Fal/Veo chỉ được dùng tại đây.' : 'Áp dụng cho Video ngắn và workflow không phải Video dài.'}</p></div>${currentPolicy?.isActive ? statusPill(`Đang dùng · v${currentPolicy.policyVersion}`, 'ready') : statusPill('Chưa cấu hình', 'blocked')}</div>${currentPolicy ? `<dl><div><dt>Nhà cung cấp</dt><dd>${escapeHtml(currentPolicy.providerName)}</dd></div><div><dt>Model</dt><dd>${escapeHtml(currentPolicy.modelCode)}</dd></div><div><dt>Biến thể</dt><dd>${escapeHtml(currentPolicy.resolution)} · ${currentPolicy.nativeAudio ? 'Âm thanh trực tiếp' : 'Không có âm thanh trực tiếp'}</dd></div><div><dt>Phạm vi</dt><dd>${scope === 'LongForm' ? 'Video dài' : 'Mặc định / Video ngắn'}</dd></div><div><dt>Cập nhật</dt><dd>${escapeHtml(formatDate(currentPolicy.updatedAtUtc))}</dd></div></dl>` : '<p class="provider-ready-note">Chọn model đã được bật và có khóa API đang hoạt động.</p>'}${capabilities().credentials ? `<form class="inline-budget-form organization-video-policy-form" data-organization-id="${escapeHtml(organizationState.selectedOrganizationId)}" data-policy-scope="${scope}"><label>Provider và model video<select class="organization-video-policy-model" required ${models.length ? '' : 'disabled'}><option value="">Chọn provider / model</option>${models.map(({ provider, model }) => `<option value="${escapeHtml(model.providerModelId)}" ${currentPolicy?.providerModelId === model.providerModelId ? 'selected' : ''}>${escapeHtml(provider.displayName)} · ${escapeHtml(model.displayName)}</option>`).join('')}</select></label><button type="submit" class="primary-button" ${models.length ? '' : 'disabled'}>Áp dụng</button><small>${scope === 'LongForm' ? 'Veo: 720p · âm thanh trực tiếp · 4/6/8 giây · 16:9/9:16. ' : ''}Dự án cũ giữ nguyên model đã chọn trước đó.</small><p class="form-message"></p></form>` : '<p class="form-hint">Chỉ Owner hoặc Quản trị viên tổ chức được đổi policy video.</p>'}</section>`;
     const defaultModels = allVideoModels.filter(({ provider }) => provider.providerCode !== 'fal');
     const renderProviderCard = provider => {
       const status = providerStatuses.get(provider.providerCode);
@@ -1084,7 +1262,7 @@
       const credentialControl = !capabilities().credentials
         ? '<p class="form-hint">Vai trò hiện tại chỉ được xem trạng thái.</p>'
         : provider.isEnabled
-          ? `<button type="button" class="primary-button" data-configure-provider="${escapeHtml(provider.providerCode)}" data-provider-name="${escapeHtml(provider.displayName)}">${status?.configured ? 'Thay credential' : 'Cấu hình credential'}</button>`
+          ? `<button type="button" class="primary-button" data-configure-provider="${escapeHtml(provider.providerCode)}" data-provider-name="${escapeHtml(provider.displayName)}">${status?.configured ? 'Thay key' : 'Cấu hình key'} ${escapeHtml(provider.displayName)}</button>`
           : `<button type="button" class="ghost-button" data-provider-unavailable="${escapeHtml(provider.providerCode)}" data-provider-name="${escapeHtml(provider.displayName)}">Xem cách kích hoạt</button>`;
       const readinessStatus = !readiness.requiredForLongForm
         ? statusPill('Không được chọn', 'warning')
@@ -1092,12 +1270,12 @@
           ? statusPill('Sẵn sàng', 'ready')
           : statusPill('Chưa sẵn sàng', 'blocked');
       const readinessDetail = !readiness.requiredForLongForm
-        ? '<p class="provider-ready-note">Không thuộc Policy Video dài hiện tại nên không phải điều kiện chặn.</p>'
+        ? `<p class="provider-ready-note">Không thuộc Policy Video dài hiện tại nên không phải điều kiện chặn.</p>${setupActionMarkup(provider.isEnabled ? readiness.model?.isEnabled ? 'policy' : 'model' : 'provider', `Chọn ${provider.providerCode === 'fal' ? 'Fal/Veo' : provider.displayName} cho Video dài`, { providerCode: provider.providerCode, modelId: readiness.model?.providerModelId })}`
         : readiness.reasons.length
-          ? `<ul class="provider-blockers">${readiness.reasons.map(reason => `<li><span>${escapeHtml(readinessMessages[reason] || reason)}${reason === 'pricing_not_configured' ? ` Thiếu: ${escapeHtml(readiness.missing.join(', '))}.` : ''}</span>${renderReadinessAction(reason, provider.providerCode)}</li>`).join('')}</ul>`
+          ? `<ul class="provider-blockers">${readiness.reasons.map(reason => `<li><span>${escapeHtml(readinessMessages[reason] || reason)}${reason === 'pricing_not_configured' ? ` Thiếu: ${escapeHtml(readiness.missing.join(', '))}.` : ''}</span>${reason === 'credential_missing' && capabilities().credentials ? '' : renderReadinessAction(reason, provider.providerCode, { modelId: readiness.model?.providerModelId, usageTypes: readiness.missing })}</li>`).join('')}</ul>`
           : '<p class="provider-ready-note">Đủ budget, credential Active, model và rate bắt buộc.</p>';
       const credentialLabel = !provider.isEnabled ? 'Provider đang tắt' : status?.credentialStatus === 'Active' ? 'Đang hoạt động' : status?.configured ? 'Cần kiểm tra lại' : 'Chưa cấu hình';
-      return `<article class="provider-admin-card"><div class="provider-admin-heading"><span class="provider-logo">${escapeHtml(provider.displayName.slice(0, 1).toUpperCase())}</span><div><h3>${escapeHtml(provider.displayName)}</h3><p>${escapeHtml(readiness.model?.modelCode || 'Chưa có model')}</p></div>${readinessStatus}</div><dl><div><dt>Khóa API</dt><dd>${status?.configured ? `${escapeHtml(status.secretHint || '••••')} · phiên bản ${escapeHtml(status.credentialVersion)}` : 'Chưa cấu hình'}</dd></div><div><dt>Trạng thái</dt><dd>${escapeHtml(credentialLabel)}</dd></div><div><dt>Cập nhật</dt><dd>${escapeHtml(formatDate(status?.updatedAtUtc))}</dd></div><div><dt>Đơn giá bắt buộc</dt><dd>${escapeHtml(readiness.required.join(', ') || 'Không áp dụng')}</dd></div></dl>${readinessDetail}${credentialControl}</article>`;
+      return `<article class="provider-admin-card" data-provider-code="${escapeHtml(provider.providerCode)}"><div class="provider-admin-heading"><span class="provider-logo">${escapeHtml(provider.displayName.slice(0, 1).toUpperCase())}</span><div><h3>${escapeHtml(provider.displayName)}</h3><p>${escapeHtml(readiness.model?.modelCode || 'Chưa có model')}</p></div>${readinessStatus}</div><dl><div><dt>Khóa API</dt><dd>${status?.configured ? `${escapeHtml(status.secretHint || '••••')} · phiên bản ${escapeHtml(status.credentialVersion)}` : 'Chưa cấu hình'}</dd></div><div><dt>Trạng thái</dt><dd>${escapeHtml(credentialLabel)}</dd></div><div><dt>Cập nhật</dt><dd>${escapeHtml(formatDate(status?.updatedAtUtc))}</dd></div><div><dt>Đơn giá bắt buộc</dt><dd>${escapeHtml(readiness.required.join(', ') || 'Không áp dụng')}</dd></div></dl>${readinessDetail}${credentialControl}</article>`;
     };
     const selectedVideoProviderId = organizationState.longFormVideoPolicy?.providerId;
     const requiredCatalog = catalog.filter(provider => provider.providerCode === 'openai' || provider.providerId === selectedVideoProviderId || (!selectedVideoProviderId && provider.providerCode === 'fal'));
@@ -1110,6 +1288,8 @@
   async function submitVideoPolicy(event) {
     event.preventDefault();
     const form = event.currentTarget;
+    const organizationId = form.dataset.organizationId, actor = adminIdentity();
+    if (!shell.state.adminReady || organizationId !== organizationState.selectedOrganizationId) return;
     const button = form.querySelector('button[type="submit"]');
     const providerModelId = form.querySelector('.organization-video-policy-model').value;
     const scope = form.dataset.policyScope || 'Default';
@@ -1124,10 +1304,11 @@
     }
     setBusy(button, true, 'Đang lưu...');
     try {
-      const savedPolicy = await api(`/api/organizations/${organizationState.selectedOrganizationId}/video-policy`, {
+      const savedPolicy = await api(`/api/organizations/${organizationId}/video-policy`, {
         method: 'PUT',
         body: JSON.stringify({ providerModelId, resolution: '720p', nativeAudio: true, scope })
       });
+      if (actor !== adminIdentity() || organizationId !== organizationState.selectedOrganizationId || !shell.state.adminReady) return;
       if (scope === 'LongForm') organizationState.longFormVideoPolicy = savedPolicy;
       else organizationState.videoPolicy = savedPolicy;
       toast('Đã cập nhật policy video. Dự án mới sẽ dùng policy này; dự án cũ giữ nguyên model.');
@@ -1135,6 +1316,7 @@
       organizationState.setupOrganizations = null;
       organizationState.directoryLoaded = false;
       await loadOrganizations(true);
+      await refreshSetupOrganization(organizationId);
       renderOrganizationHeading();
       await loadProviders(true);
     } catch (error) {
@@ -1277,7 +1459,7 @@
         const missing = requiredRates(provider.providerCode).filter(value => !configured.has(value));
         const stateControls = `<button type="button" class="${model.isEnabled ? 'danger-button' : 'ghost-button'}" data-toggle-ai-model="${escapeHtml(model.providerModelId)}" data-ai-model-enabled="${model.isEnabled ? 'false' : 'true'}">${model.isEnabled ? 'Tắt model' : 'Bật model'}</button>${model.isEnabled && !model.isDefault ? `<button type="button" class="ghost-button" data-default-ai-model="${escapeHtml(model.providerModelId)}">Đặt mặc định</button>` : ''}`;
         const variant = provider.providerCode === 'kling' ? ' · 720p · âm thanh trực tiếp' : provider.providerCode === 'fal' ? ' · 720p · âm thanh trực tiếp · đúng endpoint' : provider.providerCode === 'byteplus' ? ' · token video hoàn tất' : '';
-        return `<article class="pricing-model"><div class="pricing-model-heading"><div><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.modelCode)} · ${escapeHtml(model.modality)} · ${model.isEnabled ? 'Đang bật' : 'Đang tắt'}${model.isDefault ? ' · Mặc định' : ''}</small></div><div class="inline-actions">${stateControls}<button type="button" class="primary-button" data-add-ai-rate="${escapeHtml(model.providerModelId)}" data-ai-rate-model="${escapeHtml(model.displayName)}" data-ai-rate-provider="${escapeHtml(provider.providerCode)}">${icon('plus')}<span>Thêm đơn giá</span></button></div></div>${missing.length ? `<div class="organization-alert warning"><strong>Thiếu đơn giá bắt buộc</strong><span>${escapeHtml(missing.map(usageLabel).join(', '))}${variant}</span></div>` : `<div class="organization-alert success"><strong>Đơn giá hợp lệ</strong><span>Model đã có đủ loại đơn giá bắt buộc đang hiệu lực.</span></div>`}${model.costRates.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Loại chi phí</th><th>Đơn vị tính</th><th>Đơn giá</th><th>Hiệu lực</th><th>Trạng thái</th><th></th></tr></thead><tbody>${model.costRates.map(rate => `<tr><td><strong>${escapeHtml(usageLabel(rate.usageType) + rateVariantLabel(provider.providerCode, rate))}</strong></td><td>${escapeHtml(unitLabel(rate.unit))}</td><td>${escapeHtml(formatMoney(rate.unitPrice, rate.currencyCode))}</td><td>${escapeHtml(formatDate(rate.effectiveFromUtc))}<br><small>đến ${escapeHtml(formatDate(rate.effectiveToUtc))}</small></td><td>${rate.isActive ? statusPill('Đang dùng', 'ready') : statusPill('Đã ngừng', 'warning')}</td><td>${rate.isActive ? `<button type="button" class="danger-button" data-deactivate-ai-rate="${escapeHtml(rate.costRateId)}">Ngừng sử dụng</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Model chưa có đơn giá.</div>'}</article>`;
+        return `<article class="pricing-model" data-pricing-model="${escapeHtml(model.providerModelId)}"><div class="pricing-model-heading"><div><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.modelCode)} · ${escapeHtml(model.modality)} · ${model.isEnabled ? 'Đang bật' : 'Đang tắt'}${model.isDefault ? ' · Mặc định' : ''}</small></div><div class="inline-actions">${stateControls}<button type="button" class="primary-button" data-add-ai-rate="${escapeHtml(model.providerModelId)}" data-ai-rate-model="${escapeHtml(model.displayName)}" data-ai-rate-provider="${escapeHtml(provider.providerCode)}">${icon('plus')}<span>Thêm đơn giá</span></button></div></div>${missing.length ? `<div class="organization-alert warning"><strong>Thiếu đơn giá bắt buộc</strong><span>${escapeHtml(missing.map(usageLabel).join(', '))}${variant}</span></div>` : `<div class="organization-alert success"><strong>Đơn giá hợp lệ</strong><span>Model đã có đủ loại đơn giá bắt buộc đang hiệu lực.</span></div>`}${model.costRates.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Loại chi phí</th><th>Đơn vị tính</th><th>Đơn giá</th><th>Hiệu lực</th><th>Trạng thái</th><th></th></tr></thead><tbody>${model.costRates.map(rate => `<tr><td><strong>${escapeHtml(usageLabel(rate.usageType) + rateVariantLabel(provider.providerCode, rate))}</strong></td><td>${escapeHtml(unitLabel(rate.unit))}</td><td>${escapeHtml(formatMoney(rate.unitPrice, rate.currencyCode))}</td><td>${escapeHtml(formatDate(rate.effectiveFromUtc))}<br><small>đến ${escapeHtml(formatDate(rate.effectiveToUtc))}</small></td><td>${rate.isActive ? statusPill('Đang dùng', 'ready') : statusPill('Đã ngừng', 'warning')}</td><td>${rate.isActive ? `<button type="button" class="danger-button" data-deactivate-ai-rate="${escapeHtml(rate.costRateId)}">Ngừng sử dụng</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Model chưa có đơn giá.</div>'}</article>`;
       }).join('');
       return `<section class="pricing-provider" data-pricing-provider="${escapeHtml(provider.providerCode)}"><div class="pricing-provider-heading"><button type="button" class="pricing-provider-summary" data-toggle-pricing-provider="${escapeHtml(provider.providerCode)}" aria-expanded="${expanded}"><span class="provider-logo">${escapeHtml(provider.displayName.slice(0, 1).toUpperCase())}</span><span><span class="eyebrow">${escapeHtml(provider.providerCode)}</span><strong>${escapeHtml(provider.displayName)}</strong><small>${provider.models.length} model · ${expanded ? 'Thu gọn' : 'Mở cấu hình'}</small></span></button><div class="inline-actions">${provider.isEnabled ? statusPill('Provider đang bật', 'ready') : statusPill('Provider đang tắt', 'blocked')}${providerToggle}</div></div><div class="pricing-model-list ${expanded ? '' : 'hidden'}">${models}</div></section>`;
     }).join('');
@@ -1315,14 +1497,19 @@
   function resetCredentialDialog() {
     const form = byId('organizationCredentialForm');
     form.reset();
+    delete form.dataset.organizationId;
+    form.dataset.openVersion = String(Number(form.dataset.openVersion || 0) + 1);
     byId('organizationCredentialKey').value = '';
     byId('organizationCredentialProvider').value = '';
+    byId('organizationCredentialKeyLink').innerHTML = '';
     form.querySelector('.form-message').textContent = '';
   }
 
   function openCredentialDialog(providerCode, providerName) {
     resetCredentialDialog();
+    byId('organizationCredentialForm').dataset.organizationId = organizationState.selectedOrganizationId;
     byId('organizationCredentialProvider').value = providerCode;
+    byId('organizationCredentialKeyLink').innerHTML = shell.aiApiKeyLink(providerCode);
     byId('organizationCredentialName').value = `${providerName} organization`;
     byId('organizationCredentialDialogTitle').textContent = `Cấu hình ${providerName}`;
     byId('organizationCredentialDialog').showModal();
@@ -1375,7 +1562,7 @@
     root.innerHTML = `<span>Ví dụ ${escapeHtml(label)}</span><strong>${escapeHtml(formatMoney(cost, 'USD'))}</strong><small>Đây là phép tính minh họa từ đơn giá bạn vừa nhập.</small>`;
   }
 
-  function openRateDialog(modelId, modelName, providerCode) {
+  function openRateDialog(modelId, modelName, providerCode, usageType) {
     const form = byId('aiRateForm');
     form.reset();
     form.querySelector('.form-message').textContent = '';
@@ -1386,7 +1573,7 @@
     const allowedTypes = allowedRateUsageTypes(providerCode);
     const selectedModel = (organizationState.pricing || []).flatMap(provider => provider.models || []).find(model => model.providerModelId === modelId);
     const configured = new Set(configuredRates(providerCode, selectedModel).map(rate => rate.usageType));
-    const initialType = allowedTypes.find(type => !configured.has(type)) || allowedTypes[0];
+    const initialType = allowedTypes.includes(usageType) ? usageType : allowedTypes.find(type => !configured.has(type)) || allowedTypes[0];
     [...byId('aiRateUsageType').options].forEach(option => option.disabled = !allowedTypes.includes(option.value));
     byId('aiRateUsageType').value = initialType;
     syncRateUnit();
@@ -1426,7 +1613,7 @@
     const limitText = byId('organizationMemberLimit').value;
     const monthlyBudgetLimit = limitText === '' ? null : Number(limitText);
     if (monthlyBudgetLimit !== null && (!Number.isFinite(monthlyBudgetLimit) || monthlyBudgetLimit < 0)) return form.querySelector('.form-message').textContent = 'Hạn mức thành viên không hợp lệ.';
-    if (current && (current.role !== role || status !== 'Active') && !confirm('Thay đổi vai trò hoặc trạng thái có thể làm mất quyền truy cập ngay lập tức. Tiếp tục?')) return;
+    if (current && (current.role !== role || status !== 'Active') && !await window.videoMakerAdminDialogs.confirm('Thay đổi vai trò hoặc trạng thái có thể làm mất quyền truy cập ngay lập tức. Tiếp tục?')) return;
     setBusy(button, true, 'Đang lưu...');
     try {
       const body = userId ? { role, status, monthlyBudgetLimit } : { email: byId('organizationMemberEmail').value.trim(), role, monthlyBudgetLimit };
@@ -1449,15 +1636,20 @@
   async function submitBudget(event) {
     event.preventDefault();
     const form = event.currentTarget;
+    const organizationId = form.dataset.organizationId, actor = adminIdentity();
+    if (!shell.state.adminReady || organizationId !== organizationState.selectedOrganizationId) return;
     const button = form.querySelector('button[type="submit"]');
     const monthlyBudgetLimit = Number(byId('organizationBudgetLimit').value);
     if (!Number.isFinite(monthlyBudgetLimit) || monthlyBudgetLimit < 0) return form.querySelector('.form-message').textContent = 'Budget không hợp lệ.';
-    if (monthlyBudgetLimit === 0 && !confirm('Budget 0 sẽ khóa mọi request AI của tổ chức. Tiếp tục?')) return;
+    if (monthlyBudgetLimit === 0 && !await window.videoMakerAdminDialogs.confirm('Budget 0 sẽ khóa mọi request AI của tổ chức. Tiếp tục?')) return;
+    if (actor !== adminIdentity() || organizationId !== organizationState.selectedOrganizationId || !shell.state.adminReady) return;
     setBusy(button, true, 'Đang cập nhật...');
     try {
-      await api(`/api/organizations/${organizationState.selectedOrganizationId}/budget`, { method: 'PUT', body: JSON.stringify({ monthlyBudgetLimit, currencyCode: 'USD' }) });
+      await api(`/api/organizations/${organizationId}/budget`, { method: 'PUT', body: JSON.stringify({ monthlyBudgetLimit, currencyCode: 'USD' }) });
+      if (actor !== adminIdentity() || organizationId !== organizationState.selectedOrganizationId || !shell.state.adminReady) return;
       toast('Đã cập nhật budget tổ chức.');
       await loadOrganizations(true);
+      await refreshSetupOrganization(organizationId);
       organizationState.usage = null;
       renderOrganizationHeading();
       await loadUsage(true);
@@ -1471,6 +1663,8 @@
   async function submitCredential(event) {
     event.preventDefault();
     const form = event.currentTarget;
+    const organizationId = form.dataset.organizationId, actor = adminIdentity(), openVersion = form.dataset.openVersion;
+    if (!shell.state.adminReady || organizationId !== organizationState.selectedOrganizationId) return;
     const button = form.querySelector('button[type="submit"]');
     const keyInput = byId('organizationCredentialKey');
     const providerCode = byId('organizationCredentialProvider').value;
@@ -1480,11 +1674,13 @@
     form.querySelector('.form-message').textContent = '';
     setBusy(button, true, 'Đang kiểm tra...');
     try {
-      await api(`/api/organizations/${organizationState.selectedOrganizationId}/providers/${encodeURIComponent(providerCode)}/credential`, { method: 'PUT', body: JSON.stringify({ apiKey, name }) });
+      await api(`/api/organizations/${organizationId}/providers/${encodeURIComponent(providerCode)}/credential`, { method: 'PUT', body: JSON.stringify({ apiKey, name }) });
+      if (actor !== adminIdentity() || organizationId !== organizationState.selectedOrganizationId || !shell.state.adminReady || openVersion !== form.dataset.openVersion) return;
       byId('organizationCredentialDialog').close();
       toast(`Đã kiểm tra và lưu credential ${providerCode}.`);
       organizationState.providers = null;
       await loadOrganizations(true);
+      await refreshSetupOrganization(organizationId);
       renderOrganizationHeading();
       await loadProviders(true);
     } catch (error) {
@@ -1528,6 +1724,7 @@
       organizationState.organizations = null;
       organizationState.setupOrganizations = null;
       organizationState.directoryLoaded = false;
+      if (organizationState.selectedOrganizationId) await refreshSetupOrganization(organizationState.selectedOrganizationId);
     } catch (error) {
       form.querySelector('.form-message').textContent = friendlyError(error);
     } finally {
@@ -1536,7 +1733,7 @@
   }
 
   async function deactivateRate(rateId) {
-    if (!confirm('Ngừng rate này? Request mới sẽ bị chặn nếu model thiếu rate bắt buộc.')) return;
+    if (!await window.videoMakerAdminDialogs.confirm('Ngừng rate này? Request mới sẽ bị chặn nếu model thiếu rate bắt buộc.')) return;
     try {
       await api(`/api/admin/ai-pricing/rates/${rateId}`, { method: 'DELETE' });
       toast('Đã ngừng rate AI.');
@@ -1551,7 +1748,7 @@
   }
 
   async function updateProviderState(providerId, isEnabled) {
-    if (!isEnabled && !confirm('Tắt provider này? Dự án mới sẽ không thể chọn provider; worker vẫn tiếp tục task đã snapshot.')) return;
+    if (!isEnabled && !await window.videoMakerAdminDialogs.confirm('Tắt provider này? Dự án mới sẽ không thể chọn provider; worker vẫn tiếp tục task đã snapshot.')) return;
     try {
       await api(`/api/admin/ai-pricing/providers/${providerId}`, {
         method: 'PUT',
@@ -1569,7 +1766,8 @@
   }
 
   async function updateModelState(modelId, isEnabled, isDefault = false) {
-    if (!isEnabled && !confirm('Tắt model này? Dự án mới sẽ không thể snapshot model; task đang chạy vẫn được worker xử lý.')) return;
+    if (isDefault && !await window.videoMakerAdminDialogs.confirm('Đổi model mặc định áp dụng toàn hệ thống, ảnh hưởng các tổ chức dùng model mặc định. Project đã snapshot vẫn giữ lựa chọn cũ. Tiếp tục?')) return;
+    if (!isEnabled && !await window.videoMakerAdminDialogs.confirm('Tắt model này? Dự án mới sẽ không thể snapshot model; task đang chạy vẫn được worker xử lý.')) return;
     try {
       await api(`/api/admin/ai-pricing/models/${modelId}`, {
         method: 'PUT',
@@ -1645,7 +1843,7 @@
   byId('organizationProviderUnavailableSetup').addEventListener('click', () => {
     const providerCode = byId('organizationProviderUnavailableCode').value;
     byId('organizationProviderUnavailableDialog').close();
-    navigateToReadinessSetup('pricing', providerCode).catch(error => toast(friendlyError(error), true));
+    navigateToReadinessSetup('provider', providerCode).catch(error => toast(friendlyError(error), true));
   });
   byId('organizationCostGuide').addEventListener('click', event => {
     if (event.target.closest('[data-open-pricing-from-guide]')) showScope('pricing');
@@ -1691,7 +1889,7 @@
     if (checkOrganization) return checkPoolOrganizationReady(checkOrganization.dataset.checkPoolOrganization, checkOrganization);
     const removeOrganization = event.target.closest('[data-remove-pool-organization]');
     if (removeOrganization) {
-      if (!confirm('Gỡ tổ chức khỏi pool? Chỉ thực hiện được khi không còn seat đang dùng hoặc giữ chỗ.')) return;
+      if (!await window.videoMakerAdminDialogs.confirm('Gỡ tổ chức khỏi pool? Chỉ thực hiện được khi không còn seat đang dùng hoặc giữ chỗ.')) return;
       try {
         await api(`/api/admin/organization-pools/${organizationState.selectedPoolId}/organizations/${removeOrganization.dataset.removePoolOrganization}`, { method: 'DELETE' });
       organizationState.pools = null;
@@ -1703,7 +1901,7 @@
     }
     const removePlan = event.target.closest('[data-remove-pool-plan]');
     if (removePlan) {
-      if (!confirm('Gỡ ánh xạ gói khỏi pool?')) return;
+      if (!await window.videoMakerAdminDialogs.confirm('Gỡ ánh xạ gói khỏi pool?')) return;
       try {
         await api(`/api/admin/organization-pools/license-plans/${removePlan.dataset.removePoolPlan}`, { method: 'DELETE' });
         organizationState.pools = null;
@@ -1762,7 +1960,11 @@
     }
     const readinessAction = event.target.closest('[data-readiness-action]');
     if (readinessAction) {
-      navigateToReadinessSetup(readinessAction.dataset.readinessAction, readinessAction.dataset.readinessProvider).catch(error => toast(friendlyError(error), true));
+      navigateToReadinessSetup(readinessAction.dataset.readinessAction, readinessAction.dataset.readinessProvider, {
+        organizationId: readinessAction.dataset.readinessOrganization,
+        modelId: readinessAction.dataset.readinessModel, modelCode: readinessAction.dataset.readinessModelCode,
+        usageTypes: readinessAction.dataset.readinessUsage?.split(','), poolId: readinessAction.dataset.readinessPool, planId: readinessAction.dataset.readinessPlan
+      });
       return;
     }
     const addMember = event.target.closest('[data-add-organization-member]');
@@ -1772,7 +1974,7 @@
     const unavailableProvider = event.target.closest('[data-provider-unavailable]');
     if (unavailableProvider) return openProviderUnavailableDialog(unavailableProvider.dataset.providerUnavailable, unavailableProvider.dataset.providerName);
     const provider = event.target.closest('[data-configure-provider]');
-    if (provider) return openCredentialDialog(provider.dataset.configureProvider, provider.dataset.providerName);
+    if (provider) return openSetupTarget({ target: 'credential', organizationId: organizationState.selectedOrganizationId, providerCode: provider.dataset.configureProvider });
     const retry = event.target.closest('[data-organization-retry]');
     if (retry) selectTab(retry.dataset.organizationRetry, true);
   });
@@ -1809,9 +2011,32 @@
     if (retry) loadPricing(true).catch(() => {});
   });
 
+  document.addEventListener('click', async event => {
+    if (event.target.closest('[data-setup-correction-return]')) {
+      const source = setupReturn;
+      if (!source || source.actor !== adminIdentity() || !shell.state.adminReady) return;
+      setupReturn = null; renderSetupReturn();
+      try { await source.restore(); }
+      catch (error) { toast(friendlyError(error), true); }
+      return;
+    }
+    if (event.target.closest('.nav-item[data-view], [data-organization-scope], [data-open-organization], [data-organization-tab]')) {
+      invalidateSetupNavigation(); cancelRequests();
+      setupReturn = null; renderSetupReturn();
+      if (byId('organizationCredentialDialog').open) byId('organizationCredentialDialog').close();
+    }
+  }, true);
+
   window.videoMakerOrganizationAdmin = Object.freeze({
     activate: (scope) => showScope(scope || organizationState.scope),
+    openPoolSetup: async (poolId, productScope, cloud) => {
+      if (productScope) window.videoMakerAllocationSetup?.setProductProfile(productScope, cloud);
+      await showScope('pools'); await openPool(poolId, true);
+    },
     refresh,
+    openSetupTarget,
+    resetSetupNavigation,
+    focusSetupTarget,
     openCreateOrganization,
     showSetup: () => showScope('setup')
   });

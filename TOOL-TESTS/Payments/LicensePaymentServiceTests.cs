@@ -12,6 +12,56 @@ namespace TOOL_TESTS.Payments;
 
 public sealed class LicensePaymentServiceTests
 {
+    [Theory]
+    [InlineData(false, true, "https://qr.sepay.vn/img")]
+    [InlineData(true, false, "https://qr.sepay.vn/img")]
+    [InlineData(true, true, "http://qr.sepay.vn/img")]
+    [InlineData(true, true, "https://unexpected.example/img")]
+    public async Task Offers_ReturnsEmptyWhenPaymentsAreNotReady_WithoutCreatingPaymentOrLicense(
+        bool enabled, bool hasReceiver, string qrBaseUrl)
+    {
+        await using var fixture = await PaymentFixture.CreateAsync();
+        var plan = fixture.AddPlan("public", 120_000, true);
+        await fixture.Db.SaveChangesAsync();
+        var options = new SepayPaymentOptions
+        {
+            Enabled = enabled,
+            QrBaseUrl = qrBaseUrl,
+            ReceiverBankCode = hasReceiver ? fixture.Options.ReceiverBankCode : string.Empty,
+            ReceiverAccountNumber = hasReceiver ? fixture.Options.ReceiverAccountNumber : string.Empty,
+            ReceiverAccountName = hasReceiver ? fixture.Options.ReceiverAccountName : string.Empty
+        };
+        var service = new LicensePaymentService(
+            fixture.Db, Options.Create(options), fixture.Time, fixture.Telemetry,
+            NullLogger<LicensePaymentService>.Instance);
+
+        Assert.Empty(await service.GetOffersAsync(CancellationToken.None));
+        var error = await Assert.ThrowsAsync<AccountApiException>(() => service.CreateOrReuseAsync(
+            "user-1", new(plan.LicensePlanId, "unavailable-payment-request"), CancellationToken.None));
+        Assert.Equal(503, error.StatusCode);
+        Assert.Equal("payments_unavailable", error.Code);
+        Assert.Empty(await fixture.Db.LicensePayments.ToListAsync());
+        Assert.Empty(await fixture.Db.UserLicenses.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Offers_ConfigurationReadFailureIsNotConvertedToEmptyCatalog()
+    {
+        await using var fixture = await PaymentFixture.CreateAsync();
+        var expected = new InvalidOperationException("Configuration storage is unavailable.");
+        var service = new LicensePaymentService(
+            fixture.Db, Options.Create(fixture.Options), fixture.Time, fixture.Telemetry,
+            NullLogger<LicensePaymentService>.Instance,
+            paymentConfiguration: new FailingPaymentConfiguration(expected));
+
+        var actual = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.GetOffersAsync(CancellationToken.None));
+
+        Assert.Same(expected, actual);
+        Assert.Empty(await fixture.Db.LicensePayments.ToListAsync());
+        Assert.Empty(await fixture.Db.UserLicenses.ToListAsync());
+    }
+
     [Fact]
     public async Task Offers_OnlyReturnsPublicSellablePlans()
     {
@@ -367,6 +417,112 @@ public sealed class LicensePaymentServiceTests
 
         var license = await fixture.Db.UserLicenses.SingleAsync();
         Assert.Equal(currentExpiry.AddDays(payment.DurationSnapshotDays), license.ExpiresAtUtc);
+    }
+
+    [Fact]
+    public async Task MultipleDifferentPlansAppendAfterScheduledLicensesAndDuplicateWebhookDoesNotExtendAgain()
+    {
+        await using var f = await PaymentFixture.CreateAsync();
+        var first = f.AddPlan("first", 10000, true);
+        var second = f.AddPlan("local", 20000, true);
+        second.FeatureFlagsJson = """{"productScope":"vietsub","vietsubCloudEnabled":false}""";
+        var third = f.AddPlan("cloud", 30000, true);
+        third.FeatureFlagsJson = """{"productScope":"vietsub","vietsubCloudEnabled":true}""";
+        f.Db.UserLicenses.Add(new() { UserLicenseId = Guid.NewGuid(), UserId = "user-1", LicensePlan = first,
+            StartsAtUtc = f.Now.AddDays(-5), ExpiresAtUtc = f.Now.AddDays(10), Status = "Active" });
+        await f.Db.SaveChangesAsync();
+        var offer = (await f.Service.GetOffersForUserAsync("user-1", default)).Single(x => x.LicensePlanId == second.LicensePlanId);
+        Assert.Equal(f.Now.AddDays(10), offer.ExpectedStartsAtUtc);
+        var a = await f.Service.CreateOrReuseAsync("user-1", new(second.LicensePlanId, "scheduled-local-12345678"), default);
+        (await f.Db.LicensePlans.SingleAsync(x => x.LicensePlanId == second.LicensePlanId)).IsActive = false;
+        await f.Db.SaveChangesAsync(); // Stopping sales must honor the pending order.
+        var webhookA = f.Webhook(a);
+        await f.Service.HandleWebhookAsync(webhookA, default);
+        await f.Service.HandleWebhookAsync(webhookA, default);
+        var b = await f.Service.CreateOrReuseAsync("user-1", new(third.LicensePlanId, "scheduled-cloud-12345678"), default);
+        Assert.Equal(f.Now.AddDays(40), b.StartsAtUtc);
+        await f.Service.HandleWebhookAsync(f.Webhook(b) with { Id = 987654322 }, default);
+        var licenses = await f.Db.UserLicenses.OrderBy(x => x.StartsAtUtc).ToArrayAsync();
+        Assert.Equal(3, licenses.Length);
+        Assert.Equal(f.Now.AddDays(10), licenses[1].StartsAtUtc);
+        Assert.Equal(f.Now.AddDays(40), licenses[2].StartsAtUtc);
+        Assert.Equal(f.Now.AddDays(70), licenses[2].ExpiresAtUtc);
+        var status = await f.Service.GetStatusAsync("user-1", b.OrderCode, default);
+        Assert.True(status.IsFulfilled); Assert.True(status.IsScheduled);
+        Assert.Equal(licenses[2].StartsAtUtc, status.StartsAtUtc);
+    }
+
+    [Fact]
+    public async Task ChangedRightsOnSamePlanAreQueuedAndDoNotOverwriteIssuedSnapshot()
+    {
+        await using var f = await PaymentFixture.CreateAsync();
+        var checkout = await f.CreatePaymentAsync();
+        var plan = await f.Db.LicensePlans.SingleAsync();
+        const string local = """{"productScope":"vietsub","vietsubCloudEnabled":false}""";
+        var old = new UserLicense { UserLicenseId = Guid.NewGuid(), UserId = "user-1", LicensePlan = plan,
+            StartsAtUtc = f.Now.AddDays(-1), ExpiresAtUtc = f.Now.AddDays(5), Status = "Active", EntitlementSnapshotJson = local };
+        f.Db.UserLicenses.Add(old); await f.Db.SaveChangesAsync();
+        await f.Service.HandleWebhookAsync(f.Webhook(checkout), default);
+        Assert.Equal(local, old.EntitlementSnapshotJson);
+        Assert.Equal(f.Now.AddDays(5), old.ExpiresAtUtc);
+        Assert.Equal(2, await f.Db.UserLicenses.CountAsync());
+    }
+
+    [Fact]
+    public async Task PerpetualLicenseBlocksNewPurchaseAndLateGrantKeepsReceivedMoneyPending()
+    {
+        await using var f = await PaymentFixture.CreateAsync();
+        var checkout = await f.CreatePaymentAsync();
+        var plan = await f.Db.LicensePlans.SingleAsync();
+        f.Db.UserLicenses.Add(new() { UserLicenseId = Guid.NewGuid(), UserId = "user-1", LicensePlan = plan,
+            StartsAtUtc = f.Now.AddDays(-1), ExpiresAtUtc = null, Status = "Active" });
+        await f.Db.SaveChangesAsync();
+        Assert.All(await f.Service.GetOffersForUserAsync("user-1", default), offer => Assert.False(offer.OrganizationSeatAvailable));
+        await f.Service.HandleWebhookAsync(f.Webhook(checkout), default);
+        var payment = await f.Db.LicensePayments.SingleAsync();
+        Assert.Equal("Paid", payment.Status);
+        Assert.Equal("license_schedule_unavailable", payment.FailureCode);
+        Assert.Single(await f.Db.UserLicenses.ToArrayAsync());
+    }
+
+    private sealed class FailingPaymentConfiguration(Exception error) : ISepayPaymentConfiguration
+    {
+        public Task<SepayPaymentOptions> GetOptionsAsync(CancellationToken cancellationToken) =>
+            Task.FromException<SepayPaymentOptions>(error);
+    }
+
+    [Fact]
+    public async Task LocalPaymentWorksWithNoPoolsAndNeverCallsSeatProvisioningEvenIfPlanChangesAfterCheckout()
+    {
+        await using var f = await PaymentFixture.CreateAsync();
+        var plan = f.AddPlan("local-personal", 70000, true);
+        plan.FeatureFlagsJson = """{"productScope":"vietsub","vietsubCloudEnabled":false}""";
+        await f.Db.SaveChangesAsync();
+        var service = new LicensePaymentService(f.Db, Options.Create(f.Options), f.Time, f.Telemetry,
+            NullLogger<LicensePaymentService>.Instance, new ForbiddenSeats());
+        Assert.True(Assert.Single(await service.GetOffersAsync(default)).OrganizationSeatAvailable);
+        var request = new CreateLicensePaymentRequest(plan.LicensePlanId, "personal-payment-12345678");
+        var checkout = await service.CreateOrReuseAsync("user-1", request, default);
+        Assert.Null(checkout.AssignedOrganizationId);
+        Assert.Equal(checkout.OrderCode, (await service.CreateOrReuseAsync("user-1", request, default)).OrderCode);
+        plan.FeatureFlagsJson = "{}"; await f.Db.SaveChangesAsync();
+        await service.HandleWebhookAsync(f.Webhook(checkout), default);
+        await service.HandleWebhookAsync(f.Webhook(checkout), default);
+        var status = await service.GetStatusAsync("user-1", checkout.OrderCode, default);
+        Assert.Equal("Fulfilled", status.Status); Assert.Null(status.AssignedOrganizationId);
+        Assert.True(LicenseProductPolicy.IsLocalOnly((await f.Db.UserLicenses.SingleAsync()).EntitlementSnapshotJson));
+        Assert.Empty(await f.Db.OrganizationMembers.ToArrayAsync());
+        Assert.Empty(await f.Db.OrganizationSeatAssignments.ToArrayAsync());
+    }
+
+    private sealed class ForbiddenSeats : TOOL_SERVER.Organizations.IOrganizationSeatProvisioningService
+    {
+        public Task<IReadOnlyDictionary<Guid, TOOL_SERVER.Organizations.OrganizationSeatAvailability>> GetAvailabilityAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) => throw new InvalidOperationException("Local must not check seats");
+        public Task<TOOL_SERVER.Domain.Organizations.OrganizationSeatAssignment> ReserveAsync(LicensePayment payment, DateTime now, CancellationToken ct) => throw new InvalidOperationException("Local must not reserve");
+        public Task ActivateAsync(LicensePayment payment, UserLicense license, DateTime now, CancellationToken ct) => throw new InvalidOperationException("Local must not activate membership");
+        public Task ReleaseReservationAsync(Guid id, string reason, DateTime now, CancellationToken ct) => throw new InvalidOperationException("No reservation exists");
+        public Task<TOOL_SERVER.Organizations.OrganizationSeatSnapshot?> GetSnapshotAsync(Guid id, CancellationToken ct) => throw new InvalidOperationException("Local must not read assignment");
+        public Task ReconcileAsync(DateTime now, CancellationToken ct) => throw new InvalidOperationException();
     }
 
     private sealed class PaymentFixture : IAsyncDisposable

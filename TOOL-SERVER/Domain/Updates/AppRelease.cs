@@ -28,6 +28,11 @@ public sealed class AppRelease
 
     public DateTime PublishedAtUtc { get; set; }
 
+    // External publication is immutable even after it is deactivated.
+    public DateTime? FirstPublishedAtUtc { get; set; }
+
+    public Guid Revision { get; set; } = Guid.NewGuid();
+
     public ICollection<AppReleaseArtifact> Artifacts { get; set; } = [];
 }
 
@@ -41,7 +46,24 @@ public sealed class AppReleaseArtifact
 
     public string FileName { get; set; } = string.Empty;
 
-    public string RelativePath { get; set; } = string.Empty;
+    public string? RelativePath { get; set; } = string.Empty;
+
+    public string SourceKind { get; set; } = "Internal";
+
+    public string? ExternalDownloadUrl { get; set; }
+
+    // Legacy is deliberately not inferred to mean Bundled, Server or StaticArchive.
+    public string InstallMode { get; set; } = "Legacy";
+
+    public int DistributionProtocol { get; set; } = 1;
+
+    public string? RegistrationEvidenceJson { get; set; }
+
+    public string? BoundPackageSha256 { get; set; }
+
+    public string? ModelBundleId { get; set; }
+
+    public Guid? VerifiedPreparationId { get; set; }
 
     public long SizeBytes { get; set; }
 

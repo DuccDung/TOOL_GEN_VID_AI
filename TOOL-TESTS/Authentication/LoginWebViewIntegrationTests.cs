@@ -10,6 +10,147 @@ namespace TOOL_TESTS.Authentication;
 [Collection(NativeWindowsCollection.Name)]
 public sealed class LoginWebViewIntegrationTests
 {
+    [Theory]
+    [InlineData("auth.register.open")]
+    [InlineData("auth.password-reset.open")]
+    public async Task AccountDialog_IsDeferredAndDoesNotBlockWebViewCallbacks(string messageType)
+    {
+        var webRoot = FindBuiltWebRoot();
+        var profile = Path.Combine(Path.GetTempPath(), $"vm-login-dialog-{Guid.NewGuid():N}");
+        System.Diagnostics.Process? browser = null;
+        Form? activeForm = null;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                using var manager = new AccountSessionManager(new FakeAccountApiClient(), new FakeTokenStore(),
+                    new DeviceIdentityService(Path.Combine(profile, "device-id.bin")));
+                using var form = new LoginForm(manager, webRoot, profile)
+                {
+                    StartPosition = FormStartPosition.Manual,
+                    Location = new Point(-2000, -2000),
+                    ShowInTaskbar = false
+                };
+                activeForm = form;
+                Exception? failure = null;
+                using var monitor = new System.Windows.Forms.Timer { Interval = 50 };
+                form.Shown += async (_, _) =>
+                {
+                    try
+                    {
+                        var webView = form.Controls.OfType<WebView2>().Single();
+                        for (var attempt = 0; attempt < 150 && webView.CoreWebView2 is null; attempt++)
+                            await Task.Delay(100);
+                        var core = webView.CoreWebView2 ?? throw new InvalidOperationException("WebView2 không khởi tạo.");
+                        browser = System.Diagnostics.Process.GetProcessById((int)core.BrowserProcessId);
+                        await WaitForLoginReadyAsync(core);
+
+                        var received = 0;
+                        core.WebMessageReceived += (_, args) =>
+                        {
+                            if (!args.TryGetWebMessageAsString().Contains(messageType, StringComparison.Ordinal)) return;
+                            received++;
+                        };
+                        var deadline = DateTime.UtcNow.AddSeconds(10);
+                        monitor.Tick += async (_, _) =>
+                        {
+                            var owned = form.OwnedForms;
+                            if (received < 2 && DateTime.UtcNow < deadline) return;
+                            if (owned.Length == 0 && DateTime.UtcNow < deadline) return;
+                            monitor.Stop();
+                            try
+                            {
+                                // Both WebMessageReceived callbacks must finish while the modal is still open.
+                                // A synchronous ShowDialog in the handler cannot meet this condition.
+                                Assert.Equal(2, received);
+                                var dialog = Assert.Single(owned);
+                                if (messageType == "auth.register.open") Assert.IsType<RegisterForm>(dialog);
+                                else Assert.IsType<ForgotPasswordForm>(dialog);
+                                Assert.Equal("4", await core.ExecuteScriptAsync("2 + 2").WaitAsync(TimeSpan.FromSeconds(3)));
+                                dialog.Close();
+                                await WaitForLoginReadyAsync(core);
+                                Assert.False(manager.IsAuthenticated);
+                            }
+                            catch (Exception exception)
+                            {
+                                failure = exception;
+                            }
+                            finally
+                            {
+                                foreach (var dialog in form.OwnedForms) dialog.Close();
+                                form.Close();
+                            }
+                        };
+                        monitor.Start();
+                        var first = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            type = messageType, requestId = Guid.NewGuid().ToString(), payload = new { email = "user@example.test" }
+                        });
+                        var second = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            type = messageType, requestId = Guid.NewGuid().ToString(), payload = new { email = "user@example.test" }
+                        });
+                        // Send actual page-to-host messages without submitting an account to a server.
+                        await core.ExecuteScriptAsync($"window.chrome.webview.postMessage(JSON.stringify({first}));" +
+                            $"window.chrome.webview.postMessage(JSON.stringify({second}));");
+                    }
+                    catch (Exception exception)
+                    {
+                        failure = exception;
+                        form.Close();
+                    }
+                };
+                Application.Run(form);
+                if (failure is not null) completion.TrySetException(failure);
+                else
+                {
+                    Assert.Empty(form.OwnedForms);
+                    Assert.False(manager.IsAuthenticated);
+                    completion.TrySetResult();
+                }
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        }) { IsBackground = true, Name = "VideoMaker Account Dialog WebView2 Regression Test" };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        try
+        {
+            await completion.Task.WaitAsync(TimeSpan.FromSeconds(45));
+        }
+        finally
+        {
+            if (activeForm is { IsDisposed: false, IsHandleCreated: true })
+                activeForm.BeginInvoke(new Action(() =>
+                {
+                    foreach (var dialog in activeForm.OwnedForms) dialog.Close();
+                    activeForm.Close();
+                }));
+            Assert.True(thread.Join(TimeSpan.FromSeconds(5)), "Account dialog UI thread did not stop.");
+            if (browser is not null)
+            {
+                try { await browser.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+                finally { browser.Dispose(); }
+            }
+            if (Directory.Exists(profile)) Directory.Delete(profile, recursive: true);
+        }
+    }
+
+    private static async Task WaitForLoginReadyAsync(CoreWebView2 core)
+    {
+        for (var attempt = 0; attempt < 150; attempt++)
+        {
+            if (await core.ExecuteScriptAsync(
+                "Boolean(document.querySelector('#login-email') && !document.querySelector('#login-email').disabled)") == "true") return;
+            await Task.Delay(100);
+        }
+
+        throw new TimeoutException("Form đăng nhập không sẵn sàng.");
+    }
+
     [Fact]
     public async Task LoginForm_LoadsWebViewAndAuthenticatesThroughTheHost()
     {
@@ -23,7 +164,8 @@ public sealed class LoginWebViewIntegrationTests
         {
             var tokenStore = new FakeTokenStore();
             var api = new FakeAccountApiClient();
-            using var manager = new AccountSessionManager(api, tokenStore, new DeviceIdentityService());
+            using var manager = new AccountSessionManager(api, tokenStore,
+                new DeviceIdentityService(Path.Combine(profile, "device-id.bin")));
             using var form = new LoginForm(manager, webRoot, profile)
             {
                 StartPosition = FormStartPosition.Manual,

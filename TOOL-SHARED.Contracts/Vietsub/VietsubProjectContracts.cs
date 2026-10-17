@@ -1,5 +1,13 @@
 namespace TOOL_SHARED.Contracts.Vietsub;
 
+/// <summary>Guid.Empty explicitly selects the authenticated user's personal Local workspace.
+/// The server stores a NULL organization and always enforces project ownership and device license.
+/// Cloud operations require a real organization.</summary>
+public static class VietsubWorkspace
+{
+    public static readonly Guid Personal = Guid.Empty;
+}
+
 public sealed record CreateVietsubProjectRequest(
     Guid ProjectId,
     Guid OrganizationId,

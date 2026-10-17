@@ -1,0 +1,78 @@
+﻿{
+    "schemaVersion":  1,
+    "bundleId":  "gyan-9.0.1-essentials-win-x64",
+    "version":  "9.0.1-essentials_build-www.gyan.dev",
+    "architecture":  "win-x64",
+    "approvalScope":  "Release",
+    "approvalKind":  "TechnicalPackaging",
+    "reviewedOn":  "2026-10-17",
+    "reviewTimeZone":  "Asia/Bangkok",
+    "reviewRecord":  "RELEASE_REVIEW.md",
+    "approvalBasis":  "Workspace owner request to standardize technical release packaging and local installation testing; exact upstream artifact/source/license/build-capability review",
+    "correspondingSourceComplete":  false,
+    "licenseReviewStatus":  "corresponding-source-pending",
+    "redistributionQualification":  "pending",
+    "redistributionQualified":  false,
+    "productionQualified":  false,
+    "source":  {
+                   "binaryArchiveUrl":  "https://github.com/GyanD/codexffmpeg/releases/download/9.0.1/ffmpeg-9.0.1-essentials_build.7z",
+                   "binaryArchiveBytes":  34372199,
+                   "binaryArchiveSha256":  "49a73bdf0850092a252ac4641d922f3048d63ed113e196cc65ce1e4f7fb33e85",
+                   "releaseMetadataUrl":  "https://api.github.com/repos/GyanD/codexffmpeg/releases/tags/9.0.1",
+                   "ffmpegCoreCommit":  "bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa",
+                   "ffmpegCoreSourceUrl":  "https://github.com/FFmpeg/FFmpeg/commit/bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa",
+                   "license":  "GPL-3.0",
+                   "dependencySourceStatus":  "Incomplete: exact dependency revisions, patches and build instructions have not all been collected or verified",
+                   "binariesModified":  false
+               },
+    "files":  [
+                  {
+                      "path":  "ffmpeg.exe",
+                      "source":  "binary",
+                      "sourcePath":  "ffmpeg.exe",
+                      "sha256":  "72a489eccd008c2ec2c0a5856c5c75bc3d8bbfa90166c4566865c246445e6aa3"
+                  },
+                  {
+                      "path":  "ffprobe.exe",
+                      "source":  "binary",
+                      "sourcePath":  "ffprobe.exe",
+                      "sha256":  "19202b23c0043f15ad1b7bce2344f406fd52bd6efd8f995ce02e7392a1cec52f"
+                  },
+                  {
+                      "path":  "LICENSE.txt",
+                      "source":  "binary",
+                      "sourcePath":  "LICENSE.txt",
+                      "sha256":  "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+                  },
+                  {
+                      "path":  "PROVENANCE.md",
+                      "source":  "review",
+                      "sourcePath":  "review/gyan-9.0.1-essentials-win-x64/PROVENANCE.md",
+                      "sha256":  "5aea39c8515c968c5652cc71ef6e94bd44e8cf1456a147add4810766dd7cf3cf"
+                  },
+                  {
+                      "path":  "checksums.sha256",
+                      "source":  "review",
+                      "sourcePath":  "review/gyan-9.0.1-essentials-win-x64/checksums.sha256",
+                      "sha256":  "f2d3a0a1f384dc7835f96bed21b45352d49918cb0b93105a2467379b7c9e71f3"
+                  },
+                  {
+                      "path":  "README.gyan.txt",
+                      "source":  "review",
+                      "sourcePath":  "review/gyan-9.0.1-essentials-win-x64/README.gyan.txt",
+                      "sha256":  "1c8c50e4df1623673ec236bafe774f3c4ee41a1e6b0cde05e31b7d89b31efa06"
+                  },
+                  {
+                      "path":  "SOURCE-AVAILABILITY.md",
+                      "source":  "review",
+                      "sourcePath":  "review/gyan-9.0.1-essentials-win-x64/SOURCE-AVAILABILITY.md",
+                      "sha256":  "4d72019fc04eb4527bf03d12867a3c8dbc206c717593256c7b0b2da612bc735c"
+                  },
+                  {
+                      "path":  "TECHNICAL-PROBE.json",
+                      "source":  "review",
+                      "sourcePath":  "review/gyan-9.0.1-essentials-win-x64/TECHNICAL-PROBE.json",
+                      "sha256":  "0e3de0e3329be52f29f8a0061551c57809e8f5c6140f9b1e70cdcb2a187b1895"
+                  }
+              ]
+}

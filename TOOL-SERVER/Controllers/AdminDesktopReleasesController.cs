@@ -22,6 +22,24 @@ public sealed class AdminDesktopReleasesController(IDesktopReleaseService releas
         CancellationToken cancellationToken = default) =>
         releaseService.GetAdminReleasesPageAsync(page, pageSize, cancellationToken);
 
+    [HttpGet("{releaseId:guid}")]
+    public async Task<ActionResult<AdminDesktopReleaseResponse>> Get(Guid releaseId, CancellationToken cancellationToken)
+    {
+        var release = await releaseService.GetAdminReleaseAsync(releaseId, cancellationToken);
+        return release is null ? NotFound() : Ok(release);
+    }
+
+    [HttpPost("{releaseId:guid}/artifacts/DesktopPackage/external")]
+    [RequestSizeLimit(4 * 1024 * 1024)]
+    public Task<AdminDesktopArtifactResponse> RegisterExternal(Guid releaseId,
+        RegisterExternalDesktopArtifactRequest request, CancellationToken cancellationToken) =>
+        releaseService.RegisterExternalAsync(releaseId, request, cancellationToken);
+
+    [HttpPost("{releaseId:guid}/publish")]
+    public Task<AdminDesktopReleaseResponse> Publish(Guid releaseId,
+        AdminDesktopReleasePublishRequest request, CancellationToken cancellationToken) =>
+        releaseService.PublishAsync(releaseId, request.Revision, cancellationToken);
+
     [HttpPost]
     public async Task<ActionResult<AdminDesktopReleaseResponse>> Create(
         AdminDesktopReleaseRequest request,

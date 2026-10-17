@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AudioLines, Film, Languages, ScanText, Settings2, ShieldCheck } from 'lucide-react';
 import { postToHost } from '../../bridge';
 import type { SystemSetupController } from './useSystemSetup';
@@ -11,10 +11,10 @@ const labels: Record<SetupComponentState, string> = {
 };
 const bytes = (value: number) => `${(value / 1_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} GB`;
 
-export function SystemSetupPanel({ setup }: { setup: SystemSetupController }) {
+export function SystemSetupPanel({ setup, personal = false }: { setup: SystemSetupController; personal?: boolean }) {
   const [piper, setPiper] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
-  const { snapshot, busy, error, run, cancel, refresh } = setup;
+  const { snapshot, busy, error, connectionLost, run, cancel, refresh, reconcile } = setup;
   const components = snapshot?.components ?? [];
   const selected = components.filter(c => c.state !== 'DISABLED' && (c.id !== 'piper' || piper)).map(c => c.id);
   const operation = snapshot?.operation;
@@ -22,6 +22,8 @@ export function SystemSetupPanel({ setup }: { setup: SystemSetupController }) {
     && operation?.componentIds.includes(c.id)).map(c => c.id);
   const resourceWarning = retryIds.includes('qwen') && components.some(c => c.id === 'qwen'
     && c.errorCode === 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED');
+  const resourceProfile = components.find(component => component.id === 'qwen')?.resourceProfileId;
+  useEffect(() => setConfirmed(false), [snapshot?.contextGeneration, resourceProfile]);
   const availableComponents = components.filter(c => c.state !== 'DISABLED');
   const readyCount = availableComponents.filter(c => c.state === 'READY').length;
   const allReady = !!snapshot && availableComponents.length > 0 && readyCount === availableComponents.length;
@@ -41,7 +43,7 @@ export function SystemSetupPanel({ setup }: { setup: SystemSetupController }) {
       </div>
       <span className={`desktop-setting-status ${allReady && !busy ? 'active' : snapshot ? 'pending' : ''}`}>{status}</span>
     </div>
-    {!snapshot && <div className="setup-empty" role="status">Chọn tổ chức để tải trạng thái Setup.
+    {!snapshot && <div className="setup-empty" role="status">{personal ? 'Chưa tải trạng thái Setup cho tài khoản của bạn.' : 'Chọn tổ chức để tải trạng thái Setup.'}
       <button type="button" onClick={refresh}>Tải lại</button></div>}
     <div className="setup-components">
       {components.map(component => {
@@ -75,7 +77,7 @@ export function SystemSetupPanel({ setup }: { setup: SystemSetupController }) {
         </article>;
       })}
     </div>
-    {busy && <div className="setup-progress" role="status" aria-live="polite">
+    {busy && !connectionLost && <div className="setup-progress" role="status" aria-live="polite">
       <strong>{components.find(c => c.id === operation?.currentComponent)?.name ?? 'Đang chuẩn bị Setup…'}</strong>
       <progress aria-label="Tiến độ thành phần hiện tại" max={100} value={operation?.percent ?? undefined} />
       {operation?.percent != null && <span>{Math.round(operation.percent)}%</span>}
@@ -89,6 +91,7 @@ export function SystemSetupPanel({ setup }: { setup: SystemSetupController }) {
       onChange={e => setConfirmed(e.target.checked)} />Tôi hiểu Qwen có thể chạy chậm, treo hoặc hết bộ nhớ khi thử với RAM hiện tại. Model và worker vẫn được kiểm tra trước khi sử dụng.</label>}
     {error && <p role="alert" className="setup-warning">{error}</p>}
     <div className="setup-actions">
+      {connectionLost && snapshot && <button type="button" onClick={reconcile}>Đối soát trạng thái</button>}
       <button type="button" disabled={busy || !selected.length} onClick={() => runAction('check')}>Kiểm tra hệ thống</button>
       <button type="button" className="primary-button" disabled={busy || !selected.length} onClick={() => runAction('start')}>Cài thành phần cần thiết</button>
       {busy && <button type="button" disabled={!operation} onClick={cancel}>Hủy Setup</button>}

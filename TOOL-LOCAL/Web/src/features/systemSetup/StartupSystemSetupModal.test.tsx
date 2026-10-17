@@ -25,9 +25,9 @@ vi.mock('../../bridge', () => ({
   }
 }));
 
-function Harness() {
+function Harness({ visible = true }: { visible?: boolean }) {
   const setup = useSystemSetup('org');
-  return <><button type="button" id="background-action">Tạo dự án</button><StartupSystemSetupModal setup={setup} /></>;
+  return <><button type="button" id="background-action">Tạo dự án</button>{visible && <StartupSystemSetupModal setup={setup} />}</>;
 }
 
 const snapshot = (): SetupSnapshot => ({
@@ -113,6 +113,26 @@ afterEach(async () => {
 });
 
 describe('Startup System Setup modal', () => {
+  it('contains keyboard and programmatic focus, then restores the original trigger after unmount', async () => {
+    await act(async () => root.render(<Harness visible={false} />));
+    const background = container.querySelector<HTMLButtonElement>('#background-action')!;
+    background.focus();
+    await act(async () => root.render(<Harness />));
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(document.activeElement).toBe(dialog);
+    const actions = [...dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+    actions.at(-1)!.focus();
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(actions[0]);
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(actions.at(-1));
+    background.focus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await act(async () => root.render(<Harness visible={false} />));
+    expect(document.activeElement).toBe(background);
+    expect(document.body.style.overflow).not.toBe('hidden');
+  });
+
   it('installs Piper separately while OCR still requires repair and keeps the startup gate visible', async () => {
     const initial = await showOcrFailure();
     const install = button('Cài giọng Việt');

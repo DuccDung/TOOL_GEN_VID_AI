@@ -15,7 +15,7 @@ public sealed class CreateProjectForm : Form
 
     public CreateProjectForm()
     {
-        Icon = BrandIdentity.WindowIcon;
+        BrandIdentity.ApplyWindowIcon(this);
         Text = "Tạo video project";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;

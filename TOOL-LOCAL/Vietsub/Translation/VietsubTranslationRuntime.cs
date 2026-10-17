@@ -92,6 +92,9 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
     private readonly VietsubTranslationComponentDefinition _component;
     private readonly IReadOnlyList<string> _approvedLocalModelCandidates;
     private readonly IVietsubTranslationMemoryProbe _memoryProbe;
+    private readonly TOOL_LOCAL.ModelDistribution.DesktopModelDistributionClient? _distribution;
+    private readonly bool _allowUpstreamDownload;
+    private readonly Func<CancellationToken, Task<string>>? _staticModelSource;
     private readonly VietsubTranslationResourceRequirements _resourceRequirements;
     private VerifiedFileStamp? _verifiedStamp;
     private int _installing;
@@ -103,15 +106,21 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
         HttpClient? httpClient = null,
         IEnumerable<string>? approvedLocalModelCandidates = null,
         IVietsubTranslationMemoryProbe? memoryProbe = null,
-        VietsubTranslationResourceRequirements? resourceRequirements = null)
+        VietsubTranslationResourceRequirements? resourceRequirements = null,
+        TOOL_LOCAL.ModelDistribution.DesktopModelDistributionClient? distribution = null,
+        bool allowUpstreamDownload = true,
+        Func<CancellationToken, Task<string>>? staticModelSource = null)
     {
         _component = component;
+        _distribution = distribution;
+        _allowUpstreamDownload = allowUpstreamDownload;
+        _staticModelSource = staticModelSource;
         ComponentsRoot = componentsRoot ?? ResolveDefaultComponentsRoot(component);
         ComponentDirectory = Path.Combine(ComponentsRoot, component.ComponentId, component.EngineVersion);
         ModelPath = Path.Combine(ComponentDirectory, component.ModelFileName);
         ProbeMarkerPath = Path.Combine(ComponentDirectory, "probe.json");
         _approvedLocalModelCandidates = (approvedLocalModelCandidates
-                ?? ResolveApprovedLocalModelCandidates(component))
+                ?? (allowUpstreamDownload ? ResolveApprovedLocalModelCandidates(component) : []))
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(Path.GetFullPath)
             .Where(path => !PathEquals(path, ModelPath))
@@ -155,6 +164,8 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
         VietsubTranslationWorkerRuntimeProfile? runtimeProfile = null)
     {
         ThrowIfDisposed();
+        try { EnsureDistributionNotRevoked(); }
+        catch (VietsubTranslationException error) { return Invalid(error.Message); }
         if (!Environment.Is64BitProcess || !OperatingSystem.IsWindows())
         {
             return new VietsubTranslationRuntimeInspection(
@@ -246,6 +257,23 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
             "Qwen3 4B local đã kiểm tra model và sẵn sàng dịch theo scene.");
     }
 
+    private void EnsureDistributionNotRevoked()
+    {
+        try
+        {
+            if (!_allowUpstreamDownload) TOOL_LOCAL.ModelDistribution.StaticModelRuntimePolicy.EnsureNotRevoked();
+            if (_distribution?.IsKnownRevoked(_component.ModelSha256) == true)
+                throw new VietsubTranslationException(VietsubTranslationErrorCodes.RuntimeInvalid,
+                    "Phiên bản model dịch local đã bị thu hồi.");
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException
+            or TOOL_SHARED.Distribution.ModelDistribution.ModelDistributionException)
+        {
+            throw new VietsubTranslationException(VietsubTranslationErrorCodes.RuntimeInvalid,
+                "Không thể xác minh trạng thái tin cậy của model.", innerException: error);
+        }
+    }
+
     public async Task InstallModelAsync(
         IProgress<VietsubTranslationRuntimeInstallProgress>? progress,
         CancellationToken cancellationToken)
@@ -260,6 +288,7 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
 
         try
         {
+            EnsureDistributionNotRevoked();
             var current = Inspect(requireProbe: false, checkResources: false);
             if (current.ModelVerified)
             {
@@ -281,6 +310,37 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
                 return;
             }
 
+            if (_staticModelSource is not null)
+            {
+                var source = await _staticModelSource(cancellationToken);
+                if (!await TryCopyAndVerifyApprovedModelAsync(source, partialPath, progress, cancellationToken))
+                    throw new VietsubTranslationException(VietsubTranslationErrorCodes.RuntimeInvalid,
+                        "Model từ gói VPS không khớp bản phát hành.");
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(partialPath, ModelPath, overwrite: true);
+                lock (_verificationLock) _verifiedStamp = null;
+                return;
+            }
+
+            if (_distribution?.CanDownload == true)
+            {
+                var reporter = new TOOL_LOCAL.SystemSetup.SetupProgress<TOOL_LOCAL.ModelDistribution.ModelDownloadProgress>(p =>
+                    progress?.Report(new VietsubTranslationRuntimeInstallProgress(p.Stage,
+                        p.TotalBytes > 0 ? p.BytesProcessed * 85d / p.TotalBytes : 0,
+                        "Đang chuẩn bị model từ kho đã xác thực.", p.BytesProcessed, p.TotalBytes)));
+                var approved = await _distribution.GetArtifactAsync(_component.ComponentId, reporter, cancellationToken);
+                if (!await TryCopyAndVerifyApprovedModelAsync(approved, partialPath, progress, cancellationToken))
+                    throw new VietsubTranslationException(VietsubTranslationErrorCodes.RuntimeInvalid,
+                        "Model tải từ kho không khớp phiên bản được duyệt.");
+                EnsureDistributionNotRevoked();
+                File.Move(partialPath, ModelPath, overwrite: true);
+                lock (_verificationLock) _verifiedStamp = null;
+                return;
+            }
+
+            if (!_allowUpstreamDownload)
+                throw new VietsubTranslationException(VietsubTranslationErrorCodes.RuntimeNotInstalled,
+                    "Thiếu model đã xác minh trong kho VPS. Hãy chạy lại Setup để sửa bộ model.");
             EnsureDiskCapacity();
             progress?.Report(new VietsubTranslationRuntimeInstallProgress(
                 "DOWNLOADING",
@@ -293,6 +353,7 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
             {
                 await DownloadAndVerifyAsync(partialPath, progress, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
+                EnsureDistributionNotRevoked();
                 File.Move(partialPath, ModelPath, overwrite: true);
                 lock (_verificationLock)
                 {
@@ -331,7 +392,9 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
                 0,
                 _component.ModelSizeBytes));
             TryDelete(partialPath);
-            var linked = TryCreateHardLink(partialPath, candidatePath);
+            // Static payload and production runtime remain independent files so repair,
+            // rollback and cache retention cannot modify the same file through two names.
+            var linked = _allowUpstreamDownload && TryCreateHardLink(partialPath, candidatePath);
             var verified = linked
                 ? await HasApprovedModelContentAsync(partialPath, cancellationToken)
                 : await TryCopyAndVerifyApprovedModelAsync(
@@ -348,6 +411,7 @@ internal sealed class VietsubTranslationComponentStore : IDisposable
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                EnsureDistributionNotRevoked();
                 File.Move(partialPath, ModelPath, overwrite: true);
                 var info = new FileInfo(ModelPath);
                 lock (_verificationLock)

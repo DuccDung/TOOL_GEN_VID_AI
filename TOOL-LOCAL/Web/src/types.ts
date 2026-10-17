@@ -464,6 +464,7 @@ export type DesktopFeatureSettings = {
 };
 
 export type CurrentLicense = {
+  featureFlagsJson?: string | null;
   hasActiveLicense: boolean;
   userLicenseId?: string | null;
   planCode?: string | null;
@@ -500,6 +501,11 @@ export type LicenseOffer = {
   organizationSeatAvailable: boolean;
   organizationPoolName?: string | null;
   availableOrganizationSeats?: number | null;
+  productScope?: string;
+  vietsubCloudEnabled?: boolean;
+  expectedStartsAtUtc?: string | null;
+  expectedExpiresAtUtc?: string | null;
+  purchaseBlockedReason?: string | null;
 };
 
 export type LicensePaymentCheckout = {
@@ -525,6 +531,9 @@ export type LicensePaymentCheckout = {
   assignedOrganizationId?: string | null;
   assignedOrganizationName?: string | null;
   provisioningStatus?: string | null;
+  startsAtUtc?: string | null;
+  licenseExpiresAtUtc?: string | null;
+  isScheduled?: boolean;
 };
 
 export type LicensePaymentStatus = {
@@ -542,6 +551,9 @@ export type LicensePaymentStatus = {
   assignedOrganizationId?: string | null;
   assignedOrganizationName?: string | null;
   provisioningStatus?: string | null;
+  startsAtUtc?: string | null;
+  licenseExpiresAtUtc?: string | null;
+  isScheduled?: boolean;
 };
 
 export type CurrentLicensePayment = {
@@ -738,6 +750,41 @@ export type DesktopUpdateNotice = {
   isUpdateAvailable: boolean;
   isMandatory: boolean;
   release?: DesktopRelease | null;
+  directRelease?: DesktopDirectRelease | null;
+  standaloneRelease?: DesktopStandaloneRelease | null;
+};
+
+// Setup routing and integrity metadata stay in the native host; React only displays release facts.
+export type DesktopStandaloneRelease = Omit<DesktopDirectRelease, 'minimumBootstrapperVersion'> & {
+  minimumSetupVersion: string;
+  apiBaseUrl: string;
+};
+
+export type DesktopDirectRelease = {
+  releaseId: string;
+  version: string;
+  declaredBuildNumber: number;
+  fileName: string;
+  downloadUrl: string;
+  expectedSha256: string;
+  profile: string;
+  channel: string;
+  platform: string;
+  modelBundleId: string;
+  revision: string;
+  publishedAtUtc: string;
+  isMandatory: boolean;
+  releaseNotes?: string | null;
+  catalogProtocol: number;
+  applicationDistributionProtocol: number;
+  minimumBootstrapperVersion: string;
+};
+
+// Native repair preparation sends display facts only; a direct catalog does not
+// claim a measured remote size or construct a legacy verified release object.
+export type DesktopRepairRelease = Pick<DesktopRelease, 'releaseId' | 'version' | 'buildNumber' | 'channel' | 'releaseNotes'> & {
+  sizeBytes: number | null;
+  catalogProtocol?: number;
 };
 
 export type DesktopRepairFailure = {

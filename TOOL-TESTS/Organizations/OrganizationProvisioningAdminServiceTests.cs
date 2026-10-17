@@ -3,6 +3,7 @@ using TOOL_SERVER.Data;
 using TOOL_SERVER.Domain.Accounts;
 using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Organizations;
+using TOOL_SHARED.Contracts.Organizations;
 
 namespace TOOL_TESTS.Organizations;
 
@@ -226,6 +227,41 @@ public sealed class OrganizationProvisioningAdminServiceTests
 
         Assert.Equal(LicensePaymentStatuses.Paid, assignment.PaymentStatus);
         Assert.Equal("organization_capacity_unavailable", assignment.FailureCode);
+    }
+
+    [Fact]
+    public async Task LocalSetupAndSummaryUseProductReadinessWithoutMarkingVideoReady()
+    {
+        await using var db = new AccountDbContext(new DbContextOptionsBuilder<AccountDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        await using var governance = new AiGovernanceDbContext(new DbContextOptionsBuilder<AiGovernanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        await using var providers = new ProviderAdminDbContext(new DbContextOptionsBuilder<ProviderAdminDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var now = DateTime.UtcNow; var poolId = Guid.NewGuid(); var orgId = Guid.NewGuid(); var planId = Guid.NewGuid();
+        db.OrganizationPools.Add(new() { OrganizationPoolId = poolId, Code = "local", Name = "Local", Status = "Active" });
+        var org = Organization(orgId, "local", now); org.MonthlyBudgetLimit = 0; db.Organizations.Add(org);
+        db.LicensePlans.Add(new() { LicensePlanId = planId, PlanCode = "local", Name = "Local", IsActive = true,
+            IsPublic = true, DefaultDurationDays = 30, SalePriceVnd = 70000, FeatureFlagsJson = """{"productScope":"vietsub"}""" });
+        await db.SaveChangesAsync();
+        var service = new OrganizationProvisioningAdminService(db, governance, providers, new FixedTimeProvider(now), null!,
+            new FakeReadinessEvaluator(new Dictionary<Guid, bool>()));
+        var checkedOrg = await service.UpsertOrganizationAsync(poolId,
+            new SaveOrganizationPoolOrganizationRequest(orgId, 5, IsAutoAssignmentEnabled: true, IsReady: true, ProductScope: "vietsub"), "admin", default);
+        Assert.False(checkedOrg.IsReady); // Local validation cannot unlock video provisioning.
+        Assert.True(checkedOrg.VietsubLocal!.Ready);
+        Assert.False(checkedOrg.VietsubCloud!.Ready);
+        Assert.Equal("local_plan_allocation_not_required", (await Assert.ThrowsAsync<TOOL_SERVER.Authentication.AccountApiException>(() =>
+            service.UpsertLicensePlanAsync(planId, new(poolId), "admin", default))).Code);
+        var detail = await service.GetPoolAsync(poolId, default);
+        Assert.True(detail.Organizations.Single().VietsubLocal!.Ready);
+        Assert.False(detail.Organizations.Single().CanReceiveCustomers);
+        Assert.Empty(detail.LicensePlans);
+        var summary = (await service.GetPoolsAsync(default)).Single();
+        Assert.Equal(0, summary.AllocatableAvailableSeats);
+        Assert.Empty(await db.LicensePlanOrganizationPools.ToArrayAsync());
+        Assert.Empty(await db.OrganizationProviderCredentials.ToArrayAsync());
+        var error = await Assert.ThrowsAsync<TOOL_SERVER.Authentication.AccountApiException>(() => service.UpsertOrganizationAsync(poolId,
+            new SaveOrganizationPoolOrganizationRequest(orgId, 5, IsAutoAssignmentEnabled: true, IsReady: true,
+                ProductScope: "vietsub", VietsubCloudEnabled: true), "admin", default));
+        Assert.Equal("organization_not_ready", error.Code);
     }
 
     private static Organization Organization(Guid id, string code, DateTime now) => new()

@@ -87,13 +87,15 @@ public partial class Form1 : Form
     private Guid? _dismissedReleaseId;
     private DesktopUpdateCheckResponse? _availableUpdate;
     private DesktopReleaseResponse? _mediaRepairRelease;
+    private DesktopDirectReleaseResponse? _mediaRepairDirectRelease;
+    private DesktopStandaloneReleaseResponse? _mediaRepairStandaloneRelease;
 
     internal bool ReturnToLoginRequested { get; private set; }
 
     public Form1()
     {
         InitializeComponent();
-        Icon = BrandIdentity.WindowIcon;
+        BrandIdentity.ApplyWindowIcon(this);
     }
 
     internal Form1(
@@ -274,7 +276,8 @@ public partial class Form1 : Form
                 () =>
                 {
                     var current = _sessionManager.Current;
-                    var organizationId = _generationClient.SelectedOrganizationId;
+                    var organizationId = TOOL_SHARED.Contracts.Accounts.LicenseProductPolicy.IsLocalOnly(_licenseManager?.Current?.FeatureFlagsJson)
+                        ? Guid.Empty : _generationClient.SelectedOrganizationId;
                     return current is null || organizationId is null
                         ? null
                         : new VietsubUserContext(current.User.UserId, organizationId.Value);
@@ -406,6 +409,18 @@ public partial class Form1 : Form
             return;
         }
 
+        try
+        {
+            var request = JsonSerializer.Deserialize<WebMessageRequest>(message, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            if (request is { Type.Length: > 0 } && !LicenseProductCommands.Allows(_licenseManager?.Current?.FeatureFlagsJson, request.Type))
+            {
+                PostJsonToWebView(JsonSerializer.Serialize(new WebMessageResponse("operation.error", request.RequestId,
+                    Error: new WebMessageError("license_feature_unavailable", "Chức năng này không nằm trong gói sử dụng hiện tại.")),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+                return;
+            }
+        }
+        catch (JsonException) { return; }
         if (_setupBridge is not null && await _setupBridge.TryHandleAsync(message, _shutdown.Token)) return;
 
         if (ShouldBlockForStartupSetup(message, out var requestId))
@@ -829,7 +844,7 @@ public partial class Form1 : Form
         try
         {
             var response = await _updateApiClient.CheckAsync(_shutdown.Token);
-            if (!response.IsUpdateAvailable || response.Release is null)
+            if (!response.IsUpdateAvailable || response.Release is null && response.DirectRelease is null && response.StandaloneRelease is null)
             {
                 _availableUpdate = null;
                 PostHostMessage("update.none");
@@ -837,7 +852,7 @@ public partial class Form1 : Form
             }
 
             _availableUpdate = response;
-            if (!response.IsMandatory && _dismissedReleaseId == response.Release.ReleaseId)
+            if (!response.IsMandatory && _dismissedReleaseId == (response.StandaloneRelease?.ReleaseId ?? response.DirectRelease?.ReleaseId ?? response.Release!.ReleaseId))
             {
                 return;
             }
@@ -880,9 +895,9 @@ public partial class Form1 : Form
                 await RepairMediaToolsAsync(request.RequestId);
                 return true;
             case "update.dismiss":
-                if (_availableUpdate is { IsMandatory: false, Release: not null })
+                if (_availableUpdate is { IsMandatory: false })
                 {
-                    _dismissedReleaseId = _availableUpdate.Release.ReleaseId;
+                    _dismissedReleaseId = _availableUpdate.StandaloneRelease?.ReleaseId ?? _availableUpdate.DirectRelease?.ReleaseId ?? _availableUpdate.Release?.ReleaseId;
                 }
                 return true;
             case "update.exit":
@@ -906,8 +921,16 @@ public partial class Form1 : Form
         _preparingMediaRepair = true;
         try
         {
-            _mediaRepairRelease = await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token);
-            PostHostMessage("media.tools.install.available", _mediaRepairRelease);
+            _mediaRepairStandaloneRelease = await _updateApiClient.GetStandaloneRepairReleaseAsync(_shutdown.Token);
+            _mediaRepairDirectRelease = _mediaRepairStandaloneRelease is null ? await _updateApiClient.GetDirectRepairReleaseAsync(_shutdown.Token) : null;
+            _mediaRepairRelease = _mediaRepairStandaloneRelease is null && _mediaRepairDirectRelease is null ? await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token) : null;
+            PostHostMessage("media.tools.install.available", _mediaRepairStandaloneRelease is { } standalone
+                ? new { releaseId = standalone.ReleaseId, version = standalone.Version, buildNumber = standalone.DeclaredBuildNumber,
+                    channel = standalone.Channel, releaseNotes = standalone.ReleaseNotes, sizeBytes = (long?)null, catalogProtocol = standalone.CatalogProtocol }
+                : _mediaRepairDirectRelease is { } direct
+                ? new { releaseId = direct.ReleaseId, version = direct.Version, buildNumber = direct.DeclaredBuildNumber,
+                    channel = direct.Channel, releaseNotes = direct.ReleaseNotes, sizeBytes = (long?)null, catalogProtocol = direct.CatalogProtocol }
+                : (object?)_mediaRepairRelease);
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
         {
@@ -915,6 +938,8 @@ public partial class Form1 : Form
         catch (Exception exception)
         {
             _mediaRepairRelease = null;
+            _mediaRepairDirectRelease = null;
+            _mediaRepairStandaloneRelease = null;
             PostHostMessage("media.tools.install.failed", DesktopRepairErrors.FromException(exception));
         }
         finally
@@ -937,12 +962,19 @@ public partial class Form1 : Form
         try
         {
             using var runtimeLease = RuntimeUseGate.Shared.Acquire(exclusive: true);
-            var release = _mediaRepairRelease
-                ?? await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token);
+            var standalone = _mediaRepairStandaloneRelease ?? (_mediaRepairRelease is null && _mediaRepairDirectRelease is null
+                ? await _updateApiClient.GetStandaloneRepairReleaseAsync(_shutdown.Token) : null);
+            var direct = standalone is null ? _mediaRepairDirectRelease ?? (_mediaRepairRelease is null
+                ? await _updateApiClient.GetDirectRepairReleaseAsync(_shutdown.Token) : null) : null;
+            var release = standalone is null && direct is null ? _mediaRepairRelease ?? await _updateApiClient.GetRepairReleaseAsync(_shutdown.Token) : null;
             _mediaRepairRelease = null;
+            _mediaRepairDirectRelease = null;
+            _mediaRepairStandaloneRelease = null;
             var progress = new Progress<DesktopUpdateProgress>(update =>
                 PostHostMessage("media.tools.install.progress", update, requestId));
-            await _packageUpdateService.StartAsync(release, progress, _shutdown.Token);
+            if (standalone is not null) await _packageUpdateService.StartStandaloneAsync(standalone, progress, _shutdown.Token, action: "repair");
+            else if (direct is not null) await _packageUpdateService.StartDirectAsync(direct, progress, _shutdown.Token, action: "repair");
+            else await _packageUpdateService.StartAsync(release!, progress, _shutdown.Token, action: "repair");
             Close();
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
@@ -961,7 +993,7 @@ public partial class Form1 : Form
 
     private async Task ApplyAvailableUpdateAsync()
     {
-        if (_applyingUpdate || _availableUpdate?.Release is not { } release || _packageUpdateService is null)
+        if (_applyingUpdate || _availableUpdate is null || _availableUpdate.Release is null && _availableUpdate.DirectRelease is null && _availableUpdate.StandaloneRelease is null || _packageUpdateService is null)
         {
             return;
         }
@@ -972,7 +1004,9 @@ public partial class Form1 : Form
         {
             var progress = new Progress<DesktopUpdateProgress>(update => PostHostMessage("update.progress", update));
             using var runtimeLease = RuntimeUseGate.Shared.Acquire(exclusive: true);
-            await _packageUpdateService.StartAsync(release, progress, _shutdown.Token);
+            if (_availableUpdate.StandaloneRelease is { } standalone) await _packageUpdateService.StartStandaloneAsync(standalone, progress, _shutdown.Token);
+            else if (_availableUpdate.DirectRelease is { } direct) await _packageUpdateService.StartDirectAsync(direct, progress, _shutdown.Token);
+            else await _packageUpdateService.StartAsync(_availableUpdate.Release!, progress, _shutdown.Token);
             Close();
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)

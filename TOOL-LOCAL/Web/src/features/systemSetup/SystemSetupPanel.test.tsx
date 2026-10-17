@@ -20,8 +20,8 @@ vi.mock('../../bridge', () => ({
     bridge.listener = listener; return () => { bridge.listener = null; };
   }
 }));
-function Harness({ organization = 'org', visible = true }: { organization?: string; visible?: boolean }) {
-  const setup = useSystemSetup(organization);
+function Harness({ organization = 'org', visible = true, user = 'user' }: { organization?: string; visible?: boolean; user?: string }) {
+  const setup = useSystemSetup(organization, user);
   return visible ? <SystemSetupPanel setup={setup} /> : <div>Trang dự án</div>;
 }
 const initial = (): SetupSnapshot => ({ contextGeneration: 'context', organizationId: 'org', revision: 1,
@@ -202,6 +202,77 @@ describe('Setup application workflow', () => {
     await act(async () => root.render(<Harness organization="other-org" />));
     await emit('system.setup.progress', { ...initial(), components: initial().components.map(c => ({ ...c, message: 'OLD CALLBACK' })) });
     expect(container.textContent).not.toContain('OLD CALLBACK');
+  });
+
+  it('offers reconciliation after a lost ACK and replays the same operation instead of creating another one', async () => {
+    await act(async () => button('Cài thành phần cần thiết').click());
+    const request = last('system.setup.start');
+    await act(async () => vi.advanceTimersByTime(16000));
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Chưa nhận xác nhận');
+    expect(button('Cài thành phần cần thiết').disabled).toBe(true);
+    expect(container.querySelector('progress')).toBeNull();
+    await act(async () => button('Đối soát trạng thái').click());
+    const replay = last('system.setup.start');
+    expect(replay.payload).toEqual(request.payload);
+    expect(replay.requestId).not.toBe(request.requestId);
+    const operationId = (request.payload as { operationId: string }).operationId;
+    await emit('system.setup.status', { ...initial(), revision: 3,
+      operation: { operationId, mode: 'start', state: 'Completed', componentIds: ['media', 'ocr', 'qwen', 'piper'],
+        sequence: 3, allSelectedReady: false, allRequiredReady: false } }, last('system.setup.get').requestId);
+    expect(button('Cài thành phần cần thiết').disabled).toBe(false);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('does not let a late rejection from an already reconciled operation unlock a new pending operation', async () => {
+    await act(async () => button('Cài thành phần cần thiết').click());
+    const previous = last('system.setup.start');
+    const operationId = (previous.payload as { operationId: string }).operationId;
+    await act(async () => vi.advanceTimersByTime(2500));
+    await emit('system.setup.status', { ...initial(), revision: 2,
+      operation: { operationId, mode: 'start', state: 'Failed', componentIds: ['qwen'], sequence: 2,
+        allSelectedReady: false, allRequiredReady: false } }, last('system.setup.get').requestId);
+    await act(async () => button('Cài thành phần cần thiết').click());
+    const current = last('system.setup.start');
+    await act(async () => bridge.listener!({ type: 'operation.error', requestId: previous.requestId,
+      error: { code: 'system_setup_busy', message: 'REJECTION FROM OLD OPERATION' } }));
+    expect(container.textContent).not.toContain('REJECTION FROM OLD OPERATION');
+    expect(button('Cài thành phần cần thiết').disabled).toBe(true);
+    expect(last('system.setup.start')).toBe(current);
+  });
+
+  it('resets a personal workspace when the signed-in user changes without changing organization', async () => {
+    const previousGet = last('system.setup.get');
+    await act(async () => root.render(<Harness user="next-user" />));
+    expect(container.textContent).toContain('Chọn tổ chức');
+    expect(button('Cài thành phần cần thiết').disabled).toBe(true);
+    expect(last('system.setup.get').requestId).not.toBe(previousGet.requestId);
+    await emit('system.setup.status', { ...initial(), components: initial().components.map(component => ({ ...component, state: 'READY' })) }, previousGet.requestId);
+    expect(container.textContent).not.toContain('4/4');
+    expect(button('Cài thành phần cần thiết').disabled).toBe(true);
+  });
+
+  it('requires a fresh low-memory decision when the Qwen resource profile changes', async () => {
+    await showQwenResourceWarning();
+    await act(async () => container.querySelector<HTMLInputElement>('.setup-warning input')!.click());
+    expect(button('Vẫn thử dùng Qwen').disabled).toBe(false);
+    await emit('system.setup.progress', { ...initial(), revision: 4,
+      components: initial().components.map(component => component.id === 'qwen'
+        ? { ...component, state: 'NEEDS_VERIFICATION', errorCode: 'TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED',
+          resourceProfileId: 'different-resource-profile' } : { ...component, state: 'READY' }),
+      operation: { operationId: (last('system.setup.start').payload as { operationId: string }).operationId,
+        mode: 'start', state: 'Failed', componentIds: ['qwen'], sequence: 4,
+        allSelectedReady: false, allRequiredReady: false } });
+    expect(button('Vẫn thử dùng Qwen').disabled).toBe(true);
+  });
+
+  it('does not hide an uncertain operation when GET still reports the previous snapshot', async () => {
+    await act(async () => button('Cài thành phần cần thiết').click());
+    await act(async () => vi.advanceTimersByTime(16000));
+    await emit('system.setup.status', initial(), last('system.setup.get').requestId);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Chưa nhận xác nhận');
+    expect(container.querySelector('progress')).toBeNull();
+    expect(button('Đối soát trạng thái')).toBeDefined();
+    expect(button('Cài thành phần cần thiết').disabled).toBe(true);
   });
 });
 

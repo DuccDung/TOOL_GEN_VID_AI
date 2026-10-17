@@ -96,6 +96,21 @@ public sealed class VietsubOcrAuthorizationTests
         Assert.Equal(0, context.AccessChecks);
     }
 
+    [Fact]
+    public async Task PersonalLocalChecksLicenseAndOwnerWithoutMembershipLookup()
+    {
+        var context = new FakeAccessContext("user-1", Guid.Empty, "Viewer", "Inactive");
+        var authorizer = new VietsubLocalJobAuthorizer(context);
+        await authorizer.AuthorizeAsync("user-1", Guid.Empty, CreateProject("user-1", Guid.Empty), default);
+        Assert.Equal(1, context.AccessChecks); Assert.Equal(0, context.MembershipChecks);
+        context.ValidLicense = false;
+        Assert.Equal(VietsubLocalJobAuthorizationErrorCodes.LicenseRequired, (await Assert.ThrowsAsync<VietsubLocalJobAuthorizationException>(() =>
+            authorizer.AuthorizeAsync("user-1", Guid.Empty, CreateProject("user-1", Guid.Empty), default))).Code);
+        foreach (var project in new[] { CreateProject("other", Guid.Empty), CreateProject("user-1", Guid.NewGuid()) })
+            Assert.Equal(VietsubLocalJobAuthorizationErrorCodes.AccessDenied, (await Assert.ThrowsAsync<VietsubLocalJobAuthorizationException>(() =>
+                authorizer.AuthorizeAsync("user-1", Guid.Empty, project, default))).Code);
+    }
+
     private static VietsubProjectManifest CreateProject(string ownerUserId, Guid organizationId) => new()
     {
         ProjectId = Guid.NewGuid(),
@@ -118,9 +133,12 @@ public sealed class VietsubOcrAuthorizationTests
 
         public int MembershipChecks { get; private set; }
 
+        public bool ValidLicense { get; set; } = true;
+
         public Task EnsureSessionAndLicenseAsync(CancellationToken cancellationToken)
         {
             AccessChecks++;
+            if (!ValidLicense) throw new TOOL_LOCAL.Authentication.AccountClientException("license_unavailable", "Expired", 403);
             return Task.CompletedTask;
         }
 

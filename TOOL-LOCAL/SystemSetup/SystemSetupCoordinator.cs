@@ -197,7 +197,7 @@ internal sealed class SystemSetupCoordinator : IAsyncDisposable
                     var code = SetupErrors.Code(exception);
                     result = adapter.Component with { State = code == "TRANSLATION_RESOURCE_CONFIRMATION_REQUIRED"
                         ? "NEEDS_VERIFICATION" : "REPAIR_REQUIRED", ErrorCode = code,
-                        Message = SetupErrors.Message(code), CheckedAtUtc = DateTime.UtcNow };
+                        Message = SetupErrors.Message(exception), CheckedAtUtc = DateTime.UtcNow };
                 }
                 token.ThrowIfCancellationRequested();
                 visited.Add(adapter.Component.Id);

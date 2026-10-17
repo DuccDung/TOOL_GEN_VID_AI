@@ -19,6 +19,9 @@ public sealed class ProviderAdminDbContext(DbContextOptions<ProviderAdminDbConte
     public DbSet<AccountAuditLog> AccountAuditLogs => Set<AccountAuditLog>();
 
     protected override void OnModelCreating(ModelBuilder builder)
+        => ConfigureModel(builder);
+
+    internal static void ConfigureModel(ModelBuilder builder)
     {
         builder.Entity<AiProvider>(entity =>
         {

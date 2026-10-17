@@ -12,14 +12,16 @@ public sealed class AdminLicensePlanSalesTests
     [Fact]
     public void AdminPlanForm_RequiresPriceAndDurationBeforeSubmittingPublicPlan()
     {
-        var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin.js");
+        var script = ReadRepositoryFile("TOOL-SERVER", "wwwroot", "admin", "admin-plan-composer.js");
 
-        Assert.Contains("function syncPlanSalesRequirements()", script);
-        Assert.Contains("duration.required = isPublic;", script);
-        Assert.Contains("salePrice.required = isPublic;", script);
-        Assert.Contains("Vui lòng nhập thời hạn mặc định cho gói được mở bán.", script);
-        Assert.Contains("Vui lòng nhập giá bán VND cho gói được mở bán.", script);
-        Assert.Contains("planForm').addEventListener('invalid'", script);
+        Assert.Contains("byId('composerDuration').required = publish;", script);
+        Assert.Contains("byId('composerPrice').required = publish;", script);
+        Assert.Contains("if (!byId('composerForm').reportValidity()) return;", script);
+        Assert.Contains("type=\"number\" min=\"1\" max=\"3650\"", script);
+        Assert.Contains("type=\"text\" inputmode=\"numeric\"", script);
+        Assert.Contains("byId('composerPrice').setCustomValidity", script);
+        Assert.Contains("Number.isSafeInteger(value) && value >= 1 && value <= 1000000000000", script);
+        Assert.DoesNotContain("id=\"planDialog\"", ReadRepositoryFile("TOOL-SERVER", "Pages", "Admin", "Index.cshtml"));
     }
 
     [Fact]

@@ -1,0 +1,145 @@
+/* Shared create, edit and clone form. Shell styles live in admin.css. */
+.plan-composer { width: 100%; margin: 0; }
+.composer-back { min-height: 40px; padding: 0; color: var(--primary); font-size: 16px; font-weight: 400; }
+.composer-back .ui-icon { width: 20px; height: 20px; }
+.composer-heading { margin: 4px 0 12px; }
+.composer-heading h1 { margin: 0 0 4px; font-size: clamp(28px, 3vw, 40px); letter-spacing: -.025em; line-height: 1.2; }
+.composer-heading p, .composer-preview > p { margin: 0; color: var(--muted); font-size: 18px; line-height: 1.5; }
+.composer-status { display: flex; gap: 18px; align-items: center; min-height: 54px; padding: 12px 20px; margin-bottom: 16px; border-radius: 6px; background: #edf2f9; color: #44516a; }
+.composer-status .ui-icon { width: 30px; height: 30px; flex: 0 0 30px; }
+.composer-status div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
+.composer-status strong { font-size: 20px; line-height: 1.4; }
+.composer-status span { padding-left: 20px; border-left: 1px solid #b7dcca; font-size: 17px; line-height: 1.5; }
+.composer-status.is-ready { color: var(--success); background: #e1f5ea; }
+.composer-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(320px, 1fr); gap: 24px; align-items: start; }
+.composer-form, .composer-preview { min-width: 0; padding: 24px; border-radius: 6px; background: #fff; }
+.composer-form h3, .composer-preview > h3 { margin: 0 0 14px; font-size: 26px; line-height: 1.2; letter-spacing: -.025em; }
+.composer-preview { padding: 12px 16px 16px; }
+.composer-preview > h3 { margin-bottom: 4px; }
+.composer-preview > p { font-size: 16px; }
+.composer-fields { display: grid; gap: 18px; }
+.plan-composer:not(.composer-vietsub) .composer-fields { gap: 12px; }
+.plan-composer:not(.composer-vietsub) .composer-form { padding: 20px; }
+.plan-composer:not(.composer-vietsub) .composer-advanced summary { min-height: 54px; padding-block: 8px; }
+.composer-vietsub .composer-fields { gap: 14px; }
+.composer-vietsub .composer-fields label, .composer-vietsub .composer-fields input, .composer-vietsub .composer-fields select, .composer-vietsub .composer-fields textarea { font-size: 16px; }
+.composer-section { min-width: 0; }
+.composer-basic > .composer-fields { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.composer-basic > .composer-fields > label { grid-column: span 3; }
+.composer-basic > .composer-fields > .composer-two-fields { grid-column: span 4; }
+.composer-basic > .composer-fields > label[for="composerDevices"] { grid-column: span 2; }
+.composer-routing > h3 { display: none; }
+.composer-actions { grid-column: 1 / -1; padding: 16px 20px; margin-top: 0; border: 1px solid #e2e9f3; background: #fff; border-radius: 6px; }
+.composer-vietsub > .composer-status { display: none; }
+.composer-vietsub .composer-form { padding: 0; background: transparent; }
+.composer-vietsub .composer-section { padding: 20px; border: 1px solid #e2e9f3; border-radius: 6px; background: #fff; }
+.composer-vietsub .composer-section h3 { font-size: 22px; margin-bottom: 16px; }
+.composer-vietsub .composer-routing > h3 { display: block; }
+.composer-vietsub .composer-preview { padding: 20px; border: 1px solid #e2e9f3; }
+.composer-vietsub .composer-offer { display: flex; flex-direction: column; }
+.composer-vietsub .composer-offer > button { order: 10; margin-top: 16px; }
+.composer-capabilities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; padding: 0; margin: 0 0 18px; list-style: none; }
+.composer-capabilities li, .composer-checks li { display: flex; align-items: center; gap: 10px; min-width: 0; line-height: 1.5; }
+.composer-capabilities .ui-icon { flex: 0 0 22px; width: 22px; height: 22px; color: var(--success); }
+.composer-cloud-toggle { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; border-top: 1px solid #e2e9f3; padding-top: 16px; cursor: pointer; }
+.composer-cloud-settings label { margin-top: 12px; }
+.composer-cloud-toggle strong, .composer-cloud-toggle small { display: block; }
+.composer-cloud-toggle small { margin-top: 4px; color: var(--muted); font-size: 14px; }
+.composer-fields .composer-cloud-toggle input { appearance: none; flex: 0 0 48px; width: 48px; min-height: 28px; height: 28px; margin: 0; padding: 3px; border: 1px solid #bac7da; border-radius: 20px; background: #cbd5e1; cursor: pointer; }
+.composer-cloud-toggle input::before { content: ''; position: absolute; top: 3px; left: 3px; display: block; width: 20px; height: 20px; border-radius: 50%; background: #fff; }
+.composer-cloud-toggle input:checked { background: var(--primary); border-color: var(--primary); }
+.composer-cloud-toggle input:checked::before { left: 23px; transform: none; }
+.composer-local-note, .composer-cloud-settings { margin: 14px 0; padding: 12px 14px; border-radius: 6px; background: #eef4ff; color: #234ca5; font-size: 14px; line-height: 1.5; }
+.composer-cloud-settings p { margin: 0 0 6px; }
+.composer-locked-tools { display: flex; align-items: flex-start; gap: 12px; margin: 14px 0 0; padding: 12px 14px; border-radius: 6px; background: #f1f5f9; color: #475569; font-size: 14px; line-height: 1.5; }
+.composer-locked-tools .ui-icon { flex-shrink: 0; }
+.composer-cloud-pill { align-self: flex-start; margin-top: 16px; padding: 5px 10px; background: #edf2f9; border-radius: 6px; color: #475569; font-size: 14px; }
+.composer-checks { margin-top: 20px; padding: 18px; border: 1px solid #e2e9f3; border-radius: 6px; }
+.composer-checks h3 { margin: 0 0 14px; font-size: 22px; }
+.composer-checks ul { padding: 0; margin: 0; list-style: none; display: grid; gap: 12px; }
+.composer-checks .is-ready .ui-icon { color: var(--success); }
+.composer-checks::after { content: attr(data-state); display: block; margin-top: 18px; padding: 12px; border-radius: 6px; background: #f1f5f9; color: #475569; font-weight: 600; }
+.composer-checks.is-ready::after { background: #e1f5ea; color: var(--success); }
+.composer-fields label { gap: 8px; color: var(--ink); font-size: 18px; font-weight: 400; line-height: 1.25; }
+.composer-fields input, .composer-fields select, .composer-fields textarea { border: 1px solid #d6dfed; border-radius: 6px; background: #fff; font-size: 18px; font-weight: 400; }
+.composer-fields input:focus-visible, .composer-fields select:focus-visible, .composer-fields textarea:focus-visible { border-color: var(--primary); outline: 2px solid #b7cdff; outline-offset: 1px; }
+.composer-fields input, .composer-fields select { min-height: 46px; }
+.composer-fields label small { color: var(--muted); font-size: 14px; font-weight: 400; line-height: 1.5; }
+.composer-two-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+.composer-input-unit { display: flex; overflow: hidden; border: 1px solid #d6dfed; border-radius: 6px; background: #f5f8fd; }
+.composer-input-unit input { min-width: 0; border: 0; border-radius: 0; }
+.composer-input-unit:focus-within { border-color: var(--primary); outline: 2px solid #b7cdff; outline-offset: 1px; }
+.composer-input-unit input:focus-visible { outline: none; }
+.composer-input-unit span { display: flex; align-items: center; padding: 0 14px; color: var(--muted); font-weight: 400; }
+.composer-fields select { appearance: none; padding-right: 42px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23425577' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 14px center / 20px; }
+.composer-group-info { display: grid; gap: 3px; margin-top: -10px; }
+.composer-group-info p { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.composer-group-info p:first-child { font-size: 16px; font-weight: 500; }
+.composer-group-info .status-check { width: 24px; height: 24px; }
+.composer-group-info p.is-ready { color: var(--success); }
+.composer-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.composer-group-info .text-button { min-height: 38px; padding: 0; color: var(--primary); text-align: left; }
+.composer-group-head .composer-reload { min-width: 28px; min-height: 24px; padding: 0 4px; }
+.composer-advanced { padding: 0; border-radius: 6px; background: #f3f7fc; }
+.composer-advanced summary { display: flex; align-items: center; gap: 18px; min-height: 66px; padding: 12px 18px; list-style: none; cursor: pointer; }
+.composer-advanced summary::-webkit-details-marker { display: none; }
+.composer-advanced summary > span { flex: 1; min-width: 0; }
+.composer-advanced summary strong, .composer-advanced summary small { display: block; }
+.composer-advanced summary strong { font-size: 18px; font-weight: 500; line-height: 1.3; }
+.composer-advanced summary small { margin-top: 3px; color: var(--muted); font-size: 14px; line-height: 1.35; }
+.composer-advanced summary .ui-icon { width: 26px; height: 26px; }
+.composer-advanced-fields { display: grid; gap: 16px; padding: 0 16px 16px; }
+.composer-form .form-message { margin: 14px 0 0; }
+.composer-form .form-message:empty { display: none; }
+.composer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.composer-actions > span { flex: 1; min-width: 180px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.composer-actions > div { display: flex; flex-wrap: wrap; gap: 12px; }
+.composer-actions button { min-height: 48px; padding: 10px 20px; border-radius: 6px; font-size: 18px; font-weight: 400; }
+.composer-actions .ghost-button { border: 1px solid #d6dfed; background: #f9fbfe; color: var(--ink); }
+.composer-actions .primary-button, .plan-composer .composer-offer > button { background: linear-gradient(135deg, #246cff, #2059f3); }
+.composer-actions .primary-button:hover { background: var(--primary-dark); }
+.composer-offer { margin-top: 18px; padding: 20px; border: 1px solid #e2e9f3; border-radius: 6px; background: #fff; }
+.composer-offer-eyebrow { color: var(--muted); font-size: 14px; font-weight: 500; }
+.composer-offer h3 { margin: 8px 0 4px; font-size: 30px; line-height: 1.2; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.composer-offer > p { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+.composer-offer-price { display: block; margin-top: 12px; font-size: clamp(32px, 3vw, 46px); line-height: 1.15; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.composer-offer-price + span { display: block; color: var(--muted); font-size: 18px; line-height: 1.5; }
+.composer-offer .composer-offer-seats { display: flex; align-items: center; gap: 12px; margin: 16px 0 14px; color: var(--success); font-size: 16px; font-weight: 500; }
+.composer-offer-seats .ui-icon { width: 24px; height: 24px; }
+.plan-composer .composer-offer > button { width: 100%; min-height: 48px; border-radius: 6px; font-size: 18px; font-weight: 400; opacity: 1; cursor: default; }
+.composer-offer ul { display: grid; gap: 10px; margin: 20px 0 0; padding: 18px 0 0; border-top: 1px solid #e2e9f3; list-style: none; }
+.composer-offer li { display: flex; align-items: flex-start; gap: 12px; min-width: 0; font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+.composer-offer li .ui-icon { width: 22px; height: 22px; margin-top: 1px; color: var(--success); }
+.composer-shared { margin-top: 16px; padding: 14px 20px; border-radius: 6px; background: #f3f7fc; }
+.composer-shared strong { font-size: 18px; font-weight: 600; }
+.composer-shared p { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+@media (max-width: 1100px) {
+  .composer-grid { grid-template-columns: minmax(0, 1fr); }
+  .composer-status span { border: 0; padding-left: 0; }
+  .composer-status div { display: grid; gap: 3px; }
+  .composer-actions button { font-size: 16px; }
+}
+@media (max-width: 520px) {
+  .composer-basic > .composer-fields { grid-template-columns: minmax(0, 1fr); }
+  .composer-basic > .composer-fields > label, .composer-basic > .composer-fields > .composer-two-fields, .composer-basic > .composer-fields > label[for="composerDevices"] { grid-column: auto; }
+  .composer-capabilities { grid-template-columns: minmax(0, 1fr); }
+  .composer-form, .composer-preview { padding: 18px; }
+  .composer-heading p { font-size: 16px; }
+  .composer-status { align-items: flex-start; gap: 12px; }
+  .composer-status strong { font-size: 17px; }
+  .composer-status span { font-size: 15px; }
+  .composer-status .ui-icon { width: 24px; height: 24px; flex-basis: 24px; }
+  .composer-fields label, .composer-fields input, .composer-fields select, .composer-fields textarea { font-size: 16px; }
+  .composer-two-fields { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .composer-group-head .composer-reload { min-width: 44px; min-height: 44px; }
+  .composer-status { padding: 14px; }
+  .composer-actions > div { width: 100%; }
+  .composer-actions button { flex: 1; }
+  .composer-actions .ghost-button { flex: 0 1 auto; }
+}
+@media (forced-colors: active) {
+  :root { --checkmark-color: CanvasText; }
+  .composer-fields select { appearance: auto; background-image: none; }
+  .status-check { forced-color-adjust: none; fill: Canvas; stroke: CanvasText; }
+  .status-check use { color: CanvasText; }
+}

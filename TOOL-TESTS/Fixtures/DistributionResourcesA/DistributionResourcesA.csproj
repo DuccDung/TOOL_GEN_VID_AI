@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <UseAppHost>true</UseAppHost>
+    <Version>1.2.0</Version>
+    <InformationalVersion>1.2.0+desktopbuild.7</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Description>VideoMaker.SharedBootstrapper.v1:eyJzY2hlbWFWZXJzaW9uIjoxLCJ2ZXJzaW9uIjoiMS4yLjAiLCJhcGlCYXNlVXJsIjoiaHR0cHM6Ly9tZXRhZGF0YS5pbnZhbGlkLyIsInByb2ZpbGUiOiJQcm9kdWN0aW9uIiwiY2hhbm5lbCI6IlN0YWJsZSIsInBsYXRmb3JtIjoid2luLXg2NCIsImRpc3RyaWJ1dGlvblByb3RvY29sIjozLCJtb2RlbEJ1bmRsZUlkIjoibW9kZWxzLTIwMjYxMDE2LTAzIn0=</Description>
+  </PropertyGroup>
+</Project>

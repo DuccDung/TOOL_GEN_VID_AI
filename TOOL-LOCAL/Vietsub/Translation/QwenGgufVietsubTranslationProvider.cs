@@ -714,7 +714,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
         string.Empty,
         new string('0', 64));
 
-    private static VietsubTranslationSceneRequest CreateEnglishProbeRequest() => new(
+    internal static VietsubTranslationSceneRequest CreateEnglishProbeRequest() => new(
         "Runtime probe",
         "en",
         "vi",
@@ -735,7 +735,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
         "Một đoạn hội thoại liên tục.",
         new string('0', 64));
 
-    private static VietsubTranslationSceneRequest CreateChineseProbeRequest() => new(
+    internal static VietsubTranslationSceneRequest CreateChineseProbeRequest() => new(
         "Runtime probe",
         "zh",
         "vi",
@@ -756,7 +756,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
         "Một đoạn hội thoại liên tục.",
         new string('0', 64));
 
-    private static void EnsureEnglishProbeResult(VietsubTranslationSceneResult result)
+    internal static void EnsureEnglishProbeResult(VietsubTranslationSceneResult result)
     {
         EnsureProbeShape(result, 2, VietsubTranslationErrorCodes.EnglishProbeFailed);
         if (!Contains(result.Items[0].TranslatedText, "chị")
@@ -768,7 +768,7 @@ internal sealed partial class QwenGgufVietsubTranslationProvider :
         }
     }
 
-    private static void EnsureChineseProbeResult(VietsubTranslationSceneResult result)
+    internal static void EnsureChineseProbeResult(VietsubTranslationSceneResult result)
     {
         EnsureProbeShape(result, 2, VietsubTranslationErrorCodes.ChineseProbeFailed);
         var first = result.Items[0].TranslatedText;

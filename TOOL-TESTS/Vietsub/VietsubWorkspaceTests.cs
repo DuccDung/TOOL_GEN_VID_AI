@@ -42,11 +42,13 @@ public sealed class VietsubWorkspaceTests : IDisposable
             paths.GetProjectPath(projectId, Path.GetPathRoot(_root)!, "outside.txt"));
     }
 
-    [Fact]
-    public async Task ProjectStore_CreateListOpenRename_EnforcesOwnerAndOrganization()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProjectStore_CreateListOpenRename_EnforcesOwnerAndOrganization(bool personal)
     {
         var (paths, _, store) = CreateStores();
-        var organizationId = Guid.NewGuid();
+        var organizationId = personal ? Guid.Empty : Guid.NewGuid();
         const string ownerUserId = "identity-user-1";
 
         var created = await store.CreateAsync(organizationId, ownerUserId, "  Dự án giới thiệu  ");

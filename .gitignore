@@ -25,6 +25,7 @@ TOOL-SERVER/App_Releases/
 
 # Local smoke-test output and generated video files
 /.tmp/
+/output/
 *.mp4
 *.mov
 *.webm
@@ -38,6 +39,8 @@ TOOL-SERVER/App_Releases/
 
 # Local secrets and runtime files
 appsettings.user.json
+TOOL-LOCAL/appsettings.release.json
+TOOL-LOCAL/Properties/PublishProfiles/FolderProfile.local.props
 .env
 .env.*
 !.env.example

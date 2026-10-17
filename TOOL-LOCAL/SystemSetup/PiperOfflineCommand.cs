@@ -39,7 +39,8 @@ internal static class PiperOfflineCommand
         catch (Exception error) when (error is not OutOfMemoryException and not AccessViolationException)
         {
             Console.WriteLine(JsonSerializer.Serialize(new { PiperOfflineReady = false,
-                ErrorCode = error is VietsubVoiceException voice ? voice.Code : "piper_offline_diagnostics_failed" }));
+                ErrorCode = error is VietsubVoiceException voice ? voice.Code : "piper_offline_diagnostics_failed",
+                Diagnostic = PiperInstallDiagnostics.GetDetails(error) }));
             return 2;
         }
     }

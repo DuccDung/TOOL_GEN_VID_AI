@@ -10,7 +10,7 @@ public partial class AppReleaseArtifact
 
     public string FileName { get; set; } = null!;
 
-    public string RelativePath { get; set; } = null!;
+    public string? RelativePath { get; set; }
 
     public long SizeBytes { get; set; }
 

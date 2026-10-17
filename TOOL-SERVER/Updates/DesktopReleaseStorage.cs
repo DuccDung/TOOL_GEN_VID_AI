@@ -37,7 +37,6 @@ public sealed class DesktopReleaseStorage : IDesktopReleaseStorage
             ? configuredRoot
             : Path.Combine(environment.ContentRootPath, configuredRoot));
         _maximumArtifactBytes = options.Value.MaximumArtifactBytes;
-        Directory.CreateDirectory(_root);
     }
 
     public async Task<StoredDesktopArtifact> SaveAsync(

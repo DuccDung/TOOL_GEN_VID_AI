@@ -1,5 +1,49 @@
 # Nghiệp vụ và kiến trúc VideoMaker
 
+Luồng phát hành hiện hành là **StandaloneCatalog**: Admin nhập phiên bản/link ZIP rồi lưu, phát hành; link tải EXE được lưu một lần cho toàn hệ thống. Không cần upload hoặc Active Setup trên hosting. Setup 1.3.0 đọc catalog 5, tải và kiểm ứng dụng/model từ VPS tại máy cài; chỉ READY sau probe và commit. Phiên bản/URL đã phát hành bất biến; cập nhật lên phiên bản mới hơn, sửa chữa đúng package đang cài. Tự cập nhật yêu cầu link EXE có hash do công cụ đóng gói tự đặt tên. Người dùng đã xác nhận luồng tải Setup hoạt động ngày 2026-10-17. [Nghiệp vụ chi tiết, trường nhập và cách phát hành tiếp](NGHIEP_VU_SETUP_VA_PHAT_HANH_DESKTOP.md), [triển khai và bằng chứng kỹ thuật](TRIEN_KHAI_PHAT_HANH_DON_GIAN_VPS.md). Những đoạn DirectCatalog/Setup Active phía dưới mô tả luồng cũ được giữ tương thích, không là gate của luồng mới.
+
+Nút tải Setup trên website có cấu hình URL riêng: Admin lưu một link EXE HTTPS trên VPS, server lưu trong `auth.ServerSettings` và chuyển hướng để trình duyệt tải trực tiếp. Ô cấu hình này không yêu cầu upload/version/checksum và không chứng nhận file đã được kiểm tra. Đây là link tải trên website, không thay đăng ký Setup Active hoặc điều kiện phát hành/cài/update ứng dụng. [Phạm vi và kiểm chứng](TRIEN_KHAI_LINK_TAI_SETUP_TREN_VPS.md).
+
+Luồng hiện hành **DirectCatalog**: Admin nhập phiên bản và URL ZIP rồi lưu/phát hành, không chờ hosting tải kiểm ZIP. Công cụ Publish tạo tên ZIP gắn version/build/SHA-256; server lưu danh tính khai báo, không báo đã kiểm file. Setup dùng chung 1.2.0 capability `3,4` lấy catalog 4, tải ZIP từ VPS, kiểm hash và native identity rồi cài/probe ứng dụng/model theo transaction distribution 3. Identity đã phát hành bất biến; update chọn version mới hơn, repair đúng package đang cài; model chỉ READY sau probe trên máy đích. [Chi tiết và bằng chứng](TRIEN_KHAI_PHAT_HANH_TRUC_TIEP_TU_VPS.md). Các đoạn protocol 2/3 tiếp theo mô tả đường cũ được giữ tương thích.
+
+Release mới protocol 3: Admin nhập **Phiên bản, URL ZIP ứng dụng**, tùy chọn ghi chú/bắt buộc cập nhật. Hệ thống tải kiểm ở nền trước khi cho phát hành; đổi version/link của nháp làm mất kết quả kiểm cũ, release đã từng phát hành khóa identity. Setup đăng ký riêng cấp hệ thống và tái dùng cho nhiều ZIP tương thích; mỗi lượt cài giữ snapshot release/hash/Setup, repair lấy đúng bản đang cài. Latest/cập nhật mới so Version trước BuildNumber. Model chỉ READY sau probe trên máy đích. [Biên bản triển khai](TRIEN_KHAI_FORM_RELEASE_TOI_GIAN_VA_SETUP_DUNG_CHUNG.md) tách source/kiểm thử khỏi nghiệm thu khách và rollout; đoạn protocol 2 bên dưới mô tả luồng cũ được giữ tương thích.
+
+Phát hành ứng dụng qua VPS (source 2026-10-17): Admin đăng ký ZIP ứng dụng ngoài bằng metadata và exact Setup của cùng release; server không tự chứng nhận byte VPS từ JSON. Setup tải, xác minh, chuẩn bị/probe đủ thành phần và commit rồi mới hoàn tất. StaticArchive update/repair phải đi qua đúng Setup; repair không đòi model READY trước khi sửa và không được giả/xóa ownership để vượt gate. [Trạng thái triển khai và nghiệm thu](TRIEN_KHAI_PHAT_HANH_TOOL_LOCAL_QUA_VPS_VA_SETUP.md) phân biệt source, fixture, bản cài thật và rollout.
+
+## Trạng thái cài đặt và phục hồi — 2026-10-17
+
+Setup chỉ báo hoàn tất khi probe/evidence đủ và giao dịch ứng dụng đã commit hợp lệ. Snapshot UI rỗng/thiếu/hỏng, receipt cũ hoặc missing marker không thay bằng chứng này. Mất phản hồi phải đối soát operation cũ, không tự tạo lượt cài mới; người dùng chỉ xác nhận RAM cho đúng profile đang được kiểm. Khôi phục file ứng dụng vẫn có thể yêu cầu verify model lại. [Phạm vi kiểm thử ổn định](TRIEN_KHAI_TEST_ON_DINH_SETUP_MODEL_UI_UX_VA_LOGIC.md).
+
+## Setup StaticArchive — bổ sung 2026-10-16
+
+Bản phát hành chọn StaticArchive có thể chuẩn bị bộ local bắt buộc trước đăng nhập: tải đúng ZIP VPS, kiểm byte/inventory, tạo runtime và probe Qwen/Piper/OCR/media/WebView2. Chỉ sau commit đủ bộ mới báo hoàn tất; file đúng hash, component bị tắt hoặc test skip không thay READY. Policy của bản StaticArchive quyết định bốn tính năng local bắt buộc trong bộ nhớ, không ghi đè cấu hình server/SQL/workspace của người dùng. Chuẩn bị component không cấp quyền sử dụng: login/license/project/organization gate vẫn giữ. [Phạm vi source và nghiệm thu](TRIEN_KHAI_SETUP_CAI_MODEL_TU_VPS.md).
+
+## Gói chỉ dùng tool dịch Vietsub — source 2026-10-15
+
+Logic bổ sung ngày 2026-10-15: gói chỉ Local dùng workspace cá nhân, không thiết lập phân bổ. Nhóm nhận khách chỉ chọn Toàn bộ công cụ hoặc Vietsub có Cloud; các kiểm tra dịch không ghi đè cờ sẵn sàng video. Hạn mức AI bằng 0 không khóa tác vụ Local. Cloud dùng cùng quy tắc model/host/structured output và rate duy nhất ở bước mở bán lẫn bước tạo job; thiếu schema Cloud, cấu hình server, credential, rate hoặc ngân sách sẽ chặn mở bán theo đúng nguyên nhân. Liên kết sửa cấu hình mang organization/model cụ thể; cờ Cloud và migration còn thiếu phải xử lý ở cấu hình server/database, không giả lập bằng cách mở credential.
+
+License hiện hành được chọn thống nhất theo trạng thái, khoảng hiệu lực, thời hạn và thứ tự ổn định; API không cộng quyền từ các license đã kích hoạt khác. Ngừng bán hoặc tắt catalog không thu hồi quyền đã cấp: thu hồi phải thực hiện trên license. Đơn đang chờ vẫn giữ giá và quyền đã snapshot. Mua khác gói nối sau toàn bộ lịch đã mua; gia hạn chỉ gộp vào license cuối cùng nếu cùng gói và cùng quyền. Nếu quyền khác, cấp license nối tiếp, không sửa snapshot cũ. Tài khoản có license không giới hạn thời hạn cần quản trị viên xử lý trước khi mua nối tiếp. Ngày dự kiến chỉ là ước tính trước khi nhận tiền; ngày hiệu lực chính thức được cấp trong transaction khi xử lý thanh toán.
+
+Đã nhận tiền nhưng tổ chức chưa sẵn sàng giữ trạng thái Paid/chờ kích hoạt, có thể retry mà không thu tiền hoặc cấp quyền lần hai. License chờ hiệu lực đã hết hạn/bị thu hồi không được tự kích hoạt membership. Trạng thái Scheduled và ngày hiệu lực được trả về desktop, không chờ kích hoạt thiết bị vô hạn. Trạng thái/kết quả/hủy tác vụ Cloud đã tạo được kiểm quyền phiên, thành viên và chủ project; quyền tạo/resume/retry có phí vẫn kiểm lại license Cloud. Worker tiếp tục settlement/reconciliation cho phần đã gửi, kể cả license hết hạn hoặc Cloud bị tắt.
+
+Form tạo/sửa/nhân bản có loại gói Toàn bộ công cụ và Chỉ tool dịch / Vietsub. Gói Vietsub gồm OCR, dịch Local, biên tập phụ đề, giọng Local và xuất SRT/MP4; Cloud là quyền riêng, mặc định tắt khi tạo gói mới. Model/runtime trên máy khách vẫn cần cờ và probe hiện hành, quyền gói không tự chứng minh runtime đã sẵn sàng.
+
+Theo yêu cầu tiếp theo ngày 2026-10-15, gói chỉ Local mở mặc định Dịch phụ đề; các menu nghiệp vụ khác, Cài đặt và nút Tạo video mới vẫn hiện nhưng khóa. Giữ nhãn/icon, bổ sung biểu tượng khóa, lý do và trạng thái trợ năng; click, Enter, Space không điều hướng hoặc gửi command. Quyền được tính từ license đang có hiệu lực: nhận `license.activated` hoặc dashboard mới phải cập nhật ngay; đang ở trang khác phải quay về Dịch. Chưa bật tính năng hoặc chưa hoàn tất Setup thì phần Dịch báo chưa sẵn sàng. Xem/nâng cấp gói, đăng xuất và Setup runtime giữ đường riêng; khóa menu Cài đặt không bỏ gate/probe runtime. Không đổi chính sách menu của gói Cloud/toàn bộ công cụ trong thay đổi này.
+
+Điều kiện nhóm nhận khách được tính theo loại gói tại form, khi ghi, offers và reserve. Với gói chỉ Local không cần tổ chức hoặc nhóm nhận khách, không tạo mapping mới, không kiểm sức chứa/giữ chỗ/kích hoạt membership; chỉ cần thông tin bán hợp lệ và SePay sẵn sàng. Thanh toán cấp license, desktop dùng workspace cá nhân theo tài khoản với kiểm tra license/thiết bị/chủ project và runtime. Không cần ngân sách AI, OpenAI/Fal hoặc cờ sẵn sàng AI đã lưu. Với gói bật Cloud, thêm cờ Cloud/model dịch trên server, OpenAI Active, capability structured output, đúng host, đơn giá InputToken/OutputToken duy nhất còn hiệu lực cùng tiền tệ và ngân sách khả dụng. Cloud không yêu cầu policy/video provider. Reservation và membership chỉ áp dụng gói có Cloud hoặc toàn bộ công cụ. Local giữ snapshot đơn/license, lịch hiệu lực, transaction và idempotency; đơn Local cũ đang Reserved được release khi cấp gói, không tạo membership. Dữ liệu phân bổ/project cũ không tự chuyển chủ hoặc xóa; điều kiện SePay riêng vẫn áp dụng khi mở bán.
+
+Quyền nằm trong `FeatureFlagsJson` với `productScope=all-tools|vietsub` và `vietsubCloudEnabled`, được snapshot vào đơn/license hiện hành. Thiếu scope giữ quy tắc legacy; scope lạ hoặc JSON hỏng không được mở công cụ ngoài gói. Server từ chối generation/TikTok và Cloud không thuộc quyền trước provider/job, desktop chặn command và chỉ hiển thị module được cấp. Chỉnh sửa giữ quyền gói hiện có; muốn đổi quyền thì nhân bản/tạo gói mới. Mặc định nhân bản giữ quyền nguồn, admin có thể chọn loại/quyền Cloud khác cho bản mới; không đổi gói nguồn hoặc license đã cấp.
+
+Đây là trạng thái source trên `main`, nền `f0651c918f28ca477f28875818148e9e86240b7b`, working tree chưa commit. Có migration mới 4.1.16 cho registry cá nhân; chưa chạy SQL hosting hoặc provider có phí. Phải triển khai đồng bộ server/desktop và migration; chưa xác minh rollout hoặc giao dịch thật của loại gói mới. Local Scheduled từ luồng cũ được release khi đối soát, không tự tạo membership, kể cả trước ngày hiệu lực.
+
+## Admin tạo gói và mở bán — 2026-10-13
+
+Global Admin nhập tên, thời hạn, giá VND, số thiết bị và nhóm nhận khách trong cùng một form, xem trước gói rồi chọn lưu nháp hoặc tạo và mở bán. Nhóm chỉ có một lựa chọn sẵn sàng được chọn trước. Nhiều gói trong cùng nhóm dùng chung sức chứa; tạo gói không làm tăng hoặc giữ chỗ nhận khách.
+
+Nháp có `IsActive=false` và `IsPublic=false`, chưa được cấp hoặc bán, có thể chưa chọn nhóm/giá/thời hạn. Với gói toàn bộ công cụ, mở bán cần thông tin bán hợp lệ, nhóm Active có ít nhất một tổ chức Active/bật phân bổ/đã kiểm tra, readiness AI hiện hành đạt, còn chỗ và SePay sẵn sàng. Gói chỉ tool dịch dùng điều kiện riêng ở mục phía trên. Server kiểm lại lúc ghi, không tự bật nhóm hoặc thay credential/rate/budget để đạt điều kiện.
+
+Nhân bản tạo gói mới, giữ quyền của gói nguồn; gói nguồn và license/đơn đã cấp không đổi. Tạo gói cùng mapping phải thành công hoặc rollback toàn bộ. Gửi lại cùng thao tác không tạo thêm gói; nội dung hoặc Admin khác bị conflict. Tạo/sửa/nhân bản dùng cùng form; dialog cũ đã gỡ. Sửa giữ mã/quyền, kiểm phiên bản plan và mapping, không chuyển/gỡ nhóm còn seat Active/Reserved/Scheduled. Có bốn trạng thái: nháp (Inactive/private), riêng tư (Active/private, cấp tay), mở bán (Active/public) và tạm ngừng bán (Inactive/public). Dừng bán/nháp/riêng tư không cần thanh toán sẵn sàng; public vẫn cần giá/thời hạn hợp lệ. [Phạm vi source, kiểm thử và hướng dẫn](PLAN_TASK_HOP_NHAT_UI_ADMIN.md).
+
 ## Bổ sung 2026-09-10: video ngắn phối trang phục
 
 `DirectShortVideo` có mode `TextOnly` mặc định và `CharacterOutfit` khi cờ được mở. Mode mới dùng một ảnh nhân vật và một ảnh trang phục; lưu bối cảnh/chuyển động, báo giá riêng từng bước AI, duyệt ảnh trước clip và duyệt hình/âm thanh trước xuất MP4. Từ 2026-09-11, cả hai mode tạo clip bằng Veo 3.1, một cảnh 4/6/8 giây, tỷ lệ 9:16 hoặc 16:9; tỷ lệ/audio chọn lúc tạo project. Đổi ảnh, bối cảnh hoặc chuyển động làm tăng revision và vô hiệu hóa kết quả đã duyệt. Chỉ hỗ trợ âm thanh môi trường hoặc tắt tiếng, không TTS/thoại. Feature mặc định tắt, máy Development đã bật bằng override; chưa nghiệm thu provider thật. Xem [triển khai Veo](TRIEN_KHAI_VIDEO_NGAN_VEO.md).
@@ -154,7 +198,7 @@ Quy tắc Canonical Voice:
 
 ## 13. Vietsub local-first
 
-- `VietsubProjectId` độc lập project video. `vs.Projects` giữ registry metadata/ownership/audit; dữ liệu biên tập, media và path nằm local. Riêng thao tác **Dịch Cloud** chủ động gửi snapshot text có giới hạn vào job server, mã hóa và dọn theo retention; không upload video/audio/path.
+- `VietsubProjectId` độc lập project video. `vs.Projects` giữ registry metadata/ownership/audit; `OrganizationId=NULL` là project Local cá nhân, luôn lọc `CreatedByUserId`; public/native dùng `Guid.Empty` để chọn rõ workspace cá nhân. Audit cá nhân ghi `auth.AccountAuditLogs` cùng transaction lưu project; project tổ chức giữ organization audit và membership/role. Cloud từ chối workspace cá nhân trước outbound; dữ liệu biên tập, media và path nằm local. Riêng thao tác **Dịch Cloud** chủ động gửi snapshot text có giới hạn vào job server, mã hóa và dọn theo retention; không upload video/audio/path.
 - System Setup sau đăng nhập/license/organization hiển thị dashboard trước rồi dùng modal kiểm FFmpeg/OCR/Qwen/Piper cho Owner/OrganizationAdmin/BillingManager/Member; Viewer không thuộc gate. Khi thiếu component bắt buộc, React khóa nền và host C# từ chối command nghiệp vụ; chỉ mở sau khi mọi component không `DISABLED` được kiểm `READY`. `NOT_INSTALLED`, checksum sai hoặc probe hỏng phải có luồng cài/sửa/thử lại, không biến thành READY do một cờ UI.
 - Workspace thuộc exact organization + owner; COPY sao chép/hash atomically, LINK phát hiện source mất/đổi.
 - Playback dùng virtual HTTPS URL và HTTP Range, không lộ absolute path; mọi mutation dùng track revision.
@@ -216,7 +260,9 @@ Quy tắc Canonical Voice:
 
 ## 14. SePay và seat
 
-- SePay mặc định tắt. Payment snapshot amount/account/content/expiry và xử lý webhook idempotent.
+- SePay mặc định tắt trong SQL. Global Admin quản lý tài khoản nhận tiền và bật/tắt nhận đơn mới tại **Thanh toán SePay**; thêm/chọn tài khoản không tự bật thanh toán. Payment snapshot amount/account/content/expiry và xử lý webhook idempotent.
+- Thay tài khoản được chọn hoặc sửa số tài khoản chỉ áp dụng cho đơn mới. Đơn cũ, QR và webhook đối chiếu thông tin snapshot của đơn, kể cả khi nhận đơn mới đã tắt.
+- Luồng hiện hành theo yêu cầu sản phẩm không dùng key/chữ ký xác thực webhook. Endpoint giới hạn dung lượng/tần suất và kiểm dữ liệu thanh toán; không xác minh nguồn gửi. Cấu hình nhận tiền chỉ Global Admin được sửa, có version chống ghi đè và audit không chứa số tài khoản.
 - Chỉ match giao dịch vào đúng account/code/exact amount và trạng thái; dữ liệu mơ hồ chuyển thủ công.
 - Pool/seat allocation dùng khóa cạnh tranh, không vượt capacity. Replay webhook không cấp license/seat hai lần.
 - Late payment, refund/chargeback và provisioning failure phải có trạng thái đối soát; không sửa ledger ad-hoc.
@@ -249,3 +295,7 @@ Quy tắc Canonical Voice:
 - Build/test đạt trên commit phát hành; Failed/Skipped được giải thích.
 - Integration/model/provider thật có smoke trên đúng môi trường/bundle và chi phí được phê duyệt.
 - Monitoring, rollback và runbook khả dụng; không có secret/dữ liệu nhạy cảm trong source/log/artifact.
+
+## Admin thiết lập mở bán 3 bước — cập nhật 2026-10-14
+
+Luồng đơn giản: Kết nối AI → Chi phí & khách hàng → Tạo gói & mở bán. SePay giữ trang riêng. Nhóm mới chưa nhận khách trước publication; activation, plan, mapping và receipt cùng Serializable transaction. OpenAI Text/Image dùng default thực tế toàn hệ thống, Veo dùng policy LongForm của tổ chức. Giá AI USD là global và cần xác nhận khi thay đổi; giá gói VND là độc lập. Gói wizard có profile OpenAI nội dung/ảnh + Fal/Veo, được kiểm lại trên offers/reserve và giữ khi clone; không áp profile này lên mọi gói legacy. Ngừng bán dùng active/private để giữ license và heartbeat của khách hiện có. Xem [biên bản triển khai](TRIEN_KHAI_ADMIN_SETUP_3_BUOC.md) cho trạng thái kiểm thử và giới hạn môi trường.

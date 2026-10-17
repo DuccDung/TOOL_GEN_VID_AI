@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>TOOL_MODEL_PUBLISHER</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TOOL-SHARED.Contracts\TOOL-SHARED.Contracts.csproj" />
+    <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
+  </ItemGroup>
+</Project>

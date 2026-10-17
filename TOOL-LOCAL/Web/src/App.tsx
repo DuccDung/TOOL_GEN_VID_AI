@@ -3,7 +3,11 @@ import { createPortal } from 'react-dom';
 import { LocalVoicePanel } from './features/localVoice/LocalVoicePanel';
 import { NewProjectDialog } from './features/projects/NewProjectDialog';
 import { LicenseInformationDialog } from './features/license/LicenseInformationDialog';
+import { PaymentSuccessDialog } from './features/license/PaymentSuccessDialog';
 import { useLicenseInformation } from './features/license/useLicenseInformation';
+import { useLicenseOffers, type LicenseOffersStatus } from './features/license/useLicenseOffers';
+import { LicenseOffersState } from './features/license/LicenseOffersState';
+import { localOnlyLicense, videoToolsAllowed } from './licenseProductAccess';
 import { TextShortVideo } from './features/shortVideo/TextShortVideo';
 import { OutfitShortVideo } from './features/shortVideo/OutfitShortVideo';
 import { createdProjectPage, shortVideoProviderStatus, type PendingProjectCreation } from './features/projects/projectCreation';
@@ -109,7 +113,7 @@ import type {
   CreateShortVideoPayload,
   ShortVideoCreatedNotice,
   DashboardState,
-  DesktopRelease,
+  DesktopRepairRelease,
   DesktopFeatureSettings,
   DesktopUpdateNotice,
   DesktopUpdateProgress,
@@ -180,7 +184,7 @@ type PendingSceneSave = {
   requestId: string;
   sceneId: string;
 };
-type LicenseRequestKind = 'offers' | 'current' | 'create' | 'status' | 'refresh';
+type LicenseRequestKind = 'current' | 'create' | 'status' | 'refresh';
 type PendingVoiceCatalogPreview = {
   voiceCode: string;
   speakingRate: number;
@@ -402,7 +406,9 @@ type ModelDisplay = {
 function App() {
   const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
   const latestDashboardRef = useRef(dashboard);
-  const [page, setPage] = useState<Page>('create');
+  const [requestedPage, setPage] = useState<Page>('create');
+  // A late navigation response must never render another tool for a Local-only license.
+  const page = localOnlyLicense(dashboard.license) ? 'vietsub' : requestedPage;
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newProjectShortMode, setNewProjectShortMode] = useState<'CharacterOutfit' | undefined>();
   const [shortEditorMode, setShortEditorMode] = useState<'auto' | 'newOutfit' | 'text'>('auto');
@@ -426,6 +432,7 @@ function App() {
   });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [updateNotice, setUpdateNotice] = useState<DesktopUpdateNotice | null>(null);
+  const updateRelease = updateNotice?.standaloneRelease ?? updateNotice?.directRelease ?? updateNotice?.release;
   const [updateProgress, setUpdateProgress] = useState<DesktopUpdateProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
@@ -441,9 +448,11 @@ function App() {
   const [characterImageBusyId, setCharacterImageBusyId] = useState<string | null>(null);
   const [assetConfirmBusyId, setAssetConfirmBusyId] = useState<string | null>(null);
   const [mediaInstallProgress, setMediaInstallProgress] = useState<DesktopUpdateProgress | null>(null);
+  const mediaRepairRequestRef = useRef<string | null>(null);
   const [sceneSaveState, setSceneSaveState] = useState<SceneSaveState | null>(null);
-  const [licenseOffers, setLicenseOffers] = useState<LicenseOffer[]>([]);
   const [licenseCheckout, setLicenseCheckout] = useState<LicensePaymentCheckout | null>(null);
+  const licenseCheckoutRef = useRef<LicensePaymentCheckout | null>(null);
+  const [licensePaymentSuccess, setLicensePaymentSuccess] = useState<LicensePaymentCheckout | null>(null);
   const [licensePaymentStatus, setLicensePaymentStatus] = useState<LicensePaymentStatus | null>(null);
   const [licensePaymentBusy, setLicensePaymentBusy] = useState(false);
   const [licensePaymentError, setLicensePaymentError] = useState<string | null>(null);
@@ -462,22 +471,47 @@ function App() {
   const pendingVoiceCatalogPreviewQuoteRef = useRef(new Map<string, PendingVoiceCatalogPreview>());
   const pendingVoiceCatalogPreviewOperationRef = useRef(new Map<string, PendingVoiceCatalogPreview>());
   const pendingVideoVoiceQuoteRef = useRef(new Map<string, string[]>());
-  const systemSetup = useSystemSetup(dashboard.selectedOrganizationId);
+  const workspaceId = localOnlyLicense(dashboard.license) ? '00000000-0000-0000-0000-000000000000' : dashboard.selectedOrganizationId;
+  const systemSetup = useSystemSetup(workspaceId, dashboard.profile.userId);
+  const systemSetupControllerRef = useRef(systemSetup);
+  systemSetupControllerRef.current = systemSetup;
   const licenseInformation = useLicenseInformation(dashboard.profile.userId);
+  const gateOffers = useLicenseOffers(dashboard.profile.userId);
   const vietsubStartupReady = !isHosted || Boolean(
     systemSetup.snapshot
     && (!systemSetup.snapshot.startupRequired || isSystemSetupReady(systemSetup.snapshot))
   );
   const vietsub = useVietsubModule(
     dashboard.features.vietsubEnabled && vietsubStartupReady,
-    dashboard.selectedOrganizationId
+    workspaceId
   );
-  const tiktok = useTikTokModule(dashboard.features.tikTokEnabled);
+  const tiktok = useTikTokModule(dashboard.features.tikTokEnabled && videoToolsAllowed(dashboard.license));
   const bilibili = useBilibiliModule(page === 'bilibili', dashboard.profile.userId);
   const selectedProjectRequestRef = useRef<string | null>(null);
   const licenseRequestsRef = useRef(new Map<string, LicenseRequestKind>());
+  const staleLicenseRequestsRef = useRef(new Set<string>());
+  const licenseCurrentRequestRef = useRef<string | null>(null);
   const licenseBootstrapRequestedRef = useRef(false);
   const licenseStatusInFlightRef = useRef(false);
+
+  const updateLicenseCheckout = (checkout: LicensePaymentCheckout | null) => {
+    licenseCheckoutRef.current = checkout;
+    setLicenseCheckout(checkout);
+    if (checkout?.isFulfilled && !checkout.isScheduled) setLicensePaymentSuccess(checkout);
+  };
+
+  useLayoutEffect(() => {
+    for (const requestId of licenseRequestsRef.current.keys()) staleLicenseRequestsRef.current.add(requestId);
+    licenseRequestsRef.current.clear();
+    licenseCurrentRequestRef.current = null;
+    licenseBootstrapRequestedRef.current = false;
+    licenseStatusInFlightRef.current = false;
+    updateLicenseCheckout(null);
+    setLicensePaymentSuccess(null);
+    setLicensePaymentStatus(null);
+    setLicensePaymentError(null);
+    setLicensePaymentBusy(false);
+  }, [dashboard.profile.userId]);
 
   useLayoutEffect(() => {
     latestDashboardRef.current = dashboard;
@@ -505,6 +539,7 @@ function App() {
   const postLicenseRequest = <T,>(kind: LicenseRequestKind, type: string, payload?: T) => {
     const requestId = postToHost(type, payload);
     licenseRequestsRef.current.set(requestId, kind);
+    if (kind === 'current') licenseCurrentRequestRef.current = requestId;
     return requestId;
   };
 
@@ -512,7 +547,7 @@ function App() {
     if (licenseBootstrapRequestedRef.current) return;
     licenseBootstrapRequestedRef.current = true;
     setLicensePaymentError(null);
-    postLicenseRequest('offers', 'license.offers.get');
+    gateOffers.loadOffers();
     postLicenseRequest('current', 'license.payment.current.get');
   };
 
@@ -526,6 +561,8 @@ function App() {
   useEffect(() => {
     const unsubscribe = subscribeToHost((message: HostMessage) => {
       if (licenseInformation.handleMessage(message)) return;
+      if (gateOffers.handleMessage(message)) return;
+      if (message.requestId && staleLicenseRequestsRef.current.has(message.requestId)) return;
       if (message.type === 'short-library.created' && message.payload) {
         const created = message.payload as ShortVideoCreatedNotice;
         if (created.organizationId === latestDashboardRef.current.selectedOrganizationId && created.projectId === latestDashboardRef.current.selectedProject?.project.projectId)
@@ -573,39 +610,39 @@ function App() {
           licenseRequestsRef.current.delete(message.requestId);
           setLicensePaymentBusy(false);
         }
-        if (nextDashboard.license && !isLicenseLocked(nextDashboard.license)) {
+        // Keep an existing checkout until its payment is confirmed and acknowledged,
+        // including when a heartbeat delivers the active license before payment polling.
+        if (nextDashboard.license && !isLicenseLocked(nextDashboard.license) && !licenseCheckoutRef.current) {
           licenseBootstrapRequestedRef.current = false;
           licenseStatusInFlightRef.current = false;
           licenseRequestsRef.current.clear();
-          setLicenseCheckout(null);
+          updateLicenseCheckout(null);
           setLicensePaymentStatus(null);
           setLicensePaymentError(null);
           setLicensePaymentBusy(false);
-        } else if (nextDashboard.license?.accessState === 'Missing' || nextDashboard.license?.accessState === 'Expired') {
-          requestLicenseBootstrap();
+          gateOffers.reset();
         }
         return;
       }
 
-      if (message.type === 'license.offers' && message.payload) {
-        if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
-        setLicenseOffers(message.payload as LicenseOffer[]);
-        return;
-      }
+      if (message.type === 'license.offers') return;
 
       if (message.type === 'license.payment.current' && message.payload) {
+        if (!message.requestId || message.requestId !== licenseCurrentRequestRef.current) return;
+        licenseCurrentRequestRef.current = null;
         if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
         const current = message.payload as CurrentLicensePayment;
         if (current.payment) {
-          setLicenseCheckout(current.payment);
+          updateLicenseCheckout(current.payment);
           setLicensePaymentStatus(null);
         }
         return;
       }
 
       if (message.type === 'license.payment.checkout' && message.payload) {
-        if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
-        setLicenseCheckout(message.payload as LicensePaymentCheckout);
+        if (!message.requestId || licenseRequestsRef.current.get(message.requestId) !== 'create') return;
+        licenseRequestsRef.current.delete(message.requestId);
+        updateLicenseCheckout(message.payload as LicensePaymentCheckout);
         setLicensePaymentStatus(null);
         setLicensePaymentError(null);
         setLicensePaymentBusy(false);
@@ -614,21 +651,27 @@ function App() {
 
       if (message.type === 'license.payment.status' && message.payload) {
         const status = message.payload as LicensePaymentStatus;
-        licenseStatusInFlightRef.current = status.isFulfilled;
-        if (message.requestId && !status.isFulfilled) licenseRequestsRef.current.delete(message.requestId);
+        const checkout = licenseCheckoutRef.current;
+        if (!message.requestId || licenseRequestsRef.current.get(message.requestId) !== 'status'
+          || !checkout || checkout.orderCode !== status.orderCode) return;
+        licenseStatusInFlightRef.current = status.isFulfilled && !status.isScheduled;
+        if (message.requestId && (!status.isFulfilled || status.isScheduled)) licenseRequestsRef.current.delete(message.requestId);
         setLicensePaymentStatus(status);
         setLicensePaymentError(null);
-        setLicensePaymentBusy(status.isFulfilled);
+        setLicensePaymentBusy(status.isFulfilled && !status.isScheduled);
+        if (status.isFulfilled && !status.isScheduled) setLicensePaymentSuccess({ ...checkout, ...status });
         return;
       }
 
       if (message.type === 'license.activated' && message.payload) {
+        if (message.requestId && licenseRequestsRef.current.get(message.requestId) !== 'status') return;
         if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
         licenseStatusInFlightRef.current = false;
         setLicensePaymentBusy(false);
+        gateOffers.reset();
         const license = message.payload as DashboardState['license'];
         setDashboard((current) => ({ ...current, license }));
-        notify(license?.assignedOrganizationName
+        if (!licenseCheckoutRef.current) notify(license?.assignedOrganizationName
           ? `Gói và tổ chức ${license.assignedOrganizationName} đã sẵn sàng.`
           : 'Gói sử dụng đã sẵn sàng.');
         return;
@@ -798,6 +841,9 @@ function App() {
       }
 
       if (message.type === 'operation.error') {
+        // Setup owns its correlated errors, including late replies from a prior
+        // context. Let its controller decide whether to display or ignore them.
+        if (systemSetupControllerRef.current.ownsResponse(message.requestId)) return;
         if (message.requestId && message.requestId === logoutRequestRef.current) {
           logoutRequestRef.current = null;
           setLogoutBusy(false);
@@ -846,8 +892,17 @@ function App() {
           : undefined;
         if (licenseRequestKind) {
           if (message.requestId) licenseRequestsRef.current.delete(message.requestId);
+          if (licenseRequestKind === 'current') {
+            if (message.requestId !== licenseCurrentRequestRef.current) return;
+            licenseCurrentRequestRef.current = null;
+          }
           if (licenseRequestKind === 'status') licenseStatusInFlightRef.current = false;
           setLicensePaymentBusy(false);
+          if (licenseRequestKind === 'create' && message.error?.code === 'payments_unavailable') {
+            gateOffers.markUnavailable();
+            setLicensePaymentError(null);
+            return;
+          }
           setLicensePaymentError(message.error?.message ?? 'Không thể hoàn tất thao tác thanh toán.');
           return;
         }
@@ -938,7 +993,11 @@ function App() {
           : current.license
             ? { ...current, license: { ...current.license, leaseExpiresAtUtc: null, accessState: 'Unavailable', accessMessage: reason } }
             : current);
-        setLicenseCheckout(null);
+        updateLicenseCheckout(null);
+        setLicensePaymentSuccess(null);
+        for (const requestId of licenseRequestsRef.current.keys()) staleLicenseRequestsRef.current.add(requestId);
+        licenseRequestsRef.current.clear();
+        licenseStatusInFlightRef.current = false;
         setLicensePaymentError(null);
         setLicensePaymentBusy(false);
         licenseBootstrapRequestedRef.current = false;
@@ -970,30 +1029,37 @@ function App() {
       }
 
       if (message.type === 'media.tools.install.progress') {
+        if (!mediaRepairRequestRef.current || message.requestId !== mediaRepairRequestRef.current) return;
         setMediaInstallProgress(message.payload as DesktopUpdateProgress);
         setBusy(true);
         return;
       }
 
       if (message.type === 'media.tools.install.available') {
-        const release = message.payload as DesktopRelease;
+        const release = message.payload as DesktopRepairRelease;
+        const direct = release.catalogProtocol === 4 || release.catalogProtocol === 5;
+        const details = [`build ${release.buildNumber}`, release.sizeBytes !== null && formatUpdateSize(release.sizeBytes)].filter(Boolean).join(', ');
         setBusy(false);
         setConfirmation({
           eyebrow: 'BỘ XỬ LÝ VIDEO',
           title: 'Cài lại FFmpeg và FFprobe?',
-          description: `taphoatool sẽ dùng package ${release.version} (build ${release.buildNumber}, ${formatUpdateSize(release.sizeBytes)}) từ máy chủ để sửa chữa trọn bộ công cụ media.`,
-          note: 'Package sẽ được kiểm tra kích thước, SHA-256, manifest và license. Ứng dụng sẽ khởi động lại; thao tác không gọi provider AI và không phát sinh chi phí.',
+          description: `taphoatool sẽ dùng package ${release.version} (${details}) từ ${direct ? 'VPS' : 'máy chủ'} để sửa chữa trọn bộ công cụ media.`,
+          note: direct ? 'Setup sẽ tải, kiểm tra và sửa ứng dụng cùng bộ model trên máy này. Ứng dụng sẽ khởi động lại; thao tác không gọi provider AI và không phát sinh chi phí.' : 'Package sẽ được kiểm tra kích thước, SHA-256, manifest và license. Ứng dụng sẽ khởi động lại; thao tác không gọi provider AI và không phát sinh chi phí.',
           confirmLabel: 'Cài bộ xử lý video',
           onConfirm: () => {
             setBusy(true);
             setMediaInstallProgress({ stage: 'starting', percent: 0, message: 'Đang bắt đầu cài đặt...' });
-            postToHost('media.tools.install');
+            mediaRepairRequestRef.current = postToHost('media.tools.install');
           }
         });
         return;
       }
 
       if (message.type === 'media.tools.install.failed') {
+        // Prepare failures are uncorrelated in the current native contract.
+        // Installation progress/failure always carries the initiating request ID.
+        if (message.requestId && message.requestId !== mediaRepairRequestRef.current) return;
+        mediaRepairRequestRef.current = null;
         setMediaInstallProgress(null);
         setBusy(false);
         notify(String((message.payload as { message?: string })?.message ?? 'Không thể cài bộ xử lý video.'), true);
@@ -1010,13 +1076,30 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const license = dashboard.license;
+    if (license && isLicenseLocked(license)
+      && (license.accessState === 'Missing' || license.accessState === 'Expired' || !license.accessState)) {
+      requestLicenseBootstrap();
+    }
+  }, [dashboard.profile.userId, dashboard.license?.accessState, dashboard.license?.hasActiveLicense]);
+
+  useEffect(() => {
+    if (localOnlyLicense(dashboard.license)) {
+      if (requestedPage !== 'vietsub') setPage('vietsub');
+      return;
+    }
+    if (!videoToolsAllowed(dashboard.license)) {
+      if (page !== 'settings' && (page !== 'vietsub' || !dashboard.features.vietsubEnabled))
+        setPage(dashboard.features.vietsubEnabled ? 'vietsub' : 'settings');
+      return;
+    }
     if (page === 'vietsub' && !dashboard.features.vietsubEnabled) {
       setPage('create');
     }
     if (page === 'tiktok' && !dashboard.features.tikTokEnabled) {
       setPage('create');
     }
-  }, [dashboard.features.vietsubEnabled, dashboard.features.tikTokEnabled, page]);
+  }, [dashboard.features.vietsubEnabled, dashboard.features.tikTokEnabled, dashboard.license?.featureFlagsJson, page, requestedPage]);
 
   useEffect(() => {
     try {
@@ -1029,6 +1112,8 @@ function App() {
   const requestLicensePaymentStatus = () => {
     if (!licenseCheckout || licenseStatusInFlightRef.current) return;
     licenseStatusInFlightRef.current = true;
+    setLicensePaymentBusy(true);
+    setLicensePaymentError(null);
     postLicenseRequest('status', 'license.payment.status', { orderCode: licenseCheckout.orderCode });
   };
 
@@ -1053,6 +1138,7 @@ function App() {
   };
 
   const retryLicenseBootstrap = () => {
+    if (gateOffers.isWaiting()) return;
     licenseBootstrapRequestedRef.current = false;
     setLicensePaymentError(null);
     requestLicenseBootstrap();
@@ -1060,13 +1146,16 @@ function App() {
 
   const resetExpiredLicensePayment = () => {
     licenseStatusInFlightRef.current = false;
-    setLicenseCheckout(null);
+    updateLicenseCheckout(null);
+    setLicensePaymentSuccess(null);
     setLicensePaymentStatus(null);
     setLicensePaymentError(null);
   };
 
   const handleNavigation = (label: string, target?: Page) => {
     setSidebarOpen(false);
+    if (localOnlyLicense(dashboard.license) && target !== 'vietsub') return;
+    if (!videoToolsAllowed(dashboard.license) && target !== 'vietsub' && target !== 'settings') return;
     if (target) {
       setPage(target);
       if (target === 'apiKeys') postToHost('providers.settings.get');
@@ -1774,20 +1863,25 @@ function App() {
       ? tiktok.state.loading || tiktok.state.busy
       : page === 'bilibili' ? bilibili.busy || bilibili.loading : generationBusy;
   const licenseLocked = isLicenseLocked(dashboard.license);
+  const paymentFlowBlocking = Boolean(licenseCheckout || licensePaymentSuccess);
+  const startupSystemSetupBlocked = Boolean(isHosted && workspaceId && dashboard.profile.userId
+    && (!systemSetup.snapshot || (systemSetup.snapshot.startupRequired && !isSystemSetupReady(systemSetup.snapshot))));
   const startupSystemSetupVisible = Boolean(
-    systemSetup.snapshot?.startupRequired
-    && !isSystemSetupReady(systemSetup.snapshot)
+    startupSystemSetupBlocked
     && !licenseLocked
+    && !paymentFlowBlocking
+    && !updateRelease
+    && !serviceError
   );
   const tiktokCredentialVerification = Boolean(
     tiktok.state.feature.isCredentialVerification &&
     dashboard.profile.roles.some((role) => role.toLowerCase() === 'admin')
   );
   useEffect(() => {
-    if (licenseLocked || startupSystemSetupVisible || updateNotice || mediaInstallProgress || serviceError) {
+    if (licenseLocked || paymentFlowBlocking || startupSystemSetupVisible || updateNotice || mediaInstallProgress || serviceError) {
       licenseInformation.close();
     }
-  }, [licenseLocked, startupSystemSetupVisible, updateNotice, mediaInstallProgress, serviceError]);
+  }, [licenseLocked, paymentFlowBlocking, startupSystemSetupVisible, updateNotice, mediaInstallProgress, serviceError]);
   const checkMediaTools = () => {
     if (generationBusy) return;
     setBusy(true);
@@ -1820,11 +1914,11 @@ function App() {
         busy={pageBusy}
         onLogout={requestLogout}
         onShowLicense={() => licenseInformation.open('current')}
-        interactionLocked={startupSystemSetupVisible}
+        interactionLocked={startupSystemSetupBlocked || paymentFlowBlocking}
       />
 
-      <main className="app-main" inert={startupSystemSetupVisible ? true : undefined}
-        aria-hidden={startupSystemSetupVisible ? true : undefined}>
+      <main className="app-main" inert={startupSystemSetupBlocked || paymentFlowBlocking ? true : undefined}
+        aria-hidden={startupSystemSetupBlocked || paymentFlowBlocking ? true : undefined}>
         <Header
           dashboard={dashboard}
           page={page}
@@ -1864,6 +1958,11 @@ function App() {
         ) : page === 'tiktok' ? (
           <TikTokPage module={tiktok} />
         ) : page === 'vietsub' ? (
+          <>
+          {localOnlyLicense(dashboard.license) && <details className="local-translation-setup">
+            <summary>Thiết lập công cụ dịch</summary>
+            <SystemSetupPanel setup={systemSetup} personal />
+          </details>}
           <VietsubPage
             state={vietsub.state}
             onRefresh={vietsub.refresh}
@@ -1911,6 +2010,7 @@ function App() {
             onCancelOperation={vietsub.cancel}
             onRegisterBeforeLeave={vietsub.registerBeforeLeave}
           />
+          </>
         ) : page === 'projects' ? (
           <ProjectsPage projects={dashboard.projects} onSelect={selectProject} onCreate={openNewProject} />
         ) : page === 'shortVideo' ? (
@@ -2094,7 +2194,7 @@ function App() {
         </div>
       )}
 
-      {serviceError && (
+      {serviceError && !licenseLocked && !paymentFlowBlocking && (
         <ServiceErrorModal
           title={serviceError.title}
           description={serviceError.description}
@@ -2102,7 +2202,7 @@ function App() {
         />
       )}
 
-      {updateNotice?.release && (
+      {updateNotice && updateRelease && !serviceError && !licenseLocked && !paymentFlowBlocking && (
         <UpdateModal
           notice={updateNotice}
           progress={updateProgress}
@@ -2121,7 +2221,7 @@ function App() {
         />
       )}
 
-      {mediaInstallProgress && (
+      {mediaInstallProgress && !startupSystemSetupVisible && !licenseLocked && !paymentFlowBlocking && !updateRelease && !serviceError && (
         <MediaToolInstallModal progress={mediaInstallProgress} />
       )}
 
@@ -2129,11 +2229,12 @@ function App() {
         <StartupSystemSetupModal setup={systemSetup} />
       )}
 
-      {licenseInformation.view && !licenseLocked && !startupSystemSetupVisible && !updateNotice && !mediaInstallProgress && !serviceError && (
+      {licenseInformation.view && !licenseLocked && !paymentFlowBlocking && !startupSystemSetupVisible && !updateNotice && !mediaInstallProgress && !serviceError && (
         <LicenseInformationDialog
           view={licenseInformation.view}
           license={dashboard.license}
           offers={licenseInformation.offers}
+          offersStatus={licenseInformation.status}
           loading={licenseInformation.loading}
           error={licenseInformation.error}
           onClose={licenseInformation.close}
@@ -2142,10 +2243,31 @@ function App() {
         />
       )}
 
-      {licenseLocked && dashboard.license && !(page === 'tiktok' && tiktokCredentialVerification) && (
+      {licensePaymentSuccess && <PaymentSuccessDialog
+        payment={licensePaymentSuccess}
+        license={dashboard.license}
+        ready={Boolean(dashboard.license) && !licenseLocked}
+        busy={licensePaymentBusy}
+        error={licensePaymentError}
+        logoutBusy={logoutBusy}
+        onRetry={requestLicensePaymentStatus}
+        onLogout={requestLogout}
+        onContinue={() => {
+          if (!latestDashboardRef.current.license || isLicenseLocked(latestDashboardRef.current.license)) return;
+          resetExpiredLicensePayment();
+          for (const requestId of licenseRequestsRef.current.keys()) staleLicenseRequestsRef.current.add(requestId);
+          licenseRequestsRef.current.clear();
+          licenseBootstrapRequestedRef.current = false;
+          gateOffers.reset();
+        }}
+      />}
+
+      {!licensePaymentSuccess && (licenseLocked || licenseCheckout) && dashboard.license && !(page === 'tiktok' && tiktokCredentialVerification) && (
         <LicenseGateOverlay
           license={dashboard.license}
-          offers={licenseOffers}
+          offers={gateOffers.offers}
+          offersStatus={gateOffers.status}
+          offersError={gateOffers.error}
           checkout={licenseCheckout}
           paymentStatus={licensePaymentStatus}
           busy={licensePaymentBusy}
@@ -2184,6 +2306,8 @@ function App() {
 function LicenseGateOverlay({
   license,
   offers,
+  offersStatus,
+  offersError,
   checkout: pendingCheckout,
   paymentStatus,
   busy,
@@ -2199,6 +2323,8 @@ function LicenseGateOverlay({
 }: {
   license: NonNullable<DashboardState['license']>;
   offers: LicenseOffer[];
+  offersStatus: LicenseOffersStatus;
+  offersError: string | null;
   checkout: LicensePaymentCheckout | null;
   paymentStatus: LicensePaymentStatus | null;
   busy: boolean;
@@ -2216,8 +2342,10 @@ function LicenseGateOverlay({
   const [nowMs, setNowMs] = useState(Date.now());
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const canPurchase = license.accessState === 'Missing' || license.accessState === 'Expired' || !license.accessState;
+  const canPurchase = license.accessState === 'Missing' || license.accessState === 'Expired' || !license.accessState
+    || Boolean(pendingCheckout && !isLicenseLocked(license));
   const checkout = canPurchase ? pendingCheckout : null;
+  const showOffersState = canPurchase && offersStatus !== 'available';
   const sessionLimit = license.accessState === 'SessionLimit' || license.accessReasonCode === 'concurrent_session_limit';
 
   useEffect(() => {
@@ -2315,6 +2443,9 @@ function LicenseGateOverlay({
     (checkout.isPaid || paymentStatus?.isPaid));
   const assignedOrganizationName = paymentStatus?.assignedOrganizationName || checkout?.assignedOrganizationName;
   const provisioningStatus = paymentStatus?.provisioningStatus || checkout?.provisioningStatus;
+  const isScheduled = Boolean(paymentStatus?.isScheduled ?? checkout?.isScheduled);
+  const startsAt = paymentStatus?.startsAtUtc || checkout?.startsAtUtc;
+  const licenseEndsAt = paymentStatus?.licenseExpiresAtUtc || checkout?.licenseExpiresAtUtc;
 
   const copyValue = async (field: string, value: string) => {
     try {
@@ -2337,7 +2468,7 @@ function LicenseGateOverlay({
     <div className="license-gate-overlay" role="presentation">
       <section
         ref={cardRef}
-        className={`license-gate-card ${checkout ? 'has-checkout' : ''} ${!canPurchase ? 'has-access-error' : ''}`}
+        className={`license-gate-card ${checkout ? 'has-checkout' : ''} ${!canPurchase ? 'has-access-error' : ''} ${!checkout && showOffersState ? 'has-offer-state' : ''}`}
         role="dialog"
         tabIndex={-1}
         aria-modal="true"
@@ -2353,7 +2484,8 @@ function LicenseGateOverlay({
 
         {!checkout ? (
           <div className="license-offer-view">
-            <div className="license-gate-intro">
+            {showOffersState ? <LicenseOffersState status={offersStatus} error={offersError} onRetry={onRetry}
+              disabled={busy || logoutBusy} titleId="license-gate-title" descriptionId="license-gate-description" /> : <div className="license-gate-intro">
               <span className="license-gate-icon"><LockKeyhole size={26} /></span>
               <div>
                 <span className="license-gate-eyebrow">QUYỀN SỬ DỤNG</span>
@@ -2364,7 +2496,7 @@ function LicenseGateOverlay({
                   {license.accessMessage || 'Bạn cần một gói đang hoạt động để sử dụng các tính năng taphoatool.'}
                 </p>
               </div>
-            </div>
+            </div>}
 
             {onVerifyTikTok && (
               <div className="license-tiktok-verification">
@@ -2375,7 +2507,7 @@ function LicenseGateOverlay({
             )}
 
             {canPurchase ? (
-              <>
+              !showOffersState && <>
                 <div className="license-plan-grid">
                   {offers.map((offer, index) => {
                     const recommended = index === 1 || (offers.length === 1 && index === 0);
@@ -2390,16 +2522,18 @@ function LicenseGateOverlay({
                         <div className="license-plan-price"><strong>{formatVnd(offer.priceVnd)}</strong><span>cho {offer.durationDays} ngày</span></div>
                         <div className={`license-seat-availability ${offer.organizationSeatAvailable ? 'available' : 'unavailable'}`}>
                           {offer.organizationSeatAvailable
-                            ? `${offer.organizationPoolName || 'Cụm tổ chức'} · còn ${offer.availableOrganizationSeats ?? 0} chỗ`
-                            : 'Tạm hết tổ chức sẵn sàng'}
+                            ? offer.productScope === 'vietsub' && !offer.vietsubCloudEnabled ? 'Kích hoạt trực tiếp · Không cần tổ chức' : `${offer.organizationPoolName || 'Cụm tổ chức'} · còn ${offer.availableOrganizationSeats ?? 0} chỗ`
+                            : offer.purchaseBlockedReason || 'Tạm hết tổ chức sẵn sàng'}
                         </div>
+                        {offer.productScope === 'vietsub' && <p>Chỉ tool dịch · {offer.vietsubCloudEnabled ? 'Local và Cloud' : 'Local'}</p>}
+                        {offer.expectedStartsAtUtc && <p>Dự kiến bắt đầu kỳ mua: {formatDate(offer.expectedStartsAtUtc)}<br />Kết thúc: {formatDate(offer.expectedExpiresAtUtc!)}</p>}
                         <button type="button" disabled={busy || !offer.organizationSeatAvailable} onClick={() => onSelectPlan(offer.licensePlanId)}>
                           {busy ? <><LoaderCircle className="spin" size={17} />Đang tạo mã</> : <>Chọn gói này<ArrowRight size={17} /></>}
                         </button>
                         <ul>
                           {(offer.marketingFeatures.length ? offer.marketingFeatures : [
                             `${offer.maxActivatedDevices} thiết bị được kích hoạt`,
-                            'Sử dụng đầy đủ quy trình tạo và dựng video',
+                            offer.productScope === 'vietsub' ? 'OCR, dịch và biên tập phụ đề, giọng Local, xuất SRT / MP4' : 'Sử dụng đầy đủ quy trình tạo và dựng video',
                             'Tự động kích hoạt sau khi thanh toán'
                           ]).map((feature) => <li key={feature}><Check size={16} />{feature}</li>)}
                         </ul>
@@ -2407,7 +2541,6 @@ function LicenseGateOverlay({
                     );
                   })}
                 </div>
-                {!offers.length && !error && <div className="license-loading"><LoaderCircle className="spin" size={22} />Đang tải các gói sử dụng...</div>}
               </>
             ) : (
               <>
@@ -2471,8 +2604,10 @@ function LicenseGateOverlay({
                   <TransferRow label="Tổ chức được cấp" value={assignedOrganizationName} />
                 )}
                 {provisioningStatus && (
-                  <TransferRow label="Trạng thái phân bổ" value={provisioningStatus} />
+                  <TransferRow label="Trạng thái phân bổ" value={isScheduled ? 'Chờ ngày hiệu lực' : provisioningStatus === 'Active' ? 'Đã kích hoạt' : provisioningStatus === 'Reserved' ? 'Đã giữ chỗ' : provisioningStatus} />
                 )}
+                {startsAt && <TransferRow label="Gói hiệu lực từ" value={formatDate(startsAt)} />}
+                {licenseEndsAt && <TransferRow label="Gói hết hạn" value={formatDate(licenseEndsAt)} />}
                 <div className="license-transfer-warning"><TriangleAlert size={17} /><span>Chuyển đúng số tiền và nội dung để hệ thống tự động nhận diện giao dịch.</span></div>
                 {(paymentStatus?.message || error) && (
                   <div className={`license-status-message ${error ? 'error' : ''}`}>{error || paymentStatus?.message}</div>
@@ -2482,7 +2617,7 @@ function LicenseGateOverlay({
                     <button type="button" className="license-primary-action" onClick={onResetExpired}>Tạo mã thanh toán mới</button>
                   ) : (
                     <button type="button" className="license-primary-action" disabled={busy || isFulfilled} onClick={onRefreshStatus}>
-                      {busy || isFulfilled ? <><LoaderCircle className="spin" size={17} />Đang kích hoạt</> : <><RefreshCw size={17} />Tôi đã thanh toán</>}
+                      {isFulfilled && isScheduled ? <><CircleCheck size={17} />Đã xếp lịch sử dụng</> : busy || isFulfilled ? <><LoaderCircle className="spin" size={17} />Đang kích hoạt</> : <><RefreshCw size={17} />Tôi đã thanh toán</>}
                     </button>
                   )}
                 </div>
@@ -2700,7 +2835,11 @@ function UpdateModal({
   onDismiss: () => void;
   onExit: () => void;
 }) {
-  const release = notice.release!;
+  const direct = notice.standaloneRelease ?? notice.directRelease;
+  const release = direct ?? notice.release;
+  if (!release) return null;
+  const build = direct ? direct.declaredBuildNumber : notice.release!.buildNumber;
+  const size = direct ? null : notice.release!.sizeBytes;
   const busy = progress !== null;
   return (
     <div className="update-overlay" role="dialog" aria-modal="true" aria-labelledby="update-title">
@@ -2709,7 +2848,7 @@ function UpdateModal({
         <div className="update-copy">
           <span className="update-eyebrow">{notice.isMandatory ? 'CẬP NHẬT BẮT BUỘC' : 'PHIÊN BẢN MỚI'}</span>
           <h2 id="update-title">taphoatool {release.version}</h2>
-          <p>Build {release.buildNumber} · {release.channel} · {formatUpdateSize(release.sizeBytes)}</p>
+          <p>{[`Build ${build}`, release.channel, size !== null && formatUpdateSize(size)].filter(Boolean).join(' · ')}</p>
         </div>
         {release.releaseNotes && <div className="update-notes">{release.releaseNotes}</div>}
         {hasRunningJob && (
@@ -2734,7 +2873,8 @@ function UpdateModal({
   );
 }
 
-function formatUpdateSize(bytes: number) {
+function formatUpdateSize(bytes: number | null | undefined) {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return '';
   return bytes >= 1024 * 1024
     ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
     : `${(bytes / 1024).toFixed(1)} KB`;
@@ -2791,6 +2931,27 @@ function Sidebar({
   interactionLocked?: boolean;
 }) {
   const profile = dashboard.profile;
+  const localOnly = localOnlyLicense(dashboard.license);
+  const lockDescriptionId = useId();
+  const lockReason = 'Gói Local chỉ sử dụng Dịch phụ đề.';
+  const renderMenuItem = ({ label, icon: Icon, page: target }: typeof secondaryMenu[number]) => {
+    const locked = localOnly && target !== 'vietsub';
+    return (
+      <button
+        className={[target === page ? 'active' : '', locked ? 'is-locked' : ''].filter(Boolean).join(' ')}
+        key={label}
+        type="button"
+        onClick={() => { if (!locked) onNavigate(label, target); }}
+        aria-label={label}
+        aria-disabled={locked || undefined}
+        aria-describedby={locked ? lockDescriptionId : undefined}
+        title={locked ? `${label} — ${lockReason}` : collapsed ? label : undefined}
+      >
+        <Icon size={18} aria-hidden="true" /><span>{label}</span>
+        {locked && <LockKeyhole size={14} className="nav-lock-icon" aria-hidden="true" />}
+      </button>
+    );
+  };
   const displayName = profile.displayName || profile.email || 'Tài khoản';
   const initials = displayName
     .split(/\s+/)
@@ -2819,44 +2980,29 @@ function Sidebar({
           </button>
         </div>
 
-        <button
-          className="new-video-button"
+        {(localOnly || videoToolsAllowed(dashboard.license)) && <button
+          className={`new-video-button${localOnly ? ' is-locked' : ''}`}
           type="button"
-          onClick={() => { onCreate(); onClose(); }}
+          onClick={() => { if (!localOnly) { onCreate(); onClose(); } }}
           disabled={busy}
           aria-haspopup="dialog"
           aria-label="Tạo video mới"
-          title={collapsed ? 'Tạo video mới' : undefined}
+          aria-disabled={localOnly || undefined}
+          aria-describedby={localOnly ? lockDescriptionId : undefined}
+          title={localOnly ? lockReason : collapsed ? 'Tạo video mới' : undefined}
         >
           <Plus size={18} /> <span className="new-video-label">Tạo video mới</span>
-        </button>
+          {localOnly && <LockKeyhole size={14} className="nav-lock-icon" aria-hidden="true" />}
+        </button>}
+
+        {localOnly && <p id={lockDescriptionId} className={`sidebar-license-note${collapsed ? ' is-collapsed' : ''}`}>{lockReason}</p>}
 
         <nav className="sidebar-nav">
           {primaryMenu
-            .filter(({ feature }) => !feature || dashboard.features[feature])
-            .map(({ label, icon: Icon, page: target }) => (
-              <button
-                className={target === page ? 'active' : ''}
-                key={label}
-                onClick={() => onNavigate(label, target)}
-                aria-label={label}
-                title={collapsed ? label : undefined}
-              >
-                <Icon size={18} /><span>{label}</span>
-              </button>
-            ))}
+            .filter(({ feature, page: target }) => localOnly || (!feature || dashboard.features[feature]) && (videoToolsAllowed(dashboard.license) || target === 'vietsub'))
+            .map(renderMenuItem)}
           <div className="nav-divider" />
-          {secondaryMenu.map(({ label, icon: Icon, page: target }) => (
-            <button
-              className={target === page ? 'active' : ''}
-              key={label}
-              onClick={() => onNavigate(label, target)}
-              aria-label={label}
-              title={collapsed ? label : undefined}
-            >
-              <Icon size={18} /><span>{label}</span>
-            </button>
-          ))}
+          {secondaryMenu.filter(({ page: target }) => localOnly || videoToolsAllowed(dashboard.license) || target === 'settings').map(renderMenuItem)}
         </nav>
 
         <div className="plan-card">
@@ -2925,7 +3071,7 @@ function Header({
           <ChevronDown size={15} />
         </label>
       )}
-      {(['create', 'projects', 'longVideo', 'shortVideo'] as Page[]).includes(page) && (
+      {videoToolsAllowed(dashboard.license) && (['create', 'projects', 'longVideo', 'shortVideo'] as Page[]).includes(page) && (
         <button className="start-button topbar-create-button" disabled={busy} aria-haspopup="dialog" onClick={onCreate}>
           <Plus size={17} /> <span>Tạo video mới</span>
         </button>

@@ -17,8 +17,9 @@ internal static class DesktopPrerequisites
         }
         var status = DesktopWebViewRuntime.Inspect();
         if (status.IsReady) return true;
-        using var form = new Form { Icon = BrandIdentity.WindowIcon, Text = "Chuẩn bị giao diện taphoatool", StartPosition = FormStartPosition.CenterScreen,
+        using var form = new Form { Text = "Chuẩn bị giao diện taphoatool", StartPosition = FormStartPosition.CenterScreen,
             ClientSize = new Size(580, 210), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
+        BrandIdentity.ApplyWindowIcon(form);
         var text = new Label { Left = 24, Top = 22, Width = 530, Height = 100,
             Text = status.Message };
         var install = new Button { Text = "Mở trang cài WebView2", Left = 24, Top = 140, Width = 210, Height = 40 };

@@ -4,7 +4,7 @@ public sealed class VietsubProject
 {
     public Guid ProjectId { get; set; }
 
-    public Guid OrganizationId { get; set; }
+    public Guid? OrganizationId { get; set; }
 
     public string CreatedByUserId { get; set; } = null!;
 

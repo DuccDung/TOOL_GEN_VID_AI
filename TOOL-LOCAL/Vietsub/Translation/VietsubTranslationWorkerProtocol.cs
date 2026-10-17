@@ -10,7 +10,7 @@ internal static class VietsubTranslationWorkerProtocol
 {
     public const int Version = 3;
     public const int MaximumFrameBytes = 1024 * 1024;
-    public const string WorkerVersion = "1.2.0";
+    public const string WorkerVersion = "1.2.1";
     public const string ProbeHardware = "probeHardware";
 
     public const string Hello = "hello";
@@ -99,7 +99,17 @@ internal static class VietsubTranslationWorkerProtocol
         {
             Path.Combine(directory, "VideoMaker.Vietsub.TranslationWorker.exe"),
             Path.Combine(directory, "VideoMaker.Vietsub.TranslationWorker.dll"),
+            Path.Combine(directory, "VideoMaker.Vietsub.TranslationWorker.runtimeconfig.json"),
+            Path.Combine(directory, "VideoMaker.Vietsub.TranslationWorker.deps.json"),
+            Path.Combine(directory, "coreclr.dll"),
+            Path.Combine(directory, "hostfxr.dll"),
+            Path.Combine(directory, "hostpolicy.dll"),
+            Path.Combine(directory, "System.Private.CoreLib.dll"),
             Path.Combine(directory, "LLamaSharp.dll"),
+            Path.Combine(directory, "msvcp140.dll"),
+            Path.Combine(directory, "vcruntime140.dll"),
+            Path.Combine(directory, "vcruntime140_1.dll"),
+            Path.Combine(directory, "vcomp140.dll"),
             Path.Combine(native, "llama.dll"),
             Path.Combine(native, "ggml.dll"),
             Path.Combine(native, "ggml-base.dll"),
@@ -111,8 +121,11 @@ internal static class VietsubTranslationWorkerProtocol
         }
 
         using var aggregate = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        // Changing this manifest invalidates probe evidence from older bundles.
+        aggregate.AppendData("qwen-worker-runtime-v2"u8);
         foreach (var path in files)
         {
+            aggregate.AppendData(Encoding.UTF8.GetBytes(Path.GetRelativePath(directory, path).Replace('\\', '/')));
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             var hash = SHA256.HashData(stream);
             aggregate.AppendData(hash);

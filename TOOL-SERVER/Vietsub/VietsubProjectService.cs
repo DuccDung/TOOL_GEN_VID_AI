@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TOOL_SERVER.Authentication;
+using TOOL_SERVER.Domain.Accounts;
 using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Organizations;
 using TOOL_SERVER.Vietsub.Data;
@@ -64,7 +65,7 @@ internal sealed class VietsubProjectService(
         await RequireAccessAsync(organizationId, context, requireWrite: false, cancellationToken);
         return await db.Projects
             .AsNoTracking()
-            .Where(project => project.OrganizationId == organizationId
+            .Where(project => project.OrganizationId == (organizationId == Guid.Empty ? (Guid?)null : organizationId)
                               && project.CreatedByUserId == context.UserId
                               && !project.IsArchived)
             .OrderByDescending(project => project.UpdatedAtUtc)
@@ -89,7 +90,7 @@ internal sealed class VietsubProjectService(
         VietsubProjectRequestContext context,
         CancellationToken cancellationToken)
     {
-        if (request.ProjectId == Guid.Empty || request.OrganizationId == Guid.Empty)
+        if (request.ProjectId == Guid.Empty)
         {
             throw new ArgumentException("Mã dự án hoặc tổ chức Vietsub không hợp lệ.");
         }
@@ -107,7 +108,7 @@ internal sealed class VietsubProjectService(
             cancellationToken);
         if (existing is not null)
         {
-            if (existing.OrganizationId == request.OrganizationId
+            if (existing.OrganizationId == (request.OrganizationId == Guid.Empty ? (Guid?)null : request.OrganizationId)
                 && existing.CreatedByUserId == context.UserId
                 && !existing.IsArchived
                 && existing.Name == name
@@ -127,7 +128,7 @@ internal sealed class VietsubProjectService(
         var project = new VietsubProject
         {
             ProjectId = request.ProjectId,
-            OrganizationId = request.OrganizationId,
+            OrganizationId = request.OrganizationId == Guid.Empty ? null : request.OrganizationId,
             CreatedByUserId = context.UserId,
             Name = name,
             SourceLanguageCode = sourceLanguageCode,
@@ -186,7 +187,7 @@ internal sealed class VietsubProjectService(
         await RequireAccessAsync(organizationId, context, requireWrite: true, cancellationToken);
         var project = await db.Projects.SingleOrDefaultAsync(
             item => item.ProjectId == projectId
-                    && item.OrganizationId == organizationId
+                    && item.OrganizationId == (organizationId == Guid.Empty ? (Guid?)null : organizationId)
                     && item.CreatedByUserId == context.UserId,
             cancellationToken)
             ?? throw ProjectNotFound();
@@ -212,18 +213,22 @@ internal sealed class VietsubProjectService(
         bool requireWrite,
         CancellationToken cancellationToken)
     {
-        if (organizationId == Guid.Empty
-            || string.IsNullOrWhiteSpace(context.UserId)
+        if (string.IsNullOrWhiteSpace(context.UserId)
             || context.DeviceId == Guid.Empty)
         {
             throw new ArgumentException("Ngữ cảnh truy cập Vietsub không hợp lệ.");
         }
 
-        var access = await generationAccess.RequireProjectAccessAsync(
+        if (organizationId == Guid.Empty)
+        {
+            await generationAccess.RequirePersonalVietsubAccessAsync(context.UserId, context.DeviceId, cancellationToken);
+            return new(Guid.Empty, "Cá nhân", "Personal", null);
+        }
+
+        var access = await generationAccess.RequireVietsubAccessAsync(
             context.UserId,
             context.DeviceId,
             organizationId,
-            projectId: null,
             cancellationToken);
         if (requireWrite && !OrganizationMemberRoles.CanGenerate(access.OrganizationRole))
         {
@@ -248,7 +253,7 @@ internal sealed class VietsubProjectService(
 
         return await db.Projects.SingleOrDefaultAsync(
             project => project.ProjectId == projectId
-                       && project.OrganizationId == organizationId
+                       && project.OrganizationId == (organizationId == Guid.Empty ? (Guid?)null : organizationId)
                        && project.CreatedByUserId == userId
                        && !project.IsArchived,
             cancellationToken)
@@ -256,13 +261,22 @@ internal sealed class VietsubProjectService(
     }
 
     private void AddAudit(
-        Guid organizationId,
+        Guid? organizationId,
         VietsubProjectRequestContext context,
         string eventType,
-        object data) =>
+        object data)
+    {
+        if (organizationId is null)
+        {
+            db.AccountAuditLogs.Add(new AccountAuditLog { UserId = context.UserId, EventType = eventType,
+                Succeeded = true, DetailsJson = JsonSerializer.Serialize(data, JsonOptions),
+                IpAddress = context.IpAddress, UserAgent = context.UserAgent,
+                CorrelationId = context.CorrelationId, OccurredAtUtc = UtcNow() });
+            return;
+        }
         db.OrganizationAuditLogs.Add(new OrganizationAuditLog
         {
-            OrganizationId = organizationId,
+            OrganizationId = organizationId.Value,
             ActorUserId = context.UserId,
             EventType = eventType,
             DataJson = JsonSerializer.Serialize(data, JsonOptions),
@@ -271,6 +285,7 @@ internal sealed class VietsubProjectService(
             CorrelationId = context.CorrelationId,
             OccurredAtUtc = UtcNow()
         });
+    }
 
     private static string NormalizeName(string? name)
     {
@@ -295,7 +310,7 @@ internal sealed class VietsubProjectService(
     private static VietsubProjectResponse ToResponse(VietsubProject project) =>
         new(
             project.ProjectId,
-            project.OrganizationId,
+            project.OrganizationId ?? Guid.Empty,
             project.CreatedByUserId,
             project.Name,
             project.Status,

@@ -177,6 +177,8 @@ public partial class VideoFactoryDbContext : DbContext
             entity.Property(e => e.PublishedAtUtc)
                 .HasPrecision(3)
                 .HasDefaultValueSql("(sysutcdatetime())", "DF_AppReleases_PublishedAtUtc");
+            entity.Property(e => e.FirstPublishedAtUtc).HasPrecision(3);
+            entity.Property(e => e.Revision).IsConcurrencyToken().HasDefaultValueSql("NEWID()");
             entity.Property(e => e.Sha256)
                 .HasMaxLength(64)
                 .IsUnicode(false)
@@ -196,6 +198,13 @@ public partial class VideoFactoryDbContext : DbContext
             entity.Property(e => e.FileName).HasMaxLength(260);
             entity.Property(e => e.Kind).HasMaxLength(30).IsUnicode(false);
             entity.Property(e => e.RelativePath).HasMaxLength(1000);
+            entity.Property(e => e.SourceKind).HasMaxLength(20).IsUnicode(false).HasDefaultValue("Internal");
+            entity.Property(e => e.ExternalDownloadUrl).HasMaxLength(2000);
+            entity.Property(e => e.InstallMode).HasMaxLength(30).IsUnicode(false).HasDefaultValue("Legacy");
+            entity.Property(e => e.DistributionProtocol).HasDefaultValue(1);
+            entity.Property(e => e.RegistrationEvidenceJson).HasMaxLength(4 * 1024 * 1024);
+            entity.Property(e => e.BoundPackageSha256).HasMaxLength(64).IsFixedLength().IsUnicode(false);
+            entity.Property(e => e.ModelBundleId).HasMaxLength(100).IsUnicode(false);
             entity.Property(e => e.Sha256).HasMaxLength(64).IsUnicode(false).IsFixedLength();
             entity.HasOne(d => d.AppRelease).WithMany(p => p.Artifacts)
                 .HasForeignKey(d => d.AppReleaseId)

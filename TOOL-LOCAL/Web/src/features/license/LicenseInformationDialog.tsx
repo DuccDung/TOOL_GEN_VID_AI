@@ -1,13 +1,16 @@
 import { useEffect, useRef } from 'react';
-import { ArrowRight, Check, Crown, LoaderCircle, Monitor, RefreshCw, Sparkles, TriangleAlert, X } from 'lucide-react';
+import { ArrowRight, Check, Crown, Monitor, Sparkles, X } from 'lucide-react';
 import type { CurrentLicense, LicenseOffer } from '../../types';
 import type { LicenseInformationView } from './useLicenseInformation';
+import type { LicenseOffersStatus } from './useLicenseOffers';
+import { LicenseOffersState } from './LicenseOffersState';
 import './licenseInformation.css';
 
-export function LicenseInformationDialog({ view, license, offers, loading, error, onClose, onChangeView, onRetry }: {
+export function LicenseInformationDialog({ view, license, offers, offersStatus, loading, error, onClose, onChangeView, onRetry }: {
   view: LicenseInformationView;
   license: CurrentLicense | null | undefined;
   offers: LicenseOffer[];
+  offersStatus: LicenseOffersStatus;
   loading: boolean;
   error: string | null;
   onClose: () => void;
@@ -75,18 +78,18 @@ export function LicenseInformationDialog({ view, license, offers, loading, error
         </>}
       </> : <>
         {license?.planName && <div className="license-information-current"><Crown size={17} /><span>Gói hiện tại: <strong>{license.planName}</strong></span></div>}
-        {loading ? <div className="license-information-feedback" role="status"><LoaderCircle size={24} className="spin" /><p>Đang tải các gói sử dụng…</p></div>
-          : error ? <div className="license-information-feedback error" role="alert"><TriangleAlert size={25} /><p>{error}</p><button type="button" onClick={onRetry}><RefreshCw size={16} />Thử lại</button></div>
-          : sortedOffers.length === 0 ? <div className="license-information-feedback" role="status"><Crown size={26} /><h3>Chưa có gói được mở bán</h3><p>Vui lòng liên hệ quản trị viên hoặc thử tải lại sau.</p><button type="button" onClick={onRetry}><RefreshCw size={16} />Tải lại</button></div>
+        {offersStatus !== 'available' ? <LicenseOffersState status={offersStatus} error={error} onRetry={onRetry} />
           : <div className="license-information-offers">
             {sortedOffers.map(offer => <article className={`license-information-offer ${offer.planCode === license?.planCode ? 'current' : ''}`} key={offer.licensePlanId}>
               <div className="license-information-offer-heading"><span>{offer.durationDays} ngày sử dụng</span>{offer.planCode === license?.planCode && <span className="license-information-badge">Gói hiện tại</span>}</div>
               <h3>{offer.name}</h3>
               {offer.description && <p>{offer.description}</p>}
+              {offer.productScope === 'vietsub' && <p>Chỉ tool dịch · {offer.vietsubCloudEnabled ? 'Local và Cloud' : 'Local'}</p>}
+              {offer.expectedStartsAtUtc && <p>Dự kiến bắt đầu kỳ mua: {formatLicenseDate(offer.expectedStartsAtUtc)}<br />Kết thúc: {formatLicenseDate(offer.expectedExpiresAtUtc)}</p>}
               <div className="license-information-price">{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(offer.priceVnd)}</div>
               <div className="license-information-device"><Monitor size={16} />Tối đa {offer.maxActivatedDevices} thiết bị</div>
               <ul>{offer.marketingFeatures.map((feature, index) => <li key={index}><Check size={16} /><span>{feature}</span></li>)}</ul>
-              <div className={`license-information-availability ${offer.organizationSeatAvailable ? 'available' : ''}`}>{offer.organizationSeatAvailable ? 'Đang còn chỗ' : 'Tạm hết chỗ'}</div>
+              <div className={`license-information-availability ${offer.organizationSeatAvailable ? 'available' : ''}`}>{offer.organizationSeatAvailable ? offer.productScope === 'vietsub' && !offer.vietsubCloudEnabled ? 'Kích hoạt trực tiếp · Không cần tổ chức' : 'Đang còn chỗ' : offer.purchaseBlockedReason || 'Tạm hết chỗ'}</div>
             </article>)}
           </div>}
         {!loading && !error && sortedOffers.length > 0 && <p className="license-information-note">Liên hệ quản trị viên để được hỗ trợ nâng cấp hoặc gia hạn gói.</p>}

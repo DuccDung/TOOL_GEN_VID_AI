@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('RegressionPair', 'RegressionBridge', 'RegressionCloud', 'Full', 'Frontend', 'Native', 'Timeline', 'Piper', 'SetupOffline')]
+    [ValidateSet('RegressionPair', 'RegressionBridge', 'RegressionCloud', 'Full', 'Frontend', 'Native', 'Timeline', 'Piper', 'SetupOffline', 'StaticSetup')]
     [string]$Profile = 'RegressionPair',
     [ValidateRange(1, 1000)][int]$Iterations = 1,
     [string]$OutputRoot = (Join-Path ([IO.Path]::GetPathRoot($PSScriptRoot)) 'vmtest'),
@@ -22,12 +22,17 @@ if (!(Test-Path -LiteralPath $assembly)) { throw 'Build Release and the frontend
 if (!(Test-Path -LiteralPath (Join-Path $web 'node_modules/vitest/vitest.mjs'))) { throw 'Run npm ci before stability checks.' }
 if (-not ('StabilityProcessJob' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'StabilityProcessJob.cs') }
 . (Join-Path $PSScriptRoot 'StabilityReport.ps1')
+Import-Module (Join-Path $PSScriptRoot 'StabilityResourcePreflight.psm1') -Force
 
 $series = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $Profile + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
 $null = New-Item -ItemType Directory -Path $series -Force
 $series = (Resolve-Path -LiteralPath $series).Path
 $drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($series))
-if ($drive.AvailableFreeSpace -lt 3GB) { throw 'At least 3 GB free is required for isolated test workspaces.' }
+$diskAssessment = Get-StabilityDiskAssessment -Profile $Profile -AvailableBytes $drive.AvailableFreeSpace
+[IO.File]::WriteAllText((Join-Path $series 'resource-preflight.json'), (ConvertTo-Json -InputObject $diskAssessment), [Text.UTF8Encoding]::new($false))
+if ($diskAssessment.assessment -eq 'Blocked') {
+    throw ('Stability preflight blocked before test execution: profile {0} needs {1} free bytes; available {2}.' -f $Profile, $diskAssessment.requiredBytes, $diskAssessment.availableBytes)
+}
 $utf8 = [Text.UTF8Encoding]::new($false)
 function Write-Json($Value, [string]$Path) { [IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $Value -Depth 18), $utf8) }
 function Get-Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
@@ -129,19 +134,23 @@ $filter = switch ($Profile) {
     'Native' { '(FullyQualifiedName~SystemSetupAdapterTests|FullyQualifiedName~VietsubPaddleOcrIntegrationTests|FullyQualifiedName~LoginWebViewIntegrationTests|FullyQualifiedName~VietsubSubtitleEditorBrowserTests|FullyQualifiedName~VietsubTimelineLayoutIntegrationTests|FullyQualifiedName~VietsubVoicePlaybackIntegrationTests|FullyQualifiedName~VietsubWebView2MediaIntegrationTests|FullyQualifiedName~ShortVideoComposerBrowserTests)&Category!=SetupPiperIntegration' }
     'Piper' { 'Category=SetupPiperIntegration' }
     'SetupOffline' { '(FullyQualifiedName~PiperOfflineBundleTests|FullyQualifiedName~StartupSystemSetupWorkflowTests|FullyQualifiedName~SystemSetupTests|FullyQualifiedName~RuntimeUseGateProcessTests)&FullyQualifiedName!~WebView2_UsesRealSetupBridgeWithoutAProject' }
+    'StaticSetup' { '(FullyQualifiedName~StaticModel|FullyQualifiedName~StaticSetup|FullyQualifiedName~ModelDistributionOfflineIntegrationTests|FullyQualifiedName~DesktopExternalRelease|FullyQualifiedName~ExternalDesktopRelease|FullyQualifiedName~DesktopArtifactPolicy|FullyQualifiedName~DesktopMaintenance|FullyQualifiedName~SetupMaintenance)&Category!=StaticSetupBrowser' }
     default { '' }
 }
 $testArgs = @('test', (Join-Path $repo 'TOOL-TESTS/TOOL-TESTS.csproj'), '-c', 'Release', '--no-build', '--no-restore')
 if ($filter) { $testArgs += @('--filter', $filter) }
 
 $sourceFiles = @(& git -C $repo ls-files --cached --others --exclude-standard | Sort-Object -Unique | Where-Object {
-    $_ -match '\.(cs|csproj|props|targets|json|ts|tsx|ps1|lock|py|sql|slnx|yaml|yml|toml)$' -and (Test-Path -LiteralPath (Join-Path $repo $_))
+    $_ -match '\.(cs|csproj|props|targets|json|ts|tsx|ps1|psm1|css|html|mjs|cjs|lock|py|sql|slnx|yaml|yml|toml)$' -and (Test-Path -LiteralPath (Join-Path $repo $_))
 })
 $sourceManifest = @($sourceFiles | ForEach-Object { [pscustomobject]@{ Path = $_; Sha256 = Get-Hash (Join-Path $repo $_) } })
 $binaryFiles = @('TOOL-TESTS.dll', 'TOOL-LOCAL.dll', 'TOOL-SERVER.dll', 'TOOL-SHARED.Contracts.dll',
     'VideoMaker.Updater.dll', 'TOOL-SHARED.Distribution.dll', 'xunit.runner.json',
     '_translation_worker/VideoMaker.Vietsub.TranslationWorker.dll') |
     ForEach-Object { Join-Path (Split-Path $assembly) $_ }
+if ($Profile -eq 'StaticSetup') {
+    $binaryFiles += Join-Path (Split-Path $assembly) 'VideoMaker Setup.dll'
+}
 $binaryFiles += @(Get-ChildItem -LiteralPath (Join-Path $web 'dist') -Recurse -File | ForEach-Object FullName)
 $binaryFiles += @(Get-ChildItem -LiteralPath (Split-Path $assembly) -File | Where-Object {
     $_.Name -in @('paddle_inference_c.dll','OpenCvSharpExtern.dll','Sdcb.PaddleOCR.Models.LocalV5.dll')
@@ -242,7 +251,7 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
 }
 # Source changes invalidate the series even when previously built binaries still pass.
 $currentSourceFiles = @(& git -C $repo ls-files --cached --others --exclude-standard | Sort-Object -Unique | Where-Object {
-    $_ -match '\.(cs|csproj|props|targets|json|ts|tsx|ps1|lock|py|sql|slnx|yaml|yml|toml)$' -and (Test-Path -LiteralPath (Join-Path $repo $_))
+    $_ -match '\.(cs|csproj|props|targets|json|ts|tsx|ps1|psm1|css|html|mjs|cjs|lock|py|sql|slnx|yaml|yml|toml)$' -and (Test-Path -LiteralPath (Join-Path $repo $_))
 })
 if (@(Compare-Object $sourceFiles $currentSourceFiles).Count -gt 0) { throw 'Source file list changed during the series.' }
 foreach ($file in $sourceManifest) {

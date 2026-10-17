@@ -604,41 +604,10 @@ internal sealed partial class OrganizationService(
         await using var transaction = await governanceDb.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
-        var current = await governanceDb.OrganizationProviderCredentials
-            .Where(x => x.OrganizationId == organizationId &&
-                        x.ProviderId == provider.ProviderId &&
-                        x.Status == ProviderCredentialStatuses.Active)
-            .ToListAsync(cancellationToken);
-        var now = UtcNow();
-        foreach (var credential in current)
-        {
-            credential.Status = ProviderCredentialStatuses.Retiring;
-            credential.RetiredAtUtc = now;
-            credential.UpdatedAtUtc = now;
-        }
-        if (current.Count > 0)
-        {
-            // Release the filtered unique Active slot before inserting the new version.
-            await governanceDb.SaveChangesAsync(cancellationToken);
-        }
-        var version = (await governanceDb.OrganizationProviderCredentials
-            .Where(x => x.OrganizationId == organizationId && x.ProviderId == provider.ProviderId)
-            .MaxAsync(x => (int?)x.Version, cancellationToken) ?? 0) + 1;
-        var added = new OrganizationProviderCredential
-        {
-            OrganizationProviderCredentialId = Guid.NewGuid(),
-            OrganizationId = organizationId,
-            ProviderId = provider.ProviderId,
-            Version = version,
-            Name = string.IsNullOrWhiteSpace(request.Name) ? $"{provider.DisplayName} v{version}" : Required(request.Name, 100, "Tên credential"),
-            EncryptedPayload = credentialProtector.Protect(apiKey),
-            SecretHint = Hint(apiKey),
-            Status = ProviderCredentialStatuses.Active,
-            CreatedByUserId = context.UserId,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now
-        };
-        governanceDb.OrganizationProviderCredentials.Add(added);
+        var added = await OrganizationCredentialWriter.RotateAsync(governanceDb, organizationId, provider.ProviderId,
+            provider.DisplayName, string.IsNullOrWhiteSpace(request.Name) ? null : Required(request.Name, 100, "Tên credential"),
+            apiKey, context.UserId, UtcNow(), credentialProtector, cancellationToken);
+        var version = added.Version;
         AddAudit(organizationId, context, "OrganizationProviderCredentialRotated", new { provider.ProviderCode, version, added.SecretHint });
         await governanceDb.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

@@ -14,6 +14,26 @@ namespace TOOL_TESTS.Payments;
 public sealed class OrganizationSeatProvisioningTests
 {
     [Fact]
+    public async Task LocalTranslationCheckoutAndWebhookGrantOnlyLicenseWithoutAiOrAllocation()
+    {
+        await using var fixture = await Fixture.CreateAsync(memberBudget: 0);
+        var plan = await fixture.Db.LicensePlans.SingleAsync();
+        plan.FeatureFlagsJson = """{"productScope":"vietsub","vietsubCloudEnabled":false}""";
+        (await fixture.Db.Organizations.SingleAsync()).MonthlyBudgetLimit = 0;
+        (await fixture.Db.OrganizationPoolOrganizations.SingleAsync()).IsReady = false;
+        await fixture.Db.SaveChangesAsync();
+        Assert.True(Assert.Single(await fixture.Service.GetOffersAsync(default)).OrganizationSeatAvailable);
+        var checkout = await fixture.CreatePaymentAsync();
+        Assert.Null(checkout.AssignedOrganizationId);
+        await fixture.Service.HandleWebhookAsync(fixture.Webhook(checkout), default);
+        var license = await fixture.Db.UserLicenses.SingleAsync();
+        Assert.Equal("vietsub", LicenseProductPolicy.Scope(license.EntitlementSnapshotJson));
+        Assert.False(LicenseProductPolicy.VideoAllowed(license.EntitlementSnapshotJson));
+        Assert.False(LicenseProductPolicy.CloudAllowed(license.EntitlementSnapshotJson));
+        Assert.Empty(await fixture.Db.OrganizationSeatAssignments.ToArrayAsync());
+        Assert.Empty(await fixture.Db.OrganizationMembers.ToArrayAsync());
+    }
+    [Fact]
     public async Task CreatePayment_ReservesSeatBeforeReturningQr()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -489,6 +509,95 @@ public sealed class OrganizationSeatProvisioningTests
         Assert.Equal(OrganizationMemberStatuses.Suspended,
             (await fixture.Db.OrganizationMembers.SingleAsync()).Status);
         Assert.Equal(0, (await fixture.Db.OrganizationPoolOrganizations.SingleAsync()).ActiveSeatCount);
+    }
+
+    [Fact]
+    public async Task LocalPaymentIgnoresInactiveOrganizationAndDuplicateWebhookDoesNotDoubleGrant()
+    {
+        await using var f = await Fixture.CreateAsync(memberBudget: 0);
+        (await f.Db.LicensePlans.SingleAsync()).FeatureFlagsJson = """{"productScope":"vietsub"}""";
+        (await f.Db.Organizations.SingleAsync()).Status = "Inactive";
+        f.Db.LicensePlanOrganizationPools.RemoveRange(f.Db.LicensePlanOrganizationPools);
+        await f.Db.SaveChangesAsync();
+        var checkout = await f.CreatePaymentAsync();
+        Assert.Null(checkout.AssignedOrganizationId);
+        await f.Service.HandleWebhookAsync(f.Webhook(checkout), default);
+        await f.Service.HandleWebhookAsync(f.Webhook(checkout), default);
+        Assert.Equal("Fulfilled", (await f.Db.LicensePayments.SingleAsync()).Status);
+        Assert.Single(await f.Db.UserLicenses.ToArrayAsync());
+        Assert.Empty(await f.Db.OrganizationMembers.ToArrayAsync());
+        Assert.Empty(await f.Db.OrganizationSeatAssignments.ToArrayAsync());
+        var capacity = await f.Db.OrganizationPoolOrganizations.SingleAsync();
+        Assert.Equal(0, capacity.ActiveSeatCount); Assert.Equal(0, capacity.ReservedSeatCount);
+    }
+
+    [Fact]
+    public async Task RevokedScheduledLicenseReleasesSeatWithoutActivatingMembership()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var plan = await f.Db.LicensePlans.SingleAsync();
+        f.Db.UserLicenses.Add(new() { UserLicenseId = Guid.NewGuid(), UserId = "user-1", LicensePlan = plan,
+            StartsAtUtc = f.Now.AddDays(-1), ExpiresAtUtc = f.Now.AddDays(1), Status = "Active", EntitlementSnapshotJson = "{}" });
+        await f.Db.SaveChangesAsync();
+        var checkout = await f.CreatePaymentAsync();
+        await f.Service.HandleWebhookAsync(f.Webhook(checkout), default);
+        var scheduled = await f.Db.OrganizationSeatAssignments.SingleAsync();
+        Assert.Equal("Scheduled", scheduled.Status);
+        var license = await f.Db.UserLicenses.SingleAsync(x => x.UserLicenseId == scheduled.UserLicenseId);
+        license.Status = "Revoked"; license.RevokedAtUtc = f.Now;
+        await f.Db.SaveChangesAsync();
+        f.Time.Advance(TimeSpan.FromDays(2));
+        await f.Provisioning.ReconcileAsync(f.Now, default);
+        Assert.Equal("Released", scheduled.Status);
+        Assert.Empty(await f.Db.OrganizationMembers.ToArrayAsync());
+        Assert.Equal(0, (await f.Db.OrganizationPoolOrganizations.SingleAsync()).ReservedSeatCount);
+    }
+
+    [Fact]
+    public async Task LocalOrderFromOldFlowReleasesExistingReservationWithoutJoiningOrganization()
+    {
+        await using var f = await Fixture.CreateAsync(memberBudget: 0);
+        (await f.Db.LicensePlans.SingleAsync()).FeatureFlagsJson = """{"productScope":"vietsub"}""";
+        await f.Db.SaveChangesAsync();
+        var checkout = await f.CreatePaymentAsync();
+        var payment = await f.Db.LicensePayments.SingleAsync();
+        await f.Provisioning.ReserveAsync(payment, f.Now, default);
+        await f.Db.SaveChangesAsync();
+        Assert.Equal(1, (await f.Db.OrganizationPoolOrganizations.SingleAsync()).ReservedSeatCount);
+        await f.Service.HandleWebhookAsync(f.Webhook(checkout), default);
+        Assert.Equal("Fulfilled", (await f.Db.LicensePayments.SingleAsync()).Status);
+        Assert.Equal("Released", (await f.Db.OrganizationSeatAssignments.SingleAsync()).Status);
+        Assert.Equal(0, (await f.Db.OrganizationPoolOrganizations.SingleAsync()).ReservedSeatCount);
+        Assert.Empty(await f.Db.OrganizationMembers.ToArrayAsync());
+        Assert.Single(await f.Db.UserLicenses.ToArrayAsync());
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(2)]
+    public async Task HistoricalLocalScheduledSeatIsReleasedWithoutActivationEvenBeforeStart(int startDays)
+    {
+        await using var f = await Fixture.CreateAsync(memberBudget: 0);
+        var plan = await f.Db.LicensePlans.SingleAsync();
+        plan.FeatureFlagsJson = """{"productScope":"vietsub"}""";
+        await f.Db.SaveChangesAsync();
+        await f.CreatePaymentAsync();
+        var payment = await f.Db.LicensePayments.SingleAsync();
+        var assignment = await f.Provisioning.ReserveAsync(payment, f.Now, default);
+        var license = new UserLicense { UserLicenseId = Guid.NewGuid(), UserId = "user-1", LicensePlanId = plan.LicensePlanId,
+            StartsAtUtc = f.Now.AddDays(startDays), ExpiresAtUtc = f.Now.AddDays(30), Status = "Active",
+            EntitlementSnapshotJson = plan.FeatureFlagsJson };
+        f.Db.UserLicenses.Add(license);
+        assignment.Status = "Scheduled"; assignment.UserLicenseId = license.UserLicenseId;
+        assignment.StartsAtUtc = license.StartsAtUtc;
+        payment.Status = "Fulfilled";
+        await f.Db.SaveChangesAsync();
+        await f.Provisioning.ReconcileAsync(f.Now, default);
+        Assert.Equal("Released", assignment.Status);
+        var capacity = await f.Db.OrganizationPoolOrganizations.SingleAsync();
+        Assert.Equal(0, capacity.ActiveSeatCount); Assert.Equal(0, capacity.ReservedSeatCount);
+        Assert.Empty(await f.Db.OrganizationMembers.ToArrayAsync());
+        Assert.Equal("Active", license.Status);
     }
 
     private sealed class Fixture : IAsyncDisposable

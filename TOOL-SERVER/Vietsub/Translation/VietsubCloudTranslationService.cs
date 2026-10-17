@@ -56,7 +56,11 @@ internal sealed partial class VietsubCloudTranslationService(
     internal async Task AuthorizeAsync(Guid projectId, Guid organizationId, CloudAccess who, CancellationToken ct)
     {
         await RequireLiveSessionAsync(who, ct);
-        await access.RequireAsync(who.UserId, who.DeviceId, organizationId, null, ct);
+        if (organizationId == Guid.Empty) throw Error("CLOUD_ORGANIZATION_REQUIRED", 403);
+        var permission = await access.RequireVietsubAccessAsync(who.UserId, who.DeviceId, organizationId, ct);
+        if (!TOOL_SERVER.Domain.Organizations.OrganizationMemberRoles.CanGenerate(permission.OrganizationRole))
+            throw Error("organization_generation_denied", 403);
+        await TOOL_SERVER.Accounts.LicenseProductAuthorization.RequireAsync(accounts, who.UserId, who.DeviceId, "vietsub-cloud", Now, ct);
         if (!await db.Projects.AsNoTracking().AnyAsync(x => x.ProjectId == projectId
             && x.OrganizationId == organizationId && x.CreatedByUserId == who.UserId && !x.IsArchived, ct))
             throw Error("vietsub_project_not_found", 404);
@@ -71,14 +75,42 @@ internal sealed partial class VietsubCloudTranslationService(
             throw Error("CLOUD_ACCESS_REQUIRED", 401);
     }
 
+    private async Task AuthorizeExistingAsync(Guid project, Guid org, CloudAccess who, CancellationToken ct)
+    {
+        await RequireLiveSessionAsync(who, ct);
+        if (!await governance.OrganizationMembers.AsNoTracking().AnyAsync(x => x.OrganizationId == org &&
+            x.UserId == who.UserId && x.Status == "Active" && x.Organization.Status == "Active", ct))
+            throw Error("organization_access_denied", 403);
+        if (!await db.Projects.AsNoTracking().AnyAsync(x => x.ProjectId == project && x.OrganizationId == org &&
+            x.CreatedByUserId == who.UserId && !x.IsArchived, ct)) throw Error("vietsub_project_not_found", 404);
+    }
+
+    private async Task RequireMemberBudgetAsync(Guid org, string user, BudgetSnapshot period, decimal amount, CancellationToken ct)
+    {
+        var member = await governance.OrganizationMembers.AsNoTracking().SingleOrDefaultAsync(x =>
+            x.OrganizationId == org && x.UserId == user && x.Status == "Active", ct)
+            ?? throw Error("organization_access_denied", 403);
+        if (member.MonthlyBudgetLimit is not { } limit) return;
+        var reserved = await governance.AiBudgetReservations.Where(x => x.OrganizationBudgetPeriodId == period.BudgetPeriodId &&
+            x.UserId == user && x.Status == BudgetReservationStatuses.Reserved).SumAsync(x => (decimal?)x.ReservedAmount, ct) ?? 0;
+        var actual = await governance.AiUsageLedger.Where(x => x.OrganizationBudgetPeriodId == period.BudgetPeriodId &&
+            x.UserId == user && (x.EntryKind == UsageLedgerEntryKinds.Actual || x.EntryKind == UsageLedgerEntryKinds.Adjustment))
+            .SumAsync(x => (decimal?)x.Amount, ct) ?? 0;
+        if (limit <= 0 || limit - reserved - actual < amount) throw Error("member_budget_exceeded");
+    }
+
     internal async Task<VietsubCloudAvailability> AvailabilityAsync(Guid projectId, Guid org, CloudAccess who, CancellationToken ct)
     {
-        await AuthorizeAsync(projectId, org, who, ct);
+        try { await AuthorizeAsync(projectId, org, who, ct); }
+        catch (AccountApiException e) when (e.Code == "license_feature_unavailable")
+        { return new(false, e.Code, "Gói hiện tại không cấp quyền dịch Cloud."); }
         if (!Options.Enabled) return new(false, "CLOUD_DISABLED", Message("CLOUD_DISABLED"));
         try
         {
             _ = await ConfigurationAsync(org, ct);
-            if ((await budget.GetSnapshotAsync(org, ct)).RemainingBudget <= 0) throw Error("organization_budget_exceeded");
+            var balance = await budget.GetSnapshotAsync(org, ct);
+            if (balance.RemainingBudget <= 0) throw Error("organization_budget_exceeded");
+            await RequireMemberBudgetAsync(org, who.UserId, balance, 0.000001m, ct);
             return new(true, null, null);
         }
         catch (AccountApiException e) { return new(false, e.Code, Message(e.Code)); }
@@ -94,25 +126,17 @@ internal sealed partial class VietsubCloudTranslationService(
             .SingleOrDefaultAsync(x => x.ModelCode == Options.ModelCode && x.Modality == "Text"
                 && x.IsEnabled && x.Provider.IsEnabled && x.Provider.ProviderCode == ProviderCodes.OpenAi, ct);
         if (model is null) throw Error("CLOUD_CONFIGURATION_REQUIRED", 503);
-        try
-        {
-            using var capabilities = JsonDocument.Parse(model.CapabilitiesJson ?? "{}");
-            if (!capabilities.RootElement.TryGetProperty("structuredOutput", out var supported) || !supported.GetBoolean())
-                throw Error("CLOUD_CONFIGURATION_REQUIRED", 503);
-        }
-        catch (JsonException) { throw Error("CLOUD_CONFIGURATION_REQUIRED", 503); }
+        if (!VietsubCloudConfiguration.ValidModel(model)) throw Error("CLOUD_CONFIGURATION_REQUIRED", 503);
         var credential = await governance.OrganizationProviderCredentials.AsNoTracking()
             .Where(x => x.OrganizationId == org && x.ProviderId == model.ProviderId && x.Status == ProviderCredentialStatuses.Active)
             .OrderByDescending(x => x.Version).FirstOrDefaultAsync(ct) ?? throw Error("CLOUD_CONFIGURATION_REQUIRED", 503);
         var rates = await videoDb.CostRates.AsNoTracking().Where(x => x.ProviderModelId == model.ProviderModelId
             && x.IsActive && x.EffectiveFromUtc <= Now && (x.EffectiveToUtc == null || x.EffectiveToUtc > Now))
             .OrderByDescending(x => x.EffectiveFromUtc).ToArrayAsync(ct);
-        var selected = new[] { "InputToken", "OutputToken" }.Select(kind => rates.FirstOrDefault(x => x.UsageType == kind)).ToArray();
-        if (selected.Any(x => x is null || x.UnitPrice <= 0 || x.Unit is not ("Token" or "1KTokens" or "MillionTokens"))
-            || selected.Select(x => x!.CurrencyCode).Distinct().Count() != 1) throw Error("pricing_not_configured", 503);
-        var currency = selected[0]!.CurrencyCode;
         var organizationCurrency = await governance.Organizations.Where(x => x.OrganizationId == org).Select(x => x.CurrencyCode).SingleAsync(ct);
-        if (currency != organizationCurrency) throw Error("pricing_not_configured", 503);
+        var selected = VietsubCloudConfiguration.SelectRates(rates.Select(VietsubCloudConfiguration.Metadata), organizationCurrency)
+            ?? throw Error("pricing_not_configured", 503);
+        var currency = organizationCurrency;
         return (model.ProviderModelId, credential.OrganizationProviderCredentialId,
             JsonSerializer.Serialize(selected.Select(x => new { x!.CostRateId, x.UsageType, x.Unit, x.UnitPrice, x.CurrencyCode }),
                 VietsubCloudSnapshot.JsonOptions), currency);
@@ -147,6 +171,7 @@ internal sealed partial class VietsubCloudTranslationService(
             EstimatedCost = Estimate(job, input, cues) }).ToArray();
         var balance = await budget.GetSnapshotAsync(input.OrganizationId, ct);
         if (balance.RemainingBudget < batches.Sum(x => x.EstimatedCost)) throw Error("organization_budget_exceeded");
+        await RequireMemberBudgetAsync(input.OrganizationId, who.UserId, balance, batches.Sum(x => x.EstimatedCost), ct);
         db.CloudTranslationJobs.Add(job); db.CloudTranslationBatches.AddRange(batches);
         Audit(job, who.UserId, "vietsub.cloud.created", new { job.Id, job.TrackId, job.TotalCues, job.SnapshotHash });
         await db.SaveChangesAsync(ct);
@@ -164,7 +189,7 @@ internal sealed partial class VietsubCloudTranslationService(
 
     internal async Task<VietsubCloudJobResponse?> FindAsync(Guid projectId, Guid org, Guid operationId, CloudAccess who, CancellationToken ct)
     {
-        await AuthorizeAsync(projectId, org, who, ct);
+        await AuthorizeExistingAsync(projectId, org, who, ct);
         var job = await db.CloudTranslationJobs.AsNoTracking().Where(x => x.ProjectId == projectId
             && x.OrganizationId == org && x.UserId == who.UserId && (operationId == Guid.Empty ? x.Active : x.ClientOperationId == operationId))
             .OrderByDescending(x => x.CreatedAtUtc).FirstOrDefaultAsync(ct);
@@ -173,7 +198,7 @@ internal sealed partial class VietsubCloudTranslationService(
 
     private async Task<VietsubCloudJob> OwnedAsync(Guid project, Guid org, Guid id, CloudAccess who, CancellationToken ct)
     {
-        await AuthorizeAsync(project, org, who, ct);
+        await AuthorizeExistingAsync(project, org, who, ct);
         return await db.CloudTranslationJobs.SingleOrDefaultAsync(x => x.Id == id && x.ProjectId == project
             && x.OrganizationId == org && x.UserId == who.UserId, ct) ?? throw Error("cloud_job_not_found", 404);
     }
@@ -215,6 +240,7 @@ internal sealed partial class VietsubCloudTranslationService(
     {
         await using var guard = await CloudDatabaseLock.AcquireAsync(db, "VietsubCloudDispatch", ct);
         var job = await OwnedAsync(project, org, id, who, ct);
+        if (command is "resume" or "retry") await AuthorizeAsync(project, org, who, ct);
         if (command == "ack")
         {
             if (job.Status != VietsubCloudStates.Completed) throw Error("CLOUD_JOB_NOT_COMPLETED");

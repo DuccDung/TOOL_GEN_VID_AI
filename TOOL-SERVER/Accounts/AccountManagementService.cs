@@ -289,15 +289,8 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
     private Task<UserLicense?> FindCurrentLicenseAsync(string userId, CancellationToken cancellationToken)
     {
         var now = UtcNow();
-        return dbContext.UserLicenses
+        return EffectiveLicense.Current(dbContext, userId, now)
             .Include(x => x.LicensePlan)
-            .Where(x => x.UserId == userId &&
-                        (x.Status == "Trial" || x.Status == "Active") &&
-                        x.StartsAtUtc <= now &&
-                        (x.ExpiresAtUtc == null || x.ExpiresAtUtc > now) &&
-                        x.LicensePlan.IsActive)
-            .OrderByDescending(x => x.Status == "Active")
-            .ThenByDescending(x => x.ExpiresAtUtc)
             .FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -314,7 +307,7 @@ public sealed class AccountManagementService(AccountDbContext dbContext, TimePro
                  x.DeviceId == currentDeviceId &&
                  x.Status == "Active",
             cancellationToken);
-        var assignedOrganization = await (
+        var assignedOrganization = LicenseProductPolicy.IsLocalOnly(license.EntitlementSnapshotJson ?? license.LicensePlan.FeatureFlagsJson) ? null : await (
                 from assignment in dbContext.OrganizationSeatAssignments.AsNoTracking()
                 join organization in dbContext.Organizations.AsNoTracking()
                     on assignment.OrganizationId equals organization.OrganizationId

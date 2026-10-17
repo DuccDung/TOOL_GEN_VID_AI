@@ -21,6 +21,8 @@ public sealed class DesktopOptions
 
     public DesktopLocalVoiceOptions LocalVoice { get; init; } = new();
 
+    public TOOL_LOCAL.ModelDistribution.DesktopModelDistributionOptions ModelDistribution { get; init; } = new();
+
     public static DesktopOptions Load() => Load(AppContext.BaseDirectory, DesktopUserSettingsStore.PreferencesDirectory);
 
     internal static DesktopOptions Load(string applicationDirectory, string? preferencesDirectory = null, bool requireDatabase = true)
@@ -49,6 +51,8 @@ public sealed class DesktopOptions
                 preferencesDirectory);
             root["Features"] = features;
         }
+
+        ApplyStaticModelReleasePolicy(root, TOOL_LOCAL.ModelDistribution.StaticModelRuntimePolicy.RequiredByRelease);
 
         var options = root.Deserialize<DesktopOptions>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
@@ -87,6 +91,33 @@ public sealed class DesktopOptions
 
         options.LocalVoice.Validate();
         return options;
+    }
+
+    // A static release requires these local components independently of preferences
+    // preserved from an older installation. This changes only the in-memory options;
+    // runtime evidence, license and command authorization remain separate gates.
+    internal static void ApplyStaticModelReleasePolicy(JsonObject root, bool requiredByRelease)
+    {
+        static JsonObject? LastObject(JsonObject value, string name) => value
+            .LastOrDefault(x => string.Equals(x.Key, name, StringComparison.OrdinalIgnoreCase)).Value as JsonObject;
+        static void Set(JsonObject value, string name, JsonNode node)
+        {
+            foreach (var key in value.Select(x => x.Key)
+                .Where(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase)).ToArray()) value.Remove(key);
+            value[name] = node;
+        }
+        var distribution = LastObject(root, "ModelDistribution");
+        var mode = distribution?.LastOrDefault(x => string.Equals(x.Key, "Mode", StringComparison.OrdinalIgnoreCase)).Value;
+        if (!requiredByRelease && !(mode is JsonValue modeValue
+            && modeValue.TryGetValue<string>(out var sourceMode) && sourceMode == "StaticArchive")) return;
+        var features = LastObject(root, "Features") ?? new JsonObject();
+        Set(root, "Features", features);
+        foreach (var feature in new[] { "VietsubEnabled", "VietsubOcrEnabled", "VietsubLocalTranslationEnabled", "VietsubLocalVoiceEnabled" })
+            Set(features, feature, JsonValue.Create(true)!);
+        distribution ??= new JsonObject();
+        Set(root, "ModelDistribution", distribution);
+        Set(distribution, "Mode", JsonValue.Create("StaticArchive")!);
+        Set(distribution, "Enabled", JsonValue.Create(false)!);
     }
 
     private static void Merge(JsonObject target, JsonObject source)

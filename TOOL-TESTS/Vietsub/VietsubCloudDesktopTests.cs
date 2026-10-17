@@ -12,6 +12,18 @@ namespace TOOL_TESTS.Vietsub;
 public sealed class VietsubCloudDesktopTests
 {
     [Fact]
+    public async Task PersonalProjectCannotStartCloudOrRequestProviderAvailability()
+    {
+        await using var f = await Fixture.Create();
+        f.Project.OrganizationId = Guid.Empty;
+        var availability = await f.Service.AvailabilityAsync(f.Session, default);
+        Assert.False(availability.Available);
+        Assert.Equal("CLOUD_ORGANIZATION_REQUIRED", availability.ErrorCode);
+        Assert.Equal("CLOUD_ORGANIZATION_REQUIRED", (await Assert.ThrowsAsync<VietsubTranslationException>(() => f.Start())).Code);
+        Assert.Null(f.Client.Input); Assert.Equal(0, f.Client.Starts);
+    }
+
+    [Fact]
     public async Task Cloud_TranslatesEntireTrackAndPreservesManualLockedAndValidLocalCues()
     {
         await using var f = await Fixture.Create(105);

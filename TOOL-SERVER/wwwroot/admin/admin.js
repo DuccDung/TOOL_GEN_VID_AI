@@ -1,9 +1,20 @@
+(() => {
+'use strict';
+if (!window.videoMakerAdminPages || !window.videoMakerAdminDialogs || document.body.dataset.adminUiGeneration !== '2') {
+  document.getElementById('adminShell')?.classList.add('hidden');
+  const shellElement = document.getElementById('adminShell');
+  if (shellElement) shellElement.hidden = true;
+  const note = document.getElementById('loginMessage');
+  if (note) note.textContent = 'Trang quản trị chưa được cập nhật đầy đủ. Hãy nạp bản server mới rồi tải lại trang.';
+  const button = document.querySelector('#loginForm button[type="submit"]');
+  if (button) button.disabled = true;
+  return;
+}
 const state = {
   accessToken: sessionStorage.getItem('vmAdminAccessToken'),
   refreshToken: sessionStorage.getItem('vmAdminRefreshToken'),
   user: readJson(sessionStorage.getItem('vmAdminUser')),
   overview: null,
-  overviewUsers: [],
   users: [],
   usersPaging: { page: 1, pageSize: 20, totalCount: 0, totalPages: 0, hasPrevious: false, hasNext: false },
   userSearch: '',
@@ -12,6 +23,8 @@ const state = {
   releasesPaging: { page: 1, pageSize: 20, totalCount: 0, totalPages: 0, hasPrevious: false, hasNext: false },
   selectedUser: null,
   currentView: 'overview',
+  adminReady: false,
+  readErrors: {},
   refreshing: null
 };
 
@@ -19,12 +32,13 @@ const loginScreen = document.getElementById('loginScreen');
 const adminShell = document.getElementById('adminShell');
 const panels = [...document.querySelectorAll('[data-panel]')];
 const pageMeta = {
-  overview: ['LICENSE CONTROL', 'Tổng quan', 'Theo dõi tài khoản, license và quyền truy cập.'],
+  overview: ['KHÔNG GIAN QUẢN TRỊ', 'Tổng quan', 'Tạo gói, chuẩn bị vận hành và quản lý khách hàng.'],
   users: ['ACCOUNTS & ACCESS', 'Người dùng', 'Cấp, gia hạn hoặc thu hồi quyền sử dụng theo từng tài khoản.'],
   organizations: ['ORGANIZATION & AI', 'Tổ chức & AI', 'Quản lý thành viên, ngân sách, credential, usage và bảng giá AI.'],
   tiktok: ['SYSTEM INTEGRATION', 'Tích hợp TikTok', 'Quản lý TikTok Developer App, kiểm tra OAuth và giới hạn đăng công khai.'],
   plans: ['LICENSE POLICY', 'Gói sử dụng', 'Thiết lập thời hạn, số thiết bị và số phiên chạy đồng thời.'],
-  releases: ['DESKTOP DISTRIBUTION', 'Desktop Releases', 'Quản lý package, bộ cài và chính sách cập nhật VideoMaker.']
+  payments: ['THANH TOÁN SEPAY', 'Tài khoản nhận thanh toán', 'Quản lý ngân hàng nhận tiền cho các đơn mua gói.'],
+  releases: ['DESKTOP DISTRIBUTION', 'Phát hành desktop', 'Quản lý package, bộ cài và chính sách cập nhật VideoMaker.']
 };
 
 function readJson(value) {
@@ -74,11 +88,19 @@ async function parseResponse(response) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-function errorMessage(payload, fallback = 'Không thể hoàn tất yêu cầu.') {
-  if (!payload) return fallback;
-  if (typeof payload === 'string') return payload;
-  const fieldMessage = payload.errors && Object.values(payload.errors).flat().find(Boolean);
-  return fieldMessage || payload.message || fallback;
+function errorMessage(payload, fallback = 'Không thể hoàn tất yêu cầu.', status = 0) {
+  const statuses = {
+    401: 'Phiên đăng nhập đã hết hạn (HTTP 401). Vui lòng đăng nhập lại.',
+    403: 'Yêu cầu bị từ chối (HTTP 403). Kiểm tra quyền Admin và cấu hình truy cập trên hosting.',
+    404: 'Không tìm thấy API (HTTP 404). Kiểm tra bản server đã deploy.',
+    405: 'Hosting không chấp nhận phương thức gửi yêu cầu (HTTP 405). Kiểm tra cấu hình API.'
+  };
+  const statusFallback = statuses[status] || (status ? `${fallback} (HTTP ${status}).` : fallback);
+  if (!payload) return statusFallback;
+  const fieldMessage = typeof payload === 'object' && payload.errors && Object.values(payload.errors).flat().find(value => typeof value === 'string');
+  const message = typeof payload === 'string' ? payload : fieldMessage || payload.message;
+  if (typeof message !== 'string' || /<\s*!doctype|<\/?(?:html|head|body|title|style|script|div|h[1-6])\b/i.test(message)) return statusFallback;
+  return message.slice(0, 1000);
 }
 
 async function refreshAccessToken() {
@@ -111,7 +133,7 @@ async function api(path, options = {}, retry = true) {
   if (response.status === 401 && retry && await refreshAccessToken()) return api(path, options, false);
   const payload = await parseResponse(response);
   if (!response.ok) {
-    const error = new Error(errorMessage(payload));
+    const error = new Error(errorMessage(payload, 'Không thể hoàn tất yêu cầu.', response.status));
     error.status = response.status;
     error.payload = payload;
     throw error;
@@ -123,6 +145,18 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
   })[character]);
+}
+
+function aiApiKeyLink(providerCode) {
+  const providers = [
+    { code: 'openai', name: 'OpenAI', url: 'https://platform.openai.com/api-keys' },
+    { code: 'fal', name: 'Fal', url: 'https://fal.ai/dashboard/keys' },
+    { code: 'kling', name: 'Kling', url: 'https://kling.ai/dev/api-key' },
+    { code: 'byteplus', name: 'BytePlus', url: 'https://ai.byteplus.com/ark/region:ap-southeast-1/apikey' }
+  ];
+  const provider = providers.find(item => item.code === String(providerCode ?? '').trim().toLowerCase());
+  if (!provider) return '';
+  return `<a href="${provider.url}" target="_blank" rel="noopener noreferrer" aria-label="Tạo API key ${provider.name} (mở tab mới)">Tạo API key ${provider.name} <span aria-hidden="true">↗</span></a>`;
 }
 
 function icon(name, className = '') {
@@ -222,22 +256,39 @@ function paginationMarkup(pagination, key, label) {
 }
 
 function showLogin(message = '') {
+  state.adminReady = false;
+  window.videoMakerAdminSetup?.reset();
+  window.videoMakerOrganizationAdmin?.resetSetupNavigation();
+  window.videoMakerPlanComposer?.reset();
   window.videoMakerTikTokAdmin?.reset();
+  window.videoMakerSepayAdmin?.reset();
+  window.videoMakerReleaseAdmin?.reset();
+  window.videoMakerDesktopDownloadSettings?.reset();
   clearSession();
+  window.videoMakerAdminDialogs.cancel();
+  document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
   setTopbarVisible(true);
   loginScreen.classList.remove('hidden');
   adminShell.classList.add('hidden');
+  loginScreen.hidden = false;
+  adminShell.hidden = true;
   document.getElementById('loginMessage').textContent = message;
 }
 
 function showAdmin() {
+  if (!state.adminReady) return;
   loginScreen.classList.add('hidden');
   adminShell.classList.remove('hidden');
+  loginScreen.hidden = true;
+  adminShell.hidden = false;
   setTopbarVisible(true);
   const displayName = state.user?.displayName || state.user?.email || 'Administrator';
   document.getElementById('adminName').textContent = displayName;
+  document.getElementById('adminName').title = state.user?.email || displayName;
   document.getElementById('adminEmail').textContent = state.user?.email || '';
   document.getElementById('adminAvatar').textContent = displayName.split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase() || 'A';
+  navigate('overview');
+  window.dispatchEvent(new Event('videomaker:admin-ready'));
 }
 
 async function loadAll() {
@@ -253,9 +304,9 @@ async function loadAll() {
   results.forEach((result, index) => {
     const key = requests[index][0];
     if (result.status === 'fulfilled') {
+      delete state.readErrors[key];
       if (key === 'users' && result.value && !Array.isArray(result.value)) {
         state.users = result.value.items || [];
-        state.overviewUsers = state.users;
         state.usersPaging = result.value;
       } else if (key === 'releases' && result.value && !Array.isArray(result.value)) {
         state.releases = result.value.items || [];
@@ -264,15 +315,21 @@ async function loadAll() {
         state[key] = result.value;
       }
     }
-    else failures.push(result.reason);
+    else { state.readErrors[key] = true; failures.push(result.reason); }
   });
   const authenticationError = failures.find(error => error?.status === 401 || error?.status === 403);
   if (authenticationError?.status === 401) return showLogin('Phiên đăng nhập đã hết hạn.');
   if (authenticationError?.status === 403) return showLogin('Tài khoản này chưa có quyền Admin.');
+  if (!state.adminReady && results.every(result => result.status === 'rejected')) {
+    document.getElementById('loginMessage').textContent = 'Chưa kết nối được hệ thống quản trị. Hãy thử đăng nhập lại.';
+    return;
+  }
   renderAll();
+  state.adminReady = true;
   const refreshLabel = document.getElementById('adminLastRefresh');
   if (refreshLabel) refreshLabel.textContent = `Cập nhật ${new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(new Date())}`;
   if (failures.length) toast(`Có ${failures.length} khu vực chưa tải được. Bạn có thể thử làm mới lại.`, true);
+  window.dispatchEvent(new Event('videomaker:admin-ready'));
   });
 }
 
@@ -281,66 +338,19 @@ function renderAll() {
   renderUsers();
   renderPlans();
   renderReleases();
-  appendReleasePagination();
   renderGrantPlans();
 }
 
-function appendReleasePagination() {
-  if (state.releases.length) document.getElementById('releaseTable').insertAdjacentHTML('beforeend', paginationMarkup(state.releasesPaging, 'releases', 'desktop release'));
-}
+function viewContext() { return { state, escapeHtml, icon, initials, licenseState, statusClass, formatDate, formatBytes, paginationMarkup }; }
 
-function renderOverview() {
-  const data = state.overview || {};
-  const metrics = [
-    ['Người dùng', data.totalUsers, 'Tài khoản đã đăng ký', 'metric-blue', 'users'],
-    ['License hoạt động', data.activeLicenses, 'Đang có hiệu lực', 'metric-green', 'id-card'],
-    ['Phiên trực tuyến', data.onlineSessions, 'Heartbeat trong 10 phút', 'metric-purple', 'monitor'],
-    ['Sắp hết hạn', data.expiringWithinSevenDays, 'Trong 7 ngày tới', 'metric-orange', 'clock']
-  ];
-  document.getElementById('overviewMetrics').innerHTML = metrics.map(([label, value, note, color, symbol]) => `
-    <article class="metric-card ${color}">${icon(symbol)}<small>${escapeHtml(label)}</small><strong>${value == null ? '—' : new Intl.NumberFormat('vi-VN').format(value)}</strong><span>${escapeHtml(note)}</span></article>`).join('');
-
-  const activeUsers = state.overviewUsers.filter(user => ['Active', 'Trial'].includes(licenseState(user.currentLicense).label)).slice(0, 6);
-  document.getElementById('userOverview').innerHTML = activeUsers.length ? `<div class="table-scroll" tabindex="0" role="region" aria-label="License đang sử dụng"><table class="data-table overview-license-table"><thead><tr><th scope="col">Người dùng</th><th scope="col">Gói sử dụng</th><th scope="col">Thiết bị</th><th scope="col">Hết hạn</th><th scope="col">Trạng thái</th></tr></thead><tbody>${activeUsers.map(user => {
-    const license = user.currentLicense;
-    const days = license.expiresAtUtc ? (new Date(license.expiresAtUtc) - Date.now()) / 86400000 : Infinity;
-    const expiring = days > 0 && days <= 7;
-    const label = expiring ? 'Sắp hết hạn' : license.status === 'Trial' ? 'Dùng thử' : 'Đang hoạt động';
-    return `<tr><td><button type="button" class="overview-user-link" data-user-id="${escapeHtml(user.userId)}"><span class="user-avatar">${escapeHtml(initials(user))}</span><strong>${escapeHtml(user.displayName || user.email)}</strong></button></td><td>${escapeHtml(license.planName)}</td><td>${escapeHtml(user.registeredDeviceCount ?? 0)}</td><td>${escapeHtml(formatDate(license.expiresAtUtc, true))}</td><td><span class="status-pill ${expiring ? 'status-warning' : 'status-healthy'}">${label}</span></td></tr>`;
-  }).join('')}</tbody></table></div>` : '<div class="empty-state">Không có license còn hiệu lực trong trang đang xem. Mở Người dùng để xem đầy đủ.</div>';
-
-  const activePlans = state.plans.filter(x => x.isActive);
-  document.getElementById('planOverview').innerHTML = activePlans.length ? `<div class="plan-mini-list">${activePlans.slice(0, 6).map(plan => `
-    <div class="plan-mini"><span class="plan-symbol">${icon('id-card')}</span><div><strong>${escapeHtml(plan.name)}</strong><small>${plan.defaultDurationDays ? `${plan.defaultDurationDays} ngày` : 'Tùy thời hạn'} · ${plan.maxActivatedDevices} thiết bị</small><small>${plan.maxConcurrentSessions} phiên đồng thời</small></div></div>`).join('')}</div>` : '<div class="empty-state">Chưa có gói đang mở.</div>';
-  const expiringCount = data.expiringWithinSevenDays;
-  document.getElementById('expiryTitle').textContent = expiringCount == null ? 'License sắp hết hạn' : `${new Intl.NumberFormat('vi-VN').format(expiringCount)} license sắp hết hạn`;
-  document.getElementById('expiryDescription').textContent = expiringCount == null ? 'Chưa tải được thống kê. Hãy thử làm mới.' : expiringCount > 0 ? 'Kiểm tra các tài khoản cần gia hạn trong 7 ngày tới.' : 'Không có license cần gia hạn trong 7 ngày tới.';
-}
+function renderOverview() { window.videoMakerAdminPages.overview(viewContext()); }
 
 function initials(user) {
   const value = user.displayName || user.email || 'U';
   return value.split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
 }
 
-function renderUsers() {
-  const root = document.getElementById('userTable');
-  if (!state.users.length) {
-    root.innerHTML = '<div class="empty-state">Không tìm thấy người dùng.</div>';
-    return;
-  }
-  root.innerHTML = `<div class="table-scroll"><table class="data-table user-table"><thead><tr><th>Người dùng</th><th>Gói hiện tại</th><th>Thời hạn</th><th>Thiết bị</th><th>Phiên online</th><th>Trạng thái</th><th></th></tr></thead><tbody>${state.users.map(user => {
-    const license = user.currentLicense;
-    const visual = licenseState(license);
-    return `<tr>
-      <td><div class="user-cell"><span class="user-avatar">${escapeHtml(initials(user))}</span><div><strong>${escapeHtml(user.displayName || 'Chưa đặt tên')}</strong><small>${escapeHtml(user.email)}</small></div></div></td>
-      <td>${license ? `<strong>${escapeHtml(license.planName)}</strong><br><small>${escapeHtml(license.planCode)}</small>` : '—'}</td>
-      <td>${license ? `${escapeHtml(formatDate(license.startsAtUtc, true))}<br><small>đến ${escapeHtml(formatDate(license.expiresAtUtc, true))}</small>` : '—'}</td>
-      <td>${user.registeredDeviceCount}</td><td>${user.activeSessionCount}</td>
-      <td><span class="status-pill ${visual.css}">${escapeHtml(visual.label)}</span></td>
-      <td><div class="row-actions"><button class="ghost-button" data-user-id="${escapeHtml(user.userId)}">Chi tiết</button><button class="primary-button" data-grant-user="${escapeHtml(user.userId)}">${license ? 'Đổi gói' : 'Cấp gói'}</button></div></td>
-    </tr>`;
-  }).join('')}</tbody></table></div>${paginationMarkup(state.usersPaging, 'users', 'người dùng')}`;
-}
+function renderUsers() { window.videoMakerAdminPages.users(viewContext()); }
 
 async function loadUsersPage(page = state.usersPaging.page, pageSize = state.usersPaging.pageSize) {
   return preservePagePosition(async () => {
@@ -361,30 +371,9 @@ async function loadUsersPage(page = state.usersPaging.page, pageSize = state.use
   });
 }
 
-function renderPlans() {
-  const root = document.getElementById('planTable');
-  if (!state.plans.length) {
-    root.innerHTML = '<div class="empty-state">Chưa có gói sử dụng.</div>';
-    return;
-  }
-  root.innerHTML = `<div class="plan-grid">${state.plans.map(plan => `
-    <article class="plan-card-admin ${plan.isActive ? '' : 'inactive'}">
-      <div class="plan-card-top"><span class="plan-symbol">${icon('id-card')}</span><span class="status-pill ${plan.isActive && plan.isPublic ? 'status-healthy' : ''}">${plan.isPublic ? 'Public' : (plan.isActive ? 'Internal' : 'Inactive')}</span></div>
-      <h3>${escapeHtml(plan.name)}</h3><code>${escapeHtml(plan.planCode)}</code><p>${escapeHtml(plan.description || 'Chưa có mô tả cho gói này.')}</p>
-      <dl><div><dt>Thời hạn</dt><dd>${plan.defaultDurationDays ? `${plan.defaultDurationDays} ngày` : 'Tùy chỉnh'}</dd></div><div><dt>Giá bán</dt><dd>${plan.salePriceVnd ? `${new Intl.NumberFormat('vi-VN').format(plan.salePriceVnd)} đ` : 'Chưa đặt'}</dd></div><div><dt>Thiết bị</dt><dd>${plan.maxActivatedDevices}</dd></div><div><dt>Thứ tự</dt><dd>${plan.displayOrder || 0}</dd></div><div><dt>Phiên đồng thời</dt><dd>${plan.maxConcurrentSessions}</dd></div><div><dt>Offline grace</dt><dd>${plan.offlineGraceHours} giờ</dd></div></dl>
-      <button class="ghost-button" data-edit-plan="${plan.licensePlanId}">${icon('pencil')}<span>Chỉnh sửa gói</span></button>
-    </article>`).join('')}</div>`;
-}
+function renderPlans() { window.videoMakerAdminPages.plans(viewContext()); }
 
-function renderReleases() {
-  const root = document.getElementById('releaseTable');
-  if (!state.releases.length) {
-    root.innerHTML = '<div class="empty-state">Chưa có desktop release.</div>';
-    return;
-  }
-  root.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Version</th><th>Channel</th><th>Phát hành</th><th>Artifact</th><th>Chính sách</th><th></th></tr></thead><tbody>${state.releases.map(item => `
-    <tr><td><strong>${escapeHtml(item.version)} (${item.buildNumber})</strong><br />${escapeHtml(item.platform)}</td><td><span class="status-pill ${item.isActive ? 'status-healthy' : ''}">${escapeHtml(item.channel)} · ${item.isActive ? 'Active' : 'Inactive'}</span></td><td>${escapeHtml(formatDate(item.publishedAtUtc))}</td><td><div class="artifact-list">${item.artifacts.map(artifact => `<span class="artifact-chip" title="SHA-256: ${escapeHtml(artifact.sha256)}">${escapeHtml(artifact.kind)} · ${escapeHtml(formatBytes(artifact.sizeBytes))}</span>`).join('') || '—'}</div></td><td>${item.isMandatory ? '<span class="status-pill status-failed">Bắt buộc</span>' : '<span class="status-pill">Tùy chọn</span>'}</td><td><div class="release-actions"><button class="ghost-button" data-edit-release="${item.releaseId}">${icon('pencil')}<span>Sửa</span></button><button class="danger-button" data-delete-release="${item.releaseId}">${icon('trash-2')}<span>Xóa</span></button></div></td></tr>`).join('')}</tbody></table></div>`;
-}
+function renderReleases() { window.videoMakerAdminPages.releases(viewContext()); }
 
 async function loadReleasesPage(page = state.releasesPaging.page, pageSize = state.releasesPaging.pageSize) {
   return preservePagePosition(async () => {
@@ -395,7 +384,6 @@ async function loadReleasesPage(page = state.releasesPaging.page, pageSize = sta
       state.releases = data.items || [];
       state.releasesPaging = data;
       renderReleases();
-      appendReleasePagination();
     } catch (error) {
       root.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
       throw error;
@@ -407,8 +395,7 @@ function renderGrantPlans() {
   document.getElementById('grantPlan').innerHTML = state.plans.filter(x => x.isActive).map(plan => `<option value="${plan.licensePlanId}" data-days="${plan.defaultDurationDays || 30}">${escapeHtml(plan.name)}${plan.defaultDurationDays ? ` · ${plan.defaultDurationDays} ngày` : ''}</option>`).join('');
 }
 
-function setPageMeta(eyebrow, title, subtitle) {
-  document.getElementById('pageEyebrow').textContent = eyebrow;
+function setPageMeta(_eyebrow, title, subtitle) {
   document.getElementById('pageTitle').textContent = title;
   document.getElementById('pageSubtitle').textContent = subtitle;
   document.getElementById('breadcrumbCurrent').textContent = title;
@@ -432,7 +419,14 @@ function setOrganizationMenuExpanded(expanded) {
 
 function navigate(view, options = {}) {
   if (!pageMeta[view]) return;
+  if (view !== 'organizations') window.videoMakerAdminSetup?.deactivate();
+  if (view !== 'plans') window.videoMakerPlanComposer?.deactivate();
   if (state.currentView === 'tiktok' && view !== 'tiktok') window.videoMakerTikTokAdmin?.deactivate();
+  if (state.currentView === 'payments' && view !== 'payments') window.videoMakerSepayAdmin?.deactivate();
+  if (state.currentView === 'releases' && view !== 'releases') {
+    window.videoMakerReleaseAdmin?.deactivate();
+    window.videoMakerDesktopDownloadSettings?.deactivate();
+  }
   state.currentView = view;
   setTopbarVisible(true);
   if (!options.keepSetupReturn) setSetupReturn(false);
@@ -448,10 +442,16 @@ function navigate(view, options = {}) {
   setPageMeta(eyebrow, title, subtitle);
   if (view === 'organizations') {
     setOrganizationMenuExpanded(options.organizationMenuExpanded ?? true);
-    window.videoMakerOrganizationAdmin?.activate(options.organizationScope);
+    return window.videoMakerOrganizationAdmin?.activate(options.organizationScope);
   } else {
     setOrganizationMenuExpanded(false);
-    if (view === 'tiktok') window.videoMakerTikTokAdmin?.activate();
+    if (view === 'plans') return window.videoMakerPlanComposer?.activate();
+    if (view === 'tiktok') return window.videoMakerTikTokAdmin?.activate();
+    if (view === 'payments') return window.videoMakerSepayAdmin?.activate();
+    if (view === 'releases') {
+      window.videoMakerDesktopDownloadSettings?.activate();
+      return window.videoMakerReleaseAdmin?.activate();
+    }
   }
 }
 
@@ -490,46 +490,133 @@ function syncGrantDuration() {
   document.getElementById('grantDuration').value = option?.dataset.days || 30;
 }
 
-function syncPlanSalesRequirements() {
-  const form = document.getElementById('planForm');
-  const isPublic = document.getElementById('planPublic').checked;
-  const duration = document.getElementById('planDuration');
-  const salePrice = document.getElementById('planSalePrice');
-  duration.required = isPublic;
-  salePrice.required = isPublic;
-  duration.setCustomValidity(isPublic && !duration.value ? 'Vui lòng nhập thời hạn mặc định cho gói được mở bán.' : '');
-  salePrice.setCustomValidity(isPublic && !salePrice.value ? 'Vui lòng nhập giá bán VND cho gói được mở bán.' : '');
-  if (!isPublic || (duration.value && salePrice.value)) form.querySelector('.dialog-message').textContent = '';
+let releaseImportedSetup = null;
+let releaseWasPublished = false;
+let releaseEditing = null;
+let releaseExternalChanged = false;
+let releaseImporting = false;
+const releaseUploadedFiles = new Map();
+
+function releaseField(id) { return document.getElementById(id); }
+
+function syncReleaseSource() {
+  const external = releaseField('releaseSource').value === 'ExternalVps';
+  releaseField('releaseInternalFields').hidden = external;
+  releaseField('releasePackage').disabled = external || releaseWasPublished;
+  releaseField('releaseExternalFields').hidden = !external;
+  releaseField('releaseExternalFields').disabled = !external || releaseWasPublished;
 }
 
-function openPlanDialog(plan = null) {
-  const form = document.getElementById('planForm');
-  form.reset();
-  form.querySelector('.dialog-message').textContent = '';
-  document.getElementById('planId').value = plan?.licensePlanId || '';
-  document.getElementById('planCode').value = plan?.planCode || '';
-  document.getElementById('planCode').disabled = Boolean(plan);
-  document.getElementById('planName').value = plan?.name || '';
-  document.getElementById('planDescription').value = plan?.description || '';
-  document.getElementById('planDuration').value = plan?.defaultDurationDays || '';
-  document.getElementById('planSalePrice').value = plan?.salePriceVnd || '';
-  document.getElementById('planDisplayOrder').value = plan?.displayOrder || 0;
-  try { document.getElementById('planMarketingFeatures').value = JSON.parse(plan?.marketingFeaturesJson || '[]').join('\n'); }
-  catch { document.getElementById('planMarketingFeatures').value = ''; }
-  document.getElementById('planDevices').value = plan?.maxActivatedDevices || 1;
-  document.getElementById('planSessions').value = plan?.maxConcurrentSessions || 1;
-  document.getElementById('planOffline').value = plan?.offlineGraceHours || 0;
-  document.getElementById('planActive').checked = plan?.isActive ?? true;
-  document.getElementById('planPublic').checked = plan?.isPublic ?? false;
-  syncPlanSalesRequirements();
-  document.getElementById('planDialogTitle').textContent = plan ? 'Chỉnh sửa gói' : 'Tạo gói';
-  document.getElementById('planDialog').showModal();
+function releaseError(message, fieldId = null) {
+  const summary = releaseField('releaseErrorSummary');
+  summary.replaceChildren();
+  const text = document.createElement(fieldId ? 'a' : 'span');
+  text.textContent = message;
+  if (fieldId) {
+    text.href = '#' + fieldId;
+    text.addEventListener('click', event => { event.preventDefault(); releaseField(fieldId).focus(); });
+    releaseField(fieldId).setAttribute('aria-invalid', 'true');
+    const inline = document.createElement('small');
+    inline.id = fieldId + 'Error'; inline.dataset.releaseError = fieldId; inline.className = 'form-message'; inline.textContent = message;
+    releaseField(fieldId).insertAdjacentElement('afterend', inline);
+    const describedBy = releaseField(fieldId).getAttribute('aria-describedby');
+    releaseField(fieldId).setAttribute('aria-describedby', [describedBy, inline.id].filter(Boolean).join(' '));
+  }
+  summary.appendChild(text); summary.hidden = false; summary.focus();
+}
+
+function clearReleaseErrors() {
+  releaseField('releaseErrorSummary').hidden = true;
+  releaseField('releaseForm').querySelectorAll('[aria-invalid]').forEach(field => field.removeAttribute('aria-invalid'));
+  releaseField('releaseForm').querySelectorAll('[data-release-error]').forEach(error => {
+    const field = releaseField(error.dataset.releaseError);
+    const describedBy = (field.getAttribute('aria-describedby') || '').split(' ').filter(id => id !== error.id).join(' ');
+    if (describedBy) field.setAttribute('aria-describedby', describedBy); else field.removeAttribute('aria-describedby');
+    error.remove();
+  });
+  releaseField('releaseForm').querySelector('.dialog-message').textContent = '';
+}
+
+function readReleaseExternal() {
+  const fail = (message, fieldId) => { const error = new Error(message); error.fieldId = fieldId; throw error; };
+  const url = releaseField('releaseExternalUrl').value.trim();
+  let parsed;
+  try { parsed = new URL(url); } catch { fail('Nhập URL HTTPS của ZIP ứng dụng.', 'releaseExternalUrl'); }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    fail('URL phải dùng HTTPS, không chứa tài khoản, query hoặc fragment.', 'releaseExternalUrl');
+  }
+  const fileName = releaseField('releaseExternalFileName').value.trim();
+  if (!/^[^\\/:*?"<>|\x00-\x1f]+\.zip$/i.test(fileName)) fail('Tên file phải là tên ZIP, không kèm đường dẫn.', 'releaseExternalFileName');
+  let manifest;
+  try { manifest = JSON.parse(releaseField('releaseExternalManifest').value); }
+  catch { fail('Package manifest phải là JSON hợp lệ từ ZIP ứng dụng.', 'releaseExternalManifest'); }
+  if (!manifest || manifest.product !== 'VideoMaker' || manifest.version !== releaseField('releaseVersion').value.trim() ||
+      manifest.buildNumber !== Number(releaseField('releaseBuild').value) || manifest.platform !== releaseField('releasePlatform').value.trim() ||
+      !Array.isArray(manifest.managedFiles) || !manifest.managedFiles.length) {
+    fail('Manifest không khớp phiên bản/build/platform hoặc thiếu danh sách file.', 'releaseExternalManifest');
+  }
+  return { schemaVersion: 1, version: releaseField('releaseVersion').value.trim(), buildNumber: Number(releaseField('releaseBuild').value),
+    channel: releaseField('releaseChannel').value, platform: releaseField('releasePlatform').value.trim(), downloadUrl: url, fileName,
+    sizeBytes: Number(releaseField('releaseExternalSize').value), sha256: releaseField('releaseExternalHash').value.trim().toLowerCase(),
+    packageManifest: manifest, expandedSizeBytes: Number(releaseField('releaseExternalExpanded').value), entryCount: Number(releaseField('releaseExternalEntries').value),
+    installMode: 'StaticArchive', distributionProtocol: 2, modelBundleId: 'models-20261016-03' };
+}
+
+async function importReleaseRegistration(file) {
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) throw new Error('JSON đăng ký vượt giới hạn 4 MiB.');
+  const data = JSON.parse(await file.text());
+  if (data?.schemaVersion !== 1 || data.installMode !== 'StaticArchive' || data.distributionProtocol !== 2 ||
+      data.modelBundleId !== 'models-20261016-03' || !data.packageManifest || !data.setup ||
+      !/^[a-f0-9]{64}$/i.test(data.setup.sha256 || '') || !Number.isSafeInteger(data.setup.sizeBytes) || data.setup.sizeBytes <= 0 || data.setup.sizeBytes > 512 * 1024 * 1024 ||
+      !data.setup.fileName || data.setup.fileName.length > 180 || !['Stable', 'Beta', 'Development'].includes(data.channel) ||
+      !/^[a-f0-9]{64}$/i.test(data.sha256 || '') || !Number.isSafeInteger(data.sizeBytes) || data.sizeBytes < 1 || data.sizeBytes > 2147483648 ||
+      !Number.isSafeInteger(data.expandedSizeBytes) || data.expandedSizeBytes < 1 || data.expandedSizeBytes > 4294967296 ||
+      !Number.isSafeInteger(data.entryCount) || data.entryCount < 1 || data.entryCount > 200000 ||
+      !Number.isInteger(data.buildNumber) || data.buildNumber < 1 || data.buildNumber > 2147483647 ||
+      data.platform !== 'win-x64' || data.packageManifest.version !== data.version || data.packageManifest.buildNumber !== data.buildNumber ||
+      data.packageManifest.platform !== data.platform || data.packageManifest.product !== 'VideoMaker' || !Array.isArray(data.packageManifest.managedFiles)) {
+    throw new Error('JSON không đúng schema đăng ký StaticArchive/protocol 2 hoặc thiếu binding Setup.');
+  }
+  const fields = { releaseVersion: data.version, releaseBuild: data.buildNumber, releaseChannel: data.channel,
+    releasePlatform: data.platform, releaseExternalUrl: data.downloadUrl, releaseExternalFileName: data.fileName,
+    releaseExternalSize: data.sizeBytes, releaseExternalHash: data.sha256, releaseExternalExpanded: data.expandedSizeBytes,
+    releaseExternalEntries: data.entryCount };
+  for (const [id, value] of Object.entries(fields)) if (value === undefined || value === null) throw new Error('JSON thiếu ' + id + '.');
+  for (const [id, value] of Object.entries(fields)) releaseField(id).value = value;
+  releaseField('releaseExternalManifest').value = JSON.stringify(data.packageManifest, null, 2);
+  releaseImportedSetup = { fileName: data.setup.fileName, sizeBytes: data.setup.sizeBytes, sha256: data.setup.sha256.toLowerCase() };
+  releaseField('releaseImportedSetup').textContent = `Setup yêu cầu: ${data.setup.fileName} · ${formatBytes(data.setup.sizeBytes)} · SHA-256 ${data.setup.sha256}. Chưa kiểm file trên VPS.`;
+  releaseField('releaseSource').value = 'ExternalVps'; syncReleaseSource();
+  releaseExternalChanged = true;
+}
+
+async function inspectReleaseSetup(file) {
+  if (!file) return releaseImportedSetup;
+  if (file.size <= 0 || file.size > 512 * 1024 * 1024) throw new Error('Setup phải có dữ liệu và không vượt 512 MiB.');
+  if (file.size > 256 * 1024 * 1024) {
+    if (!releaseImportedSetup) throw new Error('Với Setup trên 256 MiB, nạp JSON từ pipeline để lấy checksum; server sẽ kiểm byte khi upload.');
+    if (file.name !== releaseImportedSetup.fileName || file.size !== releaseImportedSetup.sizeBytes) {
+      const error = new Error('Tên hoặc dung lượng Setup không khớp JSON. Hãy chọn đúng bộ bàn giao.'); error.fieldId = 'releaseSetup'; throw error;
+    }
+    releaseField('releaseImportedSetup').textContent = 'Setup trên 256 MiB: dùng checksum trong JSON pipeline; server sẽ kiểm byte và checksum khi upload.';
+    return releaseImportedSetup;
+  }
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  const actual = { fileName: file.name, sizeBytes: file.size, sha256: [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('') };
+  if (releaseImportedSetup && (actual.fileName !== releaseImportedSetup.fileName || actual.sizeBytes !== releaseImportedSetup.sizeBytes || actual.sha256 !== releaseImportedSetup.sha256)) {
+    const error = new Error('File Setup đã chọn không khớp tên/dung lượng/checksum trong JSON. Hãy chọn đúng bộ bàn giao.');
+    error.fieldId = 'releaseSetup'; throw error;
+  }
+  return actual;
 }
 
 function openReleaseDialog(release = null) {
   const form = document.getElementById('releaseForm');
   form.reset();
-  form.querySelector('.dialog-message').textContent = '';
+  clearReleaseErrors(); releaseImportedSetup = null; releaseUploadedFiles.clear(); releaseEditing = release; releaseExternalChanged = false;
+  releaseWasPublished = Boolean(release?.firstPublishedAtUtc || release?.publishedOnceAtUtc);
+  form.querySelectorAll('input,select,textarea,button').forEach(field => { field.disabled = false; });
   document.getElementById('releaseId').value = release?.releaseId || '';
   document.getElementById('releaseVersion').value = release?.version || '';
   document.getElementById('releaseBuild').value = release?.buildNumber || 1;
@@ -539,7 +626,23 @@ function openReleaseDialog(release = null) {
   document.getElementById('releasePublished').value = toLocalDateTime(release?.publishedAtUtc);
   document.getElementById('releaseNotes').value = release?.releaseNotes || '';
   document.getElementById('releaseMandatory').checked = release?.isMandatory ?? false;
-  document.getElementById('releaseActive').checked = release?.isActive ?? true;
+  const packageArtifact = release?.artifacts?.find(item => item.kind === 'DesktopPackage');
+  const external = packageArtifact?.sourceKind === 'ExternalVps';
+  releaseField('releaseSource').value = external ? 'ExternalVps' : 'InternalUpload';
+  releaseField('releaseExternalUrl').value = packageArtifact?.downloadUrl || '';
+  releaseField('releaseExternalFileName').value = external ? packageArtifact.fileName : '';
+  releaseField('releaseExternalSize').value = external ? packageArtifact.sizeBytes : '';
+  releaseField('releaseExternalHash').value = external ? packageArtifact.sha256 : '';
+  releaseField('releaseExternalExpanded').value = packageArtifact?.expandedSizeBytes || '';
+  releaseField('releaseExternalEntries').value = packageArtifact?.entryCount || '';
+  releaseField('releaseExternalManifest').value = packageArtifact?.packageManifest ? JSON.stringify(packageArtifact.packageManifest, null, 2) : '';
+  releaseImportedSetup = packageArtifact?.setupBinding || packageArtifact?.expectedSetup || null;
+  releaseField('releaseImportedSetup').textContent = external ? 'Metadata đã đăng ký; trạng thái này không chứng nhận file thực trên VPS.' : '';
+  releaseField('releaseIdentityNotice').hidden = !releaseWasPublished;
+  for (const id of ['releaseVersion', 'releaseBuild', 'releaseChannel', 'releasePlatform', 'releaseSource', 'releasePackage', 'releaseSetup']) releaseField(id).disabled = releaseWasPublished;
+  // Existing internal download links must keep their source. A different source uses a new build.
+  if (packageArtifact) releaseField('releaseSource').disabled = true;
+  syncReleaseSource();
   document.getElementById('releaseDialogTitle').textContent = release ? 'Chỉnh sửa release' : 'Tạo release';
   document.getElementById('releaseDialog').showModal();
 }
@@ -556,20 +659,7 @@ async function openUserDialog(userId) {
   }
 }
 
-function renderUserDetail() {
-  const data = state.selectedUser;
-  if (!data) return;
-  const user = data.user;
-  const current = user.currentLicense;
-  document.getElementById('userDetail').innerHTML = `
-    <div class="user-detail-header"><span class="user-avatar large">${escapeHtml(initials(user))}</span><div><h3>${escapeHtml(user.displayName || 'Chưa đặt tên')}</h3><p>${escapeHtml(user.email)}</p></div><button class="primary-button" data-grant-user="${escapeHtml(user.userId)}">${current ? 'Đổi gói' : 'Cấp gói'}</button></div>
-    <div class="detail-stats"><div><span>Trạng thái</span><strong>${escapeHtml(user.accountStatus)}</strong></div><div><span>Lần đăng nhập cuối</span><strong>${escapeHtml(formatDate(user.lastLoginAtUtc))}</strong></div><div><span>Thiết bị</span><strong>${user.registeredDeviceCount}</strong></div><div><span>Phiên online</span><strong>${user.activeSessionCount}</strong></div></div>
-    <section class="detail-section"><div class="section-heading compact-detail"><div><span class="eyebrow">LICENSE HISTORY</span><h3>Lịch sử gói</h3></div></div>${data.licenses.length ? `<div class="license-history">${data.licenses.map(license => `<article><div><strong>${escapeHtml(license.planName)}</strong><span class="status-pill ${statusClass(license.status)}">${escapeHtml(license.status)}</span></div><p>${escapeHtml(formatDate(license.startsAtUtc))} → ${escapeHtml(formatDate(license.expiresAtUtc))} · ${license.activeDeviceCount} thiết bị</p><div class="row-actions">${license.status === 'Active' ? `<button class="ghost-button" data-extend-license="${license.userLicenseId}">Gia hạn</button><button class="ghost-button warning-action" data-license-status="Suspended" data-license-id="${license.userLicenseId}">Tạm khóa</button><button class="danger-button" data-license-status="Revoked" data-license-id="${license.userLicenseId}">Thu hồi</button>` : license.status === 'Suspended' ? `<button class="ghost-button" data-license-status="Active" data-license-id="${license.userLicenseId}">Mở lại</button><button class="danger-button" data-license-status="Revoked" data-license-id="${license.userLicenseId}">Thu hồi</button>` : ''}</div></article>`).join('')}</div>` : '<div class="empty-state">Chưa có license.</div>'}</section>
-    <div class="detail-columns">
-      <section class="detail-section"><div class="section-heading compact-detail"><div><span class="eyebrow">DEVICES</span><h3>Thiết bị đã đăng ký</h3></div></div>${data.devices.length ? `<div class="access-list">${data.devices.map(device => `<article><span class="access-icon">${icon('monitor')}</span><div><strong>${escapeHtml(device.deviceName)}</strong><small>${escapeHtml(device.operatingSystem || 'Không rõ hệ điều hành')} · ${device.isRevoked ? 'Revoked' : 'Active'}</small><small>Lần cuối: ${escapeHtml(formatDate(device.lastSeenAtUtc))}</small></div>${!device.isRevoked ? `<button class="danger-button" data-revoke-device="${device.deviceId}">Thu hồi</button>` : ''}</article>`).join('')}</div>` : '<div class="empty-state">Chưa có thiết bị.</div>'}</section>
-      <section class="detail-section"><div class="section-heading compact-detail"><div><span class="eyebrow">SESSIONS</span><h3>Phiên sử dụng</h3></div></div>${data.sessions.length ? `<div class="access-list">${data.sessions.map(session => `<article><span class="access-icon online">${icon('radio')}</span><div><strong>${escapeHtml(session.deviceName)}</strong><small>${escapeHtml(session.status)} · ${escapeHtml(session.applicationVersion || '')}</small><small>Heartbeat: ${escapeHtml(formatDate(session.lastSeenAtUtc))}</small></div>${session.status === 'Active' ? `<button class="danger-button" data-revoke-session="${session.sessionId}">Đăng xuất</button>` : ''}</article>`).join('')}</div>` : '<div class="empty-state">Chưa có phiên.</div>'}</section>
-    </div>`;
-}
+function renderUserDetail() { window.videoMakerAdminPages.userDetail(viewContext()); }
 
 async function refreshSelectedUser() {
   if (!state.selectedUser) return;
@@ -587,9 +677,9 @@ document.getElementById('loginForm').addEventListener('submit', async event => {
   try {
     const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: document.getElementById('loginEmail').value.trim(), password: document.getElementById('loginPassword').value, device: devicePayload() }) });
     const payload = await parseResponse(response);
-    if (!response.ok) throw new Error(errorMessage(payload, 'Đăng nhập không thành công.'));
+    if (!response.ok) throw new Error(errorMessage(payload, 'Đăng nhập không thành công.', response.status));
     if (!payload.user?.roles?.some(role => role.toLowerCase() === 'admin')) throw new Error('Tài khoản này chưa được cấp role Admin.');
-    saveSession(payload); showAdmin(); await loadAll();
+    saveSession(payload); await loadAll(); if (state.adminReady) showAdmin();
   } catch (error) { message.textContent = error.message; }
   finally { setBusy(button, false); }
 });
@@ -603,6 +693,16 @@ document.querySelectorAll('.nav-item').forEach(button => button.addEventListener
   navigate(button.dataset.view);
 }));
 document.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => navigate(button.dataset.go)));
+document.getElementById('adminMain').addEventListener('click', event => {
+  if (!state.adminReady) return;
+  if (event.target.closest('[data-home-create]')) return window.videoMakerPlanComposer.open();
+  if (event.target.closest('[data-home-setup]')) return navigate('organizations', { organizationScope: 'setup' });
+  const action = event.target.closest('[data-home-go]');
+  if (!action) return;
+  if (action.dataset.homeGo === 'pools') return navigate('organizations', { organizationScope: 'pools' });
+  if (action.dataset.homeGo === 'organizations') return navigate('organizations', { organizationScope: 'directory' });
+  navigate(action.dataset.homeGo);
+});
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
 document.getElementById('adminMenuToggle').addEventListener('click', event => {
   setNavigationOpen(event.currentTarget.getAttribute('aria-expanded') !== 'true');
@@ -623,10 +723,18 @@ document.getElementById('adminSearchForm').addEventListener('submit', event => {
 document.getElementById('refreshButton').addEventListener('click', () => {
   if (state.currentView === 'organizations') return window.videoMakerOrganizationAdmin?.refresh();
   if (state.currentView === 'tiktok') return window.videoMakerTikTokAdmin?.refresh();
+  if (state.currentView === 'payments') return window.videoMakerSepayAdmin?.refresh();
+  if (state.currentView === 'releases') window.videoMakerDesktopDownloadSettings?.refresh();
   return loadAll();
 });
-document.getElementById('addPlanButton').addEventListener('click', () => openPlanDialog());
-document.getElementById('addReleaseButton').addEventListener('click', () => openReleaseDialog());
+document.getElementById('addPlanButton').addEventListener('click', () => {
+  if (window.videoMakerPlanComposer) window.videoMakerPlanComposer.open();
+  else toast('Chưa tải được form tạo gói. Hãy tải lại trang quản trị.', true);
+});
+document.getElementById('addReleaseButton').addEventListener('click', () => {
+  if (window.videoMakerReleaseAdmin) return window.videoMakerReleaseAdmin.open();
+  toast('Chưa tải được form phát hành mới. Hãy tải lại trang.', true);
+});
 document.getElementById('grantPlan').addEventListener('change', syncGrantDuration);
 document.getElementById('returnToSetupButton').addEventListener('click', () => {
   navigate('organizations', { keepSetupReturn: true });
@@ -667,7 +775,9 @@ document.addEventListener('click', event => {
   const grantButton = event.target.closest('[data-grant-user]');
   if (grantButton) openGrantDialog(grantButton.dataset.grantUser);
   const editPlan = event.target.closest('[data-edit-plan]');
-  if (editPlan) openPlanDialog(state.plans.find(x => x.licensePlanId === editPlan.dataset.editPlan));
+  if (editPlan) window.videoMakerPlanComposer?.edit(state.plans.find(x => x.licensePlanId === editPlan.dataset.editPlan));
+  const copyPlan = event.target.closest('[data-copy-plan]');
+  if (copyPlan) window.videoMakerPlanComposer?.open(state.plans.find(x => x.licensePlanId === copyPlan.dataset.copyPlan));
 });
 
 document.getElementById('grantForm').addEventListener('submit', async event => {
@@ -685,29 +795,10 @@ document.getElementById('grantForm').addEventListener('submit', async event => {
   finally { setBusy(button, false); }
 });
 
-document.getElementById('planPublic').addEventListener('change', syncPlanSalesRequirements);
-document.getElementById('planDuration').addEventListener('input', syncPlanSalesRequirements);
-document.getElementById('planSalePrice').addEventListener('input', syncPlanSalesRequirements);
-document.getElementById('planForm').addEventListener('invalid', event => {
-  event.currentTarget.querySelector('.dialog-message').textContent = event.target.validationMessage;
-}, true);
-
-document.getElementById('planForm').addEventListener('submit', async event => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const id = document.getElementById('planId').value;
-  const marketingFeatures = document.getElementById('planMarketingFeatures').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-  const body = { planCode: document.getElementById('planCode').value, name: document.getElementById('planName').value, description: document.getElementById('planDescription').value || null, maxActivatedDevices: Number(document.getElementById('planDevices').value), maxConcurrentSessions: Number(document.getElementById('planSessions').value), offlineGraceHours: Number(document.getElementById('planOffline').value), defaultDurationDays: document.getElementById('planDuration').value ? Number(document.getElementById('planDuration').value) : null, featureFlagsJson: id ? state.plans.find(x => x.licensePlanId === id)?.featureFlagsJson || null : null, isActive: document.getElementById('planActive').checked, salePriceVnd: document.getElementById('planSalePrice').value ? Number(document.getElementById('planSalePrice').value) : null, isPublic: document.getElementById('planPublic').checked, displayOrder: Number(document.getElementById('planDisplayOrder').value || 0), marketingFeaturesJson: marketingFeatures.length ? JSON.stringify(marketingFeatures) : null };
-  const button = form.querySelector('button[type="submit"]'); setBusy(button, true, 'Đang lưu...');
-  try { await api(id ? `/api/admin/licenses/plans/${id}` : '/api/admin/licenses/plans', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) }); document.getElementById('planDialog').close(); toast('Đã lưu gói sử dụng.'); await loadAll(); }
-  catch (error) { form.querySelector('.dialog-message').textContent = error.message; }
-  finally { setBusy(button, false); }
-});
-
 document.getElementById('userDetail').addEventListener('click', async event => {
   const extend = event.target.closest('[data-extend-license]');
   if (extend) {
-    const days = Number(prompt('Gia hạn thêm bao nhiêu ngày?', '30'));
+    const days = await window.videoMakerAdminDialogs.requestDays();
     if (!Number.isInteger(days) || days <= 0) return;
     try { await api(`/api/admin/licenses/user-licenses/${extend.dataset.extendLicense}/extend`, { method: 'POST', body: JSON.stringify({ durationDays: days }) }); toast(`Đã gia hạn thêm ${days} ngày.`); await refreshSelectedUser(); } catch (error) { toast(error.message, true); }
     return;
@@ -715,55 +806,124 @@ document.getElementById('userDetail').addEventListener('click', async event => {
   const status = event.target.closest('[data-license-status]');
   if (status) {
     const labels = { Active: 'mở lại', Suspended: 'tạm khóa', Revoked: 'thu hồi' };
-    if (!confirm(`Xác nhận ${labels[status.dataset.licenseStatus]} license này?`)) return;
+    if (!await window.videoMakerAdminDialogs.confirm(`Xác nhận ${labels[status.dataset.licenseStatus]} license này?`)) return;
     try { await api(`/api/admin/licenses/user-licenses/${status.dataset.licenseId}/status`, { method: 'PUT', body: JSON.stringify({ status: status.dataset.licenseStatus, reason: `Admin ${labels[status.dataset.licenseStatus]} license` }) }); toast('Đã cập nhật trạng thái license.'); await refreshSelectedUser(); } catch (error) { toast(error.message, true); }
     return;
   }
   const device = event.target.closest('[data-revoke-device]');
-  if (device && confirm('Thu hồi thiết bị này? Người dùng sẽ phải kích hoạt lại.')) {
+  if (device && await window.videoMakerAdminDialogs.confirm('Thu hồi thiết bị này? Người dùng sẽ phải kích hoạt lại.')) {
     try { await api(`/api/admin/licenses/devices/${device.dataset.revokeDevice}`, { method: 'DELETE' }); toast('Đã thu hồi thiết bị.'); await refreshSelectedUser(); } catch (error) { toast(error.message, true); }
     return;
   }
   const session = event.target.closest('[data-revoke-session]');
-  if (session && confirm('Đăng xuất phiên này ngay?')) {
+  if (session && await window.videoMakerAdminDialogs.confirm('Đăng xuất phiên này ngay?')) {
     try { await api(`/api/admin/licenses/sessions/${session.dataset.revokeSession}`, { method: 'DELETE' }); toast('Đã thu hồi phiên sử dụng.'); await refreshSelectedUser(); } catch (error) { toast(error.message, true); }
   }
 });
 
 document.getElementById('releaseTable').addEventListener('click', async event => {
   const edit = event.target.closest('[data-edit-release]');
-  if (edit) return openReleaseDialog(state.releases.find(x => x.releaseId === edit.dataset.editRelease));
+  if (edit) {
+    const release = state.releases.find(x => x.releaseId === edit.dataset.editRelease);
+    if (release?.artifacts?.some(artifact => artifact.distributionProtocol >= 3)) {
+      if (window.videoMakerReleaseAdmin) return window.videoMakerReleaseAdmin.openForRelease(release.releaseId);
+      return toast('Chưa tải được form phát hành mới. Hãy tải lại trang.', true);
+    }
+    return openReleaseDialog(release);
+  }
   const remove = event.target.closest('[data-delete-release]');
-  if (remove && confirm('Xóa release và toàn bộ artifact của phiên bản này?')) {
+  if (remove && await window.videoMakerAdminDialogs.confirm('Xóa release và toàn bộ artifact của phiên bản này?')) {
     try { await api(`/api/admin/desktop-releases/${remove.dataset.deleteRelease}`, { method: 'DELETE' }); toast('Đã xóa release.'); await loadAll(); } catch (error) { toast(error.message, true); }
   }
+});
+
+releaseField('releaseSource').addEventListener('change', () => { releaseExternalChanged = true; syncReleaseSource(); });
+releaseField('releaseExternalFields').addEventListener('input', () => { releaseExternalChanged = true; });
+releaseField('releaseSetup').addEventListener('change', () => { if (releaseField('releaseSource').value === 'ExternalVps') releaseExternalChanged = true; });
+releaseField('releaseRegistrationFile').addEventListener('change', async event => {
+  clearReleaseErrors();
+  releaseImporting = true;
+  try { await importReleaseRegistration(event.target.files[0]); }
+  catch (error) { releaseError(error.message, 'releaseRegistrationFile'); }
+  finally { releaseImporting = false; }
+});
+releaseField('releaseDialog').addEventListener('cancel', event => {
+  if (releaseField('releaseForm').getAttribute('aria-busy') === 'true') event.preventDefault();
 });
 
 document.getElementById('releaseForm').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
-  const id = document.getElementById('releaseId').value;
+  if (form.getAttribute('aria-busy') === 'true') return;
+  if (releaseImporting) { releaseError('Đang đọc JSON đăng ký, vui lòng chờ hoàn tất.', 'releaseRegistrationFile'); return; }
+  clearReleaseErrors();
+  const external = releaseField('releaseSource').value === 'ExternalVps';
+  const existingExternal = releaseEditing?.artifacts?.some(item => item.kind === 'DesktopPackage' && item.sourceKind === 'ExternalVps');
+  const registerExternal = external && !releaseWasPublished && (!existingExternal || releaseExternalChanged);
+  const invalid = [...form.elements].find(field => field.willValidate &&
+    !(releaseField('releaseExternalFields').contains(field) && !registerExternal) && !field.checkValidity());
+  if (invalid) { releaseError(invalid.validationMessage || 'Kiểm tra trường này.', invalid.id); return; }
+  const publish = event.submitter?.value === 'publish';
+  let id = document.getElementById('releaseId').value;
   const publishedValue = document.getElementById('releasePublished').value;
-  const body = { version: document.getElementById('releaseVersion').value, buildNumber: Number(document.getElementById('releaseBuild').value), channel: document.getElementById('releaseChannel').value, platform: document.getElementById('releasePlatform').value, minimumSupportedDesktopVersion: document.getElementById('releaseMinimum').value || null, releaseNotes: document.getElementById('releaseNotes').value || null, isMandatory: document.getElementById('releaseMandatory').checked, isActive: document.getElementById('releaseActive').checked, publishedAtUtc: publishedValue ? new Date(publishedValue).toISOString() : null };
-  const button = form.querySelector('button[type="submit"]'); setBusy(button, true, 'Đang lưu...');
+  const body = { version: document.getElementById('releaseVersion').value.trim(), buildNumber: Number(document.getElementById('releaseBuild').value), channel: document.getElementById('releaseChannel').value, platform: document.getElementById('releasePlatform').value.trim(), minimumSupportedDesktopVersion: document.getElementById('releaseMinimum').value || null, releaseNotes: document.getElementById('releaseNotes').value || null, isMandatory: document.getElementById('releaseMandatory').checked, isActive: false, publishedAtUtc: publishedValue ? new Date(publishedValue).toISOString() : null, revision: releaseEditing?.revision || null };
+  const button = event.submitter || releaseField('releaseSaveDraft');
+  const disabled = [...form.querySelectorAll('input,select,textarea,button')].map(field => [field, field.disabled]);
+  const packageFile = releaseField('releasePackage').files[0], setupFile = releaseField('releaseSetup').files[0];
+  form.setAttribute('aria-busy', 'true'); setBusy(button, true, 'Đang lưu...');
+  disabled.forEach(([field]) => { field.disabled = true; });
   try {
-    const release = await api(id ? `/api/admin/desktop-releases/${id}` : '/api/admin/desktop-releases', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
-    const uploads = [['DesktopPackage', document.getElementById('releasePackage').files[0]], ['Setup', document.getElementById('releaseSetup').files[0]]];
+    let registration = registerExternal ? readReleaseExternal() : null;
+    if (registration) {
+      registration.setup = await inspectReleaseSetup(setupFile);
+      if (!registration.setup) { const error = new Error('Chọn đúng Setup hoặc nạp JSON có binding Setup trước khi đăng ký ZIP VPS.'); error.fieldId = 'releaseSetup'; throw error; }
+    }
+    releaseEditing = await api(id ? `/api/admin/desktop-releases/${id}` : '/api/admin/desktop-releases', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+    id = releaseEditing.releaseId;
+    // Retain the created draft after a later registration/upload failure.
+    releaseField('releaseId').value = id;
+    if (registration) {
+      button.textContent = 'Đang đăng ký ZIP VPS...';
+      await api(`/api/admin/desktop-releases/${id}/artifacts/DesktopPackage/external`, { method: 'POST', body: JSON.stringify(registration) });
+      releaseEditing = await api(`/api/admin/desktop-releases/${id}`);
+    }
+    const uploads = [['DesktopPackage', external ? null : packageFile], ['Setup', setupFile]];
     for (const [kind, file] of uploads) {
-      if (!file) continue;
+      if (!file || releaseUploadedFiles.get(kind) === file) continue;
       button.textContent = `Đang upload ${kind}...`;
       const data = new FormData(); data.append('file', file);
-      await api(`/api/admin/desktop-releases/${release.releaseId}/artifacts/${kind}`, { method: 'POST', body: data });
+      await api(`/api/admin/desktop-releases/${id}/artifacts/${kind}`, { method: 'POST', body: data });
+      releaseUploadedFiles.set(kind, file);
+      releaseEditing = await api(`/api/admin/desktop-releases/${id}`);
     }
-    document.getElementById('releaseDialog').close(); toast('Đã lưu desktop release.'); await loadAll();
-  } catch (error) { form.querySelector('.dialog-message').textContent = error.message; }
-  finally { setBusy(button, false); }
+    if (publish) {
+      button.textContent = 'Đang phát hành...';
+      releaseEditing = await api(`/api/admin/desktop-releases/${id}`);
+      releaseEditing = await api(`/api/admin/desktop-releases/${id}/publish`, { method: 'POST', body: JSON.stringify({ revision: releaseEditing.revision }) });
+    }
+    document.getElementById('releaseDialog').close(); toast(publish ? 'Đã phát hành desktop release.' : 'Đã lưu bản nháp desktop release.'); await loadAll();
+  } catch (error) {
+    // Keep the original revision on a CAS conflict; require reopening the fresh release.
+    const field = error.fieldId || (/url|source|nguồn/i.test(error.payload?.code || '') ? 'releaseExternalUrl' : null);
+    releaseError(error.message, field);
+  } finally {
+    form.removeAttribute('aria-busy'); disabled.forEach(([field, wasDisabled]) => { field.disabled = wasDisabled; }); setBusy(button, false);
+  }
 });
 
 window.videoMakerAdminShell = Object.freeze({
   state,
+  openLegacyRelease: openReleaseDialog,
+  refreshReleases: loadReleasesPage,
+  confirm: (message, options) => window.videoMakerAdminDialogs.confirm(message, options),
+  upsertPlan: plan => {
+    const index = state.plans.findIndex(item => item.licensePlanId === plan.licensePlanId);
+    if (index < 0) state.plans.push(plan); else state.plans[index] = plan;
+    renderPlans(); renderGrantPlans(); renderOverview();
+  },
   api,
   escapeHtml,
+  aiApiKeyLink,
   formatDate,
   icon,
   paginationMarkup,
@@ -780,6 +940,8 @@ window.videoMakerAdminShell = Object.freeze({
 
 (async function initialize() {
   if (!state.accessToken || !state.user?.roles?.some(role => role.toLowerCase() === 'admin')) return showLogin();
-  showAdmin();
   await loadAll();
+  if (state.adminReady) showAdmin();
+})();
+
 })();

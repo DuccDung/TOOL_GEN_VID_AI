@@ -26,12 +26,43 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="Fixtures\SetupJobOwnerHost\**\*.cs" />
+    <Compile Remove="Fixtures\DistributionResourcesA\**\*.cs;Fixtures\DistributionResourcesB\**\*.cs" />
+    <ProjectReference Include="Fixtures\DistributionResourcesA\DistributionResourcesA.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Fixtures\DistributionResourcesB\DistributionResourcesB.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Fixtures\SetupJobOwnerHost\SetupJobOwnerHost.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\TOOL-LOCAL\TOOL-LOCAL.csproj" />
     <ProjectReference Include="..\TOOL-SERVER\TOOL-SERVER.csproj" />
     <ProjectReference Include="..\TOOL-UPDATER\TOOL-UPDATER.csproj" />
+    <ProjectReference Include="..\TOOL-SETUP\TOOL-SETUP.csproj" Aliases="SetupAssembly" />
     <ProjectReference Include="..\TOOL-DISTRIBUTION\TOOL-DISTRIBUTION.csproj" />
+    <ProjectReference Include="..\TOOL-MODEL-PUBLISHER\TOOL-MODEL-PUBLISHER.csproj" />
     <ProjectReference Include="..\TOOL-VIETSUB-TRANSLATION-WORKER\TOOL-VIETSUB-TRANSLATION-WORKER.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <!-- WindowsDesktop pruning assumes the installed host supplies Pkcs. Keep the server's
+       patched servicing package in this test host so an older shared runtime cannot replace it. -->
+  <Target Name="KeepPatchedPkcsInTestRuntime" DependsOnTargets="AddPrunePackageReferences" BeforeTargets="CollectPrunePackageReferences">
+    <ItemGroup>
+      <PrunePackageReference Remove="System.Security.Cryptography.Pkcs" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyDistributionResourceFixtures" AfterTargets="Build">
+    <ItemGroup>
+      <DistributionResourceFixture Include="$(MSBuildThisFileDirectory)Fixtures\DistributionResourcesA\bin\$(Configuration)\net10.0\DistributionResourcesA.exe;$(MSBuildThisFileDirectory)Fixtures\DistributionResourcesB\bin\$(Configuration)\net10.0\DistributionResourcesB.exe" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DistributionResourceFixture)" DestinationFolder="$(TargetDir)DistributionResources" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Setup and desktop both link BrandIdentity; keep the test-only alias on the resolved reference. -->
+  <Target Name="ApplyVideoMakerSetupReferenceAlias" BeforeTargets="FindReferenceAssembliesForReferences">
+    <ItemGroup>
+      <ReferencePath Update="@(ReferencePath)" Condition="'%(ReferencePath.Filename)' == 'VideoMaker Setup'">
+        <Aliases>SetupAssembly</Aliases>
+      </ReferencePath>
+    </ItemGroup>
+  </Target>
 
   <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
     <ItemGroup>
@@ -44,6 +75,13 @@
       <TranslationWorkerTestFile Include="$(MSBuildThisFileDirectory)..\TOOL-VIETSUB-TRANSLATION-WORKER\bin\$(Configuration)\net10.0-windows\win-x64\**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(TranslationWorkerTestFile)" DestinationFiles="@(TranslationWorkerTestFile->'$(TargetDir)_translation_worker\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopySetupJobOwnerFixtureForTests" AfterTargets="Build">
+    <ItemGroup>
+      <SetupJobOwnerFixtureFile Include="$(MSBuildThisFileDirectory)Fixtures\SetupJobOwnerHost\bin\$(Configuration)\net10.0-windows\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SetupJobOwnerFixtureFile)" DestinationFolder="$(TargetDir)SetupJobOwnerHost" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

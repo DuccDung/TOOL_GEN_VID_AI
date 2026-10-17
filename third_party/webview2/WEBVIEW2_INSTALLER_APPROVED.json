@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "platform": "win-x64",
+  "sourceUrl": "https://go.microsoft.com/fwlink/?linkid=2124701",
+  "fileName": "MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+  "packageRelativePath": "prerequisites/webview2-runtime-x64.exe",
+  "installerProductVersion": "1.3.287.9",
+  "sizeBytes": 214131448,
+  "sha256": "3505a37b54a294c2bc423b30d6c02cd33a2e58dbcdc7e03b50d7a4112746c986",
+  "publisherThumbprint": "21CA9DD6DA7C57C3A599880D17317D7BDA31899C",
+  "publisherSubject": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+  "verifiedAtUtcDate": "2026-10-16",
+  "signatureVerificationRequired": true
+}

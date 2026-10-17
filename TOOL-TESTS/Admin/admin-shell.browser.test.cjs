@@ -4,6 +4,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { withAdminFonts } = require('./admin-browser-assets.cjs');
 const { chromium } = require(process.env.VIDEOMAKER_PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '../..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
@@ -12,7 +13,7 @@ const html = razor.slice(razor.indexOf('<!doctype')).replace(/<script\b[^>]*>[\s
 const days = amount => new Date(Date.now() + amount * 86400000).toISOString();
 const plans = ['Cơ bản', 'Chuyên nghiệp', 'Doanh nghiệp'].map((name, i) => ({
   licensePlanId: `plan-${i}`, name, planCode: `plan-${i}`, defaultDurationDays: i === 2 ? 90 : 30,
-  maxActivatedDevices: [1, 3, 5][i], maxConcurrentSessions: i + 1, offlineGraceHours: 0,
+  maxActivatedDevices: [1, 3, 5][i], maxConcurrentSessions: i + 1, offlineGraceHours: 0, updatedAtUtc: '2026-10-13T00:00:00Z',
   isActive: true, isPublic: true, description: 'Tạo video và xử lý phụ đề cho công việc hằng ngày.', salePriceVnd: (i + 1) * 199000
 }));
 const names = ['Minh Anh', 'Hoàng Nam', 'Thu Hà', 'Quốc Bảo', 'Lan Chi', 'Gia Huy'];
@@ -32,16 +33,18 @@ const pageResult = (items, url, totalCount = items.length) => {
   return { items, page, pageSize, totalCount, totalPages, hasPrevious: page > 1, hasNext: page < totalPages };
 };
 let browser;
-before(async () => { browser = await chromium.launch({ headless: true }); });
+before(async () => { browser = await chromium.launch({ headless: true, channel: process.env.VIDEOMAKER_BROWSER_CHANNEL }); });
 after(async () => { await browser?.close(); });
 
-async function fixture(t, { width = 1440, empty = false, failOverview = false, login = false, unsafeName = false } = {}) {
+async function fixture(t, { width = 1440, empty = false, failOverview = false, login = false, unsafeName = false, denySession = false, unavailable = false } = {}) {
   const context = await browser.newContext({ viewport: { width, height: 1050 }, locale: 'vi-VN', timezoneId: 'Asia/Ho_Chi_Minh' });
   const page = await context.newPage();
   const errors = [], calls = [], unexpected = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(async () => { await context.close(); assert.deepEqual(errors, [], 'No unhandled browser errors'); assert.deepEqual(unexpected, [], 'Only expected local fixture APIs are used'); });
   const rows = empty ? [] : structuredClone(users);
+  let downloadSettings = { setupDownloadUrl: empty ? null : 'https://103.179.190.182:8443/models/VideoMaker-Setup-1.2.0.exe',
+    revision: empty ? null : 'AAAAAAAAB9E=', updatedAtUtc: empty ? null : '2026-10-17T08:00:00Z' };
   if (unsafeName) rows[0].displayName = '<img src=x onerror=alert(1)>';
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
@@ -49,11 +52,16 @@ async function fixture(t, { width = 1440, empty = false, failOverview = false, l
     if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
     const method = route.request().method();
     calls.push({ path: url.pathname, search: url.searchParams.get('search'), page: url.searchParams.get('page'), method });
+    if (unavailable && url.pathname.startsWith('/api/admin/')) return route.fulfill({ status: 503, contentType: 'application/json', body: '{"message":"Service unavailable"}' });
     let body;
     if (url.pathname.endsWith('/overview')) {
+      if (denySession) return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ message: 'Phiên đăng nhập đã hết hạn.' }) });
       if (failOverview) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'Không tải được thống kê.' }) });
       body = { totalUsers: empty ? 0 : 1284, activeLicenses: empty ? 0 : 968, onlineSessions: empty ? 0 : 246, expiringWithinSevenDays: empty ? 0 : 24 };
-    } else if (url.pathname === '/api/admin/licenses/plans') body = empty ? [] : plans;
+    } else if (url.pathname === '/api/auth/login') body = { accessToken: 'synthetic-session', refreshToken: 'synthetic-refresh', user: { userId: 'fixture-admin', displayName: 'Quản trị viên', email: 'admin@example.test', roles: ['Admin'] } };
+    else if (url.pathname === '/api/admin/licenses/plans') body = empty ? [] : plans;
+    else if (url.pathname === '/api/admin/licenses/plan-composer/setup') body = { paymentsReady: true, groups: [{ organizationPoolId: 'pool-test', name: 'Nhóm thử', ready: true, availableSeats: 10 }] };
+    else if (url.pathname.startsWith('/api/admin/licenses/plan-composer/')) body = { plan: plans.find(plan => url.pathname.endsWith(plan.licensePlanId)), organizationPoolId: 'pool-test', memberMonthlyAiBudget: null, mappingUpdatedAtUtc: null };
     else if (url.pathname === '/api/admin/licenses/users/page') {
       const term = (url.searchParams.get('search') || '').toLowerCase();
       const result = rows.filter(user => `${user.displayName} ${user.email}`.toLowerCase().includes(term));
@@ -63,6 +71,20 @@ async function fixture(t, { width = 1440, empty = false, failOverview = false, l
       body = { user, licenses: [user.currentLicense], devices: [], sessions: [] };
     } else if (url.pathname === '/api/admin/desktop-releases/page') body = pageResult(empty ? [] : [{ releaseId: 'release-1', version: '1.0.0', buildNumber: 1,
       platform: 'win-x64', channel: 'Stable', isActive: true, isMandatory: false, publishedAtUtc: days(-1), artifacts: [{ kind: 'DesktopPackage', sizeBytes: 1024, sha256: 'a'.repeat(64) }] }], url);
+    else if (url.pathname === '/api/admin/desktop-release-preparations/page') body = pageResult([], url);
+    else if (url.pathname === '/api/admin/desktop-bootstrappers/status' && method === 'GET') body = {
+      sharedBootstrapperEnabled: true, releasePreparationEnabled: true, configured: true, profile: 'Production', publicationMode: 'ServerInspection'
+    };
+    else if (url.pathname === '/api/admin/desktop-bootstrappers' && method === 'GET') body = [];
+    else if (url.pathname === '/api/admin/desktop-download-settings' && method === 'GET') body = downloadSettings;
+    else if (url.pathname === '/api/admin/desktop-download-settings' && method === 'POST') {
+      const request = route.request().postDataJSON();
+      assert.deepEqual(Object.keys(request).sort(), ['revision', 'setupDownloadUrl']);
+      assert.equal(request.revision, downloadSettings.revision);
+      assert.equal(new URL(request.setupDownloadUrl).protocol, 'https:');
+      downloadSettings = { setupDownloadUrl: request.setupDownloadUrl, revision: 'AAAAAAAAB9I=', updatedAtUtc: '2026-10-17T08:01:00Z' };
+      body = downloadSettings;
+    }
     else if (url.pathname === '/api/organizations') body = [organization];
     else if (url.pathname === '/api/organizations/page') body = pageResult([organization], url);
     else if (url.pathname === '/api/organizations/org-1/members/page') body = pageResult(members, url);
@@ -84,9 +106,12 @@ async function fixture(t, { width = 1440, empty = false, failOverview = false, l
     sessionStorage.setItem('vmAdminUser', JSON.stringify({ displayName: 'Quản trị viên', email: 'admin@example.test', roles: ['Admin'] }));
   });
   await page.goto('https://admin.example.test/');
-  await page.addStyleTag({ content: read('TOOL-SERVER/wwwroot/admin/admin.css') });
-  for (const file of ['admin.js', 'admin-organizations.js']) await page.addScriptTag({ content: read(`TOOL-SERVER/wwwroot/admin/${file}`) });
-  if (!login) await page.waitForSelector('#overviewMetrics .metric-card');
+  await page.addStyleTag({ content: withAdminFonts(read('TOOL-SERVER/wwwroot/admin/admin.css')) });
+  await page.addStyleTag({ content: read('TOOL-SERVER/wwwroot/admin/admin-modules.css') });
+  await page.addStyleTag({ content: read('TOOL-SERVER/wwwroot/admin/admin-allocation-setup.css') });
+  await page.addStyleTag({ content: read('TOOL-SERVER/wwwroot/admin/admin-plan-composer.css') });
+  for (const file of ['admin-pages.js', 'admin-dialogs.js', 'admin.js', 'admin-release-preparations.js', 'admin-desktop-download-settings.js', 'admin-plan-composer.js', 'admin-allocation-setup.js', 'admin-organizations.js']) await page.addScriptTag({ content: read(`TOOL-SERVER/wwwroot/admin/${file}`) });
+  if (!login && !denySession && !unavailable) await page.waitForSelector('#overviewMetrics .home-stat');
   return { page, calls };
 }
 
@@ -97,18 +122,82 @@ async function screenshot(page, name) {
   await page.screenshot({ path: path.join(process.env.VIDEOMAKER_SCREENSHOT_DIR, `${name}.png`), fullPage: true });
 }
 
-test('overview uses live fixture metrics, expiry dates, real detail actions and escapes user names', async t => {
+test('new home uses real metrics and routes to people with safe names and working details', async t => {
   const { page, calls } = await fixture(t, { unsafeName: true });
-  assert.equal(await page.locator('#overviewMetrics .metric-card strong').first().textContent(), '1.284');
-  assert.equal(await page.locator('#userOverview tbody tr').count(), 6);
-  assert.equal(await page.locator('#userOverview img').count(), 0);
-  assert.equal(await page.locator('#userOverview .status-warning').count(), 2);
-  assert.match(await page.locator('#expiryTitle').textContent(), /^24 license/);
-  await page.locator('#userOverview [data-user-id="user-1"]').click();
-  await page.waitForSelector('#userDetail .user-detail-header');
+  assert.equal(await page.locator('#overviewMetrics .home-stat strong').first().textContent(), '1.284');
+  assert.equal(await page.locator('#userOverview, .license-overview-grid').count(), 0);
+  assert.match(await page.locator('#homeAttention').textContent(), /24 gói sắp hết hạn/);
+  await page.locator('#homeAttention [data-home-go="users"]').click();
+  assert.equal(await page.locator('#userTable tbody tr').count(), 6);
+  assert.equal(await page.locator('#userTable img').count(), 0);
+  await page.locator('#userTable [data-user-id="user-1"]').first().click();
+  await page.waitForSelector('#userDetail .person-detail-heading');
   assert.match(await page.locator('#userDetail').textContent(), /Hoàng Nam/);
+  assert.match(await page.locator('#userDetail .person-detail-facts').textContent(), /Trạng thái tài khoảnActive/);
+  assert.match(await page.locator('#userDetail .person-detail-facts').textContent(), /Đăng nhập gần nhất/);
+  await screenshot(page, 'user-detail-1440');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#userDialog').evaluate(node => node.open), false);
+  assert.equal(calls.filter(call => call.method !== 'GET').length, 0);
+});
+
+test('normal login at the default URL opens only the new home and its create-plan shortcut', async t => {
+  const { page, calls } = await fixture(t, { login: true });
+  assert.equal(await page.locator('#adminShell').isVisible(), false);
+  await page.fill('#loginEmail', 'admin@example.test'); await page.fill('#loginPassword', 'synthetic-password');
+  await page.locator('#loginForm button[type="submit"]').click();
+  await page.waitForSelector('#adminShell:not(.hidden) .home-launch h2');
+  assert.equal(await page.locator('.nav-item.active').getAttribute('data-view'), 'overview');
+  assert.match(await page.locator('#homeLaunch').textContent(), /Tạo gói và đưa VideoMaker/);
+  assert.equal(await page.locator('#userOverview, #planOverview, .license-summary-panel, .plan-card-admin, #planDialog').count(), 0);
+  assert.equal(await page.locator('body').getAttribute('data-admin-ui-generation'), '2');
+  await screenshot(page, 'after-login-default-1440');
+  await page.locator('[data-home-create]').click();
+  await page.waitForSelector('#licensePlanComposer:not(.hidden)');
+  assert.equal(calls.filter(call => call.method !== 'GET' && call.path !== '/api/auth/login').length, 0);
+});
+
+test('a rejected saved session keeps the new shell hidden until the server validates Admin', async t => {
+  const { page, calls } = await fixture(t, { denySession: true });
+  await page.waitForSelector('#loginMessage:not(:empty)');
+  assert.equal(await page.locator('#adminShell').isVisible(), false);
+  assert.equal(await page.evaluate(() => window.videoMakerAdminShell.state.adminReady), false);
+  assert.equal(calls.filter(call => call.method !== 'GET').length, 0);
+});
+
+test('incomplete assets cannot authenticate or display an old Admin layout', async t => {
+  const context = await browser.newContext(); t.after(() => context.close());
+  const page = await context.newPage(), requests = [];
+  await page.route('**/*', route => { requests.push(route.request().url()); return route.abort(); });
+  await page.setContent(html);
+  await page.addScriptTag({ content: read('TOOL-SERVER/wwwroot/admin/admin.js') });
+  assert.equal(await page.locator('#loginForm button[type="submit"]').isDisabled(), true);
+  assert.match(await page.locator('#loginMessage').textContent(), /chưa được cập nhật đầy đủ/);
+  assert.equal(await page.locator('#adminShell').isVisible(), false);
+  assert.deepEqual(requests, []);
+});
+
+test('an unavailable Admin service never exposes the shell from a stored role alone', async t => {
+  const { page, calls } = await fixture(t, { unavailable: true });
+  await page.waitForSelector('#loginMessage:not(:empty)');
+  assert.equal(await page.locator('#adminShell').isVisible(), false);
+  assert.equal(await page.evaluate(() => window.videoMakerAdminShell.state.adminReady), false);
+  assert.equal(calls.filter(call => call.method !== 'GET').length, 0);
+});
+
+test('license confirmation uses the shared new dialog and cancelling or Escape makes no write', async t => {
+  const { page, calls } = await fixture(t);
+  await page.locator('.nav-item[data-view="users"]').click();
+  await page.locator('#userTable [data-user-id="user-0"]').first().click();
+  await page.waitForSelector('#userDialog[open]');
+  await page.locator('[data-license-status="Suspended"]').first().click();
+  await page.waitForSelector('#adminActionDialog[open]');
+  await page.locator('#adminActionCancel').click();
+  assert.equal(await page.locator('#adminActionDialog').evaluate(node => node.open), false);
+  await page.locator('[data-extend-license]').first().click();
+  await page.waitForSelector('#adminActionDialog[open]');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#adminActionDialog').evaluate(node => node.open), false);
   assert.equal(calls.filter(call => call.method !== 'GET').length, 0);
 });
 
@@ -120,7 +209,7 @@ test('header search routes to paginated users and leaves the overview snapshot i
   assert.equal(await page.inputValue('#userSearch'), 'Thu Hà');
   assert.equal(calls.some(call => call.search === 'Thu Hà'), true);
   await page.click('.nav-item[data-view="overview"]');
-  assert.equal(await page.locator('#userOverview tbody tr').count(), 6);
+  assert.equal(await page.locator('#overviewMetrics .home-stat strong').first().textContent(), '1.284');
   await page.click('#manageUsersShortcut');
   await page.fill('#userSearch', '');
   await page.locator('#userSearch').press('Enter');
@@ -133,11 +222,12 @@ test('header search routes to paginated users and leaves the overview snapshot i
 test('empty and unavailable data remain distinguishable without fabricated totals', async t => {
   const { page } = await fixture(t, { empty: true });
   assert.equal(await page.locator('#overviewMetrics strong').first().textContent(), '0');
-  assert.match(await page.locator('#userOverview').textContent(), /Không có license/);
-  assert.match(await page.locator('#planOverview').textContent(), /Chưa có gói/);
+  assert.match(await page.locator('#homeAttention').textContent(), /Chưa có gói cần gia hạn/);
+  assert.match(await page.locator('#homeLaunch').textContent(), /Tạo gói đầu tiên/);
   const failed = await fixture(t, { failOverview: true });
   assert.equal(await failed.page.locator('#overviewMetrics strong').first().textContent(), '—');
-  assert.match(await failed.page.locator('#expiryDescription').textContent(), /Chưa tải được/);
+  assert.equal(await failed.page.locator('#homeDataNotice').isVisible(), true);
+  assert.match(await failed.page.locator('#homeDataNotice').textContent(), /Chưa tải được/);
 });
 
 test('mobile navigation, keyboard focus and logout remain accessible', async t => {
@@ -156,20 +246,26 @@ test('mobile navigation, keyboard focus and logout remain accessible', async t =
   await screenshot(page, 'login-mobile');
 });
 
-test('all shell pages remain square and borderless without page overflow at five widths', async t => {
+test('all shell pages share the light rounded design without page overflow at five widths', async t => {
   const { page } = await fixture(t);
   for (const width of [390, 768, 1024, 1440, 1920]) {
     await page.setViewportSize({ width, height: 1050 });
     for (const view of ['overview', 'users', 'plans', 'releases']) {
       await page.evaluate(view => window.videoMakerAdminShell.navigate(view), view);
+      if (view === 'releases') {
+        await page.waitForSelector('#desktopSetupDownloadUrl:not(:disabled)');
+        assert.equal(await page.inputValue('#desktopSetupDownloadUrl'), 'https://103.179.190.182:8443/models/VideoMaker-Setup-1.2.0.exe');
+        assert.equal(await page.locator('#desktopDownloadSettingsOpen').isEnabled(), true);
+      }
       const geometry = await page.evaluate(() => {
-        const elements = [...document.querySelectorAll('.panel, .metric-card, .plan-card-admin, .nav-item, .user-avatar, .status-pill, .primary-button, .ghost-button, .pagination-page, input')]
+        const elements = [...document.querySelectorAll('.surface, .panel, .home-stat, .catalog-offer, .release-entry, .nav-item, .user-avatar, .status-pill, .primary-button, .ghost-button, .pagination-page, input')]
           .filter(node => node.getClientRects().length);
         return { overflow: document.documentElement.scrollWidth > innerWidth + 1,
-          invalid: elements.filter(node => { const s = getComputedStyle(node); return parseFloat(s.borderTopLeftRadius) !== 0 || [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth].some(value => parseFloat(value) !== 0); }).map(node => node.className) };
+          invalid: elements.filter(node => { const s = getComputedStyle(node); return parseFloat(s.borderTopLeftRadius) <= 0; }).map(node => node.className) };
       });
+      assert.equal(await page.locator('.sidebar').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(255, 255, 255)');
       assert.equal(geometry.overflow, false, `${view} at ${width}px must not overflow the page`);
-      assert.deepEqual(geometry.invalid, [], `${view} at ${width}px must match square borderless design`);
+      assert.deepEqual(geometry.invalid, [], `${view} at ${width}px must share the rounded design`);
       if (width === 1440 || (width === 390 && view === 'overview')) await screenshot(page, `${view}-${width}`);
     }
   }
@@ -177,20 +273,23 @@ test('all shell pages remain square and borderless without page overflow at five
   await screenshot(page, 'overview-1920');
 });
 
-test('plan and release dialogs retain validation, keyboard dismissal and mobile sizing', async t => {
+test('shared plan form and release dialog retain validation and mobile sizing', async t => {
   const { page, calls } = await fixture(t, { width: 390 });
   await page.evaluate(() => window.videoMakerAdminShell.navigate('plans'));
-  await page.click('#addPlanButton');
-  await page.locator('#planForm button[type="submit"]').click();
+  await page.locator('[data-edit-plan]').first().click();
+  await page.waitForSelector('#composerName:not(:disabled)');
+  await page.locator('#composerName').fill('');
+  await page.locator('#composerPublish').click();
   assert.equal(calls.filter(call => call.method !== 'GET').length, 0);
-  assert.equal(await page.locator('#planCode').evaluate(node => node.validity.valueMissing), true);
+  assert.equal(await page.locator('#composerName').evaluate(node => node.validity.valueMissing), true);
   await screenshot(page, 'plan-dialog-mobile');
-  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#planDialog').count(), 0);
+  await page.click('#composerBack');
   await page.evaluate(() => window.videoMakerAdminShell.navigate('releases'));
   await page.click('#addReleaseButton');
-  const bounds = await page.locator('#releaseDialog').boundingBox();
+  const bounds = await page.locator('#releaseDraftDialog').boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 391);
-  assert.equal(await page.locator('#releaseDialog').evaluate(node => getComputedStyle(node).borderTopLeftRadius), '0px');
+  assert.equal(await page.locator('#releaseDraftDialog').evaluate(node => getComputedStyle(node).borderTopLeftRadius), '10px');
   await page.keyboard.press('Escape');
 });
 
@@ -199,7 +298,9 @@ test('organization setup, directory, pricing and cost guide keep readable respon
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 1050 });
     await page.evaluate(() => window.videoMakerAdminShell.navigate('organizations', { organizationScope: 'setup' }));
-    await page.waitForSelector('#adminSetupCenter .setup-center-hero');
+    await page.waitForSelector('#adminSetupCenter [role="alert"]');
+    assert.match(await page.locator('#adminSetupCenter [role="alert"]').textContent(), /chưa tải đầy đủ/);
+    assert.equal(await page.locator('#adminSetupCenter .setup-stage-list').count(), 0);
     for (const scope of ['setup', 'directory', 'pools', 'pricing', 'cost-guide']) {
       await page.evaluate(scope => window.videoMakerOrganizationAdmin.activate(scope), scope);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `${scope} at ${width}px`);

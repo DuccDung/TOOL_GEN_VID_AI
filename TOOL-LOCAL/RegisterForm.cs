@@ -16,17 +16,35 @@ public sealed class RegisterForm : Form
     private readonly AuthButton _facebookButton = new();
     private readonly LinkLabel _loginLink = new();
     private readonly Label _statusLabel = new();
+    private readonly CancellationTokenSource _lifetime = new();
+    private bool _registrationBusy;
+    private bool _lifetimeDisposed;
 
     public RegisterForm(AccountSessionManager sessionManager)
     {
         _sessionManager = sessionManager;
         InitializeUi();
+        FormClosed += (_, _) => _lifetime.Cancel();
+    }
+
+    private bool CanUpdateUi => !IsDisposed && !Disposing && !_lifetime.IsCancellationRequested;
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !_lifetimeDisposed)
+        {
+            _lifetimeDisposed = true;
+            _lifetime.Cancel();
+            _lifetime.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     private void InitializeUi()
     {
         SuspendLayout();
-        Icon = BrandIdentity.WindowIcon;
+        BrandIdentity.ApplyWindowIcon(this);
         Text = "taphoatool - Đăng ký";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -170,8 +188,12 @@ public sealed class RegisterForm : Form
         ResumeLayout(false);
     }
 
-    private async void RegisterButtonOnClick(object? sender, EventArgs eventArgs)
+    private async void RegisterButtonOnClick(object? sender, EventArgs eventArgs) =>
+        await SubmitRegistrationAsync();
+
+    internal async Task SubmitRegistrationAsync()
     {
+        if (_registrationBusy || !CanUpdateUi) return;
         ClearErrors();
         var validationErrors = RegistrationInputValidator.Validate(
             _displayNameField.Value,
@@ -191,24 +213,43 @@ public sealed class RegisterForm : Form
             return;
         }
 
+        _registrationBusy = true;
         SetBusy(true, "Đang tạo tài khoản...");
         try
         {
             await _sessionManager.RegisterAsync(
                 _emailField.Value,
                 _passwordField.Value,
-                _displayNameField.Value);
+                _displayNameField.Value,
+                _lifetime.Token);
+            if (!CanUpdateUi) return;
             DialogResult = DialogResult.OK;
             Close();
         }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
         catch (AccountClientException exception)
         {
+            if (!CanUpdateUi) return;
             SetBusy(false, string.Empty);
             ShowErrors(exception.Errors, FormatServerMessage(exception));
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
         {
+            if (!CanUpdateUi) return;
             SetBusy(false, GetSafeMessage(exception), true);
+        }
+        catch (Exception)
+        {
+            if (!CanUpdateUi) return;
+            SetBusy(false,
+                "Không thể hoàn tất đăng ký. Nếu đã gửi thông tin, hãy thử đăng nhập bằng email này.", true);
+        }
+        finally
+        {
+            _registrationBusy = false;
+            if (CanUpdateUi) SetBusy(false);
         }
     }
 
@@ -268,7 +309,7 @@ public sealed class RegisterForm : Form
     private void ShowUnavailableFeature(string feature) =>
         SetStatus($"{feature} đang được cập nhật.");
 
-    private void SetBusy(bool busy, string status, bool error = false)
+    private void SetBusy(bool busy, string? status = null, bool error = false)
     {
         _displayNameField.Enabled = !busy;
         _emailField.Enabled = !busy;
@@ -281,7 +322,7 @@ public sealed class RegisterForm : Form
         _facebookButton.Enabled = !busy;
         _loginLink.Enabled = !busy;
         _registerButton.Text = busy ? "Đang tạo tài khoản..." : "Đăng ký";
-        SetStatus(status, error);
+        if (status is not null) SetStatus(status, error);
         UseWaitCursor = busy;
     }
 

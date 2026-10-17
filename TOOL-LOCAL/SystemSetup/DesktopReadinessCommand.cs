@@ -62,15 +62,17 @@ internal static class DesktopReadinessCommand
                 return bundledReady ? 0 : 2;
             }
             var options = DesktopOptions.Load(AppContext.BaseDirectory, DesktopUserSettingsStore.PreferencesDirectory, requireDatabase: false);
+            var staticModels = ModelDistribution.StaticModelRuntimePolicy.IsStaticMode(options);
+            var staticCacheRoot = staticModels ? ModelDistribution.StaticModelRuntimePolicy.ResolveCacheRoot(options) : null;
             var mediaPaths = new MediaToolPathResolver(options.MediaTools).Resolve();
             var media = new MediaToolPreflightService(mediaPaths, new ExternalProcessRunner(), TimeProvider.System);
             var ocrEnabled = options.Features.VietsubEnabled && options.Features.VietsubOcrEnabled;
             await using var ocr = ocrEnabled ? new PaddleVietsubOcrRecognizer() : null;
             await using var qwen = DesktopComponentComposition.CreateTranslationProvider(options.Features,
-                () => new QwenGgufVietsubTranslationProvider(new VietsubTranslationComponentStore(VietsubTranslationApprovedComponents.Qwen3_4B_Q4Km)));
+                () => new QwenGgufVietsubTranslationProvider(DesktopComponentComposition.CreateTranslationStore(staticCacheRoot, null)));
             var voiceEnabled = options.Features.VietsubEnabled && options.Features.VietsubLocalVoiceEnabled;
             using var voice = voiceEnabled ? DesktopComponentComposition.CreateVoiceComponents(
-                new VietsubAppPaths(options.Storage.WorkspaceRoot), options.Features) : null;
+                new VietsubAppPaths(options.Storage.WorkspaceRoot), options.Features, staticCacheRoot: staticCacheRoot) : null;
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
             var components = await InspectAsync([
                 new MediaSetupAdapter(media, mediaPaths),
@@ -78,7 +80,8 @@ internal static class DesktopReadinessCommand
                 new QwenSetupAdapter(qwen),
                 new PiperSetupAdapter(voice, voiceEnabled)
             ], timeout.Token);
-            var ready = webView.IsReady && components.All(x => x.State is "READY" or "DISABLED");
+            var ready = webView.IsReady && components.All(x => staticModels ? x.State == "READY" : x.State is "READY" or "DISABLED")
+                && (!staticModels || ModelDistribution.StaticModelRuntimePolicy.ReadReadyReceipt() is not null);
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 AppVersion = DesktopBuildInfo.Version,

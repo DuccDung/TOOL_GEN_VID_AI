@@ -10,7 +10,8 @@ internal sealed record VietsubTranslationWorkerClientOptions(
     TimeSpan LoadTimeout,
     TimeSpan InferenceTimeout,
     TimeSpan CancelGracePeriod,
-    IReadOnlyDictionary<string, string?>? EnvironmentVariables = null)
+    IReadOnlyDictionary<string, string?>? EnvironmentVariables = null,
+    string? DiagnosticDirectory = null)
 {
     public static VietsubTranslationWorkerClientOptions CreateDefault() => new(
         Path.Combine(AppContext.BaseDirectory, "_translation_worker", "VideoMaker.Vietsub.TranslationWorker.exe"),
@@ -45,6 +46,8 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
     private readonly object _disposeLock = new();
     private WorkerSession? _session;
     private string _lastDiagnostics = string.Empty;
+    private VietsubTranslationFailureReport? _lastFailureReport;
+    private VietsubTranslationWorkerMetrics? _lastMetrics;
     private volatile bool _disposed;
     private Task? _disposeTask;
 
@@ -62,6 +65,9 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
 
     public string LastDiagnostics => Volatile.Read(ref _session)?.Diagnostics.ToString()
         ?? Volatile.Read(ref _lastDiagnostics);
+
+    public VietsubTranslationFailureReport? LastFailureReport => Volatile.Read(ref _lastFailureReport);
+    public VietsubTranslationWorkerMetrics? LastMetrics => Volatile.Read(ref _lastMetrics);
 
     public string WorkerBinaryFingerprint => VietsubTranslationWorkerProtocol.ComputeWorkerBinaryFingerprint(
         Path.GetDirectoryName(Path.GetFullPath(_options.WorkerExecutablePath))!);
@@ -106,6 +112,7 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
         await _operationGate.WaitAsync(token).ConfigureAwait(false);
         var requestId = Guid.NewGuid().ToString("N");
         var pending = new PendingRequest(progress);
+        var attempt = new FailureAttempt(type, payload, CaptureMemory());
         WorkerSession? session = null;
         try
         {
@@ -115,7 +122,10 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
                 : payload is VietsubTranslationWorkerLoadRequest load ? load.ResourceRequirements : _resourceRequirements;
             session = await EnsureStartedAsync(requirements,
                 payload is VietsubTranslationWorkerLoadRequest accepted && accepted.ResourceWarningAccepted,
-                token, (payload as VietsubTranslationWorkerLoadRequest)?.Config.GpuDeviceId).ConfigureAwait(false);
+                token, (payload as VietsubTranslationWorkerLoadRequest)?.Config.GpuDeviceId, attempt).ConfigureAwait(false);
+            if (payload is VietsubTranslationWorkerLoadRequest loading) session.Config = loading.Config;
+            attempt.Config ??= session.Config;
+            session.LastStage = attempt.Stage;
             if (type == VietsubTranslationWorkerProtocol.Load) session.LoadedConfigFingerprint = null;
             session.Register(requestId, pending);
             await WriteAsync(session, VietsubTranslationWorkerProtocol.Create(type, requestId, payload), token)
@@ -147,14 +157,26 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
             var result = VietsubTranslationWorkerProtocol.ReadPayload<T>(response);
             // A load completion belongs to this session, even if Reset runs concurrently.
             if (result is VietsubTranslationWorkerLoadResult loaded && session.IsUsable)
+            {
                 session.LoadedConfigFingerprint = loaded.ConfigFingerprint;
+                Volatile.Write(ref _lastMetrics, loaded.Metrics);
+            }
+            else if (result is VietsubTranslationWorkerInferResult inferred)
+                Volatile.Write(ref _lastMetrics, inferred.Metrics);
             return result;
         }
         catch (VietsubTranslationWorkerProtocolException exception)
         {
             await StopWorkerAsync(kill: true, expected: session).ConfigureAwait(false);
-            throw new VietsubTranslationException(VietsubTranslationErrorCodes.WorkerProtocolInvalid,
+            var failure = new VietsubTranslationException(VietsubTranslationErrorCodes.WorkerProtocolInvalid,
                 "Giao thức worker dịch local không hợp lệ.", retryable: false, innerException: exception);
+            RecordFailure(failure, attempt);
+            throw failure;
+        }
+        catch (VietsubTranslationException exception)
+        {
+            RecordFailure(exception, attempt);
+            throw;
         }
         finally
         {
@@ -165,13 +187,17 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
 
     private async Task<WorkerSession> EnsureStartedAsync(
         VietsubTranslationResourceRequirements requirements, bool resourceWarningAccepted,
-        CancellationToken cancellationToken, string? gpuDeviceId)
+        CancellationToken cancellationToken, string? gpuDeviceId, FailureAttempt attempt)
     {
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
-            if (_session is { IsUsable: true } current) return current;
+            if (_session is { IsUsable: true } current)
+            {
+                attempt.Session = current;
+                return current;
+            }
             await StopWorkerCoreAsync(kill: true).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -196,6 +222,9 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
                 RedirectStandardError = true,
                 WorkingDirectory = Path.GetDirectoryName(executable)!
             };
+            startInfo.Environment.Remove(VietsubTranslationDiagnosticWorkspace.EnvironmentVariable);
+            startInfo.Environment.Remove("VIDEOMAKER_TRANSLATION_WORKER_TEST_MODE");
+            startInfo.Environment.Remove("VIDEOMAKER_TRANSLATION_WORKER_BENCHMARK");
             if (_options.EnvironmentVariables is not null)
                 foreach (var pair in _options.EnvironmentVariables) startInfo.Environment[pair.Key] = pair.Value;
             startInfo.Environment.Remove("CUDA_VISIBLE_DEVICES");
@@ -215,6 +244,8 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
             }
 
             var session = new WorkerSession(process);
+            session.LastStage = "STARTING";
+            attempt.Session = session;
             Volatile.Write(ref _session, session);
             try
             {
@@ -279,6 +310,14 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
         session.LoadedConfigFingerprint = null;
         if (session.IsStopping) return;
         var exitCode = await ReadExitCodeAsync(session.Process).ConfigureAwait(false);
+        session.ExitCode = exitCode;
+        // stdout and stderr are independent pipes. Drain the final stage before
+        // handing the failure to the UI; never wait indefinitely on diagnostics.
+        if (exitCode is not null)
+        {
+            try { await session.StderrPump.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false); }
+            catch (TimeoutException) { }
+        }
         if (session.IsStopping) return;
         var code = failure is VietsubTranslationWorkerProtocolException
             ? VietsubTranslationErrorCodes.WorkerProtocolInvalid : VietsubTranslationErrorCodes.ProcessCrashed;
@@ -299,6 +338,7 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
                 var read = await session.Error.ReadAsync(buffer.AsMemory(), session.ReaderCancellation.Token).ConfigureAwait(false);
                 if (read == 0) break;
                 session.Diagnostics.Append(buffer.AsSpan(0, read));
+                session.ObserveStage(buffer.AsSpan(0, read));
             }
         }
         catch (OperationCanceledException) when (session.ReaderCancellation.IsCancellationRequested) { }
@@ -412,6 +452,7 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
         }
 
         session.Diagnostics.Append($"client_worker_cleanup:pid={session.ProcessId}:code={session.Process.ExitCode}\n");
+        session.ExitCode = session.Process.ExitCode;
         Volatile.Write(ref _lastDiagnostics, session.Diagnostics.ToString());
         await session.WriteGate.WaitAsync().ConfigureAwait(false);
         try
@@ -462,6 +503,81 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
+    private VietsubTranslationMemorySnapshot? CaptureMemory() =>
+        _memoryProbe.TryCapture(out var memory, out _) ? memory : null;
+
+    private void RecordFailure(VietsubTranslationException error, FailureAttempt attempt)
+    {
+        if (error.Code is not (VietsubTranslationErrorCodes.ProcessCrashed or VietsubTranslationErrorCodes.ProcessTimeout
+            or VietsubTranslationErrorCodes.BackendLoadFailed or VietsubTranslationErrorCodes.RuntimeOutOfMemory
+            or VietsubTranslationErrorCodes.WorkerProtocolInvalid or VietsubTranslationErrorCodes.ProcessFailed)) return;
+        try
+        {
+            var config = attempt.Config;
+            var profile = config?.ProfileId is VietsubTranslationWorkerProfiles.StandardProfileId
+                or VietsubTranslationWorkerProfiles.LowMemoryProfileId ? config.ProfileId : null;
+            var report = new VietsubTranslationFailureReport(Guid.NewGuid().ToString("N"), DateTime.UtcNow,
+                error.Code, attempt.Operation, attempt.Session?.LastStage ?? attempt.Stage, VietsubTranslationWorkerProtocol.WorkerVersion,
+                TryGetWorkerFingerprint(), ReadWorkerRuntimeVersion(), attempt.Session?.ProcessId, attempt.Session?.ExitCode,
+                profile, config is null ? null : VietsubTranslationWorkerProtocol.ComputeConfigFingerprint(config),
+                config is null ? null : config.GpuLayerCount > 0 ? "cuda" : "cpu", attempt.MemoryBefore, CaptureMemory());
+            Volatile.Write(ref _lastFailureReport, report);
+            if (VietsubTranslationFailureReports.TryWrite(report, _options.DiagnosticDirectory))
+                error.DiagnosticId = report.DiagnosticId;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or ArgumentException
+            or System.Text.Json.JsonException or System.Security.SecurityException or InvalidOperationException
+            or OutOfMemoryException) { }
+    }
+
+    private string? TryGetWorkerFingerprint()
+    {
+        try { return WorkerBinaryFingerprint; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
+    }
+
+    private string? ReadWorkerRuntimeVersion()
+    {
+        try { return ReadWorkerRuntimeVersionCore(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException
+            or InvalidOperationException or ArgumentException) { return null; }
+    }
+
+    private string? ReadWorkerRuntimeVersionCore()
+    {
+        var path = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(_options.WorkerExecutablePath))!,
+            "VideoMaker.Vietsub.TranslationWorker.runtimeconfig.json");
+        if (!File.Exists(path) || new FileInfo(path).Length > 16 * 1024) return null;
+        using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(path));
+        if (!json.RootElement.TryGetProperty("runtimeOptions", out var options)
+            || !options.TryGetProperty("includedFrameworks", out var frameworks)) return null;
+        foreach (var framework in frameworks.EnumerateArray())
+            if (framework.TryGetProperty("name", out var name) && name.GetString() == "Microsoft.NETCore.App"
+                && framework.TryGetProperty("version", out var version)
+                && Version.TryParse(version.GetString(), out var parsed)) return parsed.ToString();
+        return null;
+    }
+
+    private sealed class FailureAttempt
+    {
+        public FailureAttempt(string operation, object payload, VietsubTranslationMemorySnapshot? before)
+        {
+            Operation = operation is "load" or "infer" or "probeHardware" ? operation : "unknown";
+            Stage = payload is VietsubTranslationWorkerInferRequest infer ? infer.Stage switch
+            {
+                "PROBING_RUNTIME" or "PROBING_EN" or "PROBING_ZH" or "TRANSLATING" or "BENCHMARK" => infer.Stage,
+                _ => "UNKNOWN"
+            } : operation == "load" ? "LOADING" : "STARTING";
+            Config = (payload as VietsubTranslationWorkerLoadRequest)?.Config;
+            MemoryBefore = before;
+        }
+        public string Operation { get; }
+        public string Stage { get; }
+        public VietsubTranslationMemorySnapshot? MemoryBefore { get; }
+        public VietsubTranslationWorkerInferenceConfig? Config { get; set; }
+        public WorkerSession? Session { get; set; }
+    }
+
     private sealed class WorkerSession
     {
         private Exception? _terminalFailure;
@@ -489,6 +605,26 @@ internal sealed class VietsubTranslationWorkerClient : IVietsubTranslationWorker
         public TaskCompletionSource<VietsubTranslationWorkerHello> Hello { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public BoundedTextBuffer Diagnostics { get; } = new(MaximumDiagnosticCharacters);
         public string? LoadedConfigFingerprint;
+        public VietsubTranslationWorkerInferenceConfig? Config;
+        public int? ExitCode;
+        public string? LastStage;
+        private string _stageTail = string.Empty;
+
+        public void ObserveStage(ReadOnlySpan<char> characters)
+        {
+            var text = _stageTail + characters.ToString();
+            var latest = -1;
+            foreach (var stage in new[] { "MODEL_LOAD", "MODEL_READY", "CONTEXT_CREATE", "INFER" })
+            {
+                var index = text.LastIndexOf("qwen_stage:" + stage + "\n", StringComparison.Ordinal);
+                var windowsIndex = text.LastIndexOf("qwen_stage:" + stage + "\r\n", StringComparison.Ordinal);
+                index = Math.Max(index, windowsIndex);
+                if (index <= latest) continue;
+                latest = index;
+                LastStage = stage;
+            }
+            _stageTail = text[Math.Max(0, text.Length - 64)..];
+        }
         public bool IsStopping => Volatile.Read(ref _stopping) != 0;
         public bool IsUsable => !IsStopping && Volatile.Read(ref _terminalFailure) is null && IsProcessAlive;
         public bool IsProcessAlive

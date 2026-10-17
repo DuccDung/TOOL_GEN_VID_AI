@@ -6,7 +6,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <AssemblyName>VideoMaker.Vietsub.TranslationWorker</AssemblyName>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <RootNamespace>VideoMaker.Vietsub.TranslationWorker</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -22,6 +22,21 @@
   <ItemGroup>
     <Compile Include="..\TOOL-LOCAL\Vietsub\Translation\VietsubTranslationResourceProbe.cs" Link="Shared\VietsubTranslationResourceProbe.cs" />
     <Compile Include="..\TOOL-LOCAL\Vietsub\Translation\VietsubTranslationWorkerProtocol.cs" Link="Shared\VietsubTranslationWorkerProtocol.cs" />
+    <Compile Include="..\TOOL-LOCAL\Vietsub\Translation\VietsubTranslationDiagnosticWorkspace.cs" Link="Shared\VietsubTranslationDiagnosticWorkspace.cs" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <OcrNativeRuntimeDirectory Condition="'$(OcrNativeRuntimeDirectory)' == ''">$(MSBuildProjectDirectory)\..\artifacts\ocr-native-runtime\msvc-14.50.35719.0-win-x64</OcrNativeRuntimeDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="$(OcrNativeRuntimeDirectory)\msvcp140.dll;$(OcrNativeRuntimeDirectory)\vcruntime140.dll;$(OcrNativeRuntimeDirectory)\vcruntime140_1.dll;$(OcrNativeRuntimeDirectory)\vcomp140.dll"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="..\third_party\ocr\MSVC_RUNTIME.json" LogicalName="Translation.MsvcRuntime" />
+    <Content Include="..\third_party\ocr\MSVC_RUNTIME.json;..\third_party\ocr\MSVC-NOTICE.md"
+             Link="third_party\msvc\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="ValidateTranslationNativeRuntime" BeforeTargets="PrepareForBuild;PrepareForPublish" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Test-OcrNativeRuntime.ps1&quot; -BundleDirectory &quot;$(OcrNativeRuntimeDirectory)&quot;" />
+  </Target>
 
 </Project>

@@ -29,6 +29,13 @@ public interface IGenerationAccessService
         Guid? projectId,
         CancellationToken cancellationToken) =>
         RequireAsync(userId, deviceId, requestedOrganizationId, projectId, cancellationToken);
+
+    Task RequirePersonalVietsubAccessAsync(string userId, Guid deviceId, CancellationToken cancellationToken) =>
+        throw new AccountApiException(403, "vietsub_personal_access_denied", "Không thể xác minh quyền Local cá nhân.");
+
+    Task<GenerationAccessContext> RequireVietsubAccessAsync(
+        string userId, Guid deviceId, Guid organizationId, CancellationToken cancellationToken) =>
+        RequireProjectAccessAsync(userId, deviceId, organizationId, null, cancellationToken);
 }
 
 internal sealed class GenerationAccessService(
@@ -49,6 +56,7 @@ internal sealed class GenerationAccessService(
             requestedOrganizationId,
             projectId,
             requireGenerationPermission: true,
+            capability: "video",
             cancellationToken);
 
     public async Task<GenerationAccessContext> RequireProjectAccessAsync(
@@ -63,7 +71,15 @@ internal sealed class GenerationAccessService(
             requestedOrganizationId,
             projectId,
             requireGenerationPermission: false,
+            capability: "video",
             cancellationToken);
+
+    public Task<GenerationAccessContext> RequireVietsubAccessAsync(
+        string userId, Guid deviceId, Guid organizationId, CancellationToken cancellationToken) =>
+        RequireCoreAsync(userId, deviceId, organizationId, null, false, "vietsub", cancellationToken);
+
+    public Task RequirePersonalVietsubAccessAsync(string userId, Guid deviceId, CancellationToken cancellationToken) =>
+        LicenseProductAuthorization.RequireAsync(accountDb, userId, deviceId, "vietsub", UtcNow(), cancellationToken);
 
     private async Task<GenerationAccessContext> RequireCoreAsync(
         string userId,
@@ -71,9 +87,12 @@ internal sealed class GenerationAccessService(
         Guid? requestedOrganizationId,
         Guid? projectId,
         bool requireGenerationPermission,
+        string capability,
         CancellationToken cancellationToken)
     {
         await RequireLicenseAsync(userId, deviceId, cancellationToken);
+        await LicenseProductAuthorization.RequireAsync(accountDb, userId, deviceId,
+            capability, UtcNow(), cancellationToken);
 
         Project? project = null;
         if (projectId is { } requestedProjectId)

@@ -64,9 +64,28 @@ public sealed class AccountApiClient(HttpClient httpClient) : IAccountApiClient
     {
         using var response = await httpClient.PostAsJsonAsync(uri, request, JsonOptions, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<AuthTokenResponse>(JsonOptions, cancellationToken)
-            ?? throw new AccountClientException("invalid_server_response", "Server trả về dữ liệu không hợp lệ.", (int)response.StatusCode);
+        AuthTokenResponse? token;
+        try
+        {
+            token = await response.Content.ReadFromJsonAsync<AuthTokenResponse>(JsonOptions, cancellationToken);
+        }
+        catch (JsonException)
+        {
+            throw InvalidTokenResponse(response);
+        }
+
+        if (token is null || string.IsNullOrWhiteSpace(token.AccessToken) ||
+            string.IsNullOrWhiteSpace(token.RefreshToken) || token.User is null ||
+            string.IsNullOrWhiteSpace(token.User.UserId) || token.SessionId == Guid.Empty ||
+            token.DeviceId == Guid.Empty || token.AccessTokenExpiresAtUtc == default ||
+            token.RefreshTokenExpiresAtUtc == default)
+            throw InvalidTokenResponse(response);
+
+        return token;
     }
+
+    private static AccountClientException InvalidTokenResponse(HttpResponseMessage response) =>
+        new("invalid_server_response", "Server trả về dữ liệu đăng nhập không hợp lệ.", (int)response.StatusCode);
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {

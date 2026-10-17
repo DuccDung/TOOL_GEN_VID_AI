@@ -39,5 +39,6 @@ internal sealed class TikTokAccessService(
                 "license_unavailable",
                 "License hoặc lease của thiết bị không còn hiệu lực; hãy heartbeat lại trước khi dùng TikTok.");
         }
+        await LicenseProductAuthorization.RequireAsync(accountDb, userId, deviceId, "video", now, cancellationToken);
     }
 }

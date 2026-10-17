@@ -28,6 +28,14 @@ public sealed partial class SepayPaymentOptions
         !options.Enabled || IsValid(options);
 
     private static bool IsValid(SepayPaymentOptions options) =>
+        AreRuntimeDefaultsValid(options) &&
+        BankCodeRegex().IsMatch(options.ReceiverBankCode.Trim()) &&
+        AccountNumberRegex().IsMatch(options.ReceiverAccountNumber.Trim()) &&
+        !string.IsNullOrWhiteSpace(options.ReceiverAccountName) &&
+        options.ReceiverAccountName.Trim().Length <= 200;
+
+    // Receiver selection and the sales switch are stored in SQL, not startup configuration.
+    public static bool AreRuntimeDefaultsValid(SepayPaymentOptions options) =>
         Uri.TryCreate(options.QrBaseUrl, UriKind.Absolute, out var qrUri) &&
         qrUri.Scheme == Uri.UriSchemeHttps &&
         qrUri.IsDefaultPort &&
@@ -35,10 +43,6 @@ public sealed partial class SepayPaymentOptions
         string.IsNullOrEmpty(qrUri.Query) &&
         string.IsNullOrEmpty(qrUri.Fragment) &&
         IsAllowedQrHost(qrUri.Host) &&
-        BankCodeRegex().IsMatch(options.ReceiverBankCode.Trim()) &&
-        AccountNumberRegex().IsMatch(options.ReceiverAccountNumber.Trim()) &&
-        !string.IsNullOrWhiteSpace(options.ReceiverAccountName) &&
-        options.ReceiverAccountName.Trim().Length <= 200 &&
         PrefixRegex().IsMatch(options.TransferCodePrefix.Trim()) &&
         options.PaymentExpireMinutes is >= 5 and <= 60;
 

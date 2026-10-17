@@ -1,5 +1,94 @@
 # Vận hành và phát hành VideoMaker
 
+## Luồng đang chọn: StandaloneCatalog
+
+Migration additive **4.1.21 đã áp và xác minh** trên `MB2D70\MSSQLSERVER2019 / tap51004_tool` ngày 2026-10-17 lúc 09:49:14 UTC theo yêu cầu người dùng; không cần chạy lại trên database này. [Biên bản đích, bảo toàn dữ liệu và giới hạn backup/restore](TRIEN_KHAI_SQL_4_1_21_HOSTING.md). Tiếp theo deploy server mới với `PublicationMode=StandaloneCatalog`, upload Setup 1.3.0 và ZIP tool-local mới lên VPS, lưu link EXE rồi tạo release bằng phiên bản/link ZIP. Giữ nguyên tên có hash tự sinh; không cần đăng ký hoặc Active Setup trên hosting. Model ZIP giữ nguyên. Setup 1.2.0 không hỗ trợ catalog 5. [Runbook chi tiết và trạng thái kiểm chứng](TRIEN_KHAI_PHAT_HANH_DON_GIAN_VPS.md). Chưa deploy hosting trong lượt SQL này; các yêu cầu Setup Active bên dưới thuộc lịch sử.
+
+## Link tải Setup trên website
+
+Deploy server mới rồi mở **Admin → Phát hành desktop → Link tải Setup cho Windows**, lưu URL EXE HTTPS trên VPS được cấu hình. Server lưu key `Desktop.SetupDownload` trong `auth.ServerSettings` có sẵn và chuyển hướng nút tải trang chủ; không tải/lưu file EXE. Hosting đã được kiểm tra bảng/quyền chỉ đọc, không cần migration mới cho phần này. Link này không thay việc đăng ký Setup Active để phát hành release. [Hướng dẫn và bằng chứng](TRIEN_KHAI_LINK_TAI_SETUP_TREN_VPS.md).
+
+## Phát hành DirectCatalog
+
+Đường khởi tạo hiện được người dùng chọn là [**4.1.20 Simple**](database/VideoFactory.4.1.20.DirectDesktopCatalogSimple.sql), sau 4.1.18: tạo cùng schema catalog, không thao tác quyền, không yêu cầu role/CONTROL. Chỉ dùng file này cho nhánh Simple; không cần chạy tiếp 4.1.19 hoặc wrapper DBA để khởi tạo. Marker nền 4.1.19 ở nhánh này chỉ xác nhận schema; không chứng minh phân quyền đã được nghiệm thu. Theo yêu cầu người dùng, exact Simple đã commit trên `MB2D70\MSSQLSERVER2019 / tap51004_tool` lúc **2026-10-17 07:47:34 UTC** và được kết nối mới xác minh schema/marker, dữ liệu cũ và quyền nhìn thấy giữ nguyên. Backup/restore và clone hosting vẫn chưa xác minh; chưa có xác nhận deploy runtime hoặc Setup Active từ lượt SQL này. [Bằng chứng SQL và cách dùng](TRIEN_KHAI_SQL_4_1_20_DON_GIAN.md).
+
+Lịch sử: lần áp **4.1.19** đã rollback vì SQL 15151 tại quyền DENY trên bảng mới; [biên bản/gói DBA cũ](TRIEN_KHAI_SQL_4_1_19_HOSTING.md) được giữ nguyên, không dùng kết quả rehearsal thay trạng thái hosting.
+
+`FolderProfile` hiện tự tạo ZIP canonical trong `artifacts/releases/direct/<version>-<build>/`. Upload nguyên ZIP, giữ tên chứa SHA-256. Admin chỉ cần phiên bản và URL; ghi chú/bắt buộc cập nhật là tùy chọn. Hosting kiểm cấu trúc URL và identity khai báo, không xác minh bytes VPS. Setup 1.2.0 capability `3,4` mới tải/kiểm bytes, native identity, runtime/model và transaction trên máy đích. Sai hash không được chạy payload. Schema catalog đã có qua **4.1.20 Simple**; vẫn cần server mới và Setup hệ thống Active trước phát hành. [Runbook và bằng chứng](TRIEN_KHAI_PHAT_HANH_TRUC_TIEP_TU_VPS.md), [Publish](scripts/VisualStudioPublish.README.vi.md).
+
+## Lịch sử: Publish bằng Visual Studio qua ServerInspection
+
+`FolderProfile` mặc định xuất thư mục Publish, tự chuẩn bị FFmpeg 9.0.1 offline theo pin và giữ worker/runtime/license cần thiết. Sau Publish thành công, nén **toàn bộ** nội dung hoặc kèm một thư mục ngoài `publish/`, upload ZIP lên VPS rồi nhập **phiên bản + link tải** trong Admin. Không cần tự viết ba JSON phát hành; server kiểm và sinh metadata/checksum. ZIP có một phần metadata cũ nhưng thiếu các file còn lại bị từ chối để tránh trộn hai định dạng. Không ghi đè bytes của release đã phát hành; tăng version/build cho bản khác. [Runbook mới](TRIEN_KHAI_ZIP_PUBLISH_DON_GIAN.md), [cấu hình Publish](scripts/VisualStudioPublish.README.vi.md).
+
+Cần deploy server có luồng kiểm ZIP mới, build/đăng ký **Setup dùng chung 1.1.0 trở lên** một lần bằng API/profile thật và installer WebView2 approved. Script build Setup kiểm pin/chữ ký và nhúng installer; Setup chỉ dùng nó khi máy đích thiếu runtime và ZIP không kèm installer. Sau đó tạo nháp release, chờ kiểm ZIP đạt, phát hành rồi chạy Setup để cài/probe model và commit. Setup 1.0 cũ không cài được định dạng này. Desktop cũ chưa nhận route ứng dụng `/models/` cần chạy Setup mới độc lập hoặc dùng `/apps/videomaker/`; không suy ra cập nhật tự động của binary cũ đã được nghiệm thu.
+
+Nếu muốn tạo ZIP đã kiểm kèm metadata ngay trên máy build, đặt `DesktopCreateVerifiedReleaseZip=true` và lấy output tại `artifacts/releases/<version>-<build>`. Cấu hình release riêng, OCR/native runtime, pin FFmpeg và quyền workflow SQL vẫn phải hợp lệ. Scope FFmpeg `Release/TechnicalPackaging` không xác nhận hồ sơ corresponding source/GPL hoặc production đã đủ; các qualification `false` được giữ. [Biên bản FFmpeg lịch sử](TRIEN_KHAI_CHUAN_HOA_FFMPEG_VA_PUBLISH.md) ghi riêng lượt ZIP từng bị chặn dung lượng; không dùng trạng thái đó thay kết quả ZIP thật mới được inspector kiểm chỉ đọc.
+
+## Form release tối giản và Setup cấp hệ thống
+
+Theo yêu cầu triển khai ngày 2026-10-17, `TOOL-SERVER/appsettings.json` trên checkout `main`, HEAD nền `f0651c918f28ca477f28875818148e9e86240b7b` cùng working tree đã cấu hình `SharedBootstrapperEnabled=true`, `ApiBaseUrl=https://taphoatool.com/`, `Profile=Production` và `AllowedExternalPrefixes=[https://103.179.190.182:8443/models/]`. Bổ sung này không bật luồng protocol 2 và không tạo/Active Setup hoặc phát hành release. Các profile Publish và script IIS giữ mục `DesktopReleases`; khi deploy cần bảo đảm cấu hình hiệu lực trên hosting nhận các giá trị này rồi khởi động lại ứng dụng. File `appsettings.Production.json` cũ hoặc biến môi trường `DesktopReleases__*` có thể ghi đè; cấu hình runtime đích chưa được kiểm trực tiếp trong lượt này. Mặc định dự phòng của lớp options vẫn tắt khi thiếu cấu hình.
+
+Luồng mới là opt-in protocol 3. Phải áp `VideoFactory.4.1.18.SharedDesktopBootstrapper.sql` **trước khi chạy binary server mới**, kể cả khi cờ shared còn tắt vì EF đã ánh xạ cột mới. Rehearsal SQL Server 2019 riêng không chứng minh backup/restore hoặc schema hosting. Runbook build Setup một lần, build ZIP `SharedVps`, cấu hình API/profile/nguồn VPS, đăng ký Setup rồi nhập version/link nằm trong [biên bản mới](TRIEN_KHAI_FORM_RELEASE_TOI_GIAN_VA_SETUP_DUNG_CHUNG.md). Không dùng Setup fixture trỏ `api.invalid`/`metadata.invalid` cho khách; FFmpeg Release, Windows A/B và model probe thực vẫn là gate nghiệm thu.
+
+Ngày **2026-10-17**, đã áp đúng migration 4.1.18 trên `MB2D70\MSSQLSERVER2019 / tap51004_tool` theo yêu cầu tiếp tục của người dùng; schema/marker, dữ liệu cũ, FK/index và quyền nhìn thấy đã được kiểm, gồm kết nối mới sau commit. Backup/restore và clone hosting vẫn **chưa xác minh**; không ghi quyền tiếp tục thành xác nhận đã có backup. Xem [biên bản SQL hosting](TRIEN_KHAI_SQL_4_1_18_HOSTING.md). Lượt này không deploy server, đăng ký Setup hoặc phát hành release.
+
+## Phát hành ZIP ứng dụng trên VPS
+
+Luồng mới có nguồn `ExternalVps`, pipeline `-DeliveryMode ExternalVps -ModelDeliveryMode StaticArchive -PackageDownloadUrl ...`, JSON đăng ký và exact Setup từng release. Đọc [runbook và bằng chứng](TRIEN_KHAI_PHAT_HANH_TOOL_LOCAL_QUA_VPS_VA_SETUP.md) trước thao tác: migration `4.1.17-desktop-external-artifacts` phải được rehearsal/áp trước binary mới, kể cả khi external tắt; giữ file/release cũ cho repair. API VideoMaker khác kho file VPS. Ngày 2026-10-17, theo yêu cầu tiếp tục của người dùng, đã áp duy nhất 4.1.17 trên hosting `tap51004_tool`, kiểm schema/marker/quyền bằng kết nối mới đạt; backup/restore và rehearsal clone hosting vẫn chưa xác minh. Lượt SQL này không đổi cấu hình ứng dụng, deploy, upload hoặc publish release.
+
+## Nghiệm thu runtime đã cài bằng StaticArchive — 2026-10-17
+
+Sau khi chính Setup đã tải/cài/probe/commit trên máy QA, dùng `scripts/Test-InstalledStaticModel.ps1 -InstallRoot <root đã cài> -Engine qwen -OutputDirectory <QA mới> -ColdStarts 3 -Iterations 30`; Piper dùng `-Engine piper -ColdStarts 1 -Iterations 30`. Output dùng đường local ngắn, mới và tách khỏi app/runtime/cache/metadata. Harness lấy root/pin từ bản cài, không nhận model/executable override và không cài/sửa/refresh receipt. Chờ tác vụ đang dùng runtime kết thúc nếu gặp lease busy; công cụ không tự đóng app/IDE.
+
+Chỉ thêm cả `-AcceptResourceWarning` và `-ConfirmedResourceProfile <id chính xác>` khi đã chấp nhận cảnh báo tài nguyên tương ứng. Chạy model riêng, không cạnh build/OCR/FFmpeg nặng. Giữ report thất bại và audio fixture; kết quả định dạng WAV không thay nghe thử. Harness bundled `Test-QwenOfflineBundle`/`Test-PiperOfflineBundle` vẫn dành cho layout bundled/diagnostic, không copy model dev vào publish để thay bài installed.
+
+Bản build thông thường chưa compile policy bắt buộc sẽ trả `installed_model_release_required` trước native hoặc tạo output; đây là guard đúng, không phải model thất bại. Candidate khách vẫn cần FFmpeg Release, profile hợp lệ và API release staging. [Biên bản khắc phục](TRIEN_KHAI_KHAC_PHUC_VA_NGHIEM_THU_SETUP_MODEL.md) ghi kết quả kiểm thử/HTTP, source/binary identity và phần Windows sạch/model thật chưa nghiệm thu; chưa deploy server hoặc cập nhật hosting runtime.
+
+## Nghiệm thu ổn định Setup/model — 2026-10-17
+
+Profile `StaticSetup` của `scripts/Test-Stability.ps1` lặp fixture tải/cài/receipt/Form/Job, không tự bật model/SQL opt-in hoặc thay bài Windows sạch. Giữ journal `Committed` và receipt của bản cài đang dùng vì startup còn đối chiếu chúng; không dọn metadata production để lấy dung lượng test. Dùng root QA riêng và giữ logs của lượt fail. Lượt ổn định trước bổ sung Publish dùng FFmpeg scope Development; bundle kỹ thuật mặc định mới được mô tả ở đầu tài liệu và không tự chứng nhận phát hành khách. [Kết quả lịch sử và đầu vào khi đó](TRIEN_KHAI_TEST_ON_DINH_SETUP_MODEL_UI_UX_VA_LOGIC.md).
+
+## Publish Setup StaticArchive — 2026-10-16
+
+`Publish-DesktopRelease.ps1 -ModelDeliveryMode StaticArchive` yêu cầu profile đủ bốn component local, nguồn model compile pin và `-WebView2InstallerPath` đúng approved size/hash/chữ ký Microsoft. Script ghép Setup với package desktop chính xác; giữ gate FFmpeg Release, profile khách, Authenticode và cap updater. ZIP model phục vụ riêng trên VPS. Không đóng nguyên cấu hình phát triển, cache, venv hoặc READY. [Lệnh chuẩn bị, bằng chứng và xử lý lỗi](TRIEN_KHAI_SETUP_CAI_MODEL_TU_VPS.md); chưa publish release hoặc thay môi trường thật trong lượt này.
+
+### Gói server kèm model — 2026-10-16
+
+`scripts/New-ServerModelDelivery.ps1` tạo ZIP local gồm server, private runtime, handover model nguyên bản và publisher offline; kiểm inventory/hash trước và sau giải nén. Dùng output mới ngoài checkout, inventory pin độc lập và đường dẫn ngắn. [Gói thật, checksum và hướng dẫn IIS](TRIEN_KHAI_DONG_GOI_SERVER_KEM_MODEL.md) đã có; không đặt toàn bộ thư mục bàn giao thành website, chỉ dùng `server/`. Gói làm sạch cấu hình nhạy cảm theo quy tắc và để kho model tắt/chưa ký; cần cấu hình, schema và nghiệm thu đích trước startup. Không tự upload hoặc chạy migration từ bước đóng gói.
+
+### Kho model Qwen/Piper và handover OCR — 2026-10-16
+
+Đã thêm công cụ gom candidate và publisher offline, module server chỉ đọc cùng mode đóng gói `Bundled|Server`; mặc định chưa bật kho online. Quy trình, artifact thật, kiểm thử và các gate còn thiếu ở [biên bản triển khai kho model](TRIEN_KHAI_KHO_MODEL_SERVER_VA_CAI_DAT_AN_TOAN.md); tham số ký/revoke/promote ở [hướng dẫn Publisher](TOOL-MODEL-PUBLISHER/README.md). Chưa có server/domain/thư mục đích hoặc khóa production được chỉ định; không suy từ appsettings hiện có và không tự upload/reload môi trường thật. Chỉ cập nhật pin envelope sau khi đã kiểm kho tại server; chữ ký model riêng với Authenticode của Setup/EXE. Không coi file đúng hash hoặc smoke localhost là RuntimeQualified/Published.
+
+### Chẩn đoán và kiểm tra ổn định Qwen — 2026-10-16
+
+Worker 1.2.1 / IPC 3 lưu báo cáo lỗi an toàn tại `%LOCALAPPDATA%\ToolGenPostVideo\system-setup\qwen-diagnostics`. Mỗi báo cáo có mã chẩn đoán, phase, exit code decimal/hex, fingerprint, phiên bản runtime và snapshot RAM/commit; không lưu prompt, stderr, đường dẫn hay dữ liệu tài khoản. Giữ tối đa 20 báo cáo, mỗi báo cáo tối đa 16 KiB. Ghi báo cáo thất bại không thay lỗi gốc. Setup hiển thị mã chẩn đoán khi báo cáo đã được ghi; hủy do người dùng không bị ghi thành crash.
+
+Fingerprint mới gồm cả runtime .NET self-contained, runtimeconfig và deps. Bản mới phải probe lại; không mang marker READY cũ qua. Giữ cờ dịch local và gate hiện hành. Không thay DLL runtime hoặc nâng dependency riêng lẻ để thử trên máy khách; phải dùng bộ publish đầy đủ và kiểm lại.
+
+Kiểm đúng model/worker của bản giải nén và giữ JSON kể cả khi probe thất bại:
+
+```powershell
+.\scripts\Test-QwenOfflineBundle.ps1 -PublishRoot 'D:\BanKiemTra' -ResultPath 'D:\ChanDoan\qwen-probe.json'
+.\scripts\Test-QwenStability.ps1 -PublishRoot 'D:\BanKiemTra' -OutputDirectory 'D:\ChanDoan\qwen-stability-moi' -ColdStarts 3 -Iterations 30
+```
+
+Thư mục kết quả stability phải mới. Mỗi cold start dùng workspace riêng, kiểm runtime/Anh/Trung rồi dịch fixture luân phiên; từ 30 lượt mới đánh giá tăng bộ nhớ private qua cửa sổ sau warm-up, giới hạn 256 MiB như bài soak native hiện có. Report không chứa nội dung dịch và luôn để `CustomerReleaseQualified=false`, `OtherMachinesVerified=false`. Đây là bằng chứng cho máy/bundle đã chạy, chưa thay nghiệm thu ma trận Intel/AMD, RAM, Windows sạch và GPU.
+
+Chỉ thêm `-AcceptResourceWarning` sau khi người vận hành chấp nhận rõ cảnh báo RAM/commit của máy thử. Không chạy model song song build/OCR/FFmpeg nặng; không dừng ứng dụng/IDE người dùng để lấy tài nguyên. Thiếu tài nguyên, hết đĩa hoặc chưa chạy inference phải ghi chưa nghiệm thu. `New-DesktopOfflineCandidate.ps1` mặc định giới hạn build một worker MSBuild; không tự nâng trạng thái candidate thành Release.
+
+### Gói Local cá nhân / Cloud — source 2026-10-15
+
+Triển khai đồng bộ server, Web Admin và desktop/contracts. Trước deploy server mới, xác minh instance/database, backup và khả năng restore; áp `database/VideoFactory.4.1.16.VietsubPersonalProjects.sql` trên database đích được phê duyệt. Migration idempotent chỉ cho phép NULL ở `vs.Projects.OrganizationId`, ghi schema version; giữ FK, dữ liệu cũ và quyền SQL. Không cấp desktop quyền SQL vào `vs`/`auth`/`ai`. Source này chưa được áp migration hoặc rollout lên hosting.
+
+Mở bán Local: nhập gói, tắt Cloud, kiểm SePay riêng. Không cần nhóm, tổ chức, key/rate/budget AI. Máy khách vẫn phải cài và probe runtime/model; cờ bật hoặc license hợp lệ không tự chứng minh runtime đã sẵn sàng. Cloud vẫn cần tổ chức nhận khách, sức chứa, schema job, cờ/model dịch, OpenAI Active, rate InputToken/OutputToken và ngân sách.
+
+Smoke trên staging được cho phép: khách không thuộc tổ chức mua Local → nhận license/lease → Setup → tạo project cá nhân → OCR/dịch/giọng/xuất Local; kiểm tài khoản khác không mở project, hết hạn/thu hồi license chặn job, Cloud không chạy trên project cá nhân. Kiểm webhook lặp, lịch nối gói và đơn Local cũ đang giữ chỗ được release khi cấp license. Giữ dữ liệu lịch sử, không tự chuyển project tổ chức sang cá nhân. Nếu quay về binary cũ, dừng phát hành gói Local mới và dùng backup/forward fix được duyệt; không đổi cột về NOT NULL khi đã có project cá nhân.
+
+Không tự gửi webhook thật, gọi provider có phí hoặc thay key trên môi trường dùng chung. Thực thi migration SQL Server và smoke hosting còn **chưa xác minh**.
+
+Cú pháp đổi nullability được đối chiếu với [ALTER TABLE của Microsoft](https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17#null--not-null); việc đối chiếu tài liệu không thay thế rehearsal trên SQL Server đích.
+
 ### Tải Bilibili — 2026-09-11
 
 Không cần migration/server flag. Desktop tải yt-dlp 2026.08.19 bằng thao tác **Chuẩn bị công cụ tải**, kiểm pinned size/SHA-256, giữ license/provenance bên runtime; không tự nâng bản. Chỉ triển khai frontend cùng native bridge mới. Chức năng dùng video public và có thể bị Bilibili hạn chế theo mạng; giữ partial, không báo quét đủ khi chưa hoàn tất. Hàng đợi trong phiên, MP4 lưu ở máy; rollback desktop không xóa video đã tải. [Hướng dẫn, nguồn gốc và giới hạn smoke](TRIEN_KHAI_TAI_VIDEO_BILIBILI.md).
@@ -77,6 +166,9 @@ database/VideoFactory.4.1.7.TikTokAdminCredentials.sql
 database/VideoFactory.4.1.8.TikTokMultiAccount.sql
 database/VideoFactory.4.1.8.LocalVoiceConsistency.sql
 database/VideoFactory.4.1.9.ShortVideoCharacterOutfit.sql
+database/VideoFactory.4.1.10.SepayReceivingAccounts.sql
+database/VideoFactory.4.1.12.SepayReceivingAccountsPermissions.sql
+database/VideoFactory.4.1.13.SepayReceivingAccountsSimple.sql
 ```
 
 Đây là thứ tự **dependency source cho binary hiện hành**, không phải xác nhận đã áp trên database nào. Các file 4.1.6/4.1.7 lip-sync Cloud còn trong repository để bảo toàn lịch sử nhưng module runtime đã loại bỏ; không tự chạy hoặc xóa chúng chỉ vì cùng tiền tố version. Những migration cùng số thuộc module khác nhau có mã `ai.SchemaVersions` riêng; kiểm **mã version cụ thể**, bảng, constraint, FK và quyền, không chỉ so số lớn nhất. Mỗi migration phải giữ tính idempotent theo thiết kế source. Không sửa lịch sử đã có khả năng được triển khai; tạo migration mới nếu cần đổi schema/data.
@@ -86,6 +178,12 @@ database/VideoFactory.4.1.9.ShortVideoCharacterOutfit.sql
 4.1.9 tạo `vf.ShortVideoOutfits` và `vf.ShortVideoOperations`, ghi `4.1.9-short-video-outfit` trong `ai.SchemaVersions` và DENY CRUD trực tiếp cho `VideoMakerDesktopRole`. `TextOnly` lưu quote video trong `ShortVideoOperations`; cờ `CharacterOutfit=false` không cho phép bỏ migration. Khi kiểm môi trường đích, xác minh hai bảng/version/index/CHECK/FK/DENY và quote `TextOnly` hoạt động qua server API trước khi bật tạo video ngắn. Không chạy server mới chỉ để "kiểm thử" schema: startup bootstrap catalog có thể ghi database.
 
 ### 2.2 Chạy rehearsal
+
+Riêng SePay, theo yêu cầu người dùng ngày 2026-10-11: chọn `VideoFactory.4.1.13.SepayReceivingAccountsSimple.sql` thay bước khởi tạo 4.1.10/4.1.12. File chỉ tạo hai bảng/ràng buộc, seed singleton tắt thanh toán khi chưa có và ghi version `4.1.10-sepay-receiving-accounts` cùng `4.1.13-sepay-receivers-simple`. Không có GRANT/DENY/REVOKE, không đọc metadata role hoặc kiểm tra CONTROL, không sửa quyền hiện có; rerun giữ nguyên tài khoản, Enabled, selection và revision. Cần schema nền thanh toán, quyền DDL/REFERENCES trong `auth`, đọc/ghi cấu hình và SELECT/INSERT `ai.SchemaVersions`. Không cần chạy file cũ hoặc gói `Apply-SePay-Permissions-Fix.sql` để khởi tạo bảng theo nhánh này.
+
+Nhánh thiết lập bảo vệ 4.1.12 vẫn được giữ nguyên cho môi trường chọn quản lý quyền riêng: `VideoFactory.4.1.12.SepayReceivingAccountsPermissions.sql` thay bước khởi tạo 4.1.10, chỉ tái sử dụng DENY schema `auth` khi đọc được đủ SELECT/INSERT/UPDATE/DELETE cho `VideoMakerDesktopRole`, hoặc dùng DENY object đã có; nếu cần đặt DENY mới, principal phải đủ quyền. Đây không phải bước bắt buộc của nhánh đơn giản 4.1.13.
+
+Khi chọn nhánh 4.1.12, DBA có thể chuẩn bị bằng `Prepare.SepayReceivingAccountsPermissions.sql` sau khi điền và xác minh database/user: DENY CRUD schema `auth` cho desktop role và chỉ GRANT VIEW DEFINITION trên role/schema cho migration user. Không thêm user vào db_owner, không impersonate, không cấp quyền desktop vào auth. SQL 2019 có thể ẩn metadata role khỏi db_ddladmin; 0 dòng trong sys.database_permissions không chứng minh chưa có DENY. Rehearsal cả nhánh đơn giản và nhánh có kiểm tra bảo vệ trên private LocalDB bằng `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-SepayReceiverMigration.ps1`; script không nhận connection string/target ngoài và dùng dữ liệu giả.
 
 Ưu tiên bản sao database đã khử dữ liệu nhạy cảm. Ví dụ cho Windows authentication:
 
@@ -212,14 +310,15 @@ Không chạy smoke đăng bài vào tài khoản thật hoặc bật public pos
 
 ## 8. Rollout SePay
 
-SePay mặc định tắt. Trước khi bật:
+SePay mặc định tắt trong SQL. Binary hiện hành cần migration `4.1.10-sepay-receiving-accounts` trước startup. Migration tạo cấu hình tắt, không chép thông tin ngân hàng từ file hoặc user-secrets. Các giá trị receiver/Enabled legacy trong `Payments:Sepay` không điều khiển runtime sau khi dùng cấu hình SQL; QR URL, transfer prefix và expiry vẫn là cấu hình server. [Phạm vi triển khai, kiểm thử và rollout](TRIEN_KHAI_ADMIN_SEPAY.md). Trước khi bật:
 
-- cấu hình bank code, account number/name, transfer prefix, QR endpoint và expiry theo môi trường;
-- cấu hình và xác minh cơ chế xác thực webhook mà môi trường yêu cầu;
+- xác minh migration, singleton, unique bank/account, FK/CHECK và DENY trực tiếp hai bảng SePay cho desktop role;
+- Global Admin thêm bank code, account number/name và chọn tài khoản nhận tiền trong **Thanh toán SePay**; xác minh transfer prefix, QR endpoint và expiry trong cấu hình server;
+- tài khoản được chọn phải đã liên kết SePay; cấu hình webhook tiền vào, JSON, HTTPS và bộ lọc prefix tương ứng. Luồng sản phẩm hiện hành không dùng key/chữ ký webhook theo yêu cầu, đối chiếu account/code/exact amount của snapshot đơn;
 - chạy simulator local/staging tại `scripts/Test-SepayOrganizationProvisioning.ps1` với token test qua environment variable;
 - test duplicate/concurrent webhook, sai amount/content, expired/late order, seat shortage và retry provisioning;
 - xác minh ledger/payment/order có thể đối soát mà không log dữ liệu nhạy cảm;
-- chỉ bật `Payments:Sepay:Enabled=true` sau sign-off.
+- chỉ bật **Nhận thanh toán** trong Admin sau sign-off; tắt chỉ chặn đơn mới, không dừng đối soát webhook của đơn cũ.
 
 Ví dụ test chỉ dành cho endpoint test đã xác nhận:
 
@@ -274,6 +373,22 @@ Nếu dùng appsettings đóng gói riêng, truyền `-AppSettingsPath` đến f
 ```
 
 Máy mới tự chuẩn bị Piper từ payload offline đã xác minh sau bước kiểm tra startup; vẫn có **Cài giọng Việt** để thử lại. ZIP phải chứa `components/piper/piper-1.6.0-python-3.11.15-offline-v3/{manifest.json,piper-offline.zip}`. Không đưa marker READY hoặc venv của máy build vào ZIP. Kiểm cả đường dẫn có dấu/khoảng trắng. Để repair toàn bộ ứng dụng qua server hoạt động, server phải có package Active, đã tới lịch phát hành, khớp version/build/channel/platform; gửi ZIP riêng cho khách không tự tạo release trên server. [Bản sửa Setup ZIP và cách lấy báo cáo chẩn đoán](TRIEN_KHAI_SUA_LOI_SETUP_BAN_ZIP.md).
+
+### Kèm model Qwen offline
+
+Thêm `-IncludeQwenModel` vào lệnh publish để kèm Qwen3 4B CPU đã pin; `-QwenModelPath` cho phép chọn file nguồn đã kiểm đúng size/SHA-256. Script thêm GGUF trước manifest/inventory, nén và giải nén theo stream, rồi probe runtime/Anh/Trung bằng worker của ZIP. Bản cấu hình bật dịch local phải kèm model. Không thay mặc định tắt trong source hoặc mang marker READY từ máy build.
+
+`-DeliveryMode Updater` là mặc định và từ chối ZIP vượt giới hạn artifact server mặc định 2 GiB. Dùng `-DeliveryMode Direct` cho gói gửi file riêng; script vẫn kiểm tổng giải nén tối đa 4 GiB/200.000 entry và ghi rõ khả năng upload ở giới hạn mặc định. Cả hai cách đều giữ kiểm cấu hình khách và gate FFmpeg Release; không tự sửa giới hạn server/updater hoặc upload release.
+
+Kiểm lại Qwen từ thư mục giải nén:
+
+```powershell
+.\scripts\Test-QwenOfflineBundle.ps1 -PublishRoot 'D:\ThuMucDaGiaiNen'
+```
+
+Lệnh chỉ dùng model và worker của bộ đó, chặn HTTP, dùng component workspace tạm mới và dọn worker/workspace sau probe. Báo code/stage/error type an toàn khi lỗi; chưa chứng minh Startup có auth/license/organization hoặc chất lượng video trên máy khách. Nếu có cảnh báo tài nguyên, chỉ thêm `-AcceptResourceWarning` sau khi đánh giá máy thử; xác nhận không bỏ checksum, platform, disk, probe hoặc OOM thật.
+
+Khi chưa có cấu hình khách hoặc hồ sơ FFmpeg Release, `New-DesktopOfflineCandidate.ps1 -Version <semver> -BuildNumber <integer>` tạo ZIP chẩn đoán riêng với `appsettings.json` rỗng. ZIP và README ghi Development candidate; dùng để nghiệm thu component, chưa dùng gửi khách hay Active release. Kế hoạch và điều kiện bàn giao: [đóng gói TOOL-LOCAL kèm model](PLAN_TASK_DONG_GOI_TOOL_LOCAL_KEM_MODEL_OFFLINE.md).
 
 ### Chuẩn bị payload Piper trước publish
 
@@ -344,3 +459,7 @@ Sửa riêng runtime Piper không cần package sửa ứng dụng trên server.
 - [ ] Monitoring/alert và rollback owner sẵn sàng.
 - [ ] Chỉ các provider/payment/translation feature đã được sign-off mới bật.
 - [ ] Kết quả rollout được cập nhật vào [BOI_CANH_HE_THONG_HIEN_HANH.md](BOI_CANH_HE_THONG_HIEN_HANH.md) bằng bằng chứng mới.
+
+## Triển khai wizard Admin — cập nhật 2026-10-14
+
+Theo yêu cầu ngày 2026-10-14, chọn [migration tạo bảng đơn giản 4.1.15](database/VideoFactory.4.1.15.AdminSetupWizardSimple.sql) thay bước khởi tạo 4.1.14 trên database đã xác định và được cho phép, sau backup/restore rehearsal; sau đó triển khai binary và toàn bộ asset Admin cùng phiên bản. File chỉ tạo hai bảng, khóa/ràng buộc/index và ghi version nền 4.1.14 cùng version nhánh đơn giản; không GRANT/DENY/REVOKE hoặc kiểm tra role/CONTROL. Không chạy tiếp file 4.1.14 hoặc wrapper DBA cũ trong nhánh này. Wizard dùng marker `admin-only-new-20261014.1`; kiểm source đang phục vụ bằng script read-only `scripts/Test-AdminRuntimeAssets.ps1` trên loopback. Trạng thái database/runtime đích cần tra biên bản mới nhất. Rollback giữ draft/receipt, rate/credential version và dữ liệu khách; không xóa bảng hoặc tắt license chỉ để ngừng bán. Xem [biên bản triển khai](TRIEN_KHAI_ADMIN_SETUP_3_BUOC.md).

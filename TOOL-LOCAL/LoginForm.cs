@@ -28,7 +28,7 @@ public sealed class LoginForm : Form
         _sessionManager = sessionManager;
         _webRoot = webRoot ?? Path.Combine(AppContext.BaseDirectory, "wwwroot");
         _userDataFolder = userDataFolder;
-        Icon = BrandIdentity.WindowIcon;
+        BrandIdentity.ApplyWindowIcon(this);
         Text = "taphoatool - Đăng nhập";
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -149,10 +149,8 @@ public sealed class LoginForm : Form
                 await LoginAsync(request);
                 break;
             case "auth.register.open":
-                OpenRegister(request.RequestId);
-                break;
             case "auth.password-reset.open":
-                OpenPasswordReset(request);
+                QueueAccountDialog(request);
                 break;
             case "auth.social.unavailable":
                 ShowSocialUnavailable(request);
@@ -251,46 +249,67 @@ public sealed class LoginForm : Form
         }
     }
 
-    private void OpenRegister(string requestId)
+    private void QueueAccountDialog(LoginWebRequest request)
     {
-        if (_operationBusy || !_restoreStarted) return;
+        if (_operationBusy || !_restoreStarted || _lifetime.IsCancellationRequested ||
+            IsDisposed || Disposing || !IsHandleCreated) return;
+
         _operationBusy = true;
+        SetState(new(true, "Đang mở cửa sổ...", false), request.RequestId);
         try
         {
-            using var registerForm = new RegisterForm(_sessionManager);
-            if (registerForm.ShowDialog(this) == DialogResult.OK && _sessionManager.Current is not null)
-            {
-                CompleteAuthentication();
-                return;
-            }
+            // WebView2 does not support a nested modal loop inside its event callbacks.
+            // Reserve the operation now, but open the dialog after the callback returns.
+            BeginInvoke(new Action(() => OpenAccountDialog(request)));
+        }
+        catch (InvalidOperationException)
+        {
+            _operationBusy = false;
+            if (!_lifetime.IsCancellationRequested && !IsDisposed && !Disposing)
+                SetState(new(false, "Không thể mở cửa sổ. Vui lòng thử lại.", true), request.RequestId);
+        }
+    }
+
+    private void OpenAccountDialog(LoginWebRequest request)
+    {
+        var status = string.Empty;
+        var error = false;
+        try
+        {
+            if (_lifetime.IsCancellationRequested || IsDisposed || Disposing) return;
+            if (request.Type == "auth.register.open")
+                OpenRegister();
+            else
+                OpenPasswordReset(request);
+        }
+        catch (Exception)
+        {
+            status = "Không thể mở cửa sổ. Vui lòng thử lại.";
+            error = true;
         }
         finally
         {
             _operationBusy = false;
+            if (!_lifetime.IsCancellationRequested && !IsDisposed && !Disposing)
+                SetState(new(false, status, error), request.RequestId);
         }
+    }
 
-        SetState(new(false, string.Empty, false), requestId);
+    private void OpenRegister()
+    {
+        using var registerForm = new RegisterForm(_sessionManager);
+        if (registerForm.ShowDialog(this) == DialogResult.OK && _sessionManager.Current is not null)
+            CompleteAuthentication();
     }
 
     private void OpenPasswordReset(LoginWebRequest request)
     {
-        if (_operationBusy || !_restoreStarted) return;
         string? email = null;
         if (LoginWebMessageContracts.TryReadString(request.Payload, "email", 320, out var value))
             email = value.Trim();
 
-        _operationBusy = true;
-        try
-        {
-            using var forgotPasswordForm = new ForgotPasswordForm(_sessionManager, email);
-            forgotPasswordForm.ShowDialog(this);
-        }
-        finally
-        {
-            _operationBusy = false;
-        }
-
-        SetState(new(false, string.Empty, false), request.RequestId);
+        using var forgotPasswordForm = new ForgotPasswordForm(_sessionManager, email);
+        forgotPasswordForm.ShowDialog(this);
     }
 
     private void ShowSocialUnavailable(LoginWebRequest request)
@@ -311,7 +330,7 @@ public sealed class LoginForm : Form
 
     private void PostState(string? requestId = null)
     {
-        if (_lifetime.IsCancellationRequested || _webView.CoreWebView2 is null) return;
+        if (_lifetime.IsCancellationRequested || IsDisposed || Disposing || _webView.CoreWebView2 is null) return;
         var json = JsonSerializer.Serialize(new
         {
             type = "auth.state",

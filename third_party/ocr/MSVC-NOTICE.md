@@ -8,6 +8,8 @@ The installer is the same signed input recorded for Piper in `third_party/voice/
 
 `onnxruntime.dll` in PaddleOCR imports the C/C++ runtime; `mkldnn.dll` imports `vcomp140.dll`. These files must travel alongside `TOOL-LOCAL.exe`, independently of the isolated Python/Piper runtime. Windows Media Foundation remains an operating-system prerequisite; its system DLLs are not redistributed in this bundle.
 
+The isolated Qwen translation worker also requires these four pinned DLLs in its own executable directory. Its build/publish validates the same Microsoft input; runtime preflight verifies their hashes and loaded module locations. Copies alongside the desktop executable do not supply the child worker's application directory. This additional application-local copy does not change the version, license or redistribution approval recorded below.
+
 - [Microsoft installer identity in WinGet](https://github.com/microsoft/winget-pkgs/blob/master/manifests/m/Microsoft/VCRedist/2015%2B/x64/14.50.35719.0/Microsoft.VCRedist.2015%2B.x64.installer.yaml).
 - [Microsoft runtime license terms](https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/) and [original license document](https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx).
 - [Redistribution rules](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files) and [application-local deployment](https://learn.microsoft.com/en-us/cpp/windows/choosing-a-deployment-method).

@@ -204,6 +204,28 @@ public sealed class VietsubProjectServiceTests
         Assert.DoesNotContain("SubtitleText", client, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task PersonalRegistryKeepsOwnerScopeAndAtomicAccountAuditWithoutOrganization()
+    {
+        await using var f = CreateFixture("Member");
+        var request = new CreateVietsubProjectRequest(Guid.NewGuid(), Guid.Empty, "Local cá nhân");
+        var project = await f.Service.CreateAsync(request, f.Context, default);
+        Assert.Equal(project, await f.Service.CreateAsync(request, f.Context, default));
+        Assert.Null((await f.Db.Projects.SingleAsync()).OrganizationId);
+        Assert.Single(await f.Service.ListAsync(Guid.Empty, f.Context, default));
+        var other = f.Context with { UserId = "other" };
+        Assert.Empty(await f.Service.ListAsync(Guid.Empty, other, default));
+        Assert.Equal("vietsub_project_not_found", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            f.Service.RenameAsync(request.ProjectId, new(Guid.Empty, "Hijack"), other, default))).Code);
+        Assert.Equal("vietsub_project_not_found", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            f.Service.GetAsync(request.ProjectId, f.OrganizationId, f.Context, default))).Code);
+        await f.Service.RenameAsync(request.ProjectId, new(Guid.Empty, "Đã sửa"), f.Context, default);
+        await f.Service.ArchiveAsync(request.ProjectId, Guid.Empty, f.Context, default);
+        Assert.Empty(await f.Service.ListAsync(Guid.Empty, f.Context, default));
+        Assert.Equal(3, await f.Db.AccountAuditLogs.CountAsync());
+        Assert.Empty(await f.Db.OrganizationAuditLogs.ToArrayAsync());
+    }
+
     private static ServiceFixture CreateFixture(string role)
     {
         var options = new DbContextOptionsBuilder<VietsubDbContext>()
@@ -258,6 +280,7 @@ public sealed class VietsubProjectServiceTests
     private sealed class FakeGenerationAccessService(string role) : IGenerationAccessService
     {
         public List<AccessCall> Calls { get; } = [];
+        public Task RequirePersonalVietsubAccessAsync(string userId, Guid deviceId, CancellationToken ct) => Task.CompletedTask;
 
         public Task<GenerationAccessContext> RequireAsync(
             string userId,

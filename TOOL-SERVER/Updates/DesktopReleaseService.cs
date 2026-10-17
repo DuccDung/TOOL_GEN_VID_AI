@@ -7,11 +7,14 @@ using System.Text.Json;
 using TOOL_SHARED.Distribution;
 using TOOL_SHARED.Contracts.Updates;
 using TOOL_SHARED.Contracts.Common;
+using Microsoft.Extensions.Options;
+using TOOL_SERVER.Configuration;
 
 namespace TOOL_SERVER.Updates;
 
 public interface IDesktopReleaseService
 {
+    bool SupportsSharedProfile(string profile) => false;
     Task<DesktopReleasePackage?> GetLatestPackageAsync(string platform, string channel, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<DesktopReleasePackage>> GetVisiblePackagesAsync(string platform, string channel, CancellationToken cancellationToken);
@@ -36,13 +39,48 @@ public interface IDesktopReleaseService
         CancellationToken cancellationToken);
 
     Task DeleteAsync(Guid releaseId, CancellationToken cancellationToken);
+
+    async Task<IReadOnlyList<DesktopReleasePackage>> GetVisiblePackagesAsync(string platform, string channel,
+        int distributionProtocol, CancellationToken cancellationToken) =>
+        (await GetVisiblePackagesAsync(platform, channel, cancellationToken))
+            .Where(x => x.Artifact.SourceKind == "Internal" && x.Artifact.DistributionProtocol == 1).ToArray();
+
+    async Task<DesktopReleasePackage?> GetLatestPackageAsync(string platform, string channel,
+        int distributionProtocol, CancellationToken cancellationToken) =>
+        (await GetVisiblePackagesAsync(platform, channel, distributionProtocol, cancellationToken)).FirstOrDefault();
+
+    Task<DesktopReleasePackage?> GetVisibleSetupAsync(Guid releaseId, int distributionProtocol, CancellationToken cancellationToken) =>
+        Task.FromResult<DesktopReleasePackage?>(null);
+
+    Task<AdminDesktopArtifactResponse> RegisterExternalAsync(Guid releaseId,
+        RegisterExternalDesktopArtifactRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    Task<AdminDesktopReleaseResponse> PublishAsync(Guid releaseId, Guid revision, CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    Task<AdminDesktopReleaseResponse?> GetAdminReleaseAsync(Guid releaseId, CancellationToken cancellationToken) =>
+        Task.FromResult<AdminDesktopReleaseResponse?>(null);
+
+    Task<DesktopReleasePackage?> GetSharedPackageAsync(Guid releaseId, Guid? bootstrapperId, string profile, CancellationToken cancellationToken) =>
+        Task.FromResult<DesktopReleasePackage?>(null);
 }
 
-public sealed class DesktopReleaseService(
+public sealed partial class DesktopReleaseService(
     AccountDbContext dbContext,
     IDesktopReleaseStorage storage,
-    TimeProvider timeProvider) : IDesktopReleaseService
+    TimeProvider timeProvider,
+    IOptions<DesktopReleaseOptions>? options = null,
+    DesktopBootstrapperService? sharedBootstrappers = null) : IDesktopReleaseService
 {
+    private readonly DesktopReleaseOptions _options = options?.Value ?? new();
+    private readonly DesktopBootstrapperService? _sharedBootstrappers = sharedBootstrappers;
+
+    public async Task<AdminDesktopReleaseResponse?> GetAdminReleaseAsync(Guid releaseId, CancellationToken cancellationToken)
+    {
+        var release = await dbContext.AppReleases.AsNoTracking().Include(x => x.Artifacts)
+            .SingleOrDefaultAsync(x => x.AppReleaseId == releaseId, cancellationToken);
+        return release is null ? null : MapAdmin(release);
+    }
     public Task<DesktopReleasePackage?> GetLatestPackageAsync(
         string platform,
         string channel,
@@ -52,28 +90,8 @@ public sealed class DesktopReleaseService(
     public async Task<IReadOnlyList<DesktopReleasePackage>> GetVisiblePackagesAsync(
         string platform,
         string channel,
-        CancellationToken cancellationToken)
-    {
-        var normalizedPlatform = NormalizePlatform(platform);
-        var normalizedChannel = NormalizeChannel(channel);
-        var now = timeProvider.GetUtcNow().UtcDateTime;
-        var releases = await dbContext.AppReleases
-            .AsNoTracking()
-            .Include(x => x.Artifacts)
-            .Where(x => x.IsActive &&
-                        x.Platform == normalizedPlatform &&
-                        x.Channel == normalizedChannel &&
-                        x.PublishedAtUtc <= now)
-            .OrderByDescending(x => x.BuildNumber)
-            .ThenByDescending(x => x.PublishedAtUtc)
-            .ToListAsync(cancellationToken);
-
-        return releases
-            .Select(release => CreatePackage(release, DesktopArtifactKinds.DesktopPackage))
-            .Where(package => package is not null)
-            .Cast<DesktopReleasePackage>()
-            .ToArray();
-    }
+        CancellationToken cancellationToken) =>
+        await GetVisiblePackagesAsync(platform, channel, DesktopDistributionProtocol.Legacy, cancellationToken);
 
     public async Task<DesktopReleasePackage?> GetVisiblePackageAsync(
         Guid releaseId,
@@ -86,7 +104,8 @@ public sealed class DesktopReleaseService(
             .SingleOrDefaultAsync(
                 x => x.AppReleaseId == releaseId && x.IsActive && x.PublishedAtUtc <= now,
                 cancellationToken);
-        return release is null ? null : CreatePackage(release, DesktopArtifactKinds.DesktopPackage);
+        return release is null || !CanDistribute(release, DesktopDistributionProtocol.Current)
+            ? null : CreatePackage(release, DesktopArtifactKinds.DesktopPackage);
     }
 
     public async Task<DesktopReleasePackage?> GetLatestArtifactAsync(
@@ -99,7 +118,7 @@ public sealed class DesktopReleaseService(
         var normalizedChannel = NormalizeChannel(channel);
         var normalizedKind = NormalizeKind(kind);
         var now = timeProvider.GetUtcNow().UtcDateTime;
-        var release = await dbContext.AppReleases
+        var releases = await dbContext.AppReleases
             .AsNoTracking()
             .Include(x => x.Artifacts)
             .Where(x => x.IsActive &&
@@ -109,7 +128,14 @@ public sealed class DesktopReleaseService(
                         x.Artifacts.Any(artifact => artifact.Kind == normalizedKind))
             .OrderByDescending(x => x.BuildNumber)
             .ThenByDescending(x => x.PublishedAtUtc)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
+        var release = releases.FirstOrDefault(x => HasExternalPackage(x)
+            ? normalizedKind == DesktopArtifactKinds.Setup && CanDistribute(x, DesktopDistributionProtocol.Current)
+            : normalizedKind == DesktopArtifactKinds.Setup
+                ? x.Artifacts.Any(a => a.Kind == DesktopArtifactKinds.Setup && a.SourceKind == DesktopArtifactSourceKinds.Internal
+                    && a.InstallMode == DesktopInstallModes.Legacy && a.DistributionProtocol == DesktopDistributionProtocol.Legacy
+                    && !string.IsNullOrWhiteSpace(a.RelativePath) && a.ExternalDownloadUrl == null)
+                : CanDistribute(x, DesktopDistributionProtocol.Legacy));
         return release is null ? null : CreatePackage(release, normalizedKind);
     }
 
@@ -190,6 +216,8 @@ public sealed class DesktopReleaseService(
             .Include(x => x.Artifacts)
             .SingleOrDefaultAsync(x => x.AppReleaseId == releaseId, cancellationToken)
             ?? throw NotFound("desktop_release_not_found", "Không tìm thấy desktop release.");
+        if (release.Artifacts.Any(x => x.Kind == DesktopArtifactKinds.DesktopPackage && x.DistributionProtocol == DesktopDistributionProtocol.Shared))
+            return await UpdateSharedReleaseAsync(release, values, cancellationToken);
         var duplicate = await dbContext.AppReleases.AnyAsync(
             x => x.AppReleaseId != releaseId &&
                  x.Version == values.Version &&
@@ -202,6 +230,19 @@ public sealed class DesktopReleaseService(
             throw Conflict("desktop_release_exists", "Phiên bản và build này đã tồn tại trong channel.");
         }
 
+        if (HasExternalPackage(release))
+        {
+            if (values.Revision is null || values.Revision != release.Revision)
+                throw Conflict("desktop_release_changed", "Tải lại release trước khi chỉnh sửa metadata.");
+            if (values.Version != release.Version || values.BuildNumber != release.BuildNumber
+                || values.Channel != release.Channel || values.Platform != release.Platform)
+                throw Conflict("desktop_external_binding_invalid", "Identity release đã gắn package. Dùng release mới để đổi version/build/channel/platform.");
+            if (values.IsActive)
+            {
+                EnsureExternalReady(release);
+                release.FirstPublishedAtUtc ??= timeProvider.GetUtcNow().UtcDateTime;
+            }
+        }
         release.Version = values.Version;
         release.BuildNumber = values.BuildNumber;
         release.Channel = values.Channel;
@@ -211,7 +252,7 @@ public sealed class DesktopReleaseService(
         release.IsMandatory = values.IsMandatory;
         release.IsActive = values.IsActive;
         release.PublishedAtUtc = values.PublishedAtUtc ?? release.PublishedAtUtc;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await SaveReleaseAsync(release, cancellationToken);
         return MapAdmin(release);
     }
 
@@ -228,6 +269,20 @@ public sealed class DesktopReleaseService(
             .Include(x => x.Artifacts)
             .SingleOrDefaultAsync(x => x.AppReleaseId == releaseId, cancellationToken)
             ?? throw NotFound("desktop_release_not_found", "Không tìm thấy desktop release.");
+        RegisterExternalDesktopArtifactRequest? external = null;
+        if (release.Artifacts.Any(x => x.DistributionProtocol == DesktopDistributionProtocol.Shared))
+            throw Conflict("desktop_preparation_managed_release", "Dùng nháp phát hành và mục Setup hệ thống để quản lý bản này.");
+        if (HasExternalPackage(release))
+        {
+            RequireMutableExternal(release);
+            if (release.IsActive || normalizedKind != DesktopArtifactKinds.Setup)
+                throw Conflict("desktop_release_draft_required", "Chỉ upload Setup khớp đăng ký cho release external nháp.");
+            var package = release.Artifacts.Single(x => x.Kind == DesktopArtifactKinds.DesktopPackage);
+            external = ReadRegistration(package);
+            _ = ValidateExternalRegistration(external, release);
+            if (fileName != external.Setup.FileName || length != external.Setup.SizeBytes)
+                throw Validation("desktop_exact_setup_invalid", "Tên hoặc kích thước Setup không khớp đăng ký.");
+        }
         var stored = await storage.SaveAsync(
             releaseId,
             normalizedKind,
@@ -235,6 +290,11 @@ public sealed class DesktopReleaseService(
             stream,
             length,
             cancellationToken);
+        if (external is not null && stored.Sha256 != external.Setup.Sha256)
+        {
+            storage.DeleteFile(stored.RelativePath);
+            throw Validation("desktop_exact_setup_invalid", "SHA-256 Setup không khớp đăng ký.");
+        }
         if (normalizedKind == DesktopArtifactKinds.DesktopPackage)
         {
             try
@@ -264,10 +324,16 @@ public sealed class DesktopReleaseService(
 
             artifact.FileName = stored.FileName;
             artifact.RelativePath = stored.RelativePath;
+            artifact.SourceKind = DesktopArtifactSourceKinds.Internal;
+            artifact.ExternalDownloadUrl = null;
+            artifact.InstallMode = external?.InstallMode ?? DesktopInstallModes.Legacy;
+            artifact.DistributionProtocol = external?.DistributionProtocol ?? DesktopDistributionProtocol.Legacy;
+            artifact.BoundPackageSha256 = external?.Sha256;
+            artifact.ModelBundleId = external?.ModelBundleId;
             artifact.SizeBytes = stored.SizeBytes;
             artifact.Sha256 = stored.Sha256;
             artifact.CreatedAtUtc = timeProvider.GetUtcNow().UtcDateTime;
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await SaveReleaseAsync(release, cancellationToken);
         }
         catch
         {
@@ -282,8 +348,12 @@ public sealed class DesktopReleaseService(
     public async Task DeleteAsync(Guid releaseId, CancellationToken cancellationToken)
     {
         var release = await dbContext.AppReleases
+            .Include(x => x.Artifacts)
             .SingleOrDefaultAsync(x => x.AppReleaseId == releaseId, cancellationToken)
             ?? throw NotFound("desktop_release_not_found", "Không tìm thấy desktop release.");
+        if (release.Artifacts.Any(x => x.DistributionProtocol == DesktopDistributionProtocol.Shared))
+            throw Conflict("desktop_preparation_managed_release", "Bản này do nháp phát hành quản lý. Hãy ngừng phát hành thay vì xóa release.");
+        RequireMutableExternal(release);
         dbContext.AppReleases.Remove(release);
         await dbContext.SaveChangesAsync(cancellationToken);
         try
@@ -372,8 +442,8 @@ public sealed class DesktopReleaseService(
             release.ReleaseNotes,
             release.IsMandatory,
             release.IsActive,
-            release.PublishedAtUtc,
-            release.Artifacts.OrderBy(x => x.Kind).Select(MapArtifact).ToArray());
+            DateTime.SpecifyKind(release.PublishedAtUtc, DateTimeKind.Utc),
+            release.Artifacts.OrderBy(x => x.Kind).Select(MapArtifact).ToArray(), release.FirstPublishedAtUtc, release.Revision);
 
     private static AdminDesktopArtifactResponse MapArtifact(AppReleaseArtifact artifact) =>
         new(
@@ -382,7 +452,9 @@ public sealed class DesktopReleaseService(
             artifact.FileName,
             artifact.SizeBytes,
             artifact.Sha256,
-            artifact.CreatedAtUtc);
+            artifact.CreatedAtUtc, artifact.SourceKind, artifact.ExternalDownloadUrl, artifact.InstallMode,
+            artifact.DistributionProtocol, artifact.SourceKind == DesktopArtifactSourceKinds.ExternalVps && artifact.DistributionProtocol == DesktopDistributionProtocol.Current,
+            artifact.BoundPackageSha256, artifact.ModelBundleId);
 
     private static AdminDesktopReleaseRequest Validate(AdminDesktopReleaseRequest request)
     {

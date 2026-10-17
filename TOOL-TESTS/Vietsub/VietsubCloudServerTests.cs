@@ -20,6 +20,23 @@ namespace TOOL_TESTS.Vietsub;
 public sealed class VietsubCloudServerTests
 {
     [Fact]
+    public async Task LocalOnlyLicenseRejectsCloudBeforeJobsOrProviderAndReturnsAvailabilityReason()
+    {
+        await using var f = await Fixture.Create();
+        var license = await f.Accounts.UserLicenses.SingleAsync();
+        license.EntitlementSnapshotJson = """{"productScope":"vietsub","vietsubCloudEnabled":false}""";
+        await f.Accounts.SaveChangesAsync();
+        var availability = await f.Service.AvailabilityAsync(f.Project,f.Org,f.Who,default);
+        Assert.False(availability.Available);
+        Assert.Equal("license_feature_unavailable",availability.ErrorCode);
+        Assert.Equal("license_feature_unavailable",(await Assert.ThrowsAsync<AccountApiException>(() => f.Start())).Code);
+        Assert.Empty(await f.Db.CloudTranslationJobs.ToArrayAsync());
+        Assert.Empty(f.Budget.Reserved); Assert.Equal(0,f.Provider.Calls);
+        license.EntitlementSnapshotJson = """{"productScope":"vietsub","vietsubCloudEnabled":true}""";
+        await f.Accounts.SaveChangesAsync();
+        Assert.NotEqual(Guid.Empty,(await f.Start()).JobId);
+    }
+    [Fact]
     public async Task Start_ReplaysIdenticalSnapshotAndRejectsNewConcurrentIntent()
     {
         await using var f = await Fixture.Create();
@@ -40,6 +57,10 @@ public sealed class VietsubCloudServerTests
     [InlineData("access", "organization_role_denied")]
     [InlineData("session", "CLOUD_ACCESS_REQUIRED")]
     [InlineData("ownership", "vietsub_project_not_found")]
+    [InlineData("member-zero", "member_budget_exceeded")]
+    [InlineData("duplicate-pricing", "pricing_not_configured")]
+    [InlineData("invalid-model-capability", "CLOUD_CONFIGURATION_REQUIRED")]
+    [InlineData("wrong-host", "CLOUD_CONFIGURATION_REQUIRED")]
     public async Task Start_DeniesBeforeOutbound(string scenario, string code)
     {
         await using var f = await Fixture.Create();
@@ -49,8 +70,35 @@ public sealed class VietsubCloudServerTests
         if (scenario == "access") f.Access.Deny = true;
         if (scenario == "session") { (await f.Accounts.UserSessions.SingleAsync()).Status = "Revoked"; await f.Accounts.SaveChangesAsync(); }
         if (scenario == "ownership") { (await f.Db.Projects.SingleAsync()).CreatedByUserId = "another"; await f.Db.SaveChangesAsync(); }
+        if (scenario == "member-zero") { (await f.Governance.OrganizationMembers.SingleAsync()).MonthlyBudgetLimit = 0; await f.Governance.SaveChangesAsync(); }
+        if (scenario == "duplicate-pricing") {
+            var rate = await f.Video.CostRates.FirstAsync();
+            f.Video.CostRates.Add(new() { CostRateId = Guid.NewGuid(), ProviderModelId = rate.ProviderModelId,
+                UsageType = rate.UsageType, Unit = rate.Unit, UnitPrice = 1, CurrencyCode = "USD", IsActive = true, EffectiveFromUtc = DateTime.UtcNow.AddDays(-1) });
+            await f.Video.SaveChangesAsync();
+        }
+        if (scenario == "invalid-model-capability") { (await f.Providers.ProviderModels.SingleAsync()).CapabilitiesJson = "[]"; await f.Providers.SaveChangesAsync(); }
+        if (scenario == "wrong-host") { (await f.Providers.Providers.SingleAsync()).BaseUrl = "https://example.test/"; await f.Providers.SaveChangesAsync(); }
         Assert.Equal(code, (await Assert.ThrowsAsync<AccountApiException>(() => f.Start())).Code);
         Assert.Empty(await f.Db.CloudTranslationJobs.ToArrayAsync()); Assert.Empty(f.Budget.Reserved); Assert.Equal(0, f.Provider.Calls);
+    }
+
+    [Fact]
+    public async Task ExistingJobCanBeReadAndCancelledAfterCloudRightsEndButCannotResume()
+    {
+        await using var f = await Fixture.Create();
+        var job = await f.Start();
+        var license = await f.Accounts.UserLicenses.SingleAsync();
+        license.EntitlementSnapshotJson = """{"productScope":"vietsub","vietsubCloudEnabled":false}""";
+        await f.Accounts.SaveChangesAsync();
+        Assert.Equal(job.JobId, (await f.Service.GetAsync(f.Project, f.Org, job.JobId, f.Who, default)).JobId);
+        await f.Service.ControlAsync(f.Project, f.Org, job.JobId, "pause", f.Who, default);
+        Assert.Equal("license_feature_unavailable", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            f.Service.ControlAsync(f.Project, f.Org, job.JobId, "resume", f.Who, default))).Code);
+        await f.Service.ControlAsync(f.Project, f.Org, job.JobId, "cancel", f.Who, default);
+        Assert.Equal(0, f.Provider.Calls);
+        Assert.Equal("cloud_job_not_found", (await Assert.ThrowsAsync<AccountApiException>(() =>
+            f.Service.GetAsync(f.Project, f.Org, Guid.NewGuid(), f.Who, default))).Code);
     }
 
     [Fact]
@@ -139,6 +187,9 @@ public sealed class VietsubCloudServerTests
         await using var f = await Fixture.Create(); var job = await f.Start(); f.Budget.FailSettlementOnce = true;
         await Assert.ThrowsAsync<IOException>(() => f.Service.ProcessOneAsync(default));
         Assert.Equal(1, f.Provider.Calls); Assert.Empty(f.Budget.Settlements);
+        (await f.Accounts.UserLicenses.SingleAsync()).ExpiresAtUtc = DateTime.UtcNow.AddSeconds(-1);
+        await f.Accounts.SaveChangesAsync();
+        f.Options.Enabled = false;
         await f.Service.ProcessOneAsync(default);
         Assert.Equal(1, f.Provider.Calls); Assert.Single(f.Budget.Settlements);
         Assert.Equal("COMPLETED", (await f.Service.GetAsync(f.Project, f.Org, job.JobId, f.Who, default)).Status);
@@ -189,12 +240,17 @@ public sealed class VietsubCloudServerTests
             var device = new RegisteredDevice { DeviceId = f.Who.DeviceId, UserId = user.Id, User = user, DeviceName = "fixture" };
             f.Accounts.UserSessions.Add(new UserSession { SessionId = f.Who.SessionId, UserId = user.Id, User = user,
                 DeviceId = device.DeviceId, Device = device, AbsoluteExpiresAtUtc = now.AddDays(1) });
+            var plan = new LicensePlan { LicensePlanId=Guid.NewGuid(), PlanCode="cloud-fixture", Name="Cloud fixture" };
+            f.Accounts.LicenseActivations.Add(new LicenseActivation { LicenseActivationId=Guid.NewGuid(), Device=device, DeviceId=device.DeviceId,
+                Status="Active", LastVerifiedAtUtc=now, UserLicense=new UserLicense { UserLicenseId=Guid.NewGuid(), UserId=user.Id,
+                    LicensePlan=plan, Status="Active", StartsAtUtc=now.AddDays(-1), ExpiresAtUtc=now.AddDays(2) } });
             await f.Accounts.SaveChangesAsync();
-            f.Providers.Providers.Add(new AiProvider { ProviderId = providerId, ProviderCode = "openai", DisplayName = "fixture", IsEnabled = true,
+            f.Providers.Providers.Add(new AiProvider { ProviderId = providerId, ProviderCode = "openai", DisplayName = "fixture", IsEnabled = true, BaseUrl = "https://api.openai.com/v1/",
                 Models = [new AiProviderModel { ProviderModelId = modelId, ModelCode = f.Options.ModelCode, DisplayName = "fixture",
                     Modality = "Text", IsEnabled = true, CapabilitiesJson = "{\"structuredOutput\":true}" }] });
             await f.Providers.SaveChangesAsync();
             f.Governance.Organizations.Add(new Organization { OrganizationId = f.Org, Name = "fixture", Code = "fixture", CreatedByUserId = user.Id, MonthlyBudgetLimit = 100 });
+            f.Governance.OrganizationMembers.Add(new OrganizationMember { OrganizationId = f.Org, UserId = user.Id, Role = "Member", Status = "Active" });
             f.Governance.OrganizationProviderCredentials.Add(new() { OrganizationProviderCredentialId = credentialId,
                 OrganizationId = f.Org, ProviderId = providerId, Name = "fixture", EncryptedPayload = "fixture-protected", SecretHint = "fixture", CreatedByUserId = user.Id });
             await f.Governance.SaveChangesAsync();

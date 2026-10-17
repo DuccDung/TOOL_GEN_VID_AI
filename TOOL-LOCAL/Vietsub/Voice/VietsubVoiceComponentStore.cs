@@ -49,20 +49,41 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
         ],
         StringComparer.OrdinalIgnoreCase);
     private readonly bool _featureEnabled;
+    private readonly TOOL_LOCAL.ModelDistribution.DesktopModelDistributionClient? _distribution;
+    private readonly bool _allowUpstreamDownloads;
+    private readonly Func<IProgress<VietsubVoiceRuntimeInstallProgress>?, CancellationToken, Task<PiperOfflineBundle>>? _staticBundleSource;
     private readonly string _componentRoot;
     private readonly bool _useVersionedRuntime;
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, VerifiedFile> _verifiedFiles = new(StringComparer.OrdinalIgnoreCase);
 
-    public VietsubVoiceComponentStore(VietsubAppPaths paths, bool featureEnabled, HttpMessageHandler? httpHandler = null,
-        bool useUserComponentsRoot = false, bool allowOnlineInstall = false, PiperOfflineBundle? offlineBundle = null)
+    public VietsubVoiceComponentStore(VietsubAppPaths? paths, bool featureEnabled, HttpMessageHandler? httpHandler = null,
+        bool useUserComponentsRoot = false, bool allowOnlineInstall = false, PiperOfflineBundle? offlineBundle = null,
+        TOOL_LOCAL.ModelDistribution.DesktopModelDistributionClient? distribution = null,
+        bool requireUserComponentsRoot = false, bool allowUpstreamDownloads = true,
+        Func<IProgress<VietsubVoiceRuntimeInstallProgress>?, CancellationToken, Task<PiperOfflineBundle>>? staticBundleSource = null)
     {
+        if (paths is null && (!useUserComponentsRoot || !requireUserComponentsRoot))
+            throw new ArgumentException("A workspace is required outside the fixed user component root.", nameof(paths));
         _featureEnabled = featureEnabled;
+        _distribution = distribution;
+        _allowUpstreamDownloads = allowUpstreamDownloads;
+        _staticBundleSource = staticBundleSource;
         _offlineBundle = allowOnlineInstall ? null : offlineBundle ?? PiperOfflineBundle.ForApplication();
+        if (_featureEnabled && offlineBundle is null && !allowOnlineInstall && _distribution is not null &&
+            !_offlineBundle!.Available(out _))
+        {
+            try { _offlineBundle = _distribution.GetCachedPiperBundle() ?? _offlineBundle; }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException
+                or TOOL_SHARED.Distribution.ModelDistribution.ModelDistributionException)
+            {
+                // Readiness reports revoked/corrupt state; it must not crash desktop construction.
+            }
+        }
         _useVersionedRuntime = useUserComponentsRoot;
-        var legacy = Path.Combine(paths.RootDirectory, "components", "voice", "piper");
-        _componentRoot = !useUserComponentsRoot || Directory.Exists(legacy) ? legacy
+        var legacy = paths is null ? string.Empty : Path.Combine(paths.RootDirectory, "components", "voice", "piper");
+        _componentRoot = !useUserComponentsRoot || (!requireUserComponentsRoot && Directory.Exists(legacy)) ? legacy
             : Path.Combine(TOOL_LOCAL.SystemSetup.SystemSetupPaths.ComponentsRoot, "voice", "piper");
         httpHandler ??= new HttpClientHandler { AllowAutoRedirect = false };
         _httpClient = new HttpClient(httpHandler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
@@ -78,6 +99,15 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
 
         try
         {
+            try { EnsureDistributionNotRevoked(); }
+            catch (VietsubVoiceException error) when (error.Code == VietsubVoiceErrorCodes.BundleInvalid)
+            {
+                // Trust rejection must remain distinct from a damaged installed runtime.
+                return Status("INVALID", false, error.Message, VietsubVoiceErrorCodes.BundleInvalid);
+            }
+            if (_distribution is not null && (_distribution.IsKnownRevoked(PiperOfflineBundle.ApprovedDefinition().ArchiveSha256)
+                || _distribution.IsKnownRevoked(PiperOfflineBundle.ApprovedDefinition().ManifestSha256)))
+                return Status("INVALID", false, "Gói giọng Việt này đã bị thu hồi.", VietsubVoiceErrorCodes.BundleInvalid);
             if (_offlineBundle is not null && Directory.Exists(RuntimeRoot))
             {
                 _offlineBundle.VerifyWorker(WorkerPath, RequirementsPath);
@@ -108,7 +138,7 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
 
             return Status("READY", true, "Piper local đã sẵn sàng tạo giọng tiếng Việt.", null, installedBytes);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or VietsubVoiceException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or VietsubVoiceException)
         {
             return Status("INVALID", false, "Không thể xác minh runtime Piper local.", VietsubVoiceErrorCodes.RuntimeInvalid);
         }
@@ -163,6 +193,10 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
             await InstallAsync(progress is null ? null : new ModelProgressAdapter(voiceId, progress), cancellationToken);
             return GetModelStatuses().Single(item => item.VoiceId == voiceId);
         }
+
+        if (!_allowUpstreamDownloads)
+            throw new VietsubVoiceException(VietsubVoiceErrorCodes.ModelNotApproved,
+                "Bản cài này chỉ chuẩn bị giọng Piper từ bộ model VPS đã duyệt.");
 
         await _gate.WaitAsync(cancellationToken);
         try
@@ -287,7 +321,7 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
             progress?.Report(new("PYTHON", 25, "Đang cài Python 3.11 x64 cô lập cho Piper.", 0, 1));
             await RunUvAsync(
                 BuildVenvArguments(Path.GetDirectoryName(Path.GetDirectoryName(PythonPath)!)!),
-                cancellationToken);
+                cancellationToken, PiperInstallPhase.Python);
             progress?.Report(new("PACKAGES", 45, "Đang cài Piper runtime đã khóa phiên bản.", 0, 1));
             await RunUvAsync(
                 [
@@ -297,7 +331,7 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
                     "--require-hashes", "--no-config", "--default-index", "https://pypi.org/simple",
                     "--requirements", RequirementsPath
                 ],
-                cancellationToken);
+                cancellationToken, PiperInstallPhase.Packages);
 
             await DownloadVerifiedAsync(ModelUri, ModelPath, ModelSize, ModelSha256, "MODEL", 55, 39, progress, cancellationToken);
             await DownloadVerifiedAsync(ConfigUri, ConfigPath, ConfigSize, ConfigSha256, "CONFIG", 94, 3, progress, cancellationToken);
@@ -522,7 +556,8 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
     internal static IReadOnlyList<string> BuildVenvArguments(string environmentPath) =>
         ["venv", "--clear", "--python", "3.11.15", "--managed-python", "--no-config", environmentPath];
 
-    private async Task RunUvAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    private async Task RunUvAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken,
+        PiperInstallPhase phase = PiperInstallPhase.Unknown)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -555,8 +590,12 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
         using var process = Process.Start(startInfo)
             ?? throw new VietsubVoiceException(VietsubVoiceErrorCodes.RuntimeInstallFailed, "Không thể khởi động trình cài Piper.");
         using var processTree = new PiperProcessTree(process);
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = PiperInstallDiagnostics.DrainOutputAsync(process.StandardOutput, cancellationToken);
+        // Retain the legacy online diagnostic behavior. Offline output is discarded,
+        // never accumulated, returned or included in the new structured diagnostic.
+        var legacyError = _offlineBundle is null ? process.StandardError.ReadToEndAsync(cancellationToken) : null;
+        Task stderr = legacyError is not null ? legacyError
+            : PiperInstallDiagnostics.DrainOutputAsync(process.StandardError, cancellationToken);
         try
         {
             await process.WaitForExitAsync(cancellationToken);
@@ -565,16 +604,17 @@ internal sealed partial class VietsubVoiceComponentStore : IDisposable
         {
             Kill(process);
             await process.WaitForExitAsync(CancellationToken.None);
+            try { await Task.WhenAll(stdout, stderr); }
+            catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException) { }
             throw;
         }
-        _ = await stdout;
-        var error = await stderr;
+        await Task.WhenAll(stdout, stderr);
         if (process.ExitCode != 0)
         {
-            throw new VietsubVoiceException(
-                VietsubVoiceErrorCodes.RuntimeInstallFailed,
-                _offlineBundle is null ? "Cài Piper runtime thất bại: " + LastLine(error)
-                    : "Không thể chuẩn bị Piper từ gói offline. Hãy kiểm tra quyền ghi và dùng bản ZIP đầy đủ.");
+            if (legacyError is not null)
+                throw new VietsubVoiceException(VietsubVoiceErrorCodes.RuntimeInstallFailed,
+                    "Cài Piper runtime thất bại: " + LastLine(await legacyError));
+            throw PiperInstallDiagnostics.ProcessExited(phase, process.ExitCode, RuntimeRoot);
         }
     }
 

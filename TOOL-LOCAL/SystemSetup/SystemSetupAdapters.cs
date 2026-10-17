@@ -37,7 +37,9 @@ internal sealed class PiperSetupAdapter(VietsubVoiceComponentStore? store, bool 
     : ISetupComponentAdapter, ISetupComponentStatusInspector
 {
     public SetupComponent Component => new("piper", "Giọng Việt · Piper", VietsubVoiceComponentStore.RuntimeVersion,
-        enabled && store is not null ? "UNKNOWN" : "DISABLED", "Giọng Việt được chuẩn bị từ gói đi kèm bộ ứng dụng.",
+        enabled && store is not null ? "UNKNOWN" : "DISABLED", store?.CanDownloadDistributionPayload == true
+            ? "Giọng Việt dùng gói đã xác thực từ kho model hoặc bộ ứng dụng."
+            : "Giọng Việt được chuẩn bị từ gói đi kèm bộ ứng dụng.",
         enabled, enabled, enabled, 0, store?.OfflineDiskBytes ?? 768L * 1024 * 1024,
         CanPrepareOffline: enabled && store is not null && store.HasOfflineBundle(out _));
     public SetupComponent Inspect()
@@ -45,9 +47,18 @@ internal sealed class PiperSetupAdapter(VietsubVoiceComponentStore? store, bool 
         if (!enabled || store is null) return Component;
         var status = store.GetStatus();
         var component = Component;
+        if (!status.Ready && store.DistributionPayloadBlocked)
+            return component with { State = "REPAIR_REQUIRED", CanInstall = false,
+                Message = status.Message, ErrorCode = status.ErrorCode, CheckedAtUtc = DateTime.UtcNow };
         if (!status.Ready && store.UsesOfflineBundle && !store.HasOfflineBundle(out var bundleError))
+        {
+            if (store.CanDownloadDistributionPayload)
+                return component with { State = "NOT_INSTALLED", CanInstall = true,
+                    Message = "Chưa có gói giọng Việt. Chọn Cài thành phần cần thiết để tải và kiểm tra.",
+                    ErrorCode = null, CheckedAtUtc = DateTime.UtcNow };
             return component with { State = "REPAIR_REQUIRED", CanInstall = false,
                 ErrorCode = bundleError, Message = SetupErrors.Message(bundleError!), CheckedAtUtc = DateTime.UtcNow };
+        }
         return component with {
             State = status.Ready ? "READY" : status.Status == "NOT_INSTALLED" ? "NOT_INSTALLED" : "REPAIR_REQUIRED",
             Message = status.Ready ? "Piper local đã có bằng chứng sẵn sàng trên máy này." : status.Message,
@@ -62,7 +73,7 @@ internal sealed class PiperSetupAdapter(VietsubVoiceComponentStore? store, bool 
                 progress(p.Stage, p.Percent, p.BytesProcessed, p.TotalBytes)), token)
             : await store.VerifyAsync(token);
         var inspected = Inspect();
-        if (!status.Ready) return inspected;
+        if (!status.Ready || inspected.State != "READY") return inspected;
         return inspected with { State = "READY", Message = "Đã tạo và kiểm tra WAV tiếng Việt mẫu.",
             ErrorCode = status.ErrorCode, CheckedAtUtc = DateTime.UtcNow };
     }

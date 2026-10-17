@@ -1,51 +1,51 @@
-param()
+param(
+    [string]$OutputRoot = '',
+    [switch]$SkipArchive
+)
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $projectPath = Join-Path $repoRoot 'TOOL-SERVER\TOOL-SERVER.csproj'
+Import-Module (Join-Path $PSScriptRoot 'ServerPackageSafety.psm1') -Force
 $artifactRoot = Join-Path $repoRoot 'artifacts'
 $packageId = [guid]::NewGuid().ToString('N').Substring(0, 8)
 $packageName = 'TOOL-SERVER-IIS-dll-runtime-win-x64-{0}-{1}' -f [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'), $packageId
 $publishDir = Join-Path $artifactRoot ('server-' + $packageId)
 $zipPath = Join-Path $artifactRoot ($packageName + '.zip')
 
-New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+if ($OutputRoot) {
+    if (-not [IO.Path]::IsPathRooted($OutputRoot) -or $OutputRoot -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])') {
+        throw 'OutputRoot must be an absolute directory path.'
+    }
+    $publishDir = [IO.Path]::GetFullPath($OutputRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if ($publishDir.Equals([IO.Path]::GetPathRoot($publishDir).TrimEnd([IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'OutputRoot must not be a drive or share root.'
+    }
+    $zipPath = Join-Path (Split-Path -Parent $publishDir) ($packageName + '.zip')
+}
+if (Test-Path -LiteralPath $publishDir) { throw 'Publish directory already exists; use a new directory.' }
+$ancestor = [IO.DirectoryInfo]::new((Split-Path -Parent $publishDir))
+while ($null -ne $ancestor) {
+    if ($ancestor.Exists -and ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Publish directory must not pass through a reparse point.'
+    }
+    $ancestor = $ancestor.Parent
+}
+New-Item -ItemType Directory -Path $publishDir | Out-Null
 
-& dotnet publish $projectPath -c Release -r win-x64 --self-contained false -o $publishDir /p:UseAppHost=false /p:AspNetCoreHostingModel=OutOfProcess
+& dotnet publish $projectPath -c Release -r win-x64 --self-contained false -o $publishDir /p:UseAppHost=false /p:AspNetCoreHostingModel=OutOfProcess | Out-Host
 if ($LASTEXITCODE -ne 0) {
     throw 'dotnet publish failed.'
 }
 
 # Sanitize immediately, before the runtime copy, so an interrupted package has no credentials.
-Get-ChildItem -LiteralPath $publishDir -Filter 'appsettings.*.json' -File | Remove-Item
-$settingsPath = Join-Path $publishDir 'appsettings.json'
-if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
-    throw 'Published appsettings.json is missing.'
+Get-ChildItem -LiteralPath $publishDir -Filter 'appsettings.*.json' -File | ForEach-Object {
+    if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Published settings contain a reparse point.' }
+    Remove-Item -LiteralPath $_.FullName
 }
-
-function Clear-SensitiveSettings {
-    param([object]$Node, [string]$ParentPath = '')
-
-    if ($Node -is [pscustomobject]) {
-        foreach ($property in $Node.PSObject.Properties) {
-            $propertyPath = if ($ParentPath) { "$ParentPath.$($property.Name)" } else { $property.Name }
-            if ($property.Value -is [string] -and $propertyPath -match '(?i)(^ConnectionStrings\.|Password|SigningKey|Secret|ApiKey|AccessKey|Credential|Token)') {
-                $property.Value = ''
-            } else {
-                Clear-SensitiveSettings -Node $property.Value -ParentPath $propertyPath
-            }
-        }
-    } elseif ($Node -is [array]) {
-        foreach ($item in $Node) {
-            Clear-SensitiveSettings -Node $item -ParentPath $ParentPath
-        }
-    }
-}
-
-$settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-Clear-SensitiveSettings -Node $settings
-$settings | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+Set-ServerPackageSafeSettings -PublishDirectory $publishDir
+Assert-ServerPackageSafe -PublishDirectory $publishDir
 
 # Framework-dependent DLL plus a private x64 .NET/ASP.NET Core runtime.
 $dotnetExe = (Get-Command dotnet.exe -ErrorAction Stop).Source
@@ -105,19 +105,26 @@ foreach ($verb in @('GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'))
         throw "Published web.config does not allow $verb."
     }
 }
-if (-not [string]::IsNullOrWhiteSpace($settings.ConnectionStrings.VideoFactory)) {
-    throw 'Connection string was not removed from published settings.'
-}
 $privateRuntimeInventory = & $privateDotnetExePath --list-runtimes
 if ($LASTEXITCODE -ne 0 -or -not ($privateRuntimeInventory -match "^Microsoft.NETCore.App $([regex]::Escape($runtimeVersion)) ") -or -not ($privateRuntimeInventory -match "^Microsoft.AspNetCore.App $([regex]::Escape($runtimeVersion)) ")) {
     throw 'Private .NET/ASP.NET Core runtime cannot be discovered by bundled dotnet.exe.'
 }
 
-Compress-Archive -Path (Join-Path $publishDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
-$hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath ($zipPath + '.sha256') -Value "$hash  $([IO.Path]::GetFileName($zipPath))" -Encoding ascii
+Assert-ServerPackageSafe -PublishDirectory $publishDir
+$serverDllSha256 = (Get-FileHash -LiteralPath $serverDllPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if (-not $SkipArchive) {
+    Compress-Archive -Path (Join-Path $publishDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
+    $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath ($zipPath + '.sha256') -Value "$hash  $([IO.Path]::GetFileName($zipPath))" -Encoding ascii
+    Write-Host "IIS upload ZIP: $zipPath"
+    Write-Host "SHA256: $hash"
+} else { $zipPath = $null }
 
 Write-Host "Publish folder: $publishDir"
-Write-Host "IIS upload ZIP: $zipPath"
 Write-Host "Bundled .NET/ASP.NET Core runtime: $runtimeVersion"
-Write-Host "SHA256: $hash"
+[pscustomobject]@{
+    PublishDirectory = $publishDir
+    ZipPath = $zipPath
+    RuntimeVersion = $runtimeVersion
+    ServerDllSha256 = $serverDllSha256
+}

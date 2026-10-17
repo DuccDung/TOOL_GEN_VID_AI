@@ -19,6 +19,9 @@ public sealed record OrganizationPoolSummaryResponse(
     int AllocatableSeatCapacity = 0,
     int AllocatableAvailableSeats = 0);
 
+public sealed record OrganizationProductReadinessResponse(
+    bool Ready, string Message, string? BlockingCode = null, string? Target = null, Guid? ModelId = null);
+
 public sealed record SaveOrganizationPoolRequest(
     string Code,
     string Name,
@@ -40,7 +43,9 @@ public sealed record OrganizationPoolOrganizationResponse(
     string? ReadinessMessage,
     DateTime UpdatedAtUtc,
     bool CanReceiveCustomers = false,
-    int AllocatableAvailableSeats = 0);
+    int AllocatableAvailableSeats = 0,
+    OrganizationProductReadinessResponse? VietsubLocal = null,
+    OrganizationProductReadinessResponse? VietsubCloud = null);
 
 public sealed record SaveOrganizationPoolOrganizationRequest(
     Guid OrganizationId,
@@ -48,7 +53,9 @@ public sealed record SaveOrganizationPoolOrganizationRequest(
     int Priority = 100,
     bool IsAutoAssignmentEnabled = false,
     bool IsReady = false,
-    string? ReadinessMessage = null);
+    string? ReadinessMessage = null,
+    string? ProductScope = null,
+    bool? VietsubCloudEnabled = null);
 
 public sealed record LicensePlanOrganizationPoolResponse(
     Guid LicensePlanId,
@@ -62,7 +69,9 @@ public sealed record LicensePlanOrganizationPoolResponse(
     DateTime UpdatedAtUtc,
     bool PlanIsActive = false,
     bool PlanIsPublic = false,
-    bool IsSellable = false);
+    bool IsSellable = false,
+    string ProductScope = "all-tools",
+    bool VietsubCloudEnabled = false);
 
 public sealed record SaveLicensePlanOrganizationPoolRequest(
     Guid OrganizationPoolId,

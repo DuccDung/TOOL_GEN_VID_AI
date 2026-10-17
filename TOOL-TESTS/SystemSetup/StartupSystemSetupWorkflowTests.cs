@@ -7,6 +7,20 @@ namespace TOOL_TESTS.SystemSetup;
 public sealed class StartupSystemSetupWorkflowTests
 {
     [Fact]
+    public async Task PersonalLocalSetupWithoutOrganizationStillRequiresRealComponentChecks()
+    {
+        var model = new FakeAdapter("qwen", "UNKNOWN");
+        await using var fixture = new Fixture(model);
+        fixture.Context.SelectedOrganizationId = Guid.Empty;
+        using var workflow = new StartupSystemSetupWorkflow(fixture.Coordinator);
+        Assert.False(StartupSystemSetupWorkflow.IsReady(workflow.Snapshot));
+        var checkedSnapshot = await workflow.CheckAsync(default);
+        Assert.Equal(Guid.Empty, checkedSnapshot.OrganizationId);
+        Assert.True(StartupSystemSetupWorkflow.IsReady(checkedSnapshot));
+        Assert.Equal(1, model.Calls);
+    }
+
+    [Fact]
     public async Task Check_skips_components_with_current_machine_readiness()
     {
         var ready = new FakeAdapter("qwen", "READY");
@@ -239,7 +253,7 @@ public sealed class StartupSystemSetupWorkflowTests
     {
         public string? CurrentUserId => "user";
 
-        public Guid? SelectedOrganizationId { get; } = Guid.NewGuid();
+        public Guid? SelectedOrganizationId { get; set; } = Guid.NewGuid();
 
         public Task EnsureSessionAndLicenseAsync(CancellationToken cancellationToken) =>
             Task.CompletedTask;

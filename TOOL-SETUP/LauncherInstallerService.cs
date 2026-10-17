@@ -5,13 +5,16 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using TOOL_SHARED.Distribution;
 using TOOL_SHARED.Contracts.Updates;
+using TOOL_SHARED.Distribution.Updates;
 
 namespace TOOL_SETUP;
 
-internal sealed class LauncherInstallerService(InstallerOptions options) : IDisposable
+internal sealed partial class LauncherInstallerService(InstallerOptions options,
+    HttpMessageHandler? metadataHandler = null, HttpMessageHandler? artifactHandler = null) : IInstallerSession
 {
     private const string ExecutableName = "TOOL-LOCAL.exe";
-    private readonly HttpClient _httpClient = new()
+    private readonly HttpClient _httpClient = new(metadataHandler ?? new HttpClientHandler
+        { AllowAutoRedirect = false, UseCookies = false }, disposeHandler: metadataHandler is null)
     {
         BaseAddress = new Uri(options.ServerBaseUrl),
         Timeout = TimeSpan.FromMinutes(30)
@@ -19,9 +22,42 @@ internal sealed class LauncherInstallerService(InstallerOptions options) : IDisp
 
     public async Task<IReadOnlyList<DesktopReleaseResponse>> GetVersionsAsync(CancellationToken cancellationToken)
     {
-        var path = $"api/launcher-distribution/versions?channel={Uri.EscapeDataString(options.Channel)}&platform={Uri.EscapeDataString(options.Platform)}";
-        return (await _httpClient.GetFromJsonAsync<DesktopReleaseListResponse>(path, cancellationToken))?.Releases
+        var path = $"api/launcher-distribution/versions?channel={Uri.EscapeDataString(options.Channel)}&platform={Uri.EscapeDataString(options.Platform)}&distributionProtocol={options.DistributionProtocol}";
+        if (options.IsSharedBootstrapper) path += $"&profile={Uri.EscapeDataString(options.Profile)}";
+        var releases = (await _httpClient.GetFromJsonAsync<DesktopReleaseListResponse>(path, cancellationToken))?.Releases
             ?? throw new InvalidDataException("Server không trả về danh sách phiên bản hợp lệ.");
+        if (releases.Count > 1000 || releases.Any(release => release is null))
+            throw new InvalidDataException("Danh sách phiên bản vượt giới hạn hoặc có phần tử không hợp lệ.");
+        if (options.IsSharedBootstrapper)
+            return releases.Where(release => IsCompatibleSharedRelease(release, options))
+                .OrderByDescending(release => Version.Parse(release.Version)).ThenByDescending(release => release.BuildNumber).ToArray();
+        return options.IsStaticArchive ? releases.Where(release => release.Version == options.DesktopVersion &&
+            release.BuildNumber == options.DesktopBuildNumber && string.Equals(release.Sha256, options.DesktopSha256, StringComparison.OrdinalIgnoreCase)
+            && release.InstallMode == "StaticArchive" && release.DistributionProtocol == 2
+            && release.ModelBundleId == TOOL_SHARED.Distribution.StaticModels.ApprovedStaticModelBundle.Current.BundleId).ToArray() :
+            releases.Where(release => release.InstallMode != "StaticArchive").ToArray();
+    }
+
+    private static bool IsCompatibleSharedRelease(DesktopReleaseResponse release, InstallerOptions installerOptions)
+    {
+        try { ValidateStaticRelease(release, installerOptions); return true; }
+        catch (Exception error) when (error is InvalidDataException or ArgumentException) { return false; }
+    }
+
+    public async Task<DesktopReleaseResponse?> GetReleaseAsync(DesktopReleaseResponse snapshot, CancellationToken cancellationToken)
+    {
+        if (!options.IsSharedBootstrapper)
+            return (await GetVersionsAsync(cancellationToken)).SingleOrDefault(release => release.ReleaseId == snapshot.ReleaseId);
+        ValidateStaticRelease(snapshot, options);
+        var path = $"api/launcher-distribution/versions/{snapshot.ReleaseId:D}?distributionProtocol=3&profile={Uri.EscapeDataString(options.Profile)}" +
+            $"&bootstrapperId={snapshot.SharedBootstrapper!.BootstrapperId:D}";
+        using var response = await _httpClient.GetAsync(path, cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        var approved = await response.Content.ReadFromJsonAsync<DesktopReleaseResponse>(cancellationToken)
+            ?? throw new InvalidDataException("Server không trả snapshot release hợp lệ.");
+        SetupMaintenanceHandoff.ValidateReleaseSnapshot(snapshot, approved, options, allowMetadataAugmentation: true);
+        return approved;
     }
 
     public async Task InstallAsync(
@@ -32,6 +68,14 @@ internal sealed class LauncherInstallerService(InstallerOptions options) : IDisp
         IProgress<DesktopUpdateProgress>? progress,
         CancellationToken cancellationToken)
     {
+        if (progress is not null) progress = new MonotonicSetupProgress(progress);
+        if (options.IsStaticArchive)
+        {
+            await InstallStaticAsync(release, installDirectory, createDesktopShortcut, launchAfterInstall,
+                progress, cancellationToken);
+            return;
+        }
+        ValidateApplicationRelease(release, options);
         var targetRoot = Path.GetFullPath(installDirectory.Trim());
         EnsureNotRunning(Path.Combine(targetRoot, ExecutableName));
         var temporaryRoot = Path.Combine(Path.GetTempPath(), "VideoMakerSetup", Guid.NewGuid().ToString("N"));
@@ -41,7 +85,8 @@ internal sealed class LauncherInstallerService(InstallerOptions options) : IDisp
         Directory.CreateDirectory(stageRoot);
         try
         {
-            await DownloadAsync(release, packagePath, progress, cancellationToken);
+            await DownloadStaticPackageAsync(release, packagePath, progress, cancellationToken);
+            await Task.Run(() => ValidateDesktopArchive(packagePath), cancellationToken);
             await ExtractAsync(packagePath, stageRoot, progress, cancellationToken);
             var manifest = ValidateStage(release, stageRoot);
             InstallWithRollback(stageRoot, targetRoot, backupRoot, manifest, progress, cancellationToken);
@@ -60,41 +105,6 @@ internal sealed class LauncherInstallerService(InstallerOptions options) : IDisp
         finally
         {
             TryDeleteDirectory(temporaryRoot);
-        }
-    }
-
-    private async Task DownloadAsync(
-        DesktopReleaseResponse release,
-        string destination,
-        IProgress<DesktopUpdateProgress>? progress,
-        CancellationToken cancellationToken)
-    {
-        progress?.Report(new DesktopUpdateProgress("download", 2, "Đang tải package VideoMaker..."));
-        using var response = await _httpClient.GetAsync(release.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true);
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[128 * 1024];
-        long written = 0;
-        while (true)
-        {
-            var read = await input.ReadAsync(buffer, cancellationToken);
-            if (read == 0) break;
-            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-            hash.AppendData(buffer, 0, read);
-            written += read;
-            progress?.Report(new DesktopUpdateProgress(
-                "download",
-                3 + (int)Math.Min(55, written * 55 / Math.Max(1, release.SizeBytes)),
-                $"Đang tải {written / 1024d / 1024d:0.0} MB / {release.SizeBytes / 1024d / 1024d:0.0} MB"));
-        }
-
-        await output.FlushAsync(cancellationToken);
-        if (written != release.SizeBytes ||
-            !Convert.ToHexString(hash.GetHashAndReset()).Equals(release.Sha256, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException("Package tải về không đúng kích thước hoặc SHA-256.");
         }
     }
 

@@ -52,6 +52,7 @@ internal static class DesktopRepairErrors
             HttpRequestException or OperationCanceledException => DesktopRepairErrorCodes.NetworkFailed,
             SetupException { Code: "system_setup_busy" } => "system_setup_busy",
             SetupException { Code: "system_setup_storage_denied" } => "system_setup_storage_denied",
+            SetupException { Code: "desktop_setup_download_unavailable" } => "desktop_setup_download_unavailable",
             UnauthorizedAccessException => "system_setup_storage_denied",
             _ => DesktopRepairErrorCodes.Failed
         };
@@ -71,6 +72,7 @@ internal static class DesktopRepairErrors
         "session_expired" => AccountSessionManager.SessionExpiredMessage,
         "system_setup_busy" => "Một tác vụ đang dùng hoặc cài thành phần. Hãy chờ tác vụ kết thúc rồi sửa ứng dụng.",
         "system_setup_storage_denied" => "Không có quyền ghi thư mục sửa chữa. Hãy kiểm tra quyền truy cập rồi thử lại.",
+        "desktop_setup_download_unavailable" => "Server chưa có link Setup có checksum để tự sửa. Hãy tải và chạy Setup mới từ trang tải ứng dụng, hoặc liên hệ quản trị viên.",
         _ => "Chưa thể sửa ứng dụng. Kiểm tra dung lượng đĩa hoặc lấy lại bản ZIP đầy đủ từ người cung cấp. Dữ liệu dự án cần được giữ nguyên."
     };
 }

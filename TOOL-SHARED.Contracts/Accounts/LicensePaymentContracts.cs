@@ -12,7 +12,12 @@ public sealed record LicenseOfferResponse(
     int DisplayOrder,
     bool OrganizationSeatAvailable = false,
     string? OrganizationPoolName = null,
-    int? AvailableOrganizationSeats = null);
+    int? AvailableOrganizationSeats = null,
+    string ProductScope = "all-tools",
+    bool VietsubCloudEnabled = false,
+    DateTime? ExpectedStartsAtUtc = null,
+    DateTime? ExpectedExpiresAtUtc = null,
+    string? PurchaseBlockedReason = null);
 
 public sealed record CreateLicensePaymentRequest(
     Guid LicensePlanId,
@@ -40,7 +45,10 @@ public sealed record LicensePaymentCheckoutResponse(
     bool IsExpired,
     Guid? AssignedOrganizationId = null,
     string? AssignedOrganizationName = null,
-    string? ProvisioningStatus = null);
+    string? ProvisioningStatus = null,
+    DateTime? StartsAtUtc = null,
+    DateTime? LicenseExpiresAtUtc = null,
+    bool IsScheduled = false);
 
 public sealed record LicensePaymentStatusResponse(
     string OrderCode,
@@ -56,7 +64,10 @@ public sealed record LicensePaymentStatusResponse(
     string? Message = null,
     Guid? AssignedOrganizationId = null,
     string? AssignedOrganizationName = null,
-    string? ProvisioningStatus = null);
+    string? ProvisioningStatus = null,
+    DateTime? StartsAtUtc = null,
+    DateTime? LicenseExpiresAtUtc = null,
+    bool IsScheduled = false);
 
 public sealed record CurrentLicensePaymentResponse(
     LicensePaymentCheckoutResponse? Payment);

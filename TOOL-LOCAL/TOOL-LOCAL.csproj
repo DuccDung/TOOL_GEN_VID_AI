@@ -9,12 +9,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Version>1.0.0</Version>
     <DesktopBuildNumber>1</DesktopBuildNumber>
+    <DesktopDistributionProtocol Condition="'$(DesktopDistributionProtocol)' == ''">2</DesktopDistributionProtocol>
+    <DesktopReleaseProfile Condition="'$(DesktopReleaseProfile)' == ''">Production</DesktopReleaseProfile>
     <AssemblyName>TOOL-LOCAL</AssemblyName>
     <Product>taphoatool</Product>
     <ApplicationIcon>Brand\taphoatool.ico</ApplicationIcon>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <StaticModelSetupRequired Condition="'$(StaticModelSetupRequired)' == ''">false</StaticModelSetupRequired>
+    <StaticModelReleaseChannel Condition="'$(StaticModelReleaseChannel)' == ''">Stable</StaticModelReleaseChannel>
   </PropertyGroup>
+
+  <!-- Apply the selected folder release profile before content and assembly metadata are evaluated. -->
+  <Import Project="Build\VisualStudioRelease.props" />
 
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
@@ -40,8 +47,24 @@
 
   <ItemGroup>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>DesktopDistributionProtocol</_Parameter1>
+      <_Parameter2>$(DesktopDistributionProtocol)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>DesktopReleaseProfile</_Parameter1>
+      <_Parameter2>$(DesktopReleaseProfile)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>DesktopBuildNumber</_Parameter1>
       <_Parameter2>$(DesktopBuildNumber)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>StaticModelSetupRequired</_Parameter1>
+      <_Parameter2>$(StaticModelSetupRequired)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>StaticModelReleaseChannel</_Parameter1>
+      <_Parameter2>$(StaticModelReleaseChannel)</_Parameter2>
     </AssemblyAttribute>
     <InternalsVisibleTo Include="TOOL-TESTS" />
   </ItemGroup>
@@ -55,6 +78,13 @@
   <ItemGroup>
     <EmbeddedResource Include="Web\public\brand\taphoatool-logo.png" LogicalName="TapHoaTool.Logo" />
     <EmbeddedResource Include="Brand\taphoatool.ico" LogicalName="TapHoaTool.WindowIcon" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <ModelDistributionTrustRootPath Condition="'$(ModelDistributionTrustRootPath)' == ''">$(MSBuildProjectDirectory)\ModelDistribution\model-trust.json</ModelDistributionTrustRootPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="$(ModelDistributionTrustRootPath)" LogicalName="ModelDistribution.TrustRoot" />
   </ItemGroup>
 
   <ItemGroup>
@@ -92,7 +122,9 @@
     <RequireMediaToolBundle Condition="'$(RequireMediaToolBundle)' == ''">false</RequireMediaToolBundle>
   </PropertyGroup>
 
-  <ItemGroup Condition="Exists('$(FfmpegBundleDirectory)\ffmpeg.exe') And Exists('$(FfmpegBundleDirectory)\ffprobe.exe') And Exists('$(FfmpegBundleDirectory)\LICENSE.txt')">
+  <!-- The pinned FolderProfile adds its full verified bundle after preparation,
+       so a first Publish also includes every notice and source review document. -->
+  <ItemGroup Condition="'$(DesktopPrepareApprovedFfmpegBundle)' != 'true' And Exists('$(FfmpegBundleDirectory)\ffmpeg.exe') And Exists('$(FfmpegBundleDirectory)\ffprobe.exe') And Exists('$(FfmpegBundleDirectory)\LICENSE.txt')">
     <Content Include="$(FfmpegBundleDirectory)\ffmpeg.exe" Link="tools\ffmpeg\ffmpeg.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(FfmpegBundleDirectory)\ffprobe.exe" Link="tools\ffmpeg\ffprobe.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(FfmpegBundleDirectory)\LICENSE.txt" Link="tools\ffmpeg\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
@@ -234,12 +266,14 @@
     </PropertyGroup>
     <MSBuild Projects="..\TOOL-UPDATER\TOOL-UPDATER.csproj"
              Targets="Publish"
+             RemoveProperties="PublishProfile;WebPublishProfileFile;PublishProfileFullPath;DesktopVisualStudioPackageEnabled"
              Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;PublishDir=$(UpdaterPublishDirectory)" />
     <ItemGroup>
       <UpdaterPublishedFile Include="$(UpdaterPublishDirectory)VideoMaker.Updater.exe" />
       <ResolvedFileToPublish Include="@(UpdaterPublishedFile)">
         <RelativePath>_updater\VideoMaker.Updater.exe</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
       </ResolvedFileToPublish>
     </ItemGroup>
   </Target>
@@ -250,12 +284,14 @@
     </PropertyGroup>
     <MSBuild Projects="..\TOOL-VIETSUB-TRANSLATION-WORKER\TOOL-VIETSUB-TRANSLATION-WORKER.csproj"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=false;PublishDir=$(TranslationWorkerPublishDirectory)" />
+             RemoveProperties="Version;VersionPrefix;VersionSuffix;AssemblyVersion;FileVersion;InformationalVersion;PublishProfile;WebPublishProfileFile;PublishProfileFullPath;DesktopVisualStudioPackageEnabled"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=false;OcrNativeRuntimeDirectory=$(OcrNativeRuntimeDirectory);PublishDir=$(TranslationWorkerPublishDirectory)" />
     <ItemGroup>
       <TranslationWorkerPublishedFile Include="$(TranslationWorkerPublishDirectory)**\*" />
       <ResolvedFileToPublish Include="@(TranslationWorkerPublishedFile)">
         <RelativePath>_translation_worker\%(TranslationWorkerPublishedFile.RecursiveDir)%(TranslationWorkerPublishedFile.Filename)%(TranslationWorkerPublishedFile.Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
       </ResolvedFileToPublish>
     </ItemGroup>
   </Target>
@@ -276,6 +312,7 @@
 
   <PropertyGroup>
     <PiperOfflineBundleVersion>piper-1.6.0-python-3.11.15-offline-v3</PiperOfflineBundleVersion>
+    <IncludePiperOfflinePayload Condition="'$(IncludePiperOfflinePayload)' == ''">true</IncludePiperOfflinePayload>
     <PiperOfflineBundleDirectory Condition="'$(PiperOfflineBundleDirectory)' == ''">$(MSBuildProjectDirectory)\..\artifacts\piper-offline\$(PiperOfflineBundleVersion)</PiperOfflineBundleDirectory>
   </PropertyGroup>
   <ItemGroup>
@@ -285,9 +322,10 @@
     <Content Include="$(PiperOfflineBundleDirectory)\manifest.json;$(PiperOfflineBundleDirectory)\piper-offline.zip"
              Link="components\piper\$(PiperOfflineBundleVersion)\%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true"
-             Condition="Exists('$(PiperOfflineBundleDirectory)\manifest.json') And Exists('$(PiperOfflineBundleDirectory)\piper-offline.zip')" />
+             Condition="'$(IncludePiperOfflinePayload)' == 'true' And Exists('$(PiperOfflineBundleDirectory)\manifest.json') And Exists('$(PiperOfflineBundleDirectory)\piper-offline.zip')" />
   </ItemGroup>
   <Target Name="ValidatePiperOfflineBundle" BeforeTargets="PrepareForPublish" Condition="'$(RequirePiperOfflineBundle)' == 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Test-PiperOfflineBundle.ps1&quot; -BundleDirectory &quot;$(PiperOfflineBundleDirectory)&quot; -ArtifactOnly" />
   </Target>
+  <Import Project="Build\VisualStudioRelease.targets" />
 </Project>

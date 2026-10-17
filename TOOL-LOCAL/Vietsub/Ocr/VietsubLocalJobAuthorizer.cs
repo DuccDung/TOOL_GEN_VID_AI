@@ -47,12 +47,15 @@ internal sealed class DesktopVietsubLocalAccessContext(
 {
     public string? CurrentUserId => sessionManager.Current?.User.UserId;
 
-    public Guid? SelectedOrganizationId => generationClient.SelectedOrganizationId;
+    public Guid? SelectedOrganizationId => TOOL_SHARED.Contracts.Accounts.LicenseProductPolicy.IsLocalOnly(licenseManager.Current?.FeatureFlagsJson)
+        ? Guid.Empty : generationClient.SelectedOrganizationId;
 
     public async Task EnsureSessionAndLicenseAsync(CancellationToken cancellationToken)
     {
         _ = await sessionManager.GetValidAccessTokenAsync(cancellationToken);
-        _ = await licenseManager.EnsureAccessAsync(cancellationToken);
+        var license = await licenseManager.EnsureAccessAsync(cancellationToken);
+        if (!TOOL_SHARED.Contracts.Accounts.LicenseProductPolicy.VietsubAllowed(license.FeatureFlagsJson))
+            throw new AccountClientException("license_feature_unavailable", "Gói hiện tại không cấp quyền tool dịch.", 403);
     }
 
     public Task<IReadOnlyList<OrganizationSummaryResponse>> GetOrganizationsAsync(
@@ -78,7 +81,6 @@ internal sealed class VietsubLocalJobAuthorizer(
         CancellationToken cancellationToken)
     {
         if (!string.Equals(accessContext.CurrentUserId, userId, StringComparison.Ordinal)
-            || organizationId == Guid.Empty
             || accessContext.SelectedOrganizationId != organizationId
             || project.OrganizationId != organizationId
             || !string.Equals(project.OwnerUserId, userId, StringComparison.Ordinal))
@@ -99,6 +101,13 @@ internal sealed class VietsubLocalJobAuthorizer(
                 "License hoặc phiên thiết bị không còn hiệu lực.",
                 exception);
         }
+
+        // Personal Local projects are owned by the authenticated user, not an organization.
+        // Recheck after the asynchronous license refresh before permitting any job.
+        if (accessContext.CurrentUserId != userId || accessContext.SelectedOrganizationId != organizationId)
+            throw new VietsubLocalJobAuthorizationException(VietsubLocalJobAuthorizationErrorCodes.AccessDenied,
+                "Ngữ cảnh tài khoản đã thay đổi.");
+        if (organizationId == Guid.Empty) return;
 
         IReadOnlyList<OrganizationSummaryResponse> organizations;
         try

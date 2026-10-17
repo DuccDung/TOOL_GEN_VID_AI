@@ -3,14 +3,86 @@ param(
     [string]$SourceWebRoot = (Join-Path $PSScriptRoot '..\TOOL-LOCAL\Web\dist'),
     [switch]$ProbeWebView2,
     [switch]$ProbeBundledComponents,
-    [switch]$ProbePiperOffline
+    [switch]$ProbePiperOffline,
+    [switch]$RequireQwenModel,
+    [switch]$ProbeQwenOffline,
+    [switch]$AcceptQwenResourceWarning,
+    [ValidateSet('Bundled', 'Server', 'StaticArchive')][string]$ExpectedModelDeliveryMode = 'Bundled',
+    [string]$ModelDistributionTrustRootPath = '',
+    [string]$ExpectedVersion = '',
+    [int]$ExpectedBuildNumber = 0,
+    [string]$ExpectedChannel = '',
+    [ValidateSet(2, 3)][int]$ExpectedDistributionProtocol = 2,
+    [string]$ExpectedProfile = ''
 )
 
 $ErrorActionPreference = 'Stop'
+function Assert-DesktopCompiledStaticPolicy {
+    param($PolicyReport, [int]$ExitCode, [string]$ExpectedVersion = '', [int]$ExpectedBuildNumber = 0,
+        [string]$ExpectedChannel = '', [ValidateSet(2, 3)][int]$ExpectedDistributionProtocol = 2, [string]$ExpectedProfile = '')
+    if ($ExpectedDistributionProtocol -eq 3 -and [string]::IsNullOrWhiteSpace($ExpectedProfile)) {
+        throw 'Shared protocol validation requires the expected release profile.'
+    }
+    if ($ExitCode -ne 0 -or $null -eq $PolicyReport -or $PolicyReport.required -ne $true -or
+        $PolicyReport.BundleId -cne 'models-20261016-03' -or
+        $PolicyReport.ArchiveSha256 -cne 'e9939863910af178ec6be6e99f7fcc16948b6a8d916bd5b32bc0a50d92d3f471') {
+        throw 'The published desktop does not contain the required approved StaticArchive policy.'
+    }
+    if (($ExpectedVersion -and $PolicyReport.version -cne $ExpectedVersion) -or
+        ($ExpectedBuildNumber -gt 0 -and $PolicyReport.buildNumber -ne $ExpectedBuildNumber) -or
+        ($ExpectedChannel -and $PolicyReport.channel -cne $ExpectedChannel) -or
+        $PolicyReport.distributionProtocol -ne $ExpectedDistributionProtocol -or
+        ($ExpectedProfile -and $PolicyReport.profile -cne $ExpectedProfile) -or
+        $PolicyReport.downloadPolicyVersion -ne 1) {
+        throw 'The published desktop compiled identity does not match release version/build/channel/protocol/profile.'
+    }
+}
+if ($ExpectedDistributionProtocol -eq 3 -and [string]::IsNullOrWhiteSpace($ExpectedProfile)) {
+    throw 'Shared protocol validation requires -ExpectedProfile.'
+}
 $candidateRoot = [System.IO.Path]::GetFullPath($PublishRoot)
+if ($ExpectedModelDeliveryMode -eq 'Server') {
+    if ($ProbePiperOffline -or $RequireQwenModel -or $ProbeQwenOffline) { throw 'Server model-delivery validation must not run bundled model probes.' }
+    & (Join-Path $PSScriptRoot 'Test-ModelDistributionPublishSettings.ps1') -SettingsPath (Join-Path $candidateRoot 'appsettings.json') `
+        -ModelDeliveryMode Server -TrustRootPath $ModelDistributionTrustRootPath -PublishRoot $candidateRoot -ProbeEmbeddedTrustRoot | Out-Null
+}
+if ($ExpectedModelDeliveryMode -eq 'StaticArchive') {
+    if ($ProbePiperOffline -or $RequireQwenModel -or $ProbeQwenOffline) { throw 'StaticArchive validation must not use diagnostic bundled-model probes.' }
+    & (Join-Path $PSScriptRoot 'Test-ModelDistributionPublishSettings.ps1') -SettingsPath (Join-Path $candidateRoot 'appsettings.json') `
+        -ModelDeliveryMode StaticArchive -PublishRoot $candidateRoot | Out-Null
+    $policyStart = New-Object Diagnostics.ProcessStartInfo
+    $policyStart.FileName = Join-Path $candidateRoot 'TOOL-LOCAL.exe'
+    $policyStart.Arguments = '--check-static-model-policy'
+    $policyStart.WorkingDirectory = $candidateRoot
+    $policyStart.UseShellExecute = $false
+    $policyStart.CreateNoWindow = $true
+    $policyStart.RedirectStandardOutput = $true
+    $policyStart.RedirectStandardError = $true
+    $policyProcess = New-Object Diagnostics.Process
+    $policyProcess.StartInfo = $policyStart
+    try {
+        if (-not $policyProcess.Start()) { throw 'Cannot verify the embedded StaticArchive policy.' }
+        $policyOutput = $policyProcess.StandardOutput.ReadToEndAsync()
+        $policyError = $policyProcess.StandardError.ReadToEndAsync()
+        if (-not $policyProcess.WaitForExit(30000)) { $policyProcess.Kill(); $policyProcess.WaitForExit(); throw 'StaticArchive policy probe timed out.' }
+        $null = $policyError.GetAwaiter().GetResult()
+        $policyReport = $policyOutput.GetAwaiter().GetResult() | ConvertFrom-Json
+        Assert-DesktopCompiledStaticPolicy -PolicyReport $policyReport -ExitCode $policyProcess.ExitCode `
+            -ExpectedVersion $ExpectedVersion -ExpectedBuildNumber $ExpectedBuildNumber -ExpectedChannel $ExpectedChannel `
+            -ExpectedDistributionProtocol $ExpectedDistributionProtocol -ExpectedProfile $ExpectedProfile
+    } finally { $policyProcess.Dispose() }
+}
+$qwenState = 'NOT_CHECKED'
+if ($RequireQwenModel -or $ProbeQwenOffline) {
+    & (Join-Path $PSScriptRoot 'Test-QwenOfflineBundle.ps1') -PublishRoot $candidateRoot -ArtifactOnly | Out-Null
+    $qwenState = 'ARTIFACT_VERIFIED'
+}
 & (Join-Path $PSScriptRoot 'Test-OcrNativeRuntime.ps1') -BundleDirectory $candidateRoot | Out-Null
+& (Join-Path $PSScriptRoot 'Test-OcrNativeRuntime.ps1') -BundleDirectory (Join-Path $candidateRoot '_translation_worker') | Out-Null
 $sourceRoot = [System.IO.Path]::GetFullPath($SourceWebRoot)
-& (Join-Path $PSScriptRoot 'Test-PiperOfflineBundle.ps1') -PublishRoot $candidateRoot -ArtifactOnly | Out-Null
+if ($ExpectedModelDeliveryMode -eq 'Bundled') {
+    & (Join-Path $PSScriptRoot 'Test-PiperOfflineBundle.ps1') -PublishRoot $candidateRoot -ArtifactOnly | Out-Null
+}
 if ($ProbePiperOffline) {
     $piperWorkspace = Join-Path ([IO.Path]::GetTempPath()) ('vm-piper-offline-' + [Guid]::NewGuid().ToString('N'))
     try {
@@ -45,12 +117,16 @@ $required = @(
     '_updater\VideoMaker.Updater.exe',
     '_translation_worker\VideoMaker.Vietsub.TranslationWorker.exe',
     '_translation_worker\LLamaSharp.dll',
+    '_translation_worker\msvcp140.dll', '_translation_worker\vcruntime140.dll',
+    '_translation_worker\vcruntime140_1.dll', '_translation_worker\vcomp140.dll',
+    '_translation_worker\third_party\msvc\MSVC_RUNTIME.json', '_translation_worker\third_party\msvc\MSVC-NOTICE.md',
     '_translation_worker\runtimes\win-x64\native\avx2\ggml-cpu.dll',
     'third_party\translation\LICENSE-NVIDIA-CUDA-12.4.txt',
     '_translation_worker\VideoMaker.Vietsub.TranslationWorker.dll',
     '_translation_worker\VideoMaker.Vietsub.TranslationWorker.runtimeconfig.json',
     '_translation_worker\VideoMaker.Vietsub.TranslationWorker.deps.json',
     '_translation_worker\coreclr.dll', '_translation_worker\hostfxr.dll',
+    '_translation_worker\hostpolicy.dll', '_translation_worker\System.Private.CoreLib.dll',
     'wwwroot\index.html'
 )
 foreach ($profile in @('avx2', 'avx', 'noavx')) {
@@ -163,5 +239,9 @@ if ($ProbeBundledComponents) {
     & (Join-Path $PSScriptRoot 'Test-DesktopBundleRuntime.ps1') -PublishRoot $candidateRoot | Out-Null
     $bundledState = 'READY'
 }
+if ($ProbeQwenOffline) {
+    & (Join-Path $PSScriptRoot 'Test-QwenOfflineBundle.ps1') -PublishRoot $candidateRoot -AcceptResourceWarning:$AcceptQwenResourceWarning | Out-Null
+    $qwenState = 'READY'
+}
 [pscustomobject]@{ RequiredComponents = $required.Count; WebAssets = $sourceFiles.Count; MissingOrMismatched = 0;
-    WebView2State = $webView2State; BundledComponentsState = $bundledState }
+    WebView2State = $webView2State; BundledComponentsState = $bundledState; QwenOfflineState = $qwenState; ModelDeliveryMode = $ExpectedModelDeliveryMode }

@@ -2,11 +2,15 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using TOOL_SERVER.Authentication;
+using TOOL_SERVER.Accounts;
 using TOOL_SERVER.Data;
 using TOOL_SERVER.Domain.Accounts;
 using TOOL_SERVER.Domain.Organizations;
 using TOOL_SERVER.Domain.Providers;
 using TOOL_SERVER.Payments;
+using Microsoft.Extensions.Options;
+using TOOL_SERVER.Vietsub.Translation;
+using TOOL_SHARED.Contracts.Accounts;
 using TOOL_SHARED.Contracts.Organizations;
 using TOOL_SHARED.Contracts.Common;
 
@@ -33,7 +37,8 @@ internal sealed partial class OrganizationProvisioningAdminService(
     ProviderAdminDbContext providerDb,
     TimeProvider timeProvider,
     ILicensePaymentService paymentService,
-    IOrganizationProvisioningReadinessEvaluator runtimeReadinessEvaluator) : IOrganizationProvisioningAdminService
+    IOrganizationProvisioningReadinessEvaluator runtimeReadinessEvaluator,
+    IOptions<VietsubCloudTranslationOptions>? cloudOptions = null) : IOrganizationProvisioningAdminService
 {
     public async Task<IReadOnlyList<OrganizationPoolSummaryResponse>> GetPoolsAsync(CancellationToken cancellationToken)
     {
@@ -51,13 +56,15 @@ internal sealed partial class OrganizationProvisioningAdminService(
         var runtimeReadiness = await EvaluateRuntimeReadinessAsync(
             organizations.Where(x => x.IsAutoAssignmentEnabled && x.IsReady),
             cancellationToken);
-        return pools.Select(pool => ToSummary(
+        var summaries = new List<OrganizationPoolSummaryResponse>();
+        foreach (var pool in pools) summaries.Add(await ToSummaryAsync(
             pool,
             organizations,
             plans,
             organizationDirectory,
             planDirectory,
-            runtimeReadiness)).ToArray();
+            runtimeReadiness, cancellationToken));
+        return summaries;
     }
 
     public async Task<PagedResponse<OrganizationPoolSummaryResponse>> GetPoolsPageAsync(
@@ -89,7 +96,8 @@ internal sealed partial class OrganizationProvisioningAdminService(
             .ToDictionaryAsync(x => x.LicensePlanId, cancellationToken);
         var runtimeReadiness = await EvaluateRuntimeReadinessAsync(
             organizations.Where(x => x.IsAutoAssignmentEnabled && x.IsReady), cancellationToken);
-        var items = pools.Select(pool => ToSummary(pool, organizations, plans, organizationDirectory, planDirectory, runtimeReadiness)).ToArray();
+        var items = new List<OrganizationPoolSummaryResponse>();
+        foreach (var pool in pools) items.Add(await ToSummaryAsync(pool, organizations, plans, organizationDirectory, planDirectory, runtimeReadiness, cancellationToken));
         return new PagedResponse<OrganizationPoolSummaryResponse>(items, effectivePage, pageSize, totalCount);
     }
 
@@ -133,15 +141,38 @@ internal sealed partial class OrganizationProvisioningAdminService(
             }
         }
 
-        return new OrganizationPoolDetailResponse(
-            ToSummary(pool, organizationLinks, allPlanLinks, organizations, plans, runtimeReadiness),
-            organizationLinks.Select(link => ToOrganizationResponse(
+        var responses = new List<OrganizationPoolOrganizationResponse>();
+        foreach (var link in organizationLinks)
+        {
+            var response = ToOrganizationResponse(
                 link,
                 organizations[link.OrganizationId],
                 pool.Status == OrganizationPoolStatuses.Active && planLinks.Any(x =>
                     x.IsActive &&
                     plans.TryGetValue(x.LicensePlanId, out var plan) &&
-                    IsSellable(plan)))).ToArray(),
+                    IsSellable(plan)));
+            var receiving = false;
+            foreach (var mapping in planLinks.Where(x => x.IsActive && IsSellable(plans[x.LicensePlanId])))
+            {
+                var flags = plans[mapping.LicensePlanId].FeatureFlagsJson;
+                if (LicenseProductPolicy.Scope(flags) == LicenseProductPolicy.Vietsub)
+                    receiving = (await VietsubPlanReadiness.EvaluateAsync(accountDb, link.OrganizationId,
+                        LicenseProductPolicy.CloudAllowed(flags), mapping.DefaultMemberMonthlyBudgetLimit, UtcNow(), cloudOptions?.Value, cancellationToken)).Ready;
+                else receiving = link.IsReady && runtimeReadiness.TryGetValue(link.OrganizationId, out var check) && check.Ready;
+                if (receiving) break;
+            }
+            receiving = receiving && pool.Status == OrganizationPoolStatuses.Active && link.IsAutoAssignmentEnabled &&
+                organizations[link.OrganizationId].Status == OrganizationStatuses.Active;
+            responses.Add(response with {
+                CanReceiveCustomers = receiving,
+                AllocatableAvailableSeats = receiving ? Math.Max(0, link.SeatCapacity - link.ActiveSeatCount - link.ReservedSeatCount) : 0,
+                VietsubLocal = await ProductReadinessAsync(link.OrganizationId, false, null, cancellationToken),
+                VietsubCloud = await ProductReadinessAsync(link.OrganizationId, true, null, cancellationToken)
+            });
+        }
+        return new OrganizationPoolDetailResponse(
+            await ToSummaryAsync(pool, organizationLinks, allPlanLinks, organizations, plans, runtimeReadiness, cancellationToken),
+            responses,
             planLinks.Select(link => ToPlanResponse(link, plans[link.LicensePlanId], pool)).ToArray(),
             await MapAssignmentsAsync(recentAssignments, cancellationToken));
     }
@@ -171,13 +202,13 @@ internal sealed partial class OrganizationProvisioningAdminService(
         accountDb.OrganizationPools.Add(pool);
         AddAudit(adminUserId, "OrganizationPoolCreated", new { pool.OrganizationPoolId, pool.Code, pool.Name, pool.Status }, now);
         await accountDb.SaveChangesAsync(cancellationToken);
-        return ToSummary(
+        return await ToSummaryAsync(
             pool,
             [],
             [],
             new Dictionary<Guid, Organization>(),
             new Dictionary<Guid, LicensePlan>(),
-            new Dictionary<Guid, OrganizationProvisioningReadiness>());
+            new Dictionary<Guid, OrganizationProvisioningReadiness>(), cancellationToken);
     }
 
     public async Task<OrganizationPoolSummaryResponse> UpdatePoolAsync(
@@ -212,7 +243,7 @@ internal sealed partial class OrganizationProvisioningAdminService(
         var runtimeReadiness = await EvaluateRuntimeReadinessAsync(
             organizationLinks.Where(x => x.IsAutoAssignmentEnabled && x.IsReady),
             cancellationToken);
-        return ToSummary(pool, organizationLinks, planLinks, organizationDirectory, planDirectory, runtimeReadiness);
+        return await ToSummaryAsync(pool, organizationLinks, planLinks, organizationDirectory, planDirectory, runtimeReadiness, cancellationToken);
     }
 
     public async Task<OrganizationPoolOrganizationResponse> UpsertOrganizationAsync(
@@ -222,6 +253,9 @@ internal sealed partial class OrganizationProvisioningAdminService(
         CancellationToken cancellationToken)
     {
         var pool = await RequirePoolAsync(poolId, cancellationToken);
+        if (request.ProductScope is not (null or LicenseProductPolicy.AllTools or LicenseProductPolicy.Vietsub) ||
+            (request.ProductScope != LicenseProductPolicy.Vietsub && request.VietsubCloudEnabled is not null))
+            throw Validation("invalid_product_scope", "Loại gói kiểm tra phân bổ không hợp lệ.");
         if (request.SeatCapacity is < 1 or > 100000)
         {
             throw Validation("invalid_seat_capacity", "Sức chứa khách hàng phải từ 1 đến 100.000.");
@@ -253,7 +287,10 @@ internal sealed partial class OrganizationProvisioningAdminService(
         var readinessMessage = NormalizeOptional(request.ReadinessMessage, 500);
         if (request.IsReady)
         {
-            var readiness = await runtimeReadinessEvaluator.EvaluateAsync(request.OrganizationId, cancellationToken);
+            var readiness = request.ProductScope == LicenseProductPolicy.Vietsub
+                ? await VietsubPlanReadiness.EvaluateAsync(accountDb, request.OrganizationId, request.VietsubCloudEnabled == true,
+                    null, UtcNow(), cloudOptions?.Value, cancellationToken)
+                : await runtimeReadinessEvaluator.EvaluateAsync(request.OrganizationId, cancellationToken);
             if (!readiness.Ready)
             {
                 throw Conflict("organization_not_ready", readiness.Message);
@@ -271,8 +308,12 @@ internal sealed partial class OrganizationProvisioningAdminService(
         link.SeatCapacity = request.SeatCapacity;
         link.Priority = request.Priority;
         link.IsAutoAssignmentEnabled = request.IsAutoAssignmentEnabled;
-        link.IsReady = request.IsReady;
-        link.ReadinessMessage = readinessMessage;
+        // A Local/Cloud check must never mark the organization ready for video AI.
+        if (request.ProductScope != LicenseProductPolicy.Vietsub)
+        {
+            link.IsReady = request.IsReady;
+            link.ReadinessMessage = readinessMessage;
+        }
         link.UpdatedAtUtc = now;
         if (existing is null)
         {
@@ -302,7 +343,10 @@ internal sealed partial class OrganizationProvisioningAdminService(
                                         plan.DefaultDurationDays <= 3650
                                   select mapping.LicensePlanId)
                               .AnyAsync(cancellationToken);
-        return ToOrganizationResponse(link, organization, poolCanAllocate);
+        return ToOrganizationResponse(link, organization, poolCanAllocate) with {
+            VietsubLocal = await ProductReadinessAsync(link.OrganizationId, false, null, cancellationToken),
+            VietsubCloud = await ProductReadinessAsync(link.OrganizationId, true, null, cancellationToken)
+        };
     }
 
     public async Task RemoveOrganizationAsync(
@@ -325,6 +369,21 @@ internal sealed partial class OrganizationProvisioningAdminService(
     }
 
     public async Task<LicensePlanOrganizationPoolResponse> UpsertLicensePlanAsync(
+        Guid licensePlanId, SaveLicensePlanOrganizationPoolRequest request, string adminUserId, CancellationToken cancellationToken)
+    {
+        if (!accountDb.Database.IsRelational() || accountDb.Database.CurrentTransaction is not null)
+            return await UpsertLicensePlanCoreAsync(licensePlanId, request, adminUserId, cancellationToken);
+        return await accountDb.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            accountDb.ChangeTracker.Clear();
+            await using var tx = await accountDb.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken);
+            var result = await UpsertLicensePlanCoreAsync(licensePlanId, request, adminUserId, cancellationToken);
+            await tx.CommitAsync(cancellationToken);
+            return result;
+        });
+    }
+
+    private async Task<LicensePlanOrganizationPoolResponse> UpsertLicensePlanCoreAsync(
         Guid licensePlanId,
         SaveLicensePlanOrganizationPoolRequest request,
         string adminUserId,
@@ -336,7 +395,23 @@ internal sealed partial class OrganizationProvisioningAdminService(
         }
         var plan = await accountDb.LicensePlans.SingleOrDefaultAsync(x => x.LicensePlanId == licensePlanId, cancellationToken)
             ?? throw NotFound("license_plan_not_found", "Không tìm thấy gói license.");
+        if (LicenseProductPolicy.IsLocalOnly(plan.FeatureFlagsJson))
+            throw Conflict("local_plan_allocation_not_required", "Gói chỉ dịch Local được cấp license trực tiếp; không liên kết nhóm nhận khách.");
         var pool = await RequirePoolAsync(request.OrganizationPoolId, cancellationToken);
+        var vietsub = LicenseProductPolicy.Scope(plan.FeatureFlagsJson) == LicenseProductPolicy.Vietsub;
+        var quota = vietsub && !LicenseProductPolicy.CloudAllowed(plan.FeatureFlagsJson) ? 0 : request.DefaultMemberMonthlyBudgetLimit;
+        if (vietsub && request.IsActive && IsSellable(plan))
+        {
+            var candidates = await accountDb.OrganizationPoolOrganizations.AsNoTracking().Where(x =>
+                x.OrganizationPoolId == pool.OrganizationPoolId && x.IsAutoAssignmentEnabled &&
+                x.SeatCapacity > x.ActiveSeatCount + x.ReservedSeatCount).ToArrayAsync(cancellationToken);
+            var ready = false;
+            foreach (var candidate in candidates)
+                if ((await VietsubPlanReadiness.EvaluateAsync(accountDb, candidate.OrganizationId,
+                    LicenseProductPolicy.CloudAllowed(plan.FeatureFlagsJson), quota, UtcNow(), cloudOptions?.Value, cancellationToken)).Ready)
+                { ready = true; break; }
+            if (!ready) throw Conflict("organization_not_ready", "Chưa có tổ chức còn chỗ và đủ điều kiện cho loại gói dịch này.");
+        }
         var existing = await accountDb.LicensePlanOrganizationPools.SingleOrDefaultAsync(
             x => x.LicensePlanId == licensePlanId,
             cancellationToken);
@@ -359,8 +434,9 @@ internal sealed partial class OrganizationProvisioningAdminService(
             LicensePlanId = licensePlanId,
             CreatedAtUtc = now
         };
+        await LicensePlanQuotaGuard.EnsureCanChangeAsync(accountDb, licensePlanId, existing, quota, now, cancellationToken);
         link.OrganizationPoolId = request.OrganizationPoolId;
-        link.DefaultMemberMonthlyBudgetLimit = request.DefaultMemberMonthlyBudgetLimit;
+        link.DefaultMemberMonthlyBudgetLimit = quota;
         link.IsActive = request.IsActive;
         link.UpdatedAtUtc = now;
         if (existing is null)
@@ -598,24 +674,41 @@ internal sealed partial class OrganizationProvisioningAdminService(
         await accountDb.OrganizationPools.SingleOrDefaultAsync(x => x.OrganizationPoolId == poolId, cancellationToken)
         ?? throw NotFound("organization_pool_not_found", "Không tìm thấy pool tổ chức.");
 
-    private static OrganizationPoolSummaryResponse ToSummary(
+    private async Task<OrganizationProductReadinessResponse> ProductReadinessAsync(Guid organizationId, bool cloud,
+        decimal? quota, CancellationToken ct)
+    {
+        var result = await VietsubPlanReadiness.EvaluateAsync(accountDb, organizationId, cloud, quota, UtcNow(), cloudOptions?.Value, ct);
+        return new(result.Ready, result.Message, result.BlockingCode, result.Target, result.ModelId);
+    }
+
+    private async Task<OrganizationPoolSummaryResponse> ToSummaryAsync(
         OrganizationPool pool,
         IReadOnlyCollection<OrganizationPoolOrganization> organizations,
         IReadOnlyCollection<LicensePlanOrganizationPool> plans,
         IReadOnlyDictionary<Guid, Organization> organizationDirectory,
         IReadOnlyDictionary<Guid, LicensePlan> planDirectory,
-        IReadOnlyDictionary<Guid, OrganizationProvisioningReadiness> runtimeReadiness)
+        IReadOnlyDictionary<Guid, OrganizationProvisioningReadiness> runtimeReadiness, CancellationToken ct)
     {
         var rows = organizations.Where(x => x.OrganizationPoolId == pool.OrganizationPoolId).ToArray();
-        var allocatableRows = rows.Where(x =>
-                x.IsAutoAssignmentEnabled &&
-                x.IsReady &&
-                organizationDirectory.TryGetValue(x.OrganizationId, out var organization) &&
-                organization.Status == OrganizationStatuses.Active &&
-                runtimeReadiness.TryGetValue(x.OrganizationId, out var readiness) &&
-                readiness.Ready)
-            .ToArray();
         var planRows = plans.Where(x => x.OrganizationPoolId == pool.OrganizationPoolId).ToArray();
+        var allocatableRows = new List<OrganizationPoolOrganization>();
+        foreach (var row in rows.Where(x => x.IsAutoAssignmentEnabled &&
+            organizationDirectory.TryGetValue(x.OrganizationId, out var org) && org.Status == OrganizationStatuses.Active))
+        {
+            var eligible = row.IsReady && runtimeReadiness.TryGetValue(row.OrganizationId, out var readiness) && readiness.Ready;
+            var sellableMappings = planRows.Where(x => x.IsActive && planDirectory.TryGetValue(x.LicensePlanId, out var plan) && IsSellable(plan)).ToArray();
+            if (sellableMappings.Length > 0) eligible = false;
+            foreach (var mapping in sellableMappings)
+            {
+                var flags = planDirectory[mapping.LicensePlanId].FeatureFlagsJson;
+                if (LicenseProductPolicy.Scope(flags) == LicenseProductPolicy.Vietsub)
+                    eligible = (await VietsubPlanReadiness.EvaluateAsync(accountDb, row.OrganizationId,
+                        LicenseProductPolicy.CloudAllowed(flags), mapping.DefaultMemberMonthlyBudgetLimit, UtcNow(), cloudOptions?.Value, ct)).Ready;
+                else eligible = row.IsReady && runtimeReadiness.TryGetValue(row.OrganizationId, out var check) && check.Ready;
+                if (eligible) break;
+            }
+            if (eligible) allocatableRows.Add(row);
+        }
         var capacity = rows.Sum(x => x.SeatCapacity);
         var active = rows.Sum(x => x.ActiveSeatCount);
         var reserved = rows.Sum(x => x.ReservedSeatCount);
@@ -642,7 +735,7 @@ internal sealed partial class OrganizationProvisioningAdminService(
             Math.Max(0, capacity - active - reserved),
             pool.CreatedAtUtc,
             pool.UpdatedAtUtc,
-            allocatableRows.Length,
+            allocatableRows.Count,
             activePlanCount,
             allocatableCapacity,
             allocatableAvailable);
@@ -694,7 +787,9 @@ internal sealed partial class OrganizationProvisioningAdminService(
             link.UpdatedAtUtc,
             plan.IsActive,
             plan.IsPublic,
-            IsSellable(plan));
+            IsSellable(plan),
+            LicenseProductPolicy.Scope(plan.FeatureFlagsJson),
+            LicenseProductPolicy.CloudAllowed(plan.FeatureFlagsJson));
 
     private static bool IsSellable(LicensePlan plan) =>
         plan.IsActive &&

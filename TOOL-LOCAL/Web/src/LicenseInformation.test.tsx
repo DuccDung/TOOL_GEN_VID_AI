@@ -16,7 +16,7 @@ vi.mock('./bridge', () => ({
   }
 }));
 vi.mock('./features/vietsub/useVietsubModule', () => ({
-  useVietsubModule: () => ({ state: { enabled: false, loading: false, busy: false } })
+  useVietsubModule: () => ({ state: { enabled: false, loading: false, busy: false, projects: [], selectedProject: null, jobs: [] } })
 }));
 
 const license: CurrentLicense = {
@@ -54,6 +54,14 @@ describe('license information entry points', () => {
     return mocked.results[index].value as string;
   };
   const expectNoPayment = () => expect(vi.mocked(postToHost).mock.calls.some(call => call[0].startsWith('license.payment.'))).toBe(false);
+  const confirmPersonalSetupReady = async () => {
+    const mocked = vi.mocked(postToHost).mock;
+    const index = mocked.calls.map((call, current) => call[0] === 'system.setup.get' ? current : -1).filter(current => current >= 0).at(-1)!;
+    await emit({ type: 'system.setup.status', requestId: mocked.results[index].value as string,
+      payload: { organizationId: '00000000-0000-0000-0000-000000000000', contextGeneration: 'personal-context', revision: 1,
+        startupRequired: true, components: ['media', 'ocr', 'qwen', 'piper'].map(id => ({ id, name: id, version: '1',
+          state: 'READY', message: 'Đã kiểm tra', canInstall: true, canVerify: true, canRepair: true })) } });
+  };
 
   beforeEach(async () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -71,6 +79,65 @@ describe('license information entry points', () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+  });
+
+  it('Local opens translation and keeps every other menu visible and locked without sending commands', async () => {
+    await emit({ type:'dashboard.state', payload:dashboard({ ...license, featureFlagsJson:'{"productScope":"vietsub","vietsubCloudEnabled":false}' }) });
+    await confirmPersonalSetupReady();
+    expect(container.querySelector('.topbar h1')?.textContent).toBe('Dịch phụ đề');
+    expect(container.querySelector('.app-main')?.textContent).toContain('Dịch phụ đề chưa sẵn sàng');
+    expect(container.querySelector('.vietsub-create-card')).toBeNull();
+    expect(container.querySelector('.local-translation-setup summary')?.textContent).toBe('Thiết lập công cụ dịch');
+    expect(container.querySelector('.local-translation-setup')?.textContent).not.toContain('Chọn tổ chức');
+    const nav = container.querySelector('.sidebar-nav')!;
+    expect(nav.textContent).toContain('Tạo Video Dài');
+    expect(nav.textContent).toContain('Tải video Bilibili');
+    expect(nav.textContent).toContain('API AI tổ chức');
+    expect(nav.textContent).toContain('Đăng TikTok');
+    expect(nav.textContent).toContain('Cài đặt');
+    const available = nav.querySelectorAll('button:not([aria-disabled="true"])');
+    expect(available).toHaveLength(1);
+    expect(available[0].textContent).toBe('Dịch phụ đề');
+    const callsBefore = vi.mocked(postToHost).mock.calls.length;
+    for (const locked of nav.querySelectorAll<HTMLButtonElement>('button[aria-disabled="true"]')) {
+      expect(locked.querySelector('.nav-lock-icon')).not.toBeNull();
+      expect(locked.title).toContain('Gói Local');
+      expect(document.getElementById(locked.getAttribute('aria-describedby')!)?.textContent).toContain('Dịch phụ đề');
+      await click(locked);
+    }
+    const create = container.querySelector<HTMLButtonElement>('.new-video-button')!;
+    expect(create.getAttribute('aria-disabled')).toBe('true');
+    await click(create);
+    expect(vi.mocked(postToHost).mock.calls).toHaveLength(callsBefore);
+    expect(container.querySelector('.topbar h1')?.textContent).toBe('Dịch phụ đề');
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(button('Thông tin gói')).toBeDefined();
+    expect(vi.mocked(postToHost).mock.calls.some(call => call[0] === 'project.create' || call[0].startsWith('generation.'))).toBe(false);
+  });
+
+  it('Local closes a previously open settings page and restores menus when the effective plan changes', async () => {
+    await click(container.querySelector<HTMLButtonElement>('.sidebar-nav [aria-label="Cài đặt"]')!);
+    expect(container.querySelector('.topbar h1')?.textContent).toBe('Cài đặt');
+    await emit({ type: 'license.activated', payload: { ...license, featureFlagsJson: '{"productScope":"vietsub"}' } });
+    await confirmPersonalSetupReady();
+    expect(container.querySelector('.topbar h1')?.textContent).toBe('Dịch phụ đề');
+    expect(container.querySelector('.sidebar-nav [aria-label="Cài đặt"]')?.getAttribute('aria-disabled')).toBe('true');
+    await click(button('Thông tin gói'));
+    expect(dialog().open).toBe(true);
+    await click(dialog().querySelector<HTMLButtonElement>('[aria-label="Đóng thông tin gói"]')!);
+    expect(container.querySelector('.sidebar [aria-label="Đăng xuất"]')?.getAttribute('aria-disabled')).toBeNull();
+    await emit({ type: 'dashboard.state', payload: dashboard(license) });
+    expect(container.querySelector('.sidebar-nav [aria-label="Cài đặt"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('.new-video-button')?.getAttribute('aria-disabled')).toBeNull();
+    await click(container.querySelector<HTMLButtonElement>('.sidebar-nav [aria-label="Cài đặt"]')!);
+    expect(container.querySelector('.topbar h1')?.textContent).toBe('Cài đặt');
+  });
+
+  it('translation Cloud plans keep their existing navigation policy', async () => {
+    await emit({ type: 'dashboard.state', payload: dashboard({ ...license, featureFlagsJson: '{"productScope":"vietsub","vietsubCloudEnabled":true}' }) });
+    expect(container.querySelector('.sidebar-nav [aria-label="Cài đặt"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('.sidebar-nav [aria-label="Tạo Video Dài"]')).toBeNull();
+    expect(container.querySelector('.new-video-button')).toBeNull();
   });
 
   it('opens account details from the sidebar and restores focus on Escape/cancel without payment requests', async () => {
@@ -131,9 +198,9 @@ describe('license information entry points', () => {
   it('shows an empty catalog with reload instead of an endless spinner or made-up plans', async () => {
     await click(button('Nâng cấp gói'));
     await emit({ type: 'license.offers', requestId: offersRequest(), payload: [] });
-    expect(dialog().textContent).toContain('Chưa có gói được mở bán');
+    expect(dialog().textContent).toContain('Hiện chưa có gói sử dụng');
     expect(dialog().textContent).not.toContain('Đang tải');
-    await act(async () => { const retry = button('Tải lại', dialog()); retry.click(); retry.click(); });
+    await act(async () => { const retry = button('Kiểm tra lại', dialog()); retry.click(); retry.click(); });
     expect(vi.mocked(postToHost).mock.calls.filter(call => call[0] === 'license.offers.get')).toHaveLength(2);
     expectNoPayment();
   });
@@ -150,7 +217,20 @@ describe('license information entry points', () => {
     await emit({ type: 'operation.error', requestId: newId, error: { code: 'payments_disabled', message: 'Thanh toán đang tạm đóng.' } });
     expect(dialog().querySelector('[role="alert"]')?.textContent).toContain('Thanh toán đang tạm đóng.');
     expect(container.querySelector('.toast-stack')?.textContent).toBe('');
-    await click(button('Thử lại', dialog()));
+    await click(button('Kiểm tra lại', dialog()));
+    await emit({ type: 'license.offers', requestId: offersRequest(), payload: [offer] });
+    expect(dialog().querySelectorAll('article')).toHaveLength(1);
+    expectNoPayment();
+  });
+
+  it('shows unavailable package sales as information in the upgrade dialog without a payment request', async () => {
+    await click(button('Nâng cấp gói'));
+    await emit({ type: 'operation.error', requestId: offersRequest(),
+      error: { code: 'payments_unavailable', message: 'Thanh toán đang tạm ngừng. Vui lòng thử lại sau.' } });
+    expect(dialog().textContent).toContain('Hiện chưa có gói sử dụng');
+    expect(dialog().textContent).not.toContain('Thanh toán đang tạm ngừng');
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    await click(button('Kiểm tra lại', dialog()));
     await emit({ type: 'license.offers', requestId: offersRequest(), payload: [offer] });
     expect(dialog().querySelectorAll('article')).toHaveLength(1);
     expectNoPayment();
@@ -162,11 +242,11 @@ describe('license information entry points', () => {
     const oldId = offersRequest();
     await act(async () => vi.advanceTimersByTime(30000));
     expect(dialog().textContent).toContain('Máy chủ chưa phản hồi');
-    await click(button('Thử lại', dialog()));
+    await click(button('Kiểm tra lại', dialog()));
     await emit({ type: 'license.offers', requestId: oldId, payload: [offer] });
     expect(dialog().textContent).toContain('Đang tải');
     await emit({ type: 'license.offers', requestId: offersRequest(), payload: [] });
-    expect(dialog().textContent).toContain('Chưa có gói được mở bán');
+    expect(dialog().textContent).toContain('Hiện chưa có gói sử dụng');
   });
 
   it('closes when account changes and never shows the previous response in the new account', async () => {

@@ -11,7 +11,10 @@ public sealed record AdminDesktopReleaseRequest(
     string? ReleaseNotes,
     bool IsMandatory,
     bool IsActive,
-    DateTime? PublishedAtUtc);
+    DateTime? PublishedAtUtc,
+    Guid? Revision = null);
+
+public sealed record AdminDesktopReleasePublishRequest(Guid Revision);
 
 public sealed record AdminDesktopArtifactResponse(
     Guid ArtifactId,
@@ -19,7 +22,14 @@ public sealed record AdminDesktopArtifactResponse(
     string FileName,
     long SizeBytes,
     string Sha256,
-    DateTime CreatedAtUtc);
+    DateTime CreatedAtUtc,
+    string SourceKind = "Internal",
+    string? DownloadUrl = null,
+    string InstallMode = "Legacy",
+    int DistributionProtocol = 1,
+    bool MetadataRegisteredOnly = false,
+    string? BoundPackageSha256 = null,
+    string? ModelBundleId = null);
 
 public sealed record AdminDesktopReleaseResponse(
     Guid ReleaseId,
@@ -32,11 +42,17 @@ public sealed record AdminDesktopReleaseResponse(
     bool IsMandatory,
     bool IsActive,
     DateTime PublishedAtUtc,
-    IReadOnlyList<AdminDesktopArtifactResponse> Artifacts);
+    IReadOnlyList<AdminDesktopArtifactResponse> Artifacts,
+    DateTime? FirstPublishedAtUtc = null,
+    Guid Revision = default);
 
 public sealed record DesktopReleasePackage(
     AppRelease Release,
-    AppReleaseArtifact Artifact);
+    AppReleaseArtifact Artifact,
+    TOOL_SHARED.Contracts.Updates.DesktopSharedBootstrapperResponse? SharedBootstrapper = null,
+    string? Profile = null,
+    string? MinimumBootstrapperVersion = null,
+    TOOL_SHARED.Contracts.Updates.DesktopPackageMetadataDocument? PackageMetadata = null);
 
 public sealed record StoredDesktopArtifact(
     string FileName,

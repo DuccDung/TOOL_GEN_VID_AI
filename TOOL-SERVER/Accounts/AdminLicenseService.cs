@@ -23,7 +23,7 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
                 (x.Status == "Active" || x.Status == "Trial") &&
                 x.StartsAtUtc <= now &&
                 (x.ExpiresAtUtc == null || x.ExpiresAtUtc > now) &&
-                x.LicensePlan.IsActive, cancellationToken),
+                x.RevokedAtUtc == null, cancellationToken),
             await dbContext.UserSessions.CountAsync(x =>
                 x.Status == SessionStatuses.Active &&
                 x.AbsoluteExpiresAtUtc > now &&
@@ -32,7 +32,7 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
                 (x.Status == "Active" || x.Status == "Trial") &&
                 x.ExpiresAtUtc > now &&
                 x.ExpiresAtUtc <= now.AddDays(7) &&
-                x.LicensePlan.IsActive, cancellationToken),
+                x.RevokedAtUtc == null, cancellationToken),
             await dbContext.UserLicenses.CountAsync(x =>
                 x.Status == "Suspended" || x.Status == "Revoked", cancellationToken));
     }
@@ -199,6 +199,9 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
             throw Conflict("plan_code_exists", "Mã gói đã tồn tại.");
         }
 
+        if (LicenseProductPolicy.Scope(plan.FeatureFlagsJson) != LicenseProductPolicy.Scope(normalized.FeatureFlagsJson) ||
+            LicenseProductPolicy.CloudAllowed(plan.FeatureFlagsJson) != LicenseProductPolicy.CloudAllowed(normalized.FeatureFlagsJson))
+            throw Conflict("license_plan_entitlements_immutable", "Quyền gói hiện có được giữ nguyên. Hãy nhân bản để tạo gói có quyền khác.");
         plan.PlanCode = normalized.PlanCode;
         plan.Name = normalized.Name;
         plan.Description = normalized.Description;
@@ -535,10 +538,9 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
         var currentByUser = licenses
             .Where(x => (x.Status == "Active" || x.Status == "Trial") &&
                         x.StartsAtUtc <= now &&
-                        (x.ExpiresAtUtc == null || x.ExpiresAtUtc > now) &&
-                        x.PlanIsActive)
+                        (x.ExpiresAtUtc == null || x.ExpiresAtUtc > now))
             .GroupBy(x => x.UserId)
-            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.ExpiresAtUtc).First().Response);
+            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.Status == "Active").ThenByDescending(y => y.ExpiresAtUtc).First().Response);
 
         return users.Select(user => new AdminUserSummaryResponse(
             user.UserId,
@@ -565,7 +567,7 @@ public sealed partial class AdminLicenseService(AccountDbContext dbContext, Time
         return licenses.Select(x => new LicenseRow(x.UserId, x.LicensePlan.IsActive, ToLicenseResponse(x))).ToArray();
     }
 
-    private static AdminLicensePlanResponse ToPlanResponse(LicensePlan plan) => new(
+    internal static AdminLicensePlanResponse ToPlanResponse(LicensePlan plan) => new(
         plan.LicensePlanId,
         plan.PlanCode,
         plan.Name,

@@ -2370,10 +2370,9 @@ internal sealed class VietsubWebBridge : IDisposable
 
     private VietsubUserContext RequireContext() =>
         _contextProvider?.Invoke() is { } context
-            && context.OrganizationId != Guid.Empty
             && !string.IsNullOrWhiteSpace(context.UserId)
                 ? context
-                : throw new InvalidOperationException("Hãy chọn tổ chức trước khi dùng Vietsub.");
+                : throw new InvalidOperationException("Hãy đăng nhập và kiểm tra gói sử dụng trước khi dùng Vietsub.");
 
     private void EnsureCurrentProjectContext(VietsubProjectManifest manifest)
     {

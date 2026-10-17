@@ -22,13 +22,19 @@ public sealed partial class LicensePaymentService(
     TimeProvider timeProvider,
     ILicensePaymentTelemetry telemetry,
     ILogger<LicensePaymentService> logger,
-    IOrganizationSeatProvisioningService? seatProvisioningService = null) : ILicensePaymentService
+    IOrganizationSeatProvisioningService? seatProvisioningService = null,
+    ISepayPaymentConfiguration? paymentConfiguration = null) : ILicensePaymentService
 {
     private readonly SepayPaymentOptions _options = options.Value;
 
     public async Task<IReadOnlyList<LicenseOfferResponse>> GetOffersAsync(CancellationToken cancellationToken)
     {
-        EnsurePaymentsReady();
+        var paymentOptions = await ResolvePaymentOptionsAsync(cancellationToken);
+        if (!paymentOptions.IsReady)
+        {
+            return [];
+        }
+
         var plans = await dbContext.LicensePlans
             .AsNoTracking()
             .Where(x => x.IsActive &&
@@ -43,12 +49,13 @@ public sealed partial class LicensePaymentService(
             .ThenBy(x => x.Name)
             .ToListAsync(cancellationToken);
 
-        var availability = seatProvisioningService is null
+        var allocatedPlans = plans.Where(x => LicenseProductPolicy.RequiresOrganizationAllocation(x.FeatureFlagsJson)).ToArray();
+        var availability = seatProvisioningService is null || allocatedPlans.Length == 0
             ? new Dictionary<Guid, OrganizationSeatAvailability>()
             : await seatProvisioningService.GetAvailabilityAsync(
-                plans.Select(x => x.LicensePlanId).ToArray(),
+                allocatedPlans.Select(x => x.LicensePlanId).ToArray(),
                 cancellationToken);
-        return plans.Select(x =>
+        return plans.Where(x => LicenseProductPolicy.Scope(x.FeatureFlagsJson) != "invalid").Select(x =>
         {
             availability.TryGetValue(x.LicensePlanId, out var seats);
             return new LicenseOfferResponse(
@@ -61,9 +68,11 @@ public sealed partial class LicensePaymentService(
                 x.MaxActivatedDevices,
                 ParseMarketingFeatures(x.MarketingFeaturesJson),
                 x.DisplayOrder,
-                seats?.IsAvailable ?? false,
+                LicenseProductPolicy.IsLocalOnly(x.FeatureFlagsJson) || (seats?.IsAvailable ?? false),
                 seats?.PoolName,
-                seats?.AvailableSeats);
+                seats?.AvailableSeats,
+                LicenseProductPolicy.Scope(x.FeatureFlagsJson),
+                LicenseProductPolicy.CloudAllowed(x.FeatureFlagsJson));
         })
             .ToArray();
     }
@@ -81,12 +90,24 @@ public sealed partial class LicensePaymentService(
         });
     }
 
+    public async Task<IReadOnlyList<LicenseOfferResponse>> GetOffersForUserAsync(string userId, CancellationToken ct)
+    {
+        var offers = await GetOffersAsync(ct);
+        var now = UtcNow();
+        var tail = await LicenseSchedule.TailAsync(dbContext, userId, now, ct);
+        if (tail is { ExpiresAtUtc: null }) return offers.Select(x => x with {
+            OrganizationSeatAvailable = false, PurchaseBlockedReason = "Tài khoản đang có gói không giới hạn thời hạn. Vui lòng liên hệ quản trị viên trước khi đổi gói."
+        }).ToArray();
+        var starts = tail?.ExpiresAtUtc ?? now;
+        return offers.Select(x => x with { ExpectedStartsAtUtc = NormalizeUtc(starts),
+            ExpectedExpiresAtUtc = NormalizeUtc(starts.AddDays(x.DurationDays)) }).ToArray();
+    }
+
     private async Task<LicensePaymentCheckoutResponse> CreateOrReuseCoreAsync(
         string userId,
         CreateLicensePaymentRequest request,
         CancellationToken cancellationToken)
     {
-        EnsurePaymentsReady();
         if (request.LicensePlanId == Guid.Empty ||
             string.IsNullOrWhiteSpace(request.IdempotencyKey) ||
             !IdempotencyKeyRegex().IsMatch(request.IdempotencyKey.Trim()))
@@ -99,6 +120,9 @@ public sealed partial class LicensePaymentService(
         await using var transaction = dbContext.Database.IsRelational()
             ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             : null;
+
+        var paymentOptions = await ResolvePaymentOptionsAsync(cancellationToken);
+        EnsurePaymentsReady(paymentOptions);
 
         var replay = await dbContext.LicensePayments
             .SingleOrDefaultAsync(
@@ -143,7 +167,7 @@ public sealed partial class LicensePaymentService(
             .FirstOrDefaultAsync(cancellationToken);
         if (existing is not null)
         {
-            if (seatProvisioningService is not null && existing.Status == LicensePaymentStatuses.Pending)
+            if (seatProvisioningService is not null && !LicenseProductPolicy.IsLocalOnly(existing.EntitlementSnapshotJson) && existing.Status == LicensePaymentStatuses.Pending)
             {
                 await seatProvisioningService.ReserveAsync(existing, now, cancellationToken);
                 await dbContext.SaveChangesAsync(cancellationToken);
@@ -160,6 +184,10 @@ public sealed partial class LicensePaymentService(
             return await BuildCheckoutResponseAsync(existing, now, true, cancellationToken);
         }
 
+        if (LicenseProductPolicy.Scope(plan.FeatureFlagsJson) == "invalid")
+            throw Conflict("invalid_product_scope", "Quyền của gói chưa hợp lệ. Vui lòng liên hệ quản trị viên.");
+        if (await LicenseSchedule.TailAsync(dbContext, userId, now, cancellationToken) is { ExpiresAtUtc: null })
+            throw Conflict("license_schedule_unavailable", "Tài khoản đang có gói không giới hạn thời hạn. Cần quản trị viên xử lý trước khi đổi gói.");
         var payment = new LicensePayment
         {
             LicensePaymentId = Guid.NewGuid(),
@@ -167,7 +195,7 @@ public sealed partial class LicensePaymentService(
             LicensePlanId = plan.LicensePlanId,
             OrderCode = await CreateUniqueCodeAsync("VMO", x => x.OrderCode, cancellationToken),
             TransferCode = await CreateUniqueCodeAsync(
-                _options.TransferCodePrefix.Trim().ToUpperInvariant(),
+                paymentOptions.TransferCodePrefix.Trim().ToUpperInvariant(),
                 x => x.TransferCode,
                 cancellationToken),
             IdempotencyKey = idempotencyKey,
@@ -175,16 +203,16 @@ public sealed partial class LicensePaymentService(
             DurationSnapshotDays = plan.DefaultDurationDays!.Value,
             PlanCodeSnapshot = plan.PlanCode,
             PlanNameSnapshot = plan.Name,
-            EntitlementSnapshotJson = plan.FeatureFlagsJson,
+            EntitlementSnapshotJson = plan.FeatureFlagsJson ?? "{}",
             Status = LicensePaymentStatuses.Pending,
-            ReceiverBankCodeSnapshot = _options.ReceiverBankCode.Trim(),
-            ReceiverAccountNumberSnapshot = _options.ReceiverAccountNumber.Trim(),
-            ReceiverAccountNameSnapshot = _options.ReceiverAccountName.Trim(),
+            ReceiverBankCodeSnapshot = paymentOptions.ReceiverBankCode.Trim(),
+            ReceiverAccountNumberSnapshot = paymentOptions.ReceiverAccountNumber.Trim(),
+            ReceiverAccountNameSnapshot = paymentOptions.ReceiverAccountName.Trim(),
             CreatedAtUtc = now,
-            ExpiresAtUtc = now.AddMinutes(_options.PaymentExpireMinutes)
+            ExpiresAtUtc = now.AddMinutes(paymentOptions.PaymentExpireMinutes)
         };
         dbContext.LicensePayments.Add(payment);
-        if (seatProvisioningService is not null)
+        if (seatProvisioningService is not null && !LicenseProductPolicy.IsLocalOnly(payment.EntitlementSnapshotJson))
         {
             await seatProvisioningService.ReserveAsync(payment, now, cancellationToken);
         }
@@ -252,7 +280,7 @@ public sealed partial class LicensePaymentService(
         string userId,
         CancellationToken cancellationToken)
     {
-        EnsureWebhookReady();
+        // Existing orders remain readable even if sales are disabled or the receiver changes.
         var now = UtcNow();
         var payment = await dbContext.LicensePayments
             .AsNoTracking()
@@ -270,7 +298,7 @@ public sealed partial class LicensePaymentService(
         SepayWebhookPayload payload,
         CancellationToken cancellationToken)
     {
-        EnsureWebhookReady();
+        // Match the receiver snapshot of the order, never the currently selected bank account.
         if (payload.Id <= 0 ||
             !string.Equals(payload.TransferType?.Trim(), "in", StringComparison.OrdinalIgnoreCase) ||
             payload.TransferAmount <= 0)
@@ -279,10 +307,7 @@ public sealed partial class LicensePaymentService(
         }
 
         var receiverAccount = NormalizeAlphaNumeric(payload.AccountNumber);
-        if (!string.Equals(
-                receiverAccount,
-                NormalizeAlphaNumeric(_options.ReceiverAccountNumber),
-                StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(receiverAccount))
         {
             logger.LogWarning("Ignored SePay transaction {ProviderTransactionId}: receiver account did not match.", payload.Id);
             telemetry.RecordUnmatchedWebhook(LicensePaymentWebhookMismatchReason.ReceiverAccount);
@@ -302,6 +327,12 @@ public sealed partial class LicensePaymentService(
                 cancellationToken);
             if (duplicatePayment is not null)
             {
+                if (NormalizeAlphaNumeric(duplicatePayment.ReceiverAccountNumberSnapshot) != receiverAccount ||
+                    duplicatePayment.PriceSnapshotVnd != payload.TransferAmount)
+                {
+                    telemetry.RecordUnmatchedWebhook(LicensePaymentWebhookMismatchReason.PaymentDetails);
+                    return;
+                }
                 if (duplicatePayment.Status == LicensePaymentStatuses.Paid)
                 {
                     await TryFulfillPaymentAsync(duplicatePayment, UtcNow(), cancellationToken);
@@ -345,7 +376,10 @@ public sealed partial class LicensePaymentService(
                     payment.LicensePaymentId,
                     payment.OrderCode,
                     payment.Status);
-                telemetry.RecordUnmatchedWebhook(LicensePaymentWebhookMismatchReason.PaymentDetails);
+                telemetry.RecordUnmatchedWebhook(
+                    NormalizeAlphaNumeric(payment.ReceiverAccountNumberSnapshot) != receiverAccount
+                        ? LicensePaymentWebhookMismatchReason.ReceiverAccount
+                        : LicensePaymentWebhookMismatchReason.PaymentDetails);
                 if (transaction is not null)
                 {
                     await transaction.CommitAsync(cancellationToken);
@@ -429,15 +463,18 @@ public sealed partial class LicensePaymentService(
         DateTime now,
         CancellationToken cancellationToken)
     {
+        var tail = await LicenseSchedule.TailAsync(dbContext, payment.UserId, now, cancellationToken);
         try
         {
-            if (seatProvisioningService is not null)
+            if (tail is { ExpiresAtUtc: null })
+                throw Conflict("license_schedule_unavailable", "Cần quản trị viên xử lý gói không giới hạn thời hạn trước khi cấp gói mới.");
+            if (seatProvisioningService is not null && !LicenseProductPolicy.IsLocalOnly(payment.EntitlementSnapshotJson))
             {
                 await seatProvisioningService.ReserveAsync(payment, now, cancellationToken);
             }
         }
         catch (AccountApiException exception) when (
-            exception.Code is "organization_capacity_unavailable" or "license_plan_pool_not_configured")
+            exception.Code is "organization_capacity_unavailable" or "license_plan_pool_not_configured" or "organization_not_ready" or "license_schedule_unavailable")
         {
             var shouldAudit = payment.FailureCode != exception.Code;
             payment.Status = LicensePaymentStatuses.Paid;
@@ -462,29 +499,19 @@ public sealed partial class LicensePaymentService(
             return false;
         }
 
-        var activeLicense = await dbContext.UserLicenses
-            .Include(x => x.LicensePlan)
-            .Where(x => x.UserId == payment.UserId &&
-                        (x.Status == "Active" || x.Status == "Trial") &&
-                        x.StartsAtUtc <= now &&
-                        (x.ExpiresAtUtc == null || x.ExpiresAtUtc > now) &&
-                        x.LicensePlan.IsActive)
-            .OrderByDescending(x => x.ExpiresAtUtc)
-            .FirstOrDefaultAsync(cancellationToken);
-
         UserLicense fulfilledLicense;
-        if (activeLicense is not null &&
-            activeLicense.LicensePlanId == payment.LicensePlanId &&
-            activeLicense.ExpiresAtUtc is { } currentExpiry)
+        if (tail is not null && tail.LicensePlanId == payment.LicensePlanId &&
+            LicenseSchedule.SameRights(tail.EntitlementSnapshotJson ?? tail.LicensePlan.FeatureFlagsJson, payment.EntitlementSnapshotJson) &&
+            tail.ExpiresAtUtc is { } currentExpiry)
         {
-            activeLicense.ExpiresAtUtc = currentExpiry.AddDays(payment.DurationSnapshotDays);
-            activeLicense.EntitlementSnapshotJson = payment.EntitlementSnapshotJson;
-            activeLicense.UpdatedAtUtc = now;
-            fulfilledLicense = activeLicense;
+            tail.ExpiresAtUtc = currentExpiry.AddDays(payment.DurationSnapshotDays);
+            tail.EntitlementSnapshotJson ??= payment.EntitlementSnapshotJson;
+            tail.UpdatedAtUtc = now;
+            fulfilledLicense = tail;
         }
         else
         {
-            var startsAt = activeLicense?.ExpiresAtUtc is { } activeExpiry && activeExpiry > now
+            var startsAt = tail?.ExpiresAtUtc is { } activeExpiry && activeExpiry > now
                 ? activeExpiry
                 : now;
             fulfilledLicense = new UserLicense
@@ -502,9 +529,15 @@ public sealed partial class LicensePaymentService(
             dbContext.UserLicenses.Add(fulfilledLicense);
         }
 
-        if (seatProvisioningService is not null)
+        if (seatProvisioningService is not null && !LicenseProductPolicy.IsLocalOnly(payment.EntitlementSnapshotJson))
         {
             await seatProvisioningService.ActivateAsync(payment, fulfilledLicense, now, cancellationToken);
+        }
+        else if (seatProvisioningService is not null && await dbContext.OrganizationSeatAssignments.AnyAsync(x =>
+            x.LicensePaymentId == payment.LicensePaymentId && x.Status == "Reserved", cancellationToken))
+        {
+            // Orders created by the old Local flow may still hold a seat. Release it without creating membership.
+            await seatProvisioningService.ReleaseReservationAsync(payment.LicensePaymentId, "local_license_only", now, cancellationToken);
         }
         payment.FulfilledUserLicenseId = fulfilledLicense.UserLicenseId;
         payment.FulfilledAtUtc = now;
@@ -621,9 +654,10 @@ public sealed partial class LicensePaymentService(
         bool reused,
         CancellationToken cancellationToken)
     {
-        var assignment = seatProvisioningService is null
+        var assignment = seatProvisioningService is null || LicenseProductPolicy.IsLocalOnly(payment.EntitlementSnapshotJson)
             ? null
             : await seatProvisioningService.GetSnapshotAsync(payment.LicensePaymentId, cancellationToken);
+        var term = await PaymentTermAsync(payment, now, cancellationToken);
         var isExpired = payment.Status == LicensePaymentStatuses.Expired ||
                         (payment.Status == LicensePaymentStatuses.Pending && payment.ExpiresAtUtc <= now);
         return new LicensePaymentCheckoutResponse(
@@ -648,7 +682,7 @@ public sealed partial class LicensePaymentService(
             isExpired,
             assignment?.OrganizationId,
             assignment?.OrganizationName,
-            assignment?.Status);
+            assignment?.Status, term.Starts, term.Ends, term.Scheduled);
     }
 
     private async Task<LicensePaymentStatusResponse> BuildStatusResponseAsync(
@@ -656,16 +690,18 @@ public sealed partial class LicensePaymentService(
         DateTime now,
         CancellationToken cancellationToken)
     {
-        var assignment = seatProvisioningService is null
+        var assignment = seatProvisioningService is null || LicenseProductPolicy.IsLocalOnly(payment.EntitlementSnapshotJson)
             ? null
             : await seatProvisioningService.GetSnapshotAsync(payment.LicensePaymentId, cancellationToken);
+        var term = await PaymentTermAsync(payment, now, cancellationToken);
         var isExpired = payment.Status == LicensePaymentStatuses.Expired ||
                         (payment.Status == LicensePaymentStatuses.Pending && payment.ExpiresAtUtc <= now);
         var status = isExpired ? LicensePaymentStatuses.Expired : payment.Status;
         var message = status switch
         {
-            LicensePaymentStatuses.Fulfilled => "Thanh toán thành công. Đang kích hoạt gói sử dụng.",
-            LicensePaymentStatuses.Paid => "Đã nhận thanh toán. Server đang cấp gói sử dụng.",
+            LicensePaymentStatuses.Fulfilled when term.Scheduled => "Đã thanh toán và xếp lịch. Gói mới có hiệu lực sau khi gói trước kết thúc.",
+            LicensePaymentStatuses.Fulfilled => "Thanh toán thành công. Gói sử dụng đã được cấp.",
+            LicensePaymentStatuses.Paid => "Đã thanh toán — đang chờ kích hoạt. Không cần thanh toán lại; hệ thống hoặc quản trị viên sẽ xử lý cấp gói.",
             LicensePaymentStatuses.Expired => "Mã thanh toán đã hết thời gian chờ. Bạn có thể tạo mã mới.",
             LicensePaymentStatuses.Failed => "Không thể hoàn tất cấp gói. Vui lòng liên hệ hỗ trợ.",
             _ => "Đang chờ ngân hàng xác nhận giao dịch."
@@ -684,7 +720,21 @@ public sealed partial class LicensePaymentService(
             message,
             assignment?.OrganizationId,
             assignment?.OrganizationName,
-            assignment?.Status);
+            assignment?.Status, term.Starts, term.Ends, term.Scheduled);
+    }
+
+    private async Task<(DateTime? Starts, DateTime? Ends, bool Scheduled)> PaymentTermAsync(
+        LicensePayment payment, DateTime now, CancellationToken ct)
+    {
+        if (payment.FulfilledUserLicenseId is { } id)
+        {
+            var license = await dbContext.UserLicenses.AsNoTracking().SingleOrDefaultAsync(x => x.UserLicenseId == id, ct);
+            if (license is not null) return (NormalizeUtc(license.StartsAtUtc), NormalizeUtc(license.ExpiresAtUtc), license.StartsAtUtc > now);
+        }
+        var tail = await LicenseSchedule.TailAsync(dbContext, payment.UserId, now, ct);
+        if (tail is { ExpiresAtUtc: null }) return (null, null, false);
+        var starts = tail?.ExpiresAtUtc ?? now;
+        return (NormalizeUtc(starts), NormalizeUtc(starts.AddDays(payment.DurationSnapshotDays)), starts > now);
     }
 
     // SQL Server datetime2 does not persist DateTime.Kind. Values in these columns are UTC,
@@ -711,25 +761,17 @@ public sealed partial class LicensePaymentService(
         return $"{_options.QrBaseUrl.TrimEnd('?')}{query.ToQueryString()}";
     }
 
-    private void EnsurePaymentsReady()
+    private Task<SepayPaymentOptions> ResolvePaymentOptionsAsync(CancellationToken cancellationToken) =>
+        paymentConfiguration?.GetOptionsAsync(cancellationToken) ?? Task.FromResult(_options);
+
+    private static void EnsurePaymentsReady(SepayPaymentOptions configuration)
     {
-        if (!_options.IsReady)
+        if (!configuration.IsReady)
         {
             throw new AccountApiException(
                 StatusCodes.Status503ServiceUnavailable,
                 "payments_unavailable",
                 "Thanh toán đang tạm ngừng. Vui lòng thử lại sau.");
-        }
-    }
-
-    private void EnsureWebhookReady()
-    {
-        if (!_options.CanProcessWebhooks)
-        {
-            throw new AccountApiException(
-                StatusCodes.Status503ServiceUnavailable,
-                "payments_unavailable",
-                "Webhook thanh toán chưa được cấu hình.");
         }
     }
 

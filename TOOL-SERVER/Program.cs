@@ -35,6 +35,12 @@ builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("model-distribution", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
+        }));
     options.OnRejected = async (context, cancellationToken) =>
     {
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
@@ -141,6 +147,9 @@ builder.Services.AddRateLimiter(options =>
             }));
 });
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.Configure<TOOL_SERVER.Configuration.ModelDistributionOptions>(
+    builder.Configuration.GetSection(TOOL_SERVER.Configuration.ModelDistributionOptions.SectionName));
+builder.Services.AddSingleton<TOOL_SERVER.ModelDistribution.IModelDistributionStore, TOOL_SERVER.ModelDistribution.ModelDistributionStore>();
 builder.Services
     .AddOptions<DesktopReleaseOptions>()
     .Bind(builder.Configuration.GetSection(DesktopReleaseOptions.SectionName))
@@ -159,7 +168,7 @@ builder.Services
 builder.Services
     .AddOptions<SepayPaymentOptions>()
     .Bind(builder.Configuration.GetSection(SepayPaymentOptions.SectionName))
-    .Validate(SepayPaymentOptions.IsValidOrDisabled, "SePay payment configuration is invalid.")
+    .Validate(SepayPaymentOptions.AreRuntimeDefaultsValid, "SePay QR/prefix/expiry configuration is invalid.")
     .ValidateOnStart();
 builder.Services
     .AddOptions<TikTokOptions>()
@@ -282,8 +291,13 @@ builder.Services.AddScoped<IPasswordResetOtpStore, PasswordResetOtpStore>();
 builder.Services.AddSingleton<IPasswordResetEmailSender, SmtpPasswordResetEmailSender>();
 builder.Services.AddScoped<IAccountManagementService, AccountManagementService>();
 builder.Services.AddScoped<IAdminLicenseService, AdminLicenseService>();
+builder.Services.AddScoped<AdminLicensePlanComposerService>();
+builder.Services.AddScoped<AdminSetupService>();
 builder.Services.AddSingleton<ILicensePaymentTelemetry, LicensePaymentTelemetry>();
 builder.Services.AddScoped<ILicensePaymentService, LicensePaymentService>();
+builder.Services.AddScoped<SepayPaymentAdminService>();
+builder.Services.AddScoped<ISepayPaymentAdminService>(services => services.GetRequiredService<SepayPaymentAdminService>());
+builder.Services.AddScoped<ISepayPaymentConfiguration>(services => services.GetRequiredService<SepayPaymentAdminService>());
 builder.Services.AddScoped<IOrganizationService, OrganizationService>();
 builder.Services.AddScoped<IOrganizationProvisioningReadinessEvaluator, OrganizationProvisioningReadinessEvaluator>();
 builder.Services.AddScoped<IOrganizationSeatProvisioningService, OrganizationSeatProvisioningService>();
@@ -419,6 +433,22 @@ builder.Services.AddHttpClient<ITikTokApiClient, TikTokApiClient>(client =>
 });
 builder.Services.AddSingleton<IDesktopReleaseStorage, DesktopReleaseStorage>();
 builder.Services.AddScoped<IDesktopReleaseService, DesktopReleaseService>();
+builder.Services.AddSingleton<IDesktopBootstrapperMetadataReader, DesktopBootstrapperMetadataReader>();
+builder.Services.AddScoped<DesktopBootstrapperService>();
+builder.Services.AddScoped<DesktopReleasePreparationService>();
+builder.Services.AddScoped<DesktopDirectCatalogService>();
+builder.Services.AddScoped<DesktopDownloadSettingsService>();
+builder.Services.AddScoped<DesktopStandaloneCatalogService>();
+builder.Services.AddHttpClient(DesktopReleaseInspectionTransport.ClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(DesktopReleaseInspectionTransport.CreateHandler);
+builder.Services.AddScoped<IDesktopReleaseArchiveInspector>(services => new DesktopReleaseArchiveInspector(
+    services.GetRequiredService<IHttpClientFactory>().CreateClient(DesktopReleaseInspectionTransport.ClientName),
+    services.GetRequiredService<IWebHostEnvironment>(), services.GetRequiredService<Microsoft.Extensions.Options.IOptions<DesktopReleaseOptions>>()));
+if ((builder.Configuration[$"{DesktopReleaseOptions.SectionName}:PublicationMode"] ?? DesktopReleaseOptions.ServerInspectionMode) == DesktopReleaseOptions.ServerInspectionMode)
+{
+    builder.Services.AddHostedService<DesktopReleasePreparationWorker>();
+    builder.Services.AddHostedService<DesktopReleaseInspectionScratchCleaner>();
+}
 
 var app = builder.Build();
 var videoStorageRoot = builder.Configuration[$"{VideoOutputOptions.SectionName}:StorageRoot"];

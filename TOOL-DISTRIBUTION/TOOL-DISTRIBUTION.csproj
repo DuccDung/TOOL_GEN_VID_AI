@@ -6,4 +6,7 @@
     <AssemblyName>TOOL-SHARED.Distribution</AssemblyName>
     <RootNamespace>TOOL_SHARED.Distribution</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TOOL-SHARED.Contracts\TOOL-SHARED.Contracts.csproj" />
+  </ItemGroup>
 </Project>

@@ -14,7 +14,7 @@ public sealed class LicensePaymentsController(ILicensePaymentService paymentServ
 {
     [HttpGet("offers")]
     public Task<IReadOnlyList<LicenseOfferResponse>> GetOffers(CancellationToken cancellationToken) =>
-        paymentService.GetOffersAsync(cancellationToken);
+        paymentService.GetOffersForUserAsync(UserId(), cancellationToken);
 
     [HttpPost("payments")]
     [EnableRateLimiting("license-payment-create")]

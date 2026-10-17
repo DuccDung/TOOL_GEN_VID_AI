@@ -4,6 +4,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { withAdminFonts } = require('../Admin/admin-browser-assets.cjs');
 const { chromium } = require(process.env.VIDEOMAKER_PLAYWRIGHT_MODULE || 'playwright');
 const repo = path.resolve(__dirname, '../..');
 const read = name => fs.readFileSync(path.join(repo, name), 'utf8');
@@ -24,15 +25,16 @@ async function fixture(t, state = base, width = 1440) {
   t.after(() => assert.deepEqual(errors, [], 'browser must not raise unhandled errors'));
   await page.route('**/*', route => route.abort());
   await page.setContent(html);
-  await page.addStyleTag({ content: read('TOOL-SERVER/wwwroot/admin/admin.css') });
+  await page.addStyleTag({ content: withAdminFonts(read('TOOL-SERVER/wwwroot/admin/admin.css')) });
+  await page.addStyleTag({ content: read('TOOL-SERVER/wwwroot/admin/admin-modules.css') });
   await page.clock.install();
   await page.evaluate(seed => {
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('adminShell').classList.remove('hidden');
+    document.getElementById('adminShell').hidden = false;
     document.getElementById('pageTitle').textContent = 'Tích hợp TikTok';
     document.getElementById('breadcrumbCurrent').textContent = 'Tích hợp TikTok';
     document.getElementById('manageUsersShortcut').classList.add('hidden');
-    document.getElementById('pageEyebrow').textContent = 'SYSTEM INTEGRATION';
     document.getElementById('pageSubtitle').textContent = 'Quản lý TikTok Developer App, kiểm tra OAuth và giới hạn đăng công khai.';
     document.querySelectorAll('[data-view]').forEach(element => element.classList.toggle('active', element.dataset.view === 'tiktok'));
     document.querySelectorAll('[data-panel]').forEach(element => element.classList.toggle('hidden', element.dataset.panel !== 'tiktok'));
